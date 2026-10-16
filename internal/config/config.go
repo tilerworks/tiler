@@ -58,6 +58,10 @@ type Config struct {
 	CacheEnabled bool
 	// LogLevel is debug, info, warn, or error.
 	LogLevel string
+	// reservedRoot is the cleaned $HOME/.tiler tree. It stays reserved
+	// even when the four directories are moved elsewhere. Load and
+	// Defaults set it; Apply keeps the value from the lower config.
+	reservedRoot string
 }
 
 // Patch records fields present in one document. Nil means omitted.
@@ -88,6 +92,7 @@ func Defaults(home string) Config {
 		CacheDir:      filepath.Join(root, "cache"),
 		SessionMaxAge: DefaultSessionMaxAge,
 		LogLevel:      DefaultLogLevel,
+		reservedRoot:  root,
 	}
 }
 
