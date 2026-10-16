@@ -93,7 +93,7 @@ func Decide(cwd string, table []Mount, prefixes Prefixes, explicit Explicit) (De
 		return Decision{}, fmt.Errorf(
 			"build mode: %s is a stale mount point missing from the mount table", cwd)
 	}
-	if view, ok := longestView(table, cwd); ok {
+	if view, ok := LongestView(table, cwd); ok {
 		return decideView(view, table, prefixes, explicit)
 	}
 	return decidePlain(cwd, prefixes, explicit)
@@ -200,13 +200,15 @@ func resolveName(viewPoint string, table []Mount, prefixes Prefixes, explicit Ex
 	return given, nil
 }
 
-// longestView is the view mount whose point is cwd or a directory
-// prefix of it, choosing the longest such point.
-func longestView(table []Mount, cwd string) (Mount, bool) {
+// LongestView is the view mount whose point is path or a directory
+// prefix of it, choosing the longest such point. The build decision
+// and the session reverse lookup share it, so the deepest covering
+// view always wins the same way.
+func LongestView(table []Mount, path string) (Mount, bool) {
 	best := Mount{}
 	found := false
 	for _, mount := range table {
-		if !isViewMount(mount) || !underPrefix(cwd, mount.Point) {
+		if !isViewMount(mount) || !underPrefix(path, mount.Point) {
 			continue
 		}
 		if !found || len(mount.Point) > len(best.Point) {

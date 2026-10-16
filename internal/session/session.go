@@ -63,6 +63,11 @@ type Engine struct {
 	Health HealthFunc
 	// Clean overrides the stale-point teardown. Nil uses CleanStale.
 	Clean CleanFunc
+	// RuntimeDir is the configured runtime tree. A path inside it —
+	// an upper, a work directory, or a lower transit point —
+	// resolves back to the session owning the combination. Empty
+	// disables the runtime branch of the reverse lookup.
+	RuntimeDir string
 	// LockTimeout bounds the exclusive-lock wait. Zero uses
 	// DefaultLockTimeout.
 	LockTimeout time.Duration
@@ -273,23 +278,39 @@ func (e *Engine) Remove(name string) error {
 	return nil
 }
 
-// healthFunc resolves the health seam: the injected fake, or the
-// shared two-condition check against one table snapshot.
+// healthFunc resolves the health seam over one fresh table
+// snapshot.
 func (e *Engine) healthFunc() (HealthFunc, error) {
-	if e.Health != nil {
-		return e.Health, nil
+	table, err := e.loadTable()
+	if err != nil {
+		return nil, err
 	}
-	var table []mountinfo.Mount
-	if e.LoadTable != nil {
-		var err error
-		if table, err = e.LoadTable(); err != nil {
-			return nil, fmt.Errorf("session: %w", err)
-		}
+	return e.healthFor(table), nil
+}
+
+// loadTable snapshots the host mount table through the seam. A
+// missing seam leaves the table conditions to the stat probes.
+func (e *Engine) loadTable() ([]mountinfo.Mount, error) {
+	if e.LoadTable == nil {
+		return nil, nil
+	}
+	table, err := e.LoadTable()
+	if err != nil {
+		return nil, fmt.Errorf("session: %w", err)
+	}
+	return table, nil
+}
+
+// healthFor builds the health check over one table snapshot: the
+// injected seam, or the shared two-condition check.
+func (e *Engine) healthFor(table []mountinfo.Mount) HealthFunc {
+	if e.Health != nil {
+		return e.Health
 	}
 	return func(point string) bool {
 		ok, err := Healthy(table, point)
 		return err == nil && ok
-	}, nil
+	}
 }
 
 // cleanFunc resolves the cleanup seam.
@@ -323,4 +344,56 @@ func (e *Engine) now() time.Time {
 		return e.Now()
 	}
 	return time.Now().UTC()
+}
+
+// List returns every record for command rendering, ordered by file
+// name. A corrupt record is reported, never silently dropped.
+func (e *Engine) List() ([]Record, error) {
+	return e.Store.List()
+}
+
+// Show returns one record for command rendering.
+func (e *Engine) Show(name string) (Record, error) {
+	return e.Load(name)
+}
+
+// Summary is the one-line read model of one session for the list
+// command.
+type Summary struct {
+	// Name is the session name.
+	Name string
+	// State is active or closed.
+	State string
+	// Mounts counts the currently mounted actions.
+	Mounts int
+	// Created is when the record was written first.
+	Created time.Time
+	// Closed is when the record reached the closed state.
+	Closed time.Time
+}
+
+// Summarize reduces one record to its list line.
+func Summarize(rec Record) Summary {
+	mounts := 0
+	for _, action := range rec.Actions {
+		if action.Type == TypeMount && action.Status == StatusMounted {
+			mounts++
+		}
+	}
+	return Summary{
+		Name:    rec.Name,
+		State:   rec.State,
+		Mounts:  mounts,
+		Created: rec.CreatedAt,
+		Closed:  rec.ClosedAt,
+	}
+}
+
+// Summaries reduces records to list lines.
+func Summaries(records []Record) []Summary {
+	summaries := make([]Summary, 0, len(records))
+	for _, rec := range records {
+		summaries = append(summaries, Summarize(rec))
+	}
+	return summaries
 }
