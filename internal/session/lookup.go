@@ -13,6 +13,8 @@ import (
 // PathSession is one reverse-lookup hit: the session whose recorded
 // view covers the queried path.
 type PathSession struct {
+	// Path is the normalized form of the queried path.
+	Path string
 	// Record is the covering session's record.
 	Record Record
 	// Mountpoint is the recorded view point covering the path.
@@ -33,12 +35,23 @@ type PathSession struct {
 // A path inside the runtime tree — an upper, a work directory, or a
 // lower transit point — resolves back through the combination that
 // owns its runtime directory. A path no session covers reports a
-// clear error.
+// clear error. The hit carries the normalized query path.
 func (e *Engine) SessionForPath(path string) (PathSession, error) {
 	normalized, err := normalizeForLookup(path)
 	if err != nil {
 		return PathSession{}, err
 	}
+	hit, err := e.resolveNormalizedPath(path, normalized)
+	if err != nil {
+		return PathSession{}, err
+	}
+	hit.Path = normalized
+	return hit, nil
+}
+
+// resolveNormalizedPath walks the lookup chain for one normalized
+// path against a fresh table snapshot.
+func (e *Engine) resolveNormalizedPath(original, normalized string) (PathSession, error) {
 	table, err := e.loadTable()
 	if err != nil {
 		return PathSession{}, err
@@ -50,7 +63,7 @@ func (e *Engine) SessionForPath(path string) (PathSession, error) {
 	if view, ok := mountinfo.LongestView(table, normalized); ok {
 		return e.sessionForMountpoint(view.Point, health)
 	}
-	return e.staleSessionForPath(path, normalized, health)
+	return e.staleSessionForPath(original, normalized, health)
 }
 
 // sessionForMountpoint matches one exact mount point against the
