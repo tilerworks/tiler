@@ -141,15 +141,17 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 	return result, nil
 }
 
-// Open replays one active record into a consistent mounted state,
-// the crash-recovery entry point. Mount actions walk in record
-// order: a healthy view is skipped, an unhealthy one is cleaned
+// Open replays one record into a consistent mounted state: the
+// crash-recovery entry point and the way a closed session resumes.
+// Mount actions walk in record order and reality decides: a healthy
+// view is skipped, an unhealthy one — never mounted, dead with its
+// daemon, or torn down by an earlier close — is cleaned
 // (fusermount3 -u, escalating to -uz) and rebuilt through the mount
 // seam, and the lower transit points of a view recover with the
-// main mount. Repeated opens skip every healthy mount, so recovery
-// is idempotent. Umount actions record teardowns that already
-// happened and restore nothing; a mount already torn down stays
-// down.
+// main mount. A closed record reopens: after a successful replay
+// its state is active again. Repeated opens skip every healthy
+// mount, so recovery is idempotent. Umount actions record teardowns
+// that already happened and restore nothing.
 func (e *Engine) Open(name string, mount MountFunc) error {
 	release, err := e.lockExclusive(name)
 	if err != nil {
@@ -160,17 +162,13 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 	if err != nil {
 		return err
 	}
-	if rec.State != StateActive {
-		return fmt.Errorf("session: %s is %s; only an active session opens",
-			name, rec.State)
-	}
 	health, err := e.healthFunc()
 	if err != nil {
 		return err
 	}
 	clean := e.cleanFunc()
 	for _, action := range rec.Actions {
-		if action.Type != TypeMount || action.Status == StatusUnmounted {
+		if action.Type != TypeMount {
 			continue
 		}
 		if action.Mountpoint != "" && health(action.Mountpoint) {
@@ -189,7 +187,22 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 			return err
 		}
 	}
+	if rec.State == StateClosed {
+		return e.reopen(name)
+	}
 	return nil
+}
+
+// reopen flips one replayed closed record back to active: its views
+// are up again, so the closed state no longer describes reality.
+func (e *Engine) reopen(name string) error {
+	fresh, err := e.Load(name)
+	if err != nil {
+		return err
+	}
+	fresh.State = StateActive
+	fresh.ClosedAt = time.Time{}
+	return e.Save(fresh)
 }
 
 // replay cleans one stale action and rebuilds it through the mount

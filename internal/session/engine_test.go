@@ -273,14 +273,15 @@ func TestOpenReplaysStaleMountsInRecordOrder(t *testing.T) {
 	}
 }
 
-func TestOpenSkipsUnmountedAndUmountActions(t *testing.T) {
+func TestOpenRemountsTornDownViewsAndIgnoresUmountActions(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	view1 := filepath.Join(dir, "view1")
 	view2 := filepath.Join(dir, "view2")
 	seedMounted(t, e, "dev", view1, view2)
-	// An intentional teardown and a recorded umount action restore
-	// nothing.
+	// A view torn down behind the record's back and a recorded umount
+	// action both face the same rule: reality decides, and a dead view
+	// remounts even when the record still calls it unmounted.
 	if err := e.Writeback("dev", 1, StatusUnmounted, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -300,8 +301,18 @@ func TestOpenSkipsUnmountedAndUmountActions(t *testing.T) {
 	if err := e.Open("dev", mount); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(log.calls, ",") != "clean view2,mount 2" {
-		t.Fatalf("calls = %v", log.calls)
+	want := "clean view1,mount 1,clean view2,mount 2"
+	if strings.Join(log.calls, ",") != want {
+		t.Fatalf("calls = %q, want %q", strings.Join(log.calls, ","), want)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range rec.Actions {
+		if action.Type == TypeMount && action.Status != StatusMounted {
+			t.Errorf("action %+v not recovered", action)
+		}
 	}
 }
 
@@ -349,16 +360,48 @@ func TestOpenReconcilesHealthyPendingActionWithoutRemount(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsClosedSession(t *testing.T) {
+func TestOpenReopensClosedSession(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
-	seedMounted(t, e, "dev", filepath.Join(dir, "view"))
+	view := filepath.Join(dir, "view")
+	seedMounted(t, e, "dev", view)
 	if err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	err := e.Open("dev", func(Action) (Result, error) { return Result{}, nil })
-	if err == nil || !strings.Contains(err.Error(), "only an active session") {
-		t.Fatalf("Open error = %v", err)
+	var log callLog
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error {
+		log.add("clean")
+		return nil
+	}
+	mount := func(a Action) (Result, error) {
+		log.add("mount %d", a.Seq)
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(log.calls, ",") != "clean,mount 1" {
+		t.Fatalf("calls = %v", log.calls)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateActive || !rec.ClosedAt.IsZero() {
+		t.Fatalf("record = %+v, want an active record with no close time", rec)
+	}
+	if rec.Actions[0].Status != StatusMounted {
+		t.Errorf("action = %+v, want mounted", rec.Actions[0])
+	}
+	// A repeated open against a healthy view stays a pure no-op.
+	e.Health = func(string) bool { return true }
+	log.calls = nil
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	if len(log.calls) != 0 {
+		t.Fatalf("a repeated open acted: %v", log.calls)
 	}
 }
 

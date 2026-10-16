@@ -100,7 +100,8 @@ tiler session close feature                # 逆序卸载，记录保留
   new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错。
   `session open <name>` 按挂载顺序遍历记录：健康视图跳过，失活
   视图先清理（`fusermount3 -u`，失败转惰性 `-uz`）再重建，因此
-  重复 open 幂等，崩溃后一条 open 恢复全部挂载。`session close
+  重复 open 幂等，崩溃后一条 open 恢复全部挂载。closed session
+  同样借此恢复：视图重新挂载，记录回到 active。`session close
   <name>` 逆序卸载每个记录在案的视图，随后置 closed 并保留记录
   供审计。`session remove <name>` 删除 closed 记录，active 拒绝。
   `session list` 每条记录打印一行，`session show <name>` 展示完整

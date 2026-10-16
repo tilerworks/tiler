@@ -125,7 +125,9 @@ Available now:
   <name>` walks the record in mount order: a healthy view is
   skipped and a dead one is cleaned (`fusermount3 -u`, escalating
   to `-uz`) and rebuilt, so repeated opens are idempotent and one
-  open restores everything after a crash. `session close <name>`
+  open restores everything after a crash. A closed session resumes
+  the same way: its views remount and the record becomes active
+  again. `session close <name>`
   unmounts every recorded view in reverse order, then marks the
   record closed and keeps it for audit. `session remove <name>`
   deletes a closed record and refuses an active one. `session

@@ -67,7 +67,8 @@ func newSessionOpenCmd() *cobra.Command {
 		Long: "Open replays the session record in mount order: a healthy\n" +
 			"view is skipped, a dead or missing one is cleaned and\n" +
 			"remounted, so the command is idempotent and is the recovery\n" +
-			"entry point after a crash.",
+			"entry point after a crash. A closed session resumes the same\n" +
+			"way: its views remount and the record becomes active again.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, engine, err := sessionCommandEngine(cmd, "session open", args[0])
