@@ -64,10 +64,10 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 		rt.dir = rt.repo.Dir
 	case 4:
 		if parts[2] != dirArchives {
-			return rmTarget{}, Meta{}, fmt.Errorf("remove: invalid target %q", target)
+			return rmTarget{}, Meta{}, invalidTarget(target)
 		}
 		if err = checkID(parts[3]); err != nil {
-			return rmTarget{}, Meta{}, fmt.Errorf("remove: invalid target %q", target)
+			return rmTarget{}, Meta{}, invalidTarget(target)
 		}
 		rt.repo, err = OpenRepo(cfg.ImagesDir, parts[0]+"/"+parts[1])
 		if err == nil {
@@ -75,7 +75,7 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 			rt.dir = filepath.Join(rt.repo.Dir, dirArchives, parts[3])
 		}
 	default:
-		err = fmt.Errorf("remove: invalid target %q", target)
+		err = invalidTarget(target)
 	}
 	if err != nil {
 		return rmTarget{}, Meta{}, err
@@ -85,6 +85,13 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 		return rmTarget{}, Meta{}, fmt.Errorf("remove: %w", err)
 	}
 	return rt, meta, nil
+}
+
+// invalidTarget reports a target that is neither owner/repo nor
+// owner/repo/archives/<full-id>. It wraps ErrInvalidName so command
+// entries classify the refusal as a usage error.
+func invalidTarget(target string) error {
+	return fmt.Errorf("remove: invalid target %q: %w", target, ErrInvalidName)
 }
 
 // rejectReferenced refuses both rm stages while any reference pins

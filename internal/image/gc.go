@@ -33,7 +33,7 @@ type GCEvent struct {
 // deleted. Held archives, active images, referenced holds, and
 // session records are never deleted. An unreadable archive is kept.
 func GC(cfg config.Config, refs Refs, now time.Time) ([]GCEvent, error) {
-	repos, err := listRepos(cfg.ImagesDir)
+	repos, err := ListRepos(cfg.ImagesDir)
 	if err != nil {
 		return nil, fmt.Errorf("gc: %w", err)
 	}
@@ -46,39 +46,6 @@ func GC(cfg config.Config, refs Refs, now time.Time) ([]GCEvent, error) {
 		}
 	}
 	return events, nil
-}
-
-// listRepos enumerates every valid owner/repo directory under the
-// image library. Entries that do not parse as names are skipped.
-func listRepos(imagesDir string) ([]Repo, error) {
-	owners, err := os.ReadDir(imagesDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var repos []Repo
-	for _, owner := range owners {
-		if !owner.IsDir() {
-			continue
-		}
-		entries, err := os.ReadDir(filepath.Join(imagesDir, owner.Name()))
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			repo, err := OpenRepo(imagesDir, owner.Name()+"/"+entry.Name())
-			if err != nil {
-				continue
-			}
-			repos = append(repos, repo)
-		}
-	}
-	return repos, nil
 }
 
 func gcRepo(repo Repo, cfg config.Config, refs Refs, now time.Time) ([]GCEvent, error) {
