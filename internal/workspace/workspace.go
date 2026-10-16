@@ -117,6 +117,10 @@ type Workspace struct {
 type hooks struct {
 	// live reports whether a point currently behaves as a mount.
 	live func(point string) bool
+	// serving reports whether a point behaves as a mount whose FUSE
+	// connection still answers. Nil falls back to live, then to the
+	// real probes.
+	serving func(point string) bool
 	// sleep pauses between liveness polls.
 	sleep func(d time.Duration)
 }
@@ -242,7 +246,7 @@ func (w *Workspace) tablePhase(
 	if !listed {
 		return false, nil
 	}
-	if !liveOf(seam, req.MergedDir) {
+	if !servingOf(seam, req.MergedDir) {
 		return false, cleanPoint(req.MergedDir, run, seam)
 	}
 	if err := identity(req, members, entry); err != nil {
@@ -710,6 +714,25 @@ func liveOf(seam hooks, point string) bool {
 		return seam.live(point)
 	}
 	return liveMount(point)
+}
+
+// servingOf probes through the seam, defaulting to the real
+// attachment and connection probes. A killed daemon can leave the
+// mount attached with the kernel attribute cache still answering
+// stat, so the reuse gate needs the stronger signal: only a mount
+// whose connection still serves requests may be reused, and a
+// listed-but-dead point takes the teardown path. A fake kernel that
+// models only attached or detached points treats attached as
+// serving.
+func servingOf(seam hooks, point string) bool {
+	switch {
+	case seam.serving != nil:
+		return seam.serving(point)
+	case seam.live != nil:
+		return seam.live(point)
+	default:
+		return liveMount(point) && answers(point)
+	}
 }
 
 // sleepOf is the seam pause between polls, defaulting to the real

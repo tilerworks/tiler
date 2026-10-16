@@ -913,6 +913,45 @@ func TestMountCleansStaleTargetThenMounts(t *testing.T) {
 	}
 }
 
+func TestMountTearsDownListedEntryWithDeadDaemon(t *testing.T) {
+	req, _ := testRequest(t)
+	req.ReadOnly = true
+	req.Layers = nil
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The kernel-side mount is still attached and stat keeps
+	// answering from the attribute cache, but the daemon behind it
+	// is gone: the entry reads anonymous and must never be reused.
+	req.Table = []Entry{{
+		Point:  req.MergedDir,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "fuse-overlayfs",
+	}}
+	k := newFakeKernel()
+	k.live[req.MergedDir] = true
+	seam := hooks{
+		live:    k.isLive,
+		serving: func(string) bool { return false },
+		sleep:   func(time.Duration) {},
+	}
+	w, err := mountTest(t, req, k.run, seam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Reused {
+		t.Error("an entry with a dead daemon must never be reused")
+	}
+	unmounts := k.find("fusermount3")
+	if len(unmounts) != 1 || unmounts[0][1] != "-u" || unmounts[0][2] != req.MergedDir {
+		t.Fatalf("teardown calls = %v, want a single -u of the target", unmounts)
+	}
+	squash := k.find("squashfuse_ll")
+	if len(squash) != 1 || squash[0][4] != req.MergedDir {
+		t.Fatalf("squashfuse_ll calls = %v, want one fresh direct mount", squash)
+	}
+}
+
 func TestMountCleansResidueOnPlannedLowerPoints(t *testing.T) {
 	req, _ := testRequest(t)
 	// Plan the runtime directory exactly like the engine will: from

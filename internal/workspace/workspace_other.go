@@ -20,6 +20,11 @@ func liveMount(string) bool {
 	return false
 }
 
+// answers is unreachable because Mount refuses before it polls.
+func answers(string) bool {
+	return false
+}
+
 // fileUID is unreachable because Mount refuses before it guards. It
 // reports the current user so the pure owner check trivially passes.
 func fileUID(os.FileInfo) uint32 {
