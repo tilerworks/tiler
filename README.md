@@ -38,6 +38,17 @@ tiler mount alice/app work          # writable view over the image
 tiler umount work                   # upper and work data survives
 ```
 
+A session groups several mounts into one durable record and is the
+unit of crash recovery:
+
+```bash
+tiler session new feature                  # durable record
+tiler mount --session feature alice/app work
+tiler mount --session feature bob/tools tools
+tiler session open feature                 # after a crash: replay and restore
+tiler session close feature                # reverse unmount, record kept
+```
+
 Available now:
 
 - `tiler version` prints one version line.
@@ -54,7 +65,13 @@ Available now:
   `--archives` adds the archived and held chain ids.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
-  `--max-age`. Zero means that rule is unlimited.
+  `--max-age`. Zero means that rule is unlimited. The same pass
+  cleans the session records: a closed record past
+  `--session-max-age` is removed, an active record is never
+  auto-deleted but one whose mounts are all dead is reported
+  stale, and with `session_autoclose_stale` enabled (off by
+  default) an aged stale record flips to closed and becomes
+  eligible for a later removal.
 - `tiler images rm <owner/repo[/archives/<id>]>` deprecates the
   target on the first call and removes it on the second. Both calls
   refuse while a reference pins the target.
@@ -86,7 +103,13 @@ Available now:
   mounting, so NAS-backed images mount from a local copy while
   the mount table keeps naming the original library path. The
   target must be an empty directory owned by the current user,
-  outside the runtime tree and every reserved directory.
+  outside the runtime tree and every reserved directory. Every
+  mount is recorded write-ahead in a session before the engine
+  runs: `--session <name>` attaches a session created with
+  `session new`, the `TILER_SESSION_ID` environment variable binds
+  one, and without either an implicit `auto-<timestamp>-<short
+  random>` session is created. A failed mount keeps its recorded
+  action failed, so a later `session open` retries it.
 - `tiler umount <dir>` tears a view down by path: the merged point
   first, then the runtime transit points in reverse order. Each
   point falls back from `fusermount3 -u` to the lazy `-uz` when it
@@ -96,10 +119,22 @@ Available now:
   `<dir>` succeeds silently. Upper and work data is never deleted,
   so a later mount of the same directory reuses the earlier
   changes.
+- `tiler session` manages the mount sessions that crash recovery
+  replays. `session new <name>` creates an empty record under
+  `~/.tiler/sessions/` and refuses a duplicate name. `session open
+  <name>` walks the record in mount order: a healthy view is
+  skipped and a dead one is cleaned (`fusermount3 -u`, escalating
+  to `-uz`) and rebuilt, so repeated opens are idempotent and one
+  open restores everything after a crash. `session close <name>`
+  unmounts every recorded view in reverse order, then marks the
+  record closed and keeps it for audit. `session remove <name>`
+  deletes a closed record and refuses an active one. `session
+  list` prints one line per record and `session show <name>` its
+  full action log. Implicit `auto-*` sessions accept the same
+  commands as explicit ones.
 
 Planned commands, not available yet:
 
-- finish the session
 - show status
 
 ## User story
@@ -122,7 +157,11 @@ Sessions isolate projects while they share one read-only base. Across
 eight sessions that share one lower layer, each upper layer is about
 6.5 MB in steady state.
 
-A crash can be restored by replaying the action record.
+A crash is recoverable because every mount action is recorded
+write-ahead: after a `kill -9` of tiler or a FUSE daemon, one
+`tiler session open <name>` replays the record, skips the views
+that are still healthy, cleans and rebuilds the dead ones, and the
+upper-layer data survives.
 
 ## License
 
