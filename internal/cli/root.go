@@ -45,6 +45,7 @@ func NewRootCmd() *cobra.Command {
 	})
 	bindFlags(root, flags)
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newDoctorCmd())
 	return root
 }
 
