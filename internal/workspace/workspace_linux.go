@@ -45,3 +45,11 @@ func liveMount(point string) bool {
 	}
 	return dev != parentDev
 }
+
+// fileUID is the owner of an already-statted file.
+func fileUID(info os.FileInfo) uint32 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return st.Uid
+	}
+	return uint32(os.Geteuid())
+}

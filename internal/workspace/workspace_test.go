@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/config"
 )
 
 type recRunner struct {
@@ -563,6 +565,396 @@ func TestMountSubdirSingleSurvivorMountsDirect(t *testing.T) {
 	}
 	if len(w.mounts) != 1 || w.mounts[0] != req.MergedDir {
 		t.Errorf("mounts = %v", w.mounts)
+	}
+}
+
+// fakeKernel tracks mount state across injected runs: a successful
+// mount tool marks the target point live and fusermount3 clears it.
+// repair, when set, mutates the file system on an unmount so a test
+// can expose the plain directory under a cleaned stale mount.
+type fakeKernel struct {
+	recRunner
+	live     map[string]bool
+	lazyOnly map[string]bool
+	repair   func(point string)
+}
+
+func newFakeKernel() *fakeKernel {
+	return &fakeKernel{
+		live:     map[string]bool{},
+		lazyOnly: map[string]bool{},
+	}
+}
+
+func (k *fakeKernel) run(name string, args ...string) error {
+	k.calls = append(k.calls, append([]string{name}, args...))
+	switch name {
+	case "squashfuse_ll", "fuse-overlayfs":
+		k.live[args[len(args)-1]] = true
+	case "fusermount3":
+		point := args[len(args)-1]
+		if args[0] == "-u" && k.lazyOnly[point] {
+			return errors.New("fusermount3: failed to unmount (device or resource busy)")
+		}
+		k.live[point] = false
+		if k.repair != nil {
+			k.repair(point)
+		}
+	}
+	return nil
+}
+
+func (k *fakeKernel) isLive(point string) bool { return k.live[point] }
+
+func (k *fakeKernel) seam() hooks {
+	return hooks{live: k.isLive, sleep: func(time.Duration) {}}
+}
+
+func TestUnderPrefix(t *testing.T) {
+	tests := []struct {
+		dir    string
+		prefix string
+		want   bool
+	}{
+		{dir: "/rt/up-1-2/upper", prefix: "/rt", want: true},
+		{dir: "/rt", prefix: "/rt", want: true},
+		{dir: "/rt2/x", prefix: "/rt", want: false},
+		{dir: "/rt/x/../y", prefix: "/rt", want: true},
+		{dir: "/mnt/view", prefix: "/rt", want: false},
+	}
+	for _, tc := range tests {
+		if got := underPrefix(tc.dir, tc.prefix); got != tc.want {
+			t.Errorf("underPrefix(%q, %q) = %v, want %v", tc.dir, tc.prefix, got, tc.want)
+		}
+	}
+}
+
+func TestCheckOwner(t *testing.T) {
+	if err := checkOwner(1000, 1000); err != nil {
+		t.Fatalf("matching owner refused: %v", err)
+	}
+	err := checkOwner(0, 1000)
+	if err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("err = %v, want an owner refusal", err)
+	}
+}
+
+func TestMountRejectsTargetUnderRuntime(t *testing.T) {
+	req, _ := testRequest(t)
+	req.MergedDir = filepath.Join(req.RuntimeDir, "view")
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "inside the runtime tree") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran despite the refusal: %v", rec.calls)
+	}
+}
+
+func TestMountRejectsNonEmptyTarget(t *testing.T) {
+	req, _ := testRequest(t)
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	precious := filepath.Join(req.MergedDir, "precious.txt")
+	if err := os.WriteFile(precious, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran despite the refusal: %v", rec.calls)
+	}
+	assertBytesFile(t, precious, []byte("user data"))
+}
+
+func TestMountRejectsFileTarget(t *testing.T) {
+	req, _ := testRequest(t)
+	if err := os.WriteFile(req.MergedDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran despite the refusal: %v", rec.calls)
+	}
+}
+
+// assertBytesFile keeps the user-data assertions readable.
+func assertBytesFile(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("%s = %q, want %q", path, got, want)
+	}
+}
+
+func TestMountReusesLiveReadWriteView(t *testing.T) {
+	req, _ := testRequest(t)
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+	req.Table = []Entry{{
+		Point:  req.MergedDir,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "overlay",
+		Upper:  filepath.Join(runtime, "upper"),
+		Lowers: plannedLowers(runtime, 3),
+	}}
+	rec := &recRunner{}
+	w, err := mountTest(t, req, rec.run, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Reused {
+		t.Error("a matching live view must be reused")
+	}
+	if w.UpperDir != filepath.Join(runtime, "upper") {
+		t.Errorf("reused upper = %s", w.UpperDir)
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("reuse ran commands: %v", rec.calls)
+	}
+	if len(w.mounts) != 0 {
+		t.Errorf("reuse recorded mounts: %v", w.mounts)
+	}
+}
+
+func TestMountReusesLiveReadOnlyDirect(t *testing.T) {
+	req, _ := testRequest(t)
+	req.ReadOnly = true
+	req.Layers = nil
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req.Table = []Entry{{
+		Point: req.MergedDir, FSType: "fuse", Source: req.Full,
+	}}
+	rec := &recRunner{}
+	w, err := mountTest(t, req, rec.run, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Reused || w.UpperDir != "" || len(rec.calls) != 0 {
+		t.Fatalf("reused = %v upper = %q calls = %v", w.Reused, w.UpperDir, rec.calls)
+	}
+}
+
+func TestMountReusesLiveReadOnlyChain(t *testing.T) {
+	req, _ := testRequest(t)
+	req.ReadOnly = true
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+	req.Table = []Entry{{
+		Point:  req.MergedDir,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "overlay",
+		Lowers: plannedLowers(runtime, 3),
+	}}
+	rec := &recRunner{}
+	w, err := mountTest(t, req, rec.run, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Reused || w.UpperDir != "" || len(rec.calls) != 0 {
+		t.Fatalf("reused = %v upper = %q calls = %v", w.Reused, w.UpperDir, rec.calls)
+	}
+}
+
+func TestMountConflictsOnDifferentIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		readOnly bool
+		layers   bool
+		entry    func(req Request) Entry
+	}{
+		{
+			name: "read-write with a foreign upper",
+			entry: func(req Request) Entry {
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  "/elsewhere/up-1-2/upper",
+					Lowers: plannedLowers("/elsewhere/up-1-2", 3),
+				}
+			},
+		},
+		{
+			name: "read-write with the wrong layer count",
+			entry: func(req Request) Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  filepath.Join(runtime, "upper"),
+					Lowers: plannedLowers(runtime, 2),
+				}
+			},
+		},
+		{
+			name:     "read-only direct with a different image",
+			readOnly: true,
+			entry: func(req Request) Entry {
+				return Entry{Point: req.MergedDir, FSType: "fuse", Source: "/other/image.sqsh"}
+			},
+		},
+		{
+			name:     "read-only chain carrying an upper",
+			readOnly: true,
+			layers:   true,
+			entry: func(req Request) Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  filepath.Join(runtime, "upper"),
+					Lowers: plannedLowers(runtime, 3),
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := testRequest(t)
+			req.ReadOnly = tc.readOnly
+			if !tc.layers {
+				req.Layers = nil
+			}
+			if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			req.Table = []Entry{tc.entry(req)}
+			rec := &recRunner{}
+			_, err := mountTest(t, req, rec.run, testHooks())
+			if err == nil || !strings.Contains(err.Error(), "different view") {
+				t.Fatalf("err = %v, want a conflict", err)
+			}
+			if len(rec.calls) != 0 {
+				t.Fatalf("a conflict ran commands: %v", rec.calls)
+			}
+		})
+	}
+}
+
+func TestMountSubdirCannotReuseLiveEntry(t *testing.T) {
+	req, _ := testRequest(t)
+	req.ReadOnly = true
+	req.Layers = nil
+	req.Subdir = "src"
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req.Table = []Entry{{Point: req.MergedDir, FSType: "fuse", Source: req.Full}}
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "cannot show a subdir") {
+		t.Fatalf("err = %v, want an unverifiable-subdir conflict", err)
+	}
+	if len(rec.find("squashfuse_ll")) != 0 || len(rec.find("fuse-overlayfs")) != 0 {
+		t.Fatalf("a conflicted reuse ran mount commands: %v", rec.calls)
+	}
+}
+
+func TestMountCleansStaleTargetThenMounts(t *testing.T) {
+	req, dir := testRequest(t)
+	req.ReadOnly = true
+	req.Layers = nil
+	// A regular file where the target's parent belongs makes every
+	// stat of the target fail, which is how a dead mount reads
+	// before the cleanup exposes the plain directory underneath.
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("in the way"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req.MergedDir = filepath.Join(blocker, "merged")
+	req.Table = []Entry{{Point: req.MergedDir, FSType: "fuse", Source: req.Full}}
+	k := newFakeKernel()
+	k.lazyOnly[req.MergedDir] = true
+	k.repair = func(point string) {
+		if point != req.MergedDir {
+			return
+		}
+		if err := os.Remove(blocker); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.MkdirAll(point, 0o755); err != nil {
+			t.Error(err)
+		}
+	}
+	w, err := mountTest(t, req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Reused {
+		t.Error("a stale entry must never reuse")
+	}
+	unmounts := k.find("fusermount3")
+	if len(unmounts) != 2 || unmounts[0][1] != "-u" || unmounts[1][1] != "-uz" ||
+		unmounts[0][2] != req.MergedDir || unmounts[1][2] != req.MergedDir {
+		t.Fatalf("stale cleanup calls = %v, want -u then -uz", unmounts)
+	}
+	squash := k.find("squashfuse_ll")
+	if len(squash) != 1 || squash[0][4] != req.MergedDir {
+		t.Fatalf("squashfuse_ll calls = %v", squash)
+	}
+	if len(w.mounts) != 1 || w.mounts[0] != req.MergedDir {
+		t.Errorf("mounts = %v", w.mounts)
+	}
+}
+
+func TestMountCleansResidueOnPlannedLowerPoints(t *testing.T) {
+	req, _ := testRequest(t)
+	// Plan the runtime directory exactly like the engine will: from
+	// the device and inode of the existing target directory.
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dev, ino, err := devIno(req.MergedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
+	residue := filepath.Join(runtime, "lower-1")
+	if err := os.MkdirAll(residue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	listed := filepath.Join(runtime, "lower-2")
+	if err := os.MkdirAll(listed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k := newFakeKernel()
+	k.live[residue] = true
+	// A table row whose point reads as a plain directory is already
+	// gone; it must clean up silently without any command.
+	req.Table = []Entry{{Point: listed, FSType: "fuse", Source: req.Full}}
+
+	w, err := mountTest(t, req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Reused {
+		t.Error("residue cleanup must not report reuse")
+	}
+	unmounts := k.find("fusermount3")
+	if len(unmounts) != 1 || unmounts[0][2] != residue {
+		t.Fatalf("cleanup calls = %v, want only the live residue", unmounts)
+	}
+	if k.calls[0][0] != "fusermount3" {
+		t.Errorf("cleanup ran after mount commands: %v", k.calls[0])
+	}
+	if len(w.mounts) != 4 {
+		t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
 	}
 }
 

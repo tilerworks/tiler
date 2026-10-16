@@ -168,14 +168,288 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
+	if underPrefix(req.MergedDir, req.RuntimeDir) {
+		return nil, fmt.Errorf("workspace: %s is inside the runtime tree %s",
+			req.MergedDir, req.RuntimeDir)
+	}
 	members, err = pruneBySubdir(members, req, run)
 	if err != nil {
 		return nil, err
 	}
-	if req.ReadOnly && len(members) == 1 {
-		return mountDirect(req, members[0], run, seam)
+	w := &Workspace{MergedDir: req.MergedDir, run: run}
+	if err := w.prepareTarget(req, members, run, seam); err != nil {
+		return nil, err
 	}
-	return mountOverlay(req, members, run, seam)
+	if w.Reused {
+		return w, nil
+	}
+	if err := w.plan(req, members, run, seam); err != nil {
+		return nil, err
+	}
+	if req.ReadOnly && len(members) == 1 {
+		return mountDirect(req, members[0], w, seam)
+	}
+	return mountOverlay(req, members, w, seam)
+}
+
+// underPrefix reports whether dir is prefix itself or lives below
+// it. Both sides are cleaned, and the comparison honors the
+// directory boundary so a sibling of the prefix never matches.
+func underPrefix(dir, prefix string) bool {
+	dir, prefix = filepath.Clean(dir), filepath.Clean(prefix)
+	if dir == prefix {
+		return true
+	}
+	return strings.HasPrefix(dir, prefix+string(filepath.Separator))
+}
+
+// prepareTarget creates the target when missing and resolves the
+// injected table: a live entry with matching identity is reused, a
+// different identity conflicts, and a listed-but-dead entry is torn
+// down before the fresh stack is built. A target that cannot be
+// statted is left for the table phase or the final guard to report.
+func (w *Workspace) prepareTarget(
+	req Request,
+	members []member,
+	run runFunc,
+	seam hooks,
+) error {
+	if _, err := os.Stat(req.MergedDir); errors.Is(err, os.ErrNotExist) {
+		if err := w.mkdirNew(req.MergedDir); err != nil {
+			return w.fail(err)
+		}
+	}
+	reused, err := w.tablePhase(req, members, run, seam)
+	if err != nil {
+		return w.fail(err)
+	}
+	w.Reused = reused
+	return nil
+}
+
+// tablePhase resolves the injected snapshot for the target point. A
+// nil table skips every table-driven check.
+func (w *Workspace) tablePhase(
+	req Request,
+	members []member,
+	run runFunc,
+	seam hooks,
+) (bool, error) {
+	if req.Table == nil {
+		return false, nil
+	}
+	entry, listed := findEntry(req.Table, req.MergedDir)
+	if !listed {
+		return false, nil
+	}
+	if !liveOf(seam, req.MergedDir) {
+		return false, cleanPoint(req.MergedDir, run, seam)
+	}
+	if err := identity(req, members, entry); err != nil {
+		return false, err
+	}
+	if !req.ReadOnly && entry.Upper != "" {
+		w.UpperDir = entry.Upper
+		w.runtimeDir = filepath.Dir(entry.Upper)
+	}
+	return true, nil
+}
+
+// findEntry returns the last table row at the exact point; later
+// mounts shadow earlier ones.
+func findEntry(table []Entry, point string) (Entry, bool) {
+	found := Entry{}
+	ok := false
+	for _, entry := range table {
+		if entry.Point == point {
+			found, ok = entry, true
+		}
+	}
+	return found, ok
+}
+
+// identity verifies a live entry at the target serves exactly what
+// this request would build. A planned subdir makes reuse
+// unverifiable: the daemon consumes the option and the mount table
+// never shows it, so the engine conflicts instead of guessing.
+func identity(req Request, members []member, entry Entry) error {
+	if req.Subdir != "" {
+		return fmt.Errorf(
+			"workspace: %s already mounts %s and the mount table cannot show a subdir; refusing to guess whether it serves %s; unmount it first",
+			req.MergedDir, entry.Source, req.Subdir)
+	}
+	if req.ReadOnly && len(members) == 1 {
+		if entry.Upper == "" && len(entry.Lowers) == 0 &&
+			entry.Source == members[0].fsname {
+			return nil
+		}
+		return conflictErr(req.MergedDir, entry)
+	}
+	return overlayIdentity(req, entry, len(members), !req.ReadOnly)
+}
+
+// overlayIdentity accepts a live overlay whose lowers are exactly
+// the planned transit points under one runtime directory of the
+// configured runtime root, with an upper for a read-write view and
+// none for a read-only chain. The live view masks the target's own
+// device and inode, so the runtime directory is read from the entry
+// instead of a fresh stat.
+func overlayIdentity(req Request, entry Entry, count int, writable bool) error {
+	runtime := ""
+	switch {
+	case writable && filepath.Base(entry.Upper) == "upper":
+		runtime = filepath.Dir(entry.Upper)
+	case !writable && entry.Upper == "" && len(entry.Lowers) > 0:
+		runtime = filepath.Dir(entry.Lowers[0])
+	}
+	if runtime == "" || !strings.HasPrefix(filepath.Base(runtime), "up-") ||
+		!underPrefix(runtime, req.RuntimeDir) {
+		return conflictErr(req.MergedDir, entry)
+	}
+	if !slices.Equal(entry.Lowers, plannedLowers(runtime, count)) {
+		return conflictErr(req.MergedDir, entry)
+	}
+	return nil
+}
+
+func conflictErr(point string, entry Entry) error {
+	return fmt.Errorf(
+		"workspace: %s already mounts a different view (source %q, upper %q); refusing to restack it silently",
+		point, entry.Source, entry.Upper)
+}
+
+// plan guards the target, then derives the runtime directory of a
+// fresh stack and clears any residue on the planned transit points.
+// The guard runs first so every refusal leaves the system
+// untouched. A read-only single member mounts directly and needs no
+// runtime planning.
+func (w *Workspace) plan(
+	req Request,
+	members []member,
+	run runFunc,
+	seam hooks,
+) error {
+	if err := guardTarget(req.MergedDir); err != nil {
+		return w.fail(err)
+	}
+	if req.ReadOnly && len(members) == 1 {
+		return nil
+	}
+	dev, ino, err := devIno(req.MergedDir)
+	if err != nil {
+		return w.fail(fmt.Errorf("workspace: %w", err))
+	}
+	w.runtimeDir = filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
+	if !req.ReadOnly {
+		w.UpperDir = filepath.Join(w.runtimeDir, "upper")
+	}
+	if err := w.cleanLowers(req, len(members), run, seam); err != nil {
+		return w.fail(err)
+	}
+	return nil
+}
+
+// plannedLowers are the lower-N transit points a stack of count
+// members uses under one runtime directory, newest first.
+func plannedLowers(runtime string, count int) []string {
+	points := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		points = append(points, filepath.Join(runtime, fmt.Sprintf("lower-%d", i)))
+	}
+	return points
+}
+
+// cleanLowers tears down any mount a planned transit point still
+// carries, found through the table or the live probe, so the fresh
+// stack becomes the one consistent combination. A point that
+// already reads as a plain directory cleans up as a no-op.
+func (w *Workspace) cleanLowers(
+	req Request,
+	count int,
+	run runFunc,
+	seam hooks,
+) error {
+	for _, point := range plannedLowers(w.runtimeDir, count) {
+		if _, listed := findEntry(req.Table, point); !listed && !liveOf(seam, point) {
+			continue
+		}
+		if err := cleanPoint(point, run, seam); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanPoint tears one point down: fusermount3 -u, escalating to the
+// lazy -uz, then waiting until the point reads as a plain directory
+// again.
+func cleanPoint(point string, run runFunc, seam hooks) error {
+	if pointGone(point, seam) {
+		return nil
+	}
+	if err := run("fusermount3", "-u", point); err != nil {
+		if lazyErr := run("fusermount3", "-uz", point); lazyErr != nil {
+			return fmt.Errorf("workspace: cannot unmount %s: %w (lazy: %v)",
+				point, err, lazyErr)
+		}
+	}
+	return waitGone(point, seam)
+}
+
+// pointGone reports the point is a plain directory again, or is
+// absent, so nothing can be mounted on it.
+func pointGone(point string, seam hooks) bool {
+	if _, err := os.Stat(point); err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return !liveOf(seam, point)
+}
+
+// waitGone polls until a torn-down point stops behaving as a mount.
+func waitGone(point string, seam hooks) error {
+	sleep := sleepOf(seam)
+	for i := 0; i < livePolls; i++ {
+		if pointGone(point, seam) {
+			return nil
+		}
+		sleep(liveInterval)
+	}
+	return fmt.Errorf("workspace: %s is still mounted after unmounting", point)
+}
+
+// guardTarget requires the mount point to be an empty directory
+// owned by the current user, so a mount never hides user data and
+// FUSE ownership stays consistent.
+func guardTarget(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace: %s is not a directory", dir)
+	}
+	if err := checkOwner(fileUID(info), uint32(os.Geteuid())); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("workspace: %s is not empty; refusing to hide its content under a mount", dir)
+	}
+	return nil
+}
+
+// checkOwner compares a mount point owner with the effective uid.
+// FUSE restricts unmounting to the mount owner, so a point owned by
+// someone else is refused up front. Pure for testability.
+func checkOwner(uid, euid uint32) error {
+	if uid != euid {
+		return fmt.Errorf("workspace: mount point owner %d is not the current user %d",
+			uid, euid)
+	}
+	return nil
 }
 
 // checkSubdir validates the image-relative subdir shape before any
@@ -301,11 +575,7 @@ func layerFSName(req Request, i int) string {
 
 // mountDirect mounts one read-only member straight onto the target
 // directory: one FUSE daemon, no runtime directory, and no overlay.
-func mountDirect(req Request, m member, run runFunc, seam hooks) (*Workspace, error) {
-	w := &Workspace{MergedDir: req.MergedDir, run: run}
-	if err := w.mkdirNew(req.MergedDir); err != nil {
-		return nil, w.fail(err)
-	}
+func mountDirect(req Request, m member, w *Workspace, seam hooks) (*Workspace, error) {
 	if err := w.mountPoint(m, req, req.MergedDir, seam); err != nil {
 		return nil, err
 	}
@@ -316,31 +586,19 @@ func mountDirect(req Request, m member, run runFunc, seam hooks) (*Workspace, er
 // merges them onto the target with fuse-overlayfs. A read-write view
 // keeps an upper and a work directory; a read-only chain merges
 // lowerdir-only.
-func mountOverlay(req Request, members []member, run runFunc, seam hooks) (*Workspace, error) {
-	w := &Workspace{MergedDir: req.MergedDir, run: run}
+func mountOverlay(req Request, members []member, w *Workspace, seam hooks) (*Workspace, error) {
 	if err := w.mkdirNew(req.RuntimeDir); err != nil {
 		return nil, w.fail(err)
-	}
-	if err := w.mkdirNew(req.MergedDir); err != nil {
-		return nil, w.fail(err)
-	}
-	dev, ino, err := devIno(req.MergedDir)
-	if err != nil {
-		return nil, w.fail(fmt.Errorf("workspace: %w", err))
-	}
-	w.runtimeDir = filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
-	if !req.ReadOnly {
-		w.UpperDir = filepath.Join(w.runtimeDir, "upper")
 	}
 	if err := w.prepareRuntime(req.ReadOnly); err != nil {
 		return nil, w.fail(err)
 	}
+	points := plannedLowers(w.runtimeDir, len(members))
 	for i, m := range members {
-		point := filepath.Join(w.runtimeDir, fmt.Sprintf("lower-%d", i))
-		if err := w.mkdirNew(point); err != nil {
+		if err := w.mkdirNew(points[i]); err != nil {
 			return nil, w.fail(err)
 		}
-		if err := w.mountPoint(m, req, point, seam); err != nil {
+		if err := w.mountPoint(m, req, points[i], seam); err != nil {
 			return nil, err
 		}
 	}
@@ -435,21 +693,31 @@ func overlayArgv(lowers []string, upper, work, options, merged string) []string 
 // tools daemonize, so a successful exec does not yet mean the mount
 // exists; a mount that never appears or dies again fails here.
 func waitLive(point string, seam hooks) error {
-	live := seam.live
-	if live == nil {
-		live = liveMount
-	}
-	sleep := seam.sleep
-	if sleep == nil {
-		sleep = time.Sleep
-	}
+	sleep := sleepOf(seam)
 	for i := 0; i < livePolls; i++ {
-		if live(point) {
+		if liveOf(seam, point) {
 			return nil
 		}
 		sleep(liveInterval)
 	}
 	return fmt.Errorf("workspace: %s did not become a live mount", point)
+}
+
+// liveOf probes through the seam, defaulting to the real stat probe.
+func liveOf(seam hooks, point string) bool {
+	if seam.live != nil {
+		return seam.live(point)
+	}
+	return liveMount(point)
+}
+
+// sleepOf is the seam pause between polls, defaulting to the real
+// clock.
+func sleepOf(seam hooks) func(time.Duration) {
+	if seam.sleep != nil {
+		return seam.sleep
+	}
+	return time.Sleep
 }
 
 // mkdirNew creates dir when it does not exist and records every new
