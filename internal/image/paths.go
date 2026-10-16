@@ -8,13 +8,23 @@ import (
 	"strings"
 )
 
+// Layout names shared with packages that match library paths.
 const (
-	fileImage   = "image.sqsh"
+	// ImageFile is the active full image name in a repository dir.
+	ImageFile = "image.sqsh"
+	// IncrDir is the subdirectory holding incremental layer files.
+	IncrDir = "incr"
+	// SquashExt is the file extension of every packed image file.
+	SquashExt = ".sqsh"
+)
+
+const (
+	fileImage   = ImageFile
 	fileMeta    = "meta.yaml"
-	dirIncr     = "incr"
+	dirIncr     = IncrDir
 	dirArchives = "archives"
 	dirHold     = "hold"
-	squashExt   = ".sqsh"
+	squashExt   = SquashExt
 )
 
 // ErrInvalidPath is a library-relative path that is absolute or
