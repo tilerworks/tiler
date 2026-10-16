@@ -1,0 +1,155 @@
+package session
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/jiangxin/tiler/internal/image"
+)
+
+// aliceRef is the identity the seeded fixtures pin.
+func aliceRef() image.Ref {
+	return image.Ref{Owner: "alice", Repo: "app", FullID: "0123456789abcdef"}
+}
+
+// seedActionRecord writes one record carrying a single action with
+// the given status, bypassing the engine for corrupt-shape fixtures.
+func seedActionRecord(t *testing.T, e *Engine, name, status string) {
+	t.Helper()
+	action := mountAction("/ws/view")
+	action.Seq = 1
+	action.Status = status
+	action.Timestamp = testNow
+	rec := Record{Name: name, State: StateActive, Actions: []Action{action}, CreatedAt: testNow}
+	if err := e.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefsHoldsActiveLibraryMounts(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", "/ws/view")
+	refs := Refs{Dir: dir}
+
+	held, err := refs.Holds(aliceRef())
+	if err != nil || !held {
+		t.Fatalf("active record held = %v (%v)", held, err)
+	}
+	for _, probe := range []image.Ref{
+		{Owner: "alice", Repo: "app", FullID: "fedcba9876543210"},
+		{Owner: "bob", Repo: "app", FullID: "0123456789abcdef"},
+		{Owner: "alice", Repo: "other", FullID: "0123456789abcdef"},
+	} {
+		held, err := refs.Holds(probe)
+		if err != nil || held {
+			t.Fatalf("probe %+v held = %v (%v)", probe, held, err)
+		}
+	}
+	// A file-path image records no identity and never protects.
+	held, err = refs.Holds(image.Ref{})
+	if err != nil || held {
+		t.Fatalf("empty ref held = %v (%v)", held, err)
+	}
+	// A closed record pins nothing.
+	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	held, err = refs.Holds(aliceRef())
+	if err != nil || held {
+		t.Fatalf("closed record held = %v (%v)", held, err)
+	}
+}
+
+func TestRefsCountsCrashShapesConservatively(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusFailed, StatusMounted} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			e := newEngine(dir)
+			seedActionRecord(t, e, "dev", status)
+			held, err := Refs{Dir: dir}.Holds(aliceRef())
+			if err != nil || !held {
+				t.Fatalf("status %s held = %v (%v)", status, held, err)
+			}
+		})
+	}
+	t.Run(StatusUnmounted, func(t *testing.T) {
+		dir := t.TempDir()
+		e := newEngine(dir)
+		seedActionRecord(t, e, "dev", StatusUnmounted)
+		held, err := Refs{Dir: dir}.Holds(aliceRef())
+		if err != nil || held {
+			t.Fatalf("unmounted held = %v (%v)", held, err)
+		}
+	})
+}
+
+func TestRefsFilePathImageNeverProtects(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	action := mountAction("/ws/view")
+	action.Seq = 1
+	action.Status = StatusMounted
+	action.Owner, action.Repo, action.FullID = "", "", ""
+	action.Image = "/somewhere/bare.sqsh"
+	rec := Record{Name: "dev", State: StateActive, Actions: []Action{action}, CreatedAt: testNow}
+	if err := e.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	held, err := Refs{Dir: dir}.Holds(aliceRef())
+	if err != nil || held {
+		t.Fatalf("file-path record held = %v (%v)", held, err)
+	}
+}
+
+func TestRefsHeldRecordIsConservative(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("advisory locking needs linux")
+	}
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", "/ws/view")
+	release, err := e.lockSession("dev", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	// A record another process holds may pin the image; the safe
+	// side refuses the delete.
+	held, err := Refs{Dir: dir}.Holds(aliceRef())
+	if err != nil || !held {
+		t.Fatalf("held record held = %v (%v)", held, err)
+	}
+}
+
+func TestRefsToleratesRemovedRecords(t *testing.T) {
+	// A record removed after the listing answers "does not hold"
+	// instead of failing the whole scan.
+	dir := t.TempDir()
+	held, err := Refs{Dir: dir}.recordHolds(Store{Dir: dir}, "absent", aliceRef())
+	if err != nil || held {
+		t.Fatalf("absent record held = %v (%v)", held, err)
+	}
+}
+
+func TestRefsMissingDirHoldsNothing(t *testing.T) {
+	refs := Refs{Dir: filepath.Join(t.TempDir(), "absent")}
+	held, err := refs.Holds(aliceRef())
+	if err != nil || held {
+		t.Fatalf("held = %v err = %v", held, err)
+	}
+}
+
+func TestRefsReportsCorruptRecords(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(":::"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Refs{Dir: dir}.Holds(aliceRef())
+	if err == nil {
+		t.Fatal("a corrupt record was silently dropped")
+	}
+}

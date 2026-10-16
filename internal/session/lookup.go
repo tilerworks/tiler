@@ -230,20 +230,23 @@ func (e *Engine) recordForMountpoint(point string) (Record, bool, error) {
 
 // eachRecord visits every record whose non-blocking scan lock is
 // free, stopping when visit returns true. A record another process
-// holds is skipped this round; a corrupt record is reported, never
-// silently dropped.
-func (e *Engine) eachRecord(visit func(Record) bool) error {
-	names, err := e.names()
+// holds is skipped this round, and so is one removed after the
+// listing; a corrupt record is reported, never silently dropped.
+func (s Store) eachRecord(visit func(Record) bool) error {
+	names, err := s.names()
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
-		release, ok := e.tryReadLock(name)
+		release, ok := s.tryReadLock(name)
 		if !ok {
 			continue
 		}
-		rec, err := e.Load(name)
+		rec, err := s.Load(name)
 		release()
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -257,8 +260,8 @@ func (e *Engine) eachRecord(visit func(Record) bool) error {
 // tryReadLock takes one record's non-blocking scan lock. A busy
 // record is skipped; a platform without advisory locking reads
 // unlocked, which the atomic record write keeps safe.
-func (e *Engine) tryReadLock(name string) (func(), bool) {
-	release, err := e.tryLockSession(name)
+func (s Store) tryReadLock(name string) (func(), bool) {
+	release, err := s.tryLockSession(name)
 	switch {
 	case err == nil:
 		return release, true

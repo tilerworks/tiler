@@ -261,14 +261,20 @@ func (e *Engine) Remove(name string) error {
 		return fmt.Errorf("session: %s is %s; close it before removing it",
 			name, rec.State)
 	}
-	recordPath, err := e.recordPath(name)
+	return e.deleteRecordFiles(name)
+}
+
+// deleteRecordFiles removes the record and its lock file. The
+// caller holds the session's exclusive lock.
+func (s Store) deleteRecordFiles(name string) error {
+	recordPath, err := s.recordPath(name)
 	if err != nil {
 		return err
 	}
 	if err := os.Remove(recordPath); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
-	lockPath, err := e.lockPath(name)
+	lockPath, err := s.lockPath(name)
 	if err != nil {
 		return err
 	}
