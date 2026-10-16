@@ -71,11 +71,13 @@ type Engine struct {
 	// LockTimeout bounds the exclusive-lock wait. Zero uses
 	// DefaultLockTimeout.
 	LockTimeout time.Duration
-
-	// lock overrides the advisory lock for in-package tests on
-	// platforms without flock. Production callers always take the
-	// real lock.
-	lock func(name string, timeout time.Duration) (func(), error)
+	// Lock replaces the advisory session locking, mirroring the
+	// mount engine's Run seam. Nil takes the real flock: a positive
+	// timeout polls until the deadline, a zero timeout attempts
+	// once and reports ErrLockHeld when busy. Production callers
+	// leave it nil; tests inject it where flock is unavailable or
+	// not the subject.
+	Lock func(name string, timeout time.Duration) (func(), error)
 }
 
 // New creates one fresh active record under the session's exclusive
@@ -109,6 +111,15 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 		return Result{}, err
 	}
 	defer release()
+	rec, err := e.Load(name)
+	if err != nil {
+		return Result{}, err
+	}
+	if rec.State != StateActive {
+		return Result{}, fmt.Errorf(
+			"session: %s is %s; create a new session to mount into it",
+			name, rec.State)
+	}
 	action.Type = TypeMount
 	if action.Timestamp.IsZero() {
 		action.Timestamp = e.now()
@@ -327,13 +338,20 @@ func (e *Engine) cleanFunc() CleanFunc {
 	return CleanStale
 }
 
-// lockExclusive takes the session's exclusive lock through the test
-// seam, defaulting to the real advisory flock.
+// lockExclusive takes the session's exclusive lock through the
+// injected seam, defaulting to the real advisory flock.
 func (e *Engine) lockExclusive(name string) (func(), error) {
-	if e.lock != nil {
-		return e.lock(name, e.lockTimeout())
+	return e.lockFor(name, e.lockTimeout())
+}
+
+// lockFor takes the session's lock through the injected seam. A
+// zero timeout makes the non-blocking attempt scans and cleanup
+// mutations use.
+func (e *Engine) lockFor(name string, timeout time.Duration) (func(), error) {
+	if e.Lock != nil {
+		return e.Lock(name, timeout)
 	}
-	return e.lockSession(name, e.lockTimeout())
+	return e.lockSession(name, timeout)
 }
 
 // lockTimeout is the configured lock wait, or the default.

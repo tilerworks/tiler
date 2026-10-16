@@ -20,7 +20,7 @@ func newEngine(dir string) *Engine {
 	return &Engine{
 		Store: Store{Dir: dir},
 		Now:   func() time.Time { return testNow },
-		lock: func(string, time.Duration) (func(), error) {
+		Lock: func(string, time.Duration) (func(), error) {
 			return func() {}, nil
 		},
 	}
@@ -172,6 +172,27 @@ func TestRunMountMissingRecordFails(t *testing.T) {
 		func(Action) (Result, error) { return Result{}, nil })
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("RunMount error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRunMountRejectsClosedSession(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", filepath.Join(dir, "view"))
+	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.RunMount("dev", mountAction(filepath.Join(dir, "other")),
+		func(Action) (Result, error) { return Result{}, nil })
+	if err == nil || !strings.Contains(err.Error(), "create a new session") {
+		t.Fatalf("RunMount error = %v", err)
+	}
+	rec, loadErr := e.Load("dev")
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(rec.Actions) != 1 {
+		t.Fatalf("a refused mount was recorded: %+v", rec.Actions)
 	}
 }
 

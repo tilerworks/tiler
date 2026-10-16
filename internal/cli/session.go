@@ -185,8 +185,10 @@ func sessionCommandEngine(cmd *cobra.Command, label, name string) (
 
 // sessionEngine assembles the lifecycle engine over the loaded
 // configuration. The table loads through the same seam the other
-// commands use; health and clock stay the real implementations.
-func sessionEngine(cfg config.Config) *session.Engine {
+// commands use; health and clock stay the real implementations. It
+// is a variable so command tests can no-op the advisory lock, the
+// same seam discipline the engines follow.
+var sessionEngine = func(cfg config.Config) *session.Engine {
 	return &session.Engine{
 		Store: session.Store{Dir: cfg.SessionsDir},
 		LoadTable: func() ([]mountinfo.Mount, error) {
@@ -198,34 +200,17 @@ func sessionEngine(cfg config.Config) *session.Engine {
 
 // sessionMount resolves one recorded action back into an engine
 // request: the image reference resolves through the library, and
-// the request assembles exactly like the mount command's, from the
-// recorded mode, subdir, and mountpoint.
+// the execution shares the mount command's engine half.
 func sessionMount(cfg config.Config) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		target, err := image.ResolveMount(cfg, action.Image)
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}
-		req, err := mountRequest(cfg, target, action.Mountpoint, mountFlags{
+		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
 			readOnly: action.Mode == session.ModeRO,
 			subdir:   action.Subdir,
 		})
-		if err != nil {
-			return session.Result{}, err
-		}
-		ws, err := mountEngine(req)
-		if err != nil {
-			if errors.Is(err, workspace.ErrUnavailable) {
-				return session.Result{}, fmt.Errorf(
-					"%w; check the environment with tiler doctor", err)
-			}
-			return session.Result{}, err
-		}
-		return session.Result{
-			Mountpoint: ws.MergedDir,
-			Upper:      ws.UpperDir,
-			Reused:     ws.Reused,
-		}, nil
 	}
 }
 

@@ -95,7 +95,7 @@ func (e *Engine) cleanupOne(
 // non-blocking lock, re-checking the rule under the lock. A busy
 // record waits for a later round.
 func (e *Engine) removeExpired(name string, maxAge time.Duration, now time.Time) (*CleanupEvent, error) {
-	release, err := e.tryLockSession(name)
+	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
 			return nil, nil
@@ -124,7 +124,7 @@ func (e *Engine) removeExpired(name string, maxAge time.Duration, now time.Time)
 // to closed under the non-blocking lock, re-checking the rule under
 // the lock so a concurrent recovery keeps the session open.
 func (e *Engine) closeStale(name string, now time.Time, health HealthFunc) (*CleanupEvent, error) {
-	release, err := e.tryLockSession(name)
+	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
 			return nil, nil

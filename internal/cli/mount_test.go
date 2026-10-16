@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
@@ -68,6 +70,7 @@ func (f *mountFake) umount(req workspace.UnmountRequest) (int, error) {
 // mount table for the command tests.
 func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	t.Helper()
+	withSessionLockSeam(t)
 	f := &mountFake{table: table}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
 	origMount, origUmount := mountEngine, unmountEngine
@@ -81,6 +84,22 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	mountEngine = f.mount
 	unmountEngine = f.umount
 	return f
+}
+
+// withSessionLockSeam makes the session engine's advisory lock a
+// no-op, so command tests stay hermetic and run on any platform;
+// the real flock has its own Linux tests.
+func withSessionLockSeam(t *testing.T) {
+	t.Helper()
+	original := sessionEngine
+	t.Cleanup(func() { sessionEngine = original })
+	sessionEngine = func(cfg config.Config) *session.Engine {
+		engine := original(cfg)
+		engine.Lock = func(string, time.Duration) (func(), error) {
+			return func() {}, nil
+		}
+		return engine
+	}
 }
 
 // buildLibrary publishes one full image through the build command

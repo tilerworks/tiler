@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,16 +12,6 @@ import (
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
-
-// requireSessionLocks skips the record lifecycle tests on platforms
-// without advisory locking; every mutating session operation
-// serializes on the flock.
-func requireSessionLocks(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("session records need linux advisory locking")
-	}
-}
 
 // writeSessionRecord seeds one active session record through the
 // authoritative store, with the given actions renumbered in order.
@@ -64,7 +53,6 @@ func libraryAction(imageRef, mountpoint, mode string) session.Action {
 }
 
 func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
-	requireSessionLocks(t)
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
@@ -181,7 +169,6 @@ func TestSessionUnknownNameIsRuntimeError(t *testing.T) {
 }
 
 func TestSessionOpenReplaysMissingMountsAndIsIdempotent(t *testing.T) {
-	requireSessionLocks(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	repoDir := buildLibrary(t, home, lib, imagesDir, "alice/app")
@@ -231,7 +218,6 @@ func TestSessionOpenReplaysMissingMountsAndIsIdempotent(t *testing.T) {
 }
 
 func TestSessionOpenResolvesFileImagesAndModes(t *testing.T) {
-	requireSessionLocks(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
@@ -268,7 +254,6 @@ func TestSessionOpenResolvesFileImagesAndModes(t *testing.T) {
 }
 
 func TestSessionOpenReportsUnavailableEnvironment(t *testing.T) {
-	requireSessionLocks(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
@@ -293,7 +278,6 @@ func TestSessionOpenReportsUnavailableEnvironment(t *testing.T) {
 }
 
 func TestSessionCloseUnmountsInReverseOrder(t *testing.T) {
-	requireSessionLocks(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
