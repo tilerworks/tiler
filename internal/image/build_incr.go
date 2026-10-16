@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/workspace"
 )
 
 // maxStackDepth is one full image plus at most seven increments.
@@ -37,7 +38,9 @@ type IncrRequest struct {
 	// Run executes external tools. Nil runs mksquashfs through exec.
 	Run ToolRunner
 	// MountSmoke is the quality gate run on the published layer.
-	// Nil skips the gate. A failing gate fails the build.
+	// Nil runs the default: a read-only mount spot check where
+	// mounting works, and a distinguishable ErrSmokeSkipped where it
+	// cannot, which still succeeds the build.
 	MountSmoke func(image string) error
 }
 
@@ -233,16 +236,37 @@ func finishIncr(
 		removeFile(tmp)
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
+	if err := verifyFileSHA256(final, entry.SHA256); err != nil {
+		removeFile(final)
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
 	if err := replaceMeta(repo, active, next, seam); err != nil {
 		removeFile(final)
 		return IncrResult{}, err
 	}
-	if req.MountSmoke != nil {
-		if err := req.MountSmoke(final); err != nil {
-			return IncrResult{}, fmt.Errorf("build: quality gate: %w", err)
-		}
+	smoke := req.MountSmoke
+	if smoke == nil {
+		smoke = defaultMountSmoke
+	}
+	if err := smoke(final); err != nil && !errors.Is(err, ErrSmokeSkipped) {
+		return IncrResult{}, fmt.Errorf("build: quality gate: %w", err)
 	}
 	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
+}
+
+// ErrSmokeSkipped marks a quality gate that could not run because
+// mounting is unavailable here. The build treats it as success.
+var ErrSmokeSkipped = errors.New("build: mount smoke gate skipped")
+
+// defaultMountSmoke is the quality gate used when a request injects
+// none: a read-only mount spot check of the fresh layer where
+// mounting works, and a distinguishable skip where it cannot.
+func defaultMountSmoke(path string) error {
+	err := workspace.SmokeReadOnly(path)
+	if errors.Is(err, workspace.ErrUnavailable) {
+		return ErrSmokeSkipped
+	}
+	return err
 }
 
 // reuseChainLayer is the idempotent rebuild of a layer the chain
@@ -262,6 +286,9 @@ func reuseChainLayer(repo Repo, id string, sum [32]byte, tmp string, seam hooks)
 		removeFile(tmp)
 	} else if err := seam.do(tmp, path); err != nil {
 		removeFile(tmp)
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	if err := verifyFileSHA256(path, hexDigest(sum)); err != nil {
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
 	return IncrResult{ID: id, Path: path, SHA256: hexDigest(sum)}, nil

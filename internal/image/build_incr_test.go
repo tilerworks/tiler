@@ -23,6 +23,10 @@ func upperDir(t *testing.T) string {
 	return upper
 }
 
+// skipSmoke keeps unit tests with fake packer output away from the
+// default read-only mount gate.
+func skipSmoke(string) error { return nil }
+
 func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
@@ -36,7 +40,7 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	req := IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upper,
 		Source: Source{Commit: "abc123"},
-		Now:    fixedNow, Run: runner.run,
+		Now:    fixedNow, Run: runner.run, MountSmoke: skipSmoke,
 	}
 	res, err := BuildIncr(req)
 	if err != nil {
@@ -159,7 +163,10 @@ func TestBuildIncrSameDigestIsNoOp(t *testing.T) {
 	seedActive(t, repo, []byte("base-full"), false)
 	upper := upperDir(t)
 	body := []byte("stable-layer")
-	req := IncrRequest{Config: cfg, Name: "alice/app", Upper: upper, Now: fixedNow}
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upper, Now: fixedNow,
+		MountSmoke: skipSmoke,
+	}
 	req.Run = (&fakeRunner{body: body}).run
 	first, err := BuildIncr(req)
 	if err != nil {
@@ -199,13 +206,13 @@ func TestBuildIncrRestoresMissingLayerFile(t *testing.T) {
 	active := seedActive(t, repo, []byte("base-full"), false)
 	body := []byte("layer-lost-its-file")
 	sum := sha256.Sum256(body)
-	active.Chain = []ChainEntry{validEntry(active.ID, ID(sum))}
+	active.Chain = []ChainEntry{realEntry(active.ID, body)}
 	if err := Store(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	req := IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
-		Run: (&fakeRunner{body: body}).run,
+		Run: (&fakeRunner{body: body}).run, MountSmoke: skipSmoke,
 	}
 	res, err := BuildIncr(req)
 	if err != nil {
@@ -218,6 +225,105 @@ func TestBuildIncrRestoresMissingLayerFile(t *testing.T) {
 	loaded, err := Load(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(loaded.Chain) != 1 {
+		t.Fatalf("chain = %+v", loaded.Chain)
+	}
+}
+
+// realEntry is a chain member whose digest fields describe body, so
+// verification of the layer file can pass.
+func realEntry(parent string, body []byte) ChainEntry {
+	sum := sha256.Sum256(body)
+	return ChainEntry{
+		ID:        ID(sum),
+		Parent:    parent,
+		Size:      int64(len(body)),
+		SHA256:    hex.EncodeToString(sum[:]),
+		MtimeUnix: 1710000001,
+		CreatedAt: fixedNow(),
+	}
+}
+
+func TestBuildIncrVerifiesPublishedLayer(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
+		Run: (&fakeRunner{body: []byte("good-layer")}).run, MountSmoke: skipSmoke,
+	}
+	incrDir := filepath.Join(repo.Dir, dirIncr)
+	_, err = buildIncr(req, hooks{
+		rename: func(oldpath, newpath string) error {
+			if filepath.Dir(newpath) == incrDir && strings.HasSuffix(newpath, squashExt) {
+				// Simulate storage that corrupts the layer as it lands.
+				if writeErr := os.WriteFile(newpath, []byte("corrupted"), 0o644); writeErr != nil {
+					return writeErr
+				}
+				return os.Remove(oldpath)
+			}
+			return os.Rename(oldpath, newpath)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match sha256") {
+		t.Fatalf("err = %v", err)
+	}
+	loaded, loadErr := Load(repo.MetaPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.ID != active.ID || len(loaded.Chain) != 0 {
+		t.Fatalf("meta changed despite the failed verification: %+v", loaded)
+	}
+	entries, readErr := os.ReadDir(incrDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("corrupt layer left behind: %v", entries)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+func TestBuildIncrReuseDetectsCorruptLayer(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	body := []byte("layer-with-corrupt-twin")
+	active.Chain = []ChainEntry{realEntry(active.ID, body)}
+	if err := Store(repo.MetaPath(), active); err != nil {
+		t.Fatal(err)
+	}
+	incrDir := filepath.Join(repo.Dir, dirIncr)
+	if err := os.MkdirAll(incrDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt, err := repo.IncrPath(active.Chain[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(corrupt, []byte("corrupted-on-disk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
+		Run: (&fakeRunner{body: body}).run, MountSmoke: skipSmoke,
+	}
+	_, err = BuildIncr(req)
+	if err == nil || !strings.Contains(err.Error(), "does not match sha256") {
+		t.Fatalf("err = %v", err)
+	}
+	assertBytes(t, corrupt, []byte("corrupted-on-disk"))
+	loaded, loadErr := Load(repo.MetaPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
 	}
 	if len(loaded.Chain) != 1 {
 		t.Fatalf("chain = %+v", loaded.Chain)
@@ -257,7 +363,7 @@ func TestBuildIncrSubdirMovesUpperWithoutCopy(t *testing.T) {
 	}
 	res, err := BuildIncr(IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upper, Subdir: "a/b",
-		Now: fixedNow, Run: run,
+		Now: fixedNow, Run: run, MountSmoke: skipSmoke,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -2,22 +2,25 @@ package image
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 )
 
 // VerifySHA256 re-hashes a published file and compares the digest
-// with meta. Builds call it after publishing so a torn write cannot
-// pass as a good image.
+// with meta. Builds call it when the build ends so a torn rename
+// cannot pass as a good image.
 func VerifySHA256(meta Meta, path string) error {
+	return verifyFileSHA256(path, meta.SHA256)
+}
+
+func verifyFileSHA256(path, want string) error {
 	sum, err := fileSHA256(path)
 	if err != nil {
 		return err
 	}
-	if hex.EncodeToString(sum[:]) != meta.SHA256 {
-		return fmt.Errorf("image: %s does not match meta sha256", path)
+	if got := hexDigest(sum); got != want {
+		return fmt.Errorf("image: %s does not match sha256", path)
 	}
 	return nil
 }
