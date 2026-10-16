@@ -213,6 +213,75 @@ func TestBuildFullRefusesFileSource(t *testing.T) {
 	}
 }
 
+func TestBuildFullNonGitSourceSkipsScene(t *testing.T) {
+	cfg := buildConfig(t)
+	src := sourceDir(t)
+	scene := func(dir string) error {
+		t.Fatalf("scene ran on a non-git source %s", dir)
+		return nil
+	}
+	_, err := BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test",
+		Run: (&fakeRunner{body: []byte("packed")}).run, PrepareScene: scene,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildFullGitSourceRunsScene(t *testing.T) {
+	cfg := buildConfig(t)
+	src := gitSourceDir(t)
+	var seen []string
+	scene := func(dir string) error {
+		seen = append(seen, dir)
+		return nil
+	}
+	_, err := BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test",
+		Run: (&fakeRunner{body: []byte("packed")}).run, PrepareScene: scene,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != src {
+		t.Fatalf("scene calls = %v", seen)
+	}
+}
+
+func TestBuildFullSceneFailureAbortsBeforePacking(t *testing.T) {
+	cfg := buildConfig(t)
+	src := gitSourceDir(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("never-packed")}
+	scene := func(string) error { return errors.New("git: fatal: index write failed") }
+	_, err = BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test",
+		Run: runner.run, PrepareScene: scene,
+	})
+	if err == nil || !strings.Contains(err.Error(), "index write failed") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran despite git failure: %v", runner.calls)
+	}
+	if _, statErr := os.Stat(repo.ImagePath()); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("active image err = %v", statErr)
+	}
+}
+
+func gitSourceDir(t *testing.T) string {
+	t.Helper()
+	src := sourceDir(t)
+	if err := os.MkdirAll(filepath.Join(src, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
 func TestBuildFullPackerFailureLeavesNoActive(t *testing.T) {
 	cfg := buildConfig(t)
 	src := sourceDir(t)

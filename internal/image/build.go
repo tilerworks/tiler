@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/gitscene"
 )
 
 // toolOutputLimit caps how much tool output one error carries.
@@ -41,6 +42,10 @@ type FullRequest struct {
 	Now func() time.Time
 	// Run executes external tools. Nil runs mksquashfs through exec.
 	Run ToolRunner
+	// PrepareScene sanitizes a git source before packing. Nil uses
+	// gitscene.Prepare when the source looks like a git repository;
+	// non-git sources are skipped without invoking git.
+	PrepareScene func(dir string) error
 }
 
 // FullResult reports one successful full build.
@@ -57,17 +62,22 @@ type FullResult struct {
 // slot of the image library.
 //
 // Split storage refuses builds. The source must exist and stay
-// outside every reserved tree. mksquashfs writes a synced temporary
-// file inside the repository directory; the image is hashed from
-// disk, the metadata is validated, and the atomic publish renames
-// both into place, archiving the previous chain when it is not
-// referenced. An identical active image with an empty chain is a
-// no-op. Before returning, the published file is hashed again and
-// compared with the stored digest. A failed packer leaves no active
-// image and no temporary file behind.
+// outside every reserved tree. When the source is a git repository,
+// it is sanitized first and any git failure aborts the build before
+// packing. mksquashfs writes a synced temporary file inside the
+// repository directory; the image is hashed from disk, the metadata
+// is validated, and the atomic publish renames both into place,
+// archiving the previous chain when it is not referenced. An
+// identical active image with an empty chain is a no-op. Before
+// returning, the published file is hashed again and compared with
+// the stored digest. A failed packer leaves no active image and no
+// temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
 	repo, err := validateFull(req)
 	if err != nil {
+		return FullResult{}, err
+	}
+	if err := prepareScene(req); err != nil {
 		return FullResult{}, err
 	}
 	run := req.Run
@@ -88,6 +98,22 @@ func BuildFull(req FullRequest) (FullResult, error) {
 		return FullResult{}, err
 	}
 	return res, nil
+}
+
+// prepareScene sanitizes the source when it is a git repository. A
+// non-git directory is skipped without invoking git.
+func prepareScene(req FullRequest) error {
+	if !gitscene.IsGit(req.SrcDir) {
+		return nil
+	}
+	prepare := req.PrepareScene
+	if prepare == nil {
+		prepare = gitscene.Prepare
+	}
+	if err := prepare(req.SrcDir); err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	return nil
 }
 
 func validateFull(req FullRequest) (Repo, error) {
