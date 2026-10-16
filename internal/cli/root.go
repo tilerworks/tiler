@@ -48,6 +48,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newBuildCmd())
 	root.AddCommand(newImagesCmd())
+	root.AddCommand(newMountCmd())
+	root.AddCommand(newUmountCmd())
 	return root
 }
 

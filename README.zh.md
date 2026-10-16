@@ -24,7 +24,15 @@ tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写�
 
 ## 使用
 
-目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。
+目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速
+开始覆盖其中已可用的部分：
+
+```bash
+tiler build --image alice/app dir   # 把准备好的目录打成镜像
+tiler mount alice/app work          # 在镜像上挂出可写视图
+# 在 work 内开发；改动都落在 upper 层
+tiler umount work                   # upper 与 work 数据保留
+```
 
 当前可用：
 
@@ -43,17 +51,42 @@ tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写�
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。
 - `tiler images rm <owner/repo[/archives/<id>]>` 第一次调用标记
   废弃，第二次物理删除。仍有引用时两次都拒绝。
+- `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
+  写：每个 squashfs 成员先只读挂到 `~/.tiler/runtime/` 下的转
+  接点，再由 `fuse-overlayfs` 叠加在按挂载点（设备号,
+  inode）命名的 upper 之上；同一目录重复挂载是幂等的，并复用
+  先前的改动。同一视图的健康挂载提示 `already mounted`；身份
+  不一致报冲突错误，绝不静默重挂。`--read-only` 把单镜像直接
+  挂在 `<dir>`，带增量链时仅以 lowerdir 合并。`<image>` 是单
+  个 squashfs 文件路径，或 `owner/repo` 库引用：库引用经活跃
+  位 meta 解析为全量镜像加增量链，一个栈至多八个成员；参数同
+  时是合法名字与真实文件时，库引用优先。库成员默认先做 size
+  加 mtime 快速校验；`--verify` 改为对每个记录在案的 sha256
+  摘要整体重验（文件路径形态没有记录摘要）。`--subdir <path>`
+  把镜像内一个子目录暴露为挂载根：缺少该子目录的成员不进栈，
+  全部缺失时挂载失败且不创建任何东西。子树内没有 `.git` 时，
+  工作区 git 命令会向上寻到挂载点之外，因此 subdir 形态面向
+  独立子仓库或非 git 内容。配置 `cache_enabled`（默认关；
+  `--cache` 对单次调用开启）后，每个成员先按内容摘要拷入
+  `cache_dir` 并整体校验通过才挂载，NAS 上的镜像因此从本地
+  副本挂载，而挂载表身份仍指向原始库路径。目标必须是当前用
+  户拥有的空目录，且位于运行时树与全部保留目录之外。
+- `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
+  运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
+  兜底，随后按挂载点（设备号, inode）对应的运行时目录扫表，
+  清理表内已不再关联目标的 lower 残留。命令幂等：未挂载的
+  `<dir>` 静默成功。upper 与 work 数据从不删除，同一目录之后
+  再次挂载时复用先前的改动。
 
 规划中、尚未提供的命令：
 
-- 挂载工作区
 - 结束 session
 - 查看状态
 
 ## 用户故事
 
-开发者用 tiler 快速制备本地环境。新机器挂载预置环境只需数秒。完整
-克隆、安装依赖再构建则需要数分钟到数小时。
+开发者用 tiler 快速制备本地环境。新机器上挂载本身毫秒级完成，工作
+区数秒可用；完整克隆、安装依赖再构建则需要数分钟到数小时。
 
 第一份入库镜像只需一条命令：场景脚本准备好目录，
 `tiler build --image alice/app dir` 把它打进 `~/.tiler/images/` 下的
