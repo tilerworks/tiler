@@ -283,29 +283,47 @@ func TestGCKeepsUnreadableArchive(t *testing.T) {
 	}
 }
 
+// pinRefs is a test Refs pinning exactly one full image.
+type pinRefs struct {
+	pin Ref
+}
+
+func (p pinRefs) Holds(ref Ref) (bool, error) {
+	return ref == p.pin, nil
+}
+
+// sessionRecordBody is one JSON session record in the shape the
+// session package writes, used to prove GC never touches the
+// sessions directory.
+const sessionRecordBody = `{"name":"s1","state":"active","actions":[{"seq":1,` +
+	`"type":"mount","image":"alice/app","owner":"alice","repo":"app",` +
+	`"full_id":"0000000000000000","mountpoint":"/ws/view","mode":"rw",` +
+	`"status":"mounted","timestamp":"2026-10-16T09:00:00Z"}],` +
+	`"created_at":"2026-10-16T09:00:00Z","closed_at":"0001-01-01T00:00:00Z"}`
+
 func TestGCNeverTouchesSessionsOrActive(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	sessions := cfg.SessionsDir
-	if err := os.MkdirAll(sessions, 0o755); err != nil {
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	record := filepath.Join(sessions, "s1.yaml")
-	body := "owner: alice\nrepo: app\nfull_id: 0000000000000000\nstate: running\n"
-	if err := os.WriteFile(record, []byte(body), 0o644); err != nil {
+	record := filepath.Join(sessions, "s1.json")
+	if err := os.WriteFile(record, []byte(sessionRecordBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	active := seedActive(t, repo, []byte("active-full"), true)
 	cfg.MaxAge = time.Hour
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	makeArchive(t, repo, []byte("archive-old"), now.Add(-48*time.Hour))
-	events, err := GC(cfg, SessionRefs{Dir: sessions}, now)
+	refs := pinRefs{pin: Ref{Owner: "alice", Repo: "app", FullID: "0000000000000000"}}
+	events, err := GC(cfg, refs, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(events) != 1 || events[0].Action != GCActionRemoved {
 		t.Fatalf("events = %+v", events)
 	}
-	assertBytes(t, record, []byte(body))
+	assertBytes(t, record, []byte(sessionRecordBody))
 	assertBytes(t, repo.ImagePath(), []byte("active-full"))
 	loaded, err := Load(repo.MetaPath())
 	if err != nil {
@@ -340,45 +358,6 @@ func TestGCSkipsForeignDirectories(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(cfg.ImagesDir, "stray dir")); statErr != nil {
 		t.Fatalf("stray directory touched: %v", statErr)
-	}
-}
-
-func TestSessionRefsCountsOpenRecords(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("open.yaml", "owner: alice\nrepo: app\nfull_id: 0123456789abcdef\nstate: running\n")
-	write("closed.yaml", "owner: alice\nrepo: app\nfull_id: fedcba9876543210\nstate: closed\n")
-	write("missing-field.yaml", "owner: alice\nrepo: app\nstate: running\n")
-	write("broken.yaml", "::: not yaml at all\n")
-	write("notes.txt", "owner: alice\nrepo: app\nfull_id: 2222222222222222\nstate: running\n")
-	refs := SessionRefs{Dir: dir}
-	ref := Ref{Owner: "alice", Repo: "app", FullID: "0123456789abcdef"}
-	held, err := refs.Holds(ref)
-	if err != nil || !held {
-		t.Fatalf("open record not held: %v %v", held, err)
-	}
-	for _, id := range []string{"fedcba9876543210", "2222222222222222", "3333333333333333"} {
-		held, err := refs.Holds(Ref{Owner: "alice", Repo: "app", FullID: id})
-		if err != nil || held {
-			t.Fatalf("id %s held = %v (%v)", id, held, err)
-		}
-	}
-	other, err := refs.Holds(Ref{Owner: "bob", Repo: "app", FullID: "0123456789abcdef"})
-	if err != nil || other {
-		t.Fatalf("other owner held: %v %v", other, err)
-	}
-}
-
-func TestSessionRefsMissingDirHoldsNothing(t *testing.T) {
-	refs := SessionRefs{Dir: filepath.Join(t.TempDir(), "absent")}
-	held, err := refs.Holds(Ref{Owner: "alice", Repo: "app", FullID: "0123456789abcdef"})
-	if err != nil || held {
-		t.Fatalf("held = %v err = %v", held, err)
 	}
 }
 

@@ -14,19 +14,20 @@ import (
 // rawPatch is the YAML shape. Pointers stay nil when the key is absent.
 // A present zero or false is non-nil so it can overlay a lower value.
 type rawPatch struct {
-	ImagesDir       *string            `yaml:"images_dir"`
-	RuntimeDir      *string            `yaml:"runtime_dir"`
-	SessionsDir     *string            `yaml:"sessions_dir"`
-	CacheDir        *string            `yaml:"cache_dir"`
-	KeepVersions    *keepVersionsValue `yaml:"keep_versions"`
-	MaxAge          *maxAgeText        `yaml:"max_age"`
-	SessionMaxAge   *sessionMaxAgeText `yaml:"session_max_age"`
-	SquashfsOptions *string            `yaml:"squashfs_options"`
-	FuseOptions     *string            `yaml:"fuse_options"`
-	SplitEnabled    *bool              `yaml:"split_enabled"`
-	SplitMode       *string            `yaml:"split_mode"`
-	CacheEnabled    *bool              `yaml:"cache_enabled"`
-	LogLevel        *string            `yaml:"log_level"`
+	ImagesDir             *string            `yaml:"images_dir"`
+	RuntimeDir            *string            `yaml:"runtime_dir"`
+	SessionsDir           *string            `yaml:"sessions_dir"`
+	CacheDir              *string            `yaml:"cache_dir"`
+	KeepVersions          *keepVersionsValue `yaml:"keep_versions"`
+	MaxAge                *maxAgeText        `yaml:"max_age"`
+	SessionMaxAge         *sessionMaxAgeText `yaml:"session_max_age"`
+	SessionAutocloseStale *bool              `yaml:"session_autoclose_stale"`
+	SquashfsOptions       *string            `yaml:"squashfs_options"`
+	FuseOptions           *string            `yaml:"fuse_options"`
+	SplitEnabled          *bool              `yaml:"split_enabled"`
+	SplitMode             *string            `yaml:"split_mode"`
+	CacheEnabled          *bool              `yaml:"cache_enabled"`
+	LogLevel              *string            `yaml:"log_level"`
 }
 
 // keepVersionsValue stores a base-10 integer scalar. A float is rejected
@@ -104,19 +105,20 @@ func (raw rawPatch) patch() (Patch, error) {
 		return Patch{}, err
 	}
 	return Patch{
-		ImagesDir:       raw.ImagesDir,
-		RuntimeDir:      raw.RuntimeDir,
-		SessionsDir:     raw.SessionsDir,
-		CacheDir:        raw.CacheDir,
-		KeepVersions:    keepVersionsPtr(raw.KeepVersions),
-		MaxAge:          maxAge,
-		SessionMaxAge:   sessionMaxAge,
-		SquashfsOptions: raw.SquashfsOptions,
-		FuseOptions:     raw.FuseOptions,
-		SplitEnabled:    raw.SplitEnabled,
-		SplitMode:       raw.SplitMode,
-		CacheEnabled:    raw.CacheEnabled,
-		LogLevel:        raw.LogLevel,
+		ImagesDir:             raw.ImagesDir,
+		RuntimeDir:            raw.RuntimeDir,
+		SessionsDir:           raw.SessionsDir,
+		CacheDir:              raw.CacheDir,
+		KeepVersions:          keepVersionsPtr(raw.KeepVersions),
+		MaxAge:                maxAge,
+		SessionMaxAge:         sessionMaxAge,
+		SessionAutocloseStale: raw.SessionAutocloseStale,
+		SquashfsOptions:       raw.SquashfsOptions,
+		FuseOptions:           raw.FuseOptions,
+		SplitEnabled:          raw.SplitEnabled,
+		SplitMode:             raw.SplitMode,
+		CacheEnabled:          raw.CacheEnabled,
+		LogLevel:              raw.LogLevel,
 	}, nil
 }
 

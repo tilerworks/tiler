@@ -50,6 +50,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newImagesCmd())
 	root.AddCommand(newMountCmd())
 	root.AddCommand(newUmountCmd())
+	root.AddCommand(newSessionCmd())
 	return root
 }
 

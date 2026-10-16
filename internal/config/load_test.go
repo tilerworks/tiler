@@ -70,6 +70,41 @@ func TestLoadFieldPriority(t *testing.T) {
 	}
 }
 
+func TestLoadSessionAutocloseStaleLayers(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	proj := filepath.Join(home, "proj")
+	mustMkdir(t, proj)
+	writeConfig(t, home, "session_autoclose_stale: true\n")
+	// A project file that omits the key keeps the user value.
+	writeConfig(t, proj, "log_level: warn\n")
+	got, err := Load(proj, home, base, Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SessionAutocloseStale {
+		t.Fatalf("user file value lost: %+v", got)
+	}
+	// The nearer project file flips it back off.
+	writeConfig(t, proj, "session_autoclose_stale: false\n")
+	got, err = Load(proj, home, base, Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionAutocloseStale {
+		t.Fatalf("project file did not override: %+v", got)
+	}
+	// The command line wins over both.
+	on := true
+	got, err = Load(proj, home, base, Patch{SessionAutocloseStale: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SessionAutocloseStale {
+		t.Fatalf("command line did not override: %+v", got)
+	}
+}
+
 func TestLoadExplicitZeroOverridesLowerValue(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, "proj")

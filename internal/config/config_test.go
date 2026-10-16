@@ -36,6 +36,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.SessionMaxAge != 720*time.Hour {
 		t.Fatalf("session max age = %s, want 720h", cfg.SessionMaxAge)
 	}
+	if cfg.SessionAutocloseStale {
+		t.Fatalf("session autoclose defaults on: %+v", cfg)
+	}
 	if cfg.KeepVersions != 0 || cfg.MaxAge != 0 {
 		t.Fatalf("image limits = %d %s", cfg.KeepVersions, cfg.MaxAge)
 	}
@@ -107,6 +110,53 @@ func TestExplicitZeroDiffersFromDefault(t *testing.T) {
 	}
 	if Defaults(testHome).SessionMaxAge == got.SessionMaxAge {
 		t.Fatal("explicit zero session max age collapsed into the default")
+	}
+}
+
+func TestSessionAutocloseStaleOverlay(t *testing.T) {
+	on := true
+	off := false
+	tests := []struct {
+		name  string
+		base  bool
+		patch *bool
+		want  bool
+	}{
+		{name: "default off stays off", base: false, patch: nil, want: false},
+		{name: "explicit on", base: false, patch: &on, want: true},
+		{name: "explicit off overrides on", base: true, patch: &off, want: false},
+		{name: "omitted keeps base", base: true, patch: nil, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := Defaults(testHome)
+			base.SessionAutocloseStale = tc.base
+			got := Patch{SessionAutocloseStale: tc.patch}.Apply(base)
+			if got.SessionAutocloseStale != tc.want {
+				t.Fatalf("Apply() = %v, want %v", got.SessionAutocloseStale, tc.want)
+			}
+		})
+	}
+	patch, err := Decode([]byte("session_autoclose_stale: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.SessionAutocloseStale == nil || !*patch.SessionAutocloseStale {
+		t.Fatal("explicit true was omitted")
+	}
+	patch, err = Decode([]byte("session_autoclose_stale: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.SessionAutocloseStale == nil || *patch.SessionAutocloseStale {
+		t.Fatal("explicit false was omitted")
+	}
+	patch, err = Decode([]byte("log_level: info\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.SessionAutocloseStale != nil {
+		t.Fatal("omitted key was marked present")
 	}
 }
 

@@ -1,0 +1,255 @@
+package session
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+// sampleAction is one fully populated mount action for the round
+// trip and contract tests.
+func sampleAction(seq int) Action {
+	return Action{
+		Seq:        seq,
+		Type:       TypeMount,
+		Image:      "alice/app",
+		Owner:      "alice",
+		Repo:       "app",
+		FullID:     "0123456789abcdef",
+		Mountpoint: "/tmp/view",
+		Mode:       ModeRW,
+		Subdir:     "src",
+		Status:     StatusMounted,
+		Timestamp:  time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC),
+	}
+}
+
+// actionEqual compares two actions, treating timestamps by instant.
+func actionEqual(got, want Action) bool {
+	if !got.Timestamp.Equal(want.Timestamp) {
+		return false
+	}
+	got.Timestamp = time.Time{}
+	want.Timestamp = time.Time{}
+	return got == want
+}
+
+func TestRecordJSONRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Dir: dir}
+	rec := Record{
+		Name:      "dev",
+		State:     StateClosed,
+		Actions:   []Action{sampleAction(1), sampleAction(2)},
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+		ClosedAt:  time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC),
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != rec.Name || loaded.State != rec.State {
+		t.Fatalf("header = %s %s", loaded.Name, loaded.State)
+	}
+	if !loaded.CreatedAt.Equal(rec.CreatedAt) || !loaded.ClosedAt.Equal(rec.ClosedAt) {
+		t.Errorf("record times = %v %v", loaded.CreatedAt, loaded.ClosedAt)
+	}
+	if len(loaded.Actions) != len(rec.Actions) {
+		t.Fatalf("actions = %+v", loaded.Actions)
+	}
+	for i := range rec.Actions {
+		if !actionEqual(loaded.Actions[i], rec.Actions[i]) {
+			t.Errorf("action %d = %+v, want %+v",
+				i, loaded.Actions[i], rec.Actions[i])
+		}
+	}
+}
+
+func TestRecordJSONContractKeys(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Dir: dir}
+	rec := Record{
+		Name:      "dev",
+		State:     StateActive,
+		Actions:   []Action{sampleAction(1)},
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "dev.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"name", "state", "actions", "created_at", "closed_at",
+	} {
+		if _, ok := doc[key]; !ok {
+			t.Errorf("record key %q missing", key)
+		}
+	}
+	actions, ok := doc["actions"].([]any)
+	if !ok || len(actions) != 1 {
+		t.Fatalf("actions = %v", doc["actions"])
+	}
+	action, ok := actions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("action = %v", actions[0])
+	}
+	for _, key := range []string{
+		"seq", "type", "image", "owner", "repo", "full_id",
+		"mountpoint", "mode", "subdir", "status", "timestamp",
+	} {
+		if _, ok := action[key]; !ok {
+			t.Errorf("action key %q missing", key)
+		}
+	}
+}
+
+func TestValidateNameMatrix(t *testing.T) {
+	valid := []string{
+		"dev",
+		"my-session_1",
+		"auto-20261017T031500Z-deadbeef",
+		"x",
+	}
+	for _, name := range valid {
+		if err := ValidateName(name); err != nil {
+			t.Errorf("ValidateName(%q) = %v", name, err)
+		}
+	}
+	invalid := []string{
+		"",
+		".",
+		"..",
+		"a/b",
+		`a\b`,
+		"a b",
+		"a\tb",
+		"a\nb",
+		"bad\x00name",
+		"bad\x1bname",
+		" trail",
+		"trail ",
+	}
+	for _, name := range invalid {
+		err := ValidateName(name)
+		if err == nil {
+			t.Errorf("ValidateName(%q) accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid session name") {
+			t.Errorf("ValidateName(%q) = %v", name, err)
+		}
+	}
+}
+
+func TestImplicitNameShape(t *testing.T) {
+	now := time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
+	pattern := regexp.MustCompile(`^auto-20261017T031500Z-[0-9a-f]{8}$`)
+	seen := make(map[string]bool)
+	for i := 0; i < 16; i++ {
+		name, err := ImplicitName(now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !pattern.MatchString(name) {
+			t.Fatalf("implicit name %q does not match %s", name, pattern)
+		}
+		if err := ValidateName(name); err != nil {
+			t.Fatalf("implicit name rejected: %v", err)
+		}
+		if seen[name] {
+			t.Fatalf("implicit name %q repeated", name)
+		}
+		seen[name] = true
+	}
+}
+
+func TestRecordValidateRejectsBadShapes(t *testing.T) {
+	base := Record{
+		Name:      "dev",
+		State:     StateActive,
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}
+	tests := []struct {
+		name   string
+		mutate func(rec *Record)
+	}{
+		{name: "bad name", mutate: func(rec *Record) { rec.Name = "a/b" }},
+		{name: "unknown state", mutate: func(rec *Record) { rec.State = "paused" }},
+		{
+			name: "unknown action type",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(1)}
+				rec.Actions[0].Type = "bind"
+			},
+		},
+		{
+			name: "unknown action status",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(1)}
+				rec.Actions[0].Status = "done"
+			},
+		},
+		{
+			name: "unknown action mode",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(1)}
+				rec.Actions[0].Mode = "wx"
+			},
+		},
+		{
+			name: "mount without mode",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(1)}
+				rec.Actions[0].Mode = ""
+			},
+		},
+		{
+			name: "zero seq",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(0)}
+			},
+		},
+		{
+			name: "duplicate seq",
+			mutate: func(rec *Record) {
+				rec.Actions = []Action{sampleAction(1), sampleAction(1)}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := base
+			tc.mutate(&rec)
+			if err := rec.Validate(); err == nil {
+				t.Fatalf("Validate accepted %+v", rec)
+			}
+		})
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("empty active record rejected: %v", err)
+	}
+	// A umount action refers to an earlier mount and needs no mode.
+	umountOnly := base
+	umountAction := sampleAction(1)
+	umountAction.Type = TypeUmount
+	umountAction.Mode = ""
+	umountAction.Status = StatusUnmounted
+	umountOnly.Actions = []Action{umountAction}
+	if err := umountOnly.Validate(); err != nil {
+		t.Fatalf("umount action without mode rejected: %v", err)
+	}
+}

@@ -26,6 +26,9 @@ type Target struct {
 	Library bool
 	// Name is the owner/repo name when Library is true.
 	Name string
+	// ID is the full image id of the resolved active chain when
+	// Library is true, and empty for a file path.
+	ID string
 	// Members lists the squashfs files to mount: the full image
 	// first, then chain layers in stored oldest-first order.
 	Members []Member
@@ -86,7 +89,7 @@ func resolveLibrary(cfg config.Config, name string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{Library: true, Name: name, Members: members}, nil
+	return Target{Library: true, Name: name, ID: meta.ID, Members: members}, nil
 }
 
 // stackMembers pairs every file of the active stack with its

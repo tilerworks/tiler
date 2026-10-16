@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
@@ -68,6 +70,7 @@ func (f *mountFake) umount(req workspace.UnmountRequest) (int, error) {
 // mount table for the command tests.
 func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	t.Helper()
+	withSessionLockSeam(t)
 	f := &mountFake{table: table}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
 	origMount, origUmount := mountEngine, unmountEngine
@@ -81,6 +84,40 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	mountEngine = f.mount
 	unmountEngine = f.umount
 	return f
+}
+
+// withSessionLockSeam makes the session engine's advisory lock a
+// no-op, so command tests stay hermetic and run on any platform;
+// the real flock has its own Linux tests.
+func withSessionLockSeam(t *testing.T) {
+	t.Helper()
+	withSessionSeams(t, nil)
+}
+
+// withSessionSeams installs the no-op advisory lock and an optional
+// engine mutator for the session command tests. The mutator lets a
+// test pin the health seam, whose real probe is Linux-only, while
+// the fake records reference mountpoints that do not exist.
+func withSessionSeams(t *testing.T, tune func(*session.Engine)) {
+	t.Helper()
+	original := sessionEngine
+	t.Cleanup(func() { sessionEngine = original })
+	sessionEngine = func(cfg config.Config) *session.Engine {
+		engine := original(cfg)
+		engine.Lock = func(string, time.Duration) (func(), error) {
+			return func() {}, nil
+		}
+		if tune != nil {
+			tune(engine)
+		}
+		return engine
+	}
+}
+
+// healthySessions pins the engine health seam to "everything is
+// healthy", so cleanup never reports the fixture mountpoints stale.
+func healthySessions(engine *session.Engine) {
+	engine.Health = func(string) bool { return true }
 }
 
 // buildLibrary publishes one full image through the build command

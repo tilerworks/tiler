@@ -12,19 +12,20 @@ import (
 // line patch only when its flag Changed, so an omitted bool keeps
 // the value loaded from a file.
 type flagSet struct {
-	imagesDir       string
-	runtimeDir      string
-	sessionsDir     string
-	cacheDir        string
-	keepVersions    int
-	maxAge          string
-	sessionMaxAge   string
-	squashfsOptions string
-	fuseOptions     string
-	split           bool
-	splitMode       string
-	cache           bool
-	logLevel        string
+	imagesDir             string
+	runtimeDir            string
+	sessionsDir           string
+	cacheDir              string
+	keepVersions          int
+	maxAge                string
+	sessionMaxAge         string
+	sessionAutocloseStale bool
+	squashfsOptions       string
+	fuseOptions           string
+	split                 bool
+	splitMode             string
+	cache                 bool
+	logLevel              string
 }
 
 func bindFlags(cmd *cobra.Command, flags *flagSet) {
@@ -36,6 +37,7 @@ func bindFlags(cmd *cobra.Command, flags *flagSet) {
 	set.IntVar(&flags.keepVersions, "keep-versions", 0, "image versions to retain; zero means unlimited")
 	set.StringVar(&flags.maxAge, "max-age", "", "maximum image age; zero means unlimited")
 	set.StringVar(&flags.sessionMaxAge, "session-max-age", "", "maximum session age; zero disables age cleanup")
+	set.BoolVar(&flags.sessionAutocloseStale, "session-autoclose-stale", false, "close aged active sessions without a healthy mount")
 	set.StringVar(&flags.squashfsOptions, "squashfs-options", "", "opaque squashfs mount options")
 	set.StringVar(&flags.fuseOptions, "fuse-options", "", "opaque FUSE mount options")
 	set.BoolVar(&flags.split, "split", false, "enable split image storage")
@@ -54,19 +56,20 @@ func commandPatch(cmd *cobra.Command, flags *flagSet) (config.Patch, error) {
 		return config.Patch{}, err
 	}
 	return config.Patch{
-		ImagesDir:       changedString(cmd, "images-dir", &flags.imagesDir),
-		RuntimeDir:      changedString(cmd, "runtime-dir", &flags.runtimeDir),
-		SessionsDir:     changedString(cmd, "sessions-dir", &flags.sessionsDir),
-		CacheDir:        changedString(cmd, "cache-dir", &flags.cacheDir),
-		KeepVersions:    changedInt(cmd, "keep-versions", flags.keepVersions),
-		MaxAge:          maxAge,
-		SessionMaxAge:   sessionMaxAge,
-		SquashfsOptions: changedString(cmd, "squashfs-options", &flags.squashfsOptions),
-		FuseOptions:     changedString(cmd, "fuse-options", &flags.fuseOptions),
-		SplitEnabled:    changedBool(cmd, "split", flags.split),
-		SplitMode:       changedString(cmd, "split-mode", &flags.splitMode),
-		CacheEnabled:    changedBool(cmd, "cache", flags.cache),
-		LogLevel:        changedString(cmd, "log-level", &flags.logLevel),
+		ImagesDir:             changedString(cmd, "images-dir", &flags.imagesDir),
+		RuntimeDir:            changedString(cmd, "runtime-dir", &flags.runtimeDir),
+		SessionsDir:           changedString(cmd, "sessions-dir", &flags.sessionsDir),
+		CacheDir:              changedString(cmd, "cache-dir", &flags.cacheDir),
+		KeepVersions:          changedInt(cmd, "keep-versions", flags.keepVersions),
+		MaxAge:                maxAge,
+		SessionMaxAge:         sessionMaxAge,
+		SessionAutocloseStale: changedBool(cmd, "session-autoclose-stale", flags.sessionAutocloseStale),
+		SquashfsOptions:       changedString(cmd, "squashfs-options", &flags.squashfsOptions),
+		FuseOptions:           changedString(cmd, "fuse-options", &flags.fuseOptions),
+		SplitEnabled:          changedBool(cmd, "split", flags.split),
+		SplitMode:             changedString(cmd, "split-mode", &flags.splitMode),
+		CacheEnabled:          changedBool(cmd, "cache", flags.cache),
+		LogLevel:              changedString(cmd, "log-level", &flags.logLevel),
 	}, nil
 }
 

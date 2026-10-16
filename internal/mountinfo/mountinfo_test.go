@@ -160,6 +160,33 @@ func TestDecideLongestMountPointWins(t *testing.T) {
 	}
 }
 
+func TestLongestViewPicksDeepestCoveringView(t *testing.T) {
+	table := testTable()
+	view, ok := LongestView(table, "/ws/view/nested/deep/file")
+	if !ok || view.Point != "/ws/view/nested" {
+		t.Fatalf("deepest view = %+v %v", view, ok)
+	}
+	view, ok = LongestView(table, "/ws/view/src")
+	if !ok || view.Point != "/ws/view" {
+		t.Fatalf("merged view = %+v %v", view, ok)
+	}
+	view, ok = LongestView(table, "/ws/ro")
+	if !ok || view.Point != "/ws/ro" {
+		t.Fatalf("read-only view = %+v %v", view, ok)
+	}
+	// Non-view mounts never match, and a sibling of a mount point
+	// is not covered by it.
+	if _, ok := LongestView(table, "/"); ok {
+		t.Fatal("the root filesystem matched as a view")
+	}
+	if _, ok := LongestView(table, "/ws/view-2"); ok {
+		t.Fatal("a sibling path matched a view")
+	}
+	if _, ok := LongestView(nil, "/ws/view"); ok {
+		t.Fatal("an empty table matched a view")
+	}
+}
+
 func TestDecideRuntimePrefixRefused(t *testing.T) {
 	for _, cwd := range []string{testRuntime, testRuntime + "/up-2049-7/upper/x"} {
 		_, err := Decide(cwd, testTable(), testPrefixes(), Explicit{Image: "alice/app"})

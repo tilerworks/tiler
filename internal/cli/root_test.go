@@ -101,6 +101,27 @@ func TestCacheFlagOverlaysOnlyWhenExplicit(t *testing.T) {
 	}
 }
 
+func TestSessionAutocloseFlagOverlaysOnlyWhenExplicit(t *testing.T) {
+	_, work := withWorkspace(t)
+	writeProjectConfig(t, work, "session_autoclose_stale: true\n")
+
+	cfg := mustRun(t, "version")
+	if !cfg.SessionAutocloseStale {
+		t.Fatal("omitted flag cleared session_autoclose_stale from the file")
+	}
+
+	cfg = mustRun(t, "version", "--session-autoclose-stale=false")
+	if cfg.SessionAutocloseStale {
+		t.Fatal("explicit --session-autoclose-stale=false did not override the file")
+	}
+
+	writeProjectConfig(t, work, "session_autoclose_stale: false\n")
+	cfg = mustRun(t, "version", "--session-autoclose-stale")
+	if !cfg.SessionAutocloseStale {
+		t.Fatal("explicit --session-autoclose-stale did not override the file")
+	}
+}
+
 func withWorkspace(t *testing.T) (home, work string) {
 	t.Helper()
 	home = t.TempDir()

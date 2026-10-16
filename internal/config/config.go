@@ -45,6 +45,11 @@ type Config struct {
 	// SessionMaxAge is how long a session may be kept. Zero disables
 	// age cleanup.
 	SessionMaxAge time.Duration
+	// SessionAutocloseStale flips an aged active session without a
+	// healthy mount to closed, which makes its record eligible for
+	// age cleanup. Off by default: active records are never closed
+	// automatically unless this is set.
+	SessionAutocloseStale bool
 	// SquashfsOptions is an opaque option string for a later mount.
 	SquashfsOptions string
 	// FuseOptions is an opaque FUSE option string for a later mount.
@@ -66,19 +71,20 @@ type Config struct {
 
 // Patch records fields present in one document. Nil means omitted.
 type Patch struct {
-	ImagesDir       *string
-	RuntimeDir      *string
-	SessionsDir     *string
-	CacheDir        *string
-	KeepVersions    *int
-	MaxAge          *time.Duration
-	SessionMaxAge   *time.Duration
-	SquashfsOptions *string
-	FuseOptions     *string
-	SplitEnabled    *bool
-	SplitMode       *string
-	CacheEnabled    *bool
-	LogLevel        *string
+	ImagesDir             *string
+	RuntimeDir            *string
+	SessionsDir           *string
+	CacheDir              *string
+	KeepVersions          *int
+	MaxAge                *time.Duration
+	SessionMaxAge         *time.Duration
+	SessionAutocloseStale *bool
+	SquashfsOptions       *string
+	FuseOptions           *string
+	SplitEnabled          *bool
+	SplitMode             *string
+	CacheEnabled          *bool
+	LogLevel              *string
 }
 
 // Defaults returns the settings used when no document sets a field.
@@ -106,6 +112,7 @@ func (p Patch) Apply(base Config) Config {
 	base.KeepVersions = overlay(base.KeepVersions, p.KeepVersions)
 	base.MaxAge = overlay(base.MaxAge, p.MaxAge)
 	base.SessionMaxAge = overlay(base.SessionMaxAge, p.SessionMaxAge)
+	base.SessionAutocloseStale = overlay(base.SessionAutocloseStale, p.SessionAutocloseStale)
 	base.SquashfsOptions = overlay(base.SquashfsOptions, p.SquashfsOptions)
 	base.FuseOptions = overlay(base.FuseOptions, p.FuseOptions)
 	base.SplitEnabled = overlay(base.SplitEnabled, p.SplitEnabled)

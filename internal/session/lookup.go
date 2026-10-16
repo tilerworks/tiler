@@ -1,0 +1,319 @@
+package session
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/jiangxin/tiler/internal/mountinfo"
+)
+
+// PathSession is one reverse-lookup hit: the session whose recorded
+// view covers the queried path.
+type PathSession struct {
+	// Record is the covering session's record.
+	Record Record
+	// Mountpoint is the recorded view point covering the path.
+	Mountpoint string
+	// Stale reports that the covering view failed the shared health
+	// check: the record is present but the mount is dead or its
+	// table entry vanished. Open restores the view.
+	Stale bool
+}
+
+// SessionForPath locates the session whose recorded view covers one
+// path, typically a deep path inside a merged view. The chain is:
+// normalize the path, match the deepest covering view in the mount
+// table, and find the record that mounted it. The table lookup is
+// pure, so a dead mount still resolves. When the table entry
+// vanished, the scan of active records falls back to the recorded
+// mountpoints and the shared health check reports the stale shape.
+// A path inside the runtime tree — an upper, a work directory, or a
+// lower transit point — resolves back through the combination that
+// owns its runtime directory. A path no session covers reports a
+// clear error.
+func (e *Engine) SessionForPath(path string) (PathSession, error) {
+	normalized, err := normalizeForLookup(path)
+	if err != nil {
+		return PathSession{}, err
+	}
+	table, err := e.loadTable()
+	if err != nil {
+		return PathSession{}, err
+	}
+	health := e.healthFor(table)
+	if e.RuntimeDir != "" && underPrefix(normalized, e.RuntimeDir) {
+		return e.sessionForRuntimePath(normalized, table, health)
+	}
+	if view, ok := mountinfo.LongestView(table, normalized); ok {
+		return e.sessionForMountpoint(view.Point, health)
+	}
+	return e.staleSessionForPath(path, normalized, health)
+}
+
+// sessionForMountpoint matches one exact mount point against the
+// active records and classifies the covering view's health.
+func (e *Engine) sessionForMountpoint(point string, health HealthFunc) (PathSession, error) {
+	rec, found, err := e.recordForMountpoint(point)
+	if err != nil {
+		return PathSession{}, err
+	}
+	if !found {
+		return PathSession{}, fmt.Errorf(
+			"session: no session covers the mount at %s", point)
+	}
+	return PathSession{Record: rec, Mountpoint: point, Stale: !health(point)}, nil
+}
+
+// staleSessionForPath is the fallback for a vanished table entry:
+// the deepest recorded mountpoint of an active session that covers
+// the literal path wins, and the shared health check reports the
+// stale shape.
+func (e *Engine) staleSessionForPath(original, normalized string, health HealthFunc) (PathSession, error) {
+	var (
+		best  PathSession
+		found bool
+	)
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if !covers(action, normalized) {
+				continue
+			}
+			if !found || len(action.Mountpoint) > len(best.Mountpoint) {
+				best = PathSession{
+					Record:     rec,
+					Mountpoint: action.Mountpoint,
+					Stale:      !health(action.Mountpoint),
+				}
+				found = true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return PathSession{}, err
+	}
+	if !found {
+		return PathSession{}, fmt.Errorf("session: no session covers %s", original)
+	}
+	return best, nil
+}
+
+// covers reports whether one action records a live mount whose
+// point is the path or a directory above it.
+func covers(action Action, path string) bool {
+	return action.Type == TypeMount &&
+		action.Status != StatusUnmounted &&
+		action.Mountpoint != "" &&
+		underPrefix(path, action.Mountpoint)
+}
+
+// sessionForRuntimePath resolves a path inside the runtime tree
+// back to the session owning the combination: the mount table links
+// a view to its runtime directory, and when that entry vanished the
+// recorded mountpoints are matched by their device and inode
+// derived runtime name.
+func (e *Engine) sessionForRuntimePath(
+	path string,
+	table []mountinfo.Mount,
+	health HealthFunc,
+) (PathSession, error) {
+	runtimeDir := runtimeSegment(e.RuntimeDir, path)
+	if runtimeDir != "" {
+		for _, mount := range table {
+			if viewRuntimeDir(mount) == runtimeDir {
+				return e.sessionForMountpoint(mount.Point, health)
+			}
+		}
+		return e.staleRuntimeSession(runtimeDir, health)
+	}
+	return PathSession{}, fmt.Errorf("session: no session covers %s", path)
+}
+
+// staleRuntimeSession matches a runtime directory against the
+// active records by deriving each recorded mountpoint's runtime
+// name from its device and inode.
+func (e *Engine) staleRuntimeSession(runtimeDir string, health HealthFunc) (PathSession, error) {
+	want := filepath.Base(runtimeDir)
+	var (
+		best  PathSession
+		found bool
+	)
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if action.Type != TypeMount || action.Status == StatusUnmounted {
+				continue
+			}
+			name, ok := runtimeNameOf(action.Mountpoint)
+			if !ok || name != want {
+				continue
+			}
+			best = PathSession{
+				Record:     rec,
+				Mountpoint: action.Mountpoint,
+				Stale:      !health(action.Mountpoint),
+			}
+			found = true
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return PathSession{}, err
+	}
+	if !found {
+		return PathSession{}, fmt.Errorf(
+			"session: no session covers the runtime directory %s", runtimeDir)
+	}
+	return best, nil
+}
+
+// viewRuntimeDir is the runtime directory a table entry's mount
+// combination lives in: the parent of its upper for a writable
+// view, or of its newest lower for a read-only chain, matching the
+// layout the mount engine builds.
+func viewRuntimeDir(mount mountinfo.Mount) string {
+	switch {
+	case mount.Upper != "" && filepath.Base(mount.Upper) == "upper":
+		return filepath.Dir(mount.Upper)
+	case mount.Upper == "" && len(mount.Lowers) > 0:
+		return filepath.Dir(mount.Lowers[0])
+	}
+	return ""
+}
+
+// runtimeSegment is the <runtime_dir>/up-<dev>-<ino> directory a
+// path inside the runtime tree belongs to, empty for the runtime
+// root itself or a path that climbs out of it.
+func runtimeSegment(runtimeRoot, path string) string {
+	rel, err := filepath.Rel(runtimeRoot, path)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	if len(segments) < 1 || segments[0] == "." || segments[0] == ".." {
+		return ""
+	}
+	return filepath.Join(runtimeRoot, segments[0])
+}
+
+// recordForMountpoint scans the active records for one exact
+// recorded mountpoint.
+func (e *Engine) recordForMountpoint(point string) (Record, bool, error) {
+	var (
+		found Record
+		hit   bool
+	)
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if action.Type == TypeMount && action.Status != StatusUnmounted &&
+				action.Mountpoint == point {
+				found, hit = rec, true
+				return true
+			}
+		}
+		return false
+	})
+	return found, hit, err
+}
+
+// eachRecord visits every record whose non-blocking scan lock is
+// free, stopping when visit returns true. A record another process
+// holds is skipped this round, and so is one removed after the
+// listing; a corrupt record is reported, never silently dropped.
+func (s Store) eachRecord(visit func(Record) bool) error {
+	names, err := s.names()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		release, ok := s.tryReadLock(name)
+		if !ok {
+			continue
+		}
+		rec, err := s.Load(name)
+		release()
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if visit(rec) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// tryReadLock takes one record's non-blocking scan lock. A busy
+// record is skipped; a platform without advisory locking reads
+// unlocked, which the atomic record write keeps safe.
+func (s Store) tryReadLock(name string) (func(), bool) {
+	release, err := s.tryLockSession(name)
+	switch {
+	case err == nil:
+		return release, true
+	case errors.Is(err, ErrLockHeld):
+		return func() {}, false
+	case errors.Is(err, ErrLockUnavailable):
+		return func() {}, true
+	default:
+		return func() {}, false
+	}
+}
+
+// normalizeForLookup resolves a path for the reverse lookup:
+// readlink -f semantics first, falling back to the literal cleaned
+// absolute path when normalization fails, which is how a deep path
+// through a dead mount behaves. The lookup never gives up because
+// normalization failed.
+func normalizeForLookup(path string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("session: %w", err)
+	}
+	return filepath.Clean(abs), nil
+}
+
+// underPrefix reports whether path is prefix itself or lives below
+// it, honoring the directory boundary.
+func underPrefix(path, prefix string) bool {
+	path, prefix = filepath.Clean(path), filepath.Clean(prefix)
+	return path == prefix || strings.HasPrefix(path, prefix+string(filepath.Separator))
+}
+
+// names lists the recorded session names in the store directory,
+// ordered by file name. A missing directory lists nothing.
+func (s Store) names() ([]string, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("session: %w", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), recordExt)
+		if entry.IsDir() || !ok {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
