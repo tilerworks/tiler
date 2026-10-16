@@ -161,7 +161,7 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	if req.Full == "" || req.RuntimeDir == "" || req.MergedDir == "" {
 		return nil, errors.New("workspace: full image, runtime dir, and merged dir are required")
 	}
-	if err := checkSubdir(req.Subdir); err != nil {
+	if err := CheckSubdir(req.Subdir); err != nil {
 		return nil, err
 	}
 	members, err := stack(req)
@@ -452,10 +452,11 @@ func checkOwner(uid, euid uint32) error {
 	return nil
 }
 
-// checkSubdir validates the image-relative subdir shape before any
+// CheckSubdir validates the image-relative subdir shape before any
 // tool runs: a clean relative slash path with no empty, ".", or ".."
-// segment, so the mount root can never escape the image.
-func checkSubdir(subdir string) error {
+// segment, so the mount root can never escape the image. The command
+// layer maps a refusal to a usage error.
+func CheckSubdir(subdir string) error {
 	if subdir == "" {
 		return nil
 	}

@@ -36,6 +36,14 @@ func exactOneArg(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func exactTwoArgs(cmd *cobra.Command, args []string) error {
+	if len(args) != 2 {
+		return usageError{fmt.Errorf("%s accepts exactly two arguments, received %d",
+			cmd.CommandPath(), len(args))}
+	}
+	return nil
+}
+
 // ExitCode maps an execution error to a process exit code. A nil
 // error is success. A usage error, including a flag parse failure,
 // and an error whose text starts with "unknown command" are exit 2.
