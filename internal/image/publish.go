@@ -60,20 +60,8 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	if err := validatePublish(repo, data, meta); err != nil {
 		return err
 	}
-	if err := repairTornActive(repo, seam); err != nil {
-		return err
-	}
-	if err := repairParkedArchives(repo, seam); err != nil {
-		return err
-	}
-	existing, exists, err := loadActive(repo)
+	existing, exists, err := preparePublish(repo, refs, seam)
 	if err != nil {
-		return err
-	}
-	// Return torn layers to the hold whose chain owns them and
-	// archive the holds no reference pins, before the active slot is
-	// reused by the new image.
-	if err := archiveUnreferencedHolds(repo, refs, seam); err != nil {
 		return err
 	}
 	if exists && sameIdleFull(existing, meta) {
@@ -91,14 +79,59 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	return nil
 }
 
+// publishStaged publishes a temporary image and meta pair that
+// already rest synced in the repository directory. Builds hand the
+// packer output over this way instead of copying the bytes through
+// memory again. The temps never survive the call: renamed on
+// success, deleted on the idle no-op and on every error.
+func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam hooks) error {
+	defer removeFile(imgTmp)
+	defer removeFile(metaTmp)
+	if err := validateMeta(repo, meta); err != nil {
+		return err
+	}
+	existing, exists, err := preparePublish(repo, refs, seam)
+	if err != nil {
+		return err
+	}
+	if exists && sameIdleFull(existing, meta) {
+		return nil
+	}
+	match, err := fileMatchesMeta(imgTmp, meta)
+	if err != nil {
+		return err
+	}
+	if !match {
+		return errors.New("publish: payload does not match meta")
+	}
+	return commit(repo, existing, exists, meta, imgTmp, metaTmp, refs, seam)
+}
+
+// preparePublish repairs the leftovers of earlier crashes and
+// archives the holds no reference pins, so the active slot is ready
+// for a new image.
+func preparePublish(repo Repo, refs Refs, seam hooks) (Meta, bool, error) {
+	if err := repairTornActive(repo, seam); err != nil {
+		return Meta{}, false, err
+	}
+	if err := repairParkedArchives(repo, seam); err != nil {
+		return Meta{}, false, err
+	}
+	existing, exists, err := loadActive(repo)
+	if err != nil {
+		return Meta{}, false, err
+	}
+	// Return torn layers to the hold whose chain owns them and
+	// archive the holds no reference pins, before the active slot is
+	// reused by the new image.
+	if err := archiveUnreferencedHolds(repo, refs, seam); err != nil {
+		return Meta{}, false, err
+	}
+	return existing, exists, nil
+}
+
 func validatePublish(repo Repo, data []byte, meta Meta) error {
-	if meta.Kind != KindFull {
-		return errors.New("publish: active meta kind must be full")
-	}
-	if meta.Owner != repo.Owner || meta.Repo != repo.Repo {
-		return errors.New("publish: meta name does not match repository")
-	}
-	if err := meta.Validate(); err != nil {
+	if err := validateMeta(repo, meta); err != nil {
 		return err
 	}
 	sum := sha256.Sum256(data)
@@ -106,6 +139,16 @@ func validatePublish(repo Repo, data []byte, meta Meta) error {
 		return errors.New("publish: payload does not match meta")
 	}
 	return nil
+}
+
+func validateMeta(repo Repo, meta Meta) error {
+	if meta.Kind != KindFull {
+		return errors.New("publish: active meta kind must be full")
+	}
+	if meta.Owner != repo.Owner || meta.Repo != repo.Repo {
+		return errors.New("publish: meta name does not match repository")
+	}
+	return meta.Validate()
 }
 
 func sameIdleFull(existing, next Meta) bool {

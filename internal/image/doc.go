@@ -1,4 +1,5 @@
-// Package image checks owner/repo names, holds image metadata, and
-// publishes image files with atomic rename.
-// Packing and command flags live in later steps.
+// Package image checks owner/repo names, holds image metadata,
+// publishes image files with atomic rename, and builds full squashfs
+// images from prepared source directories.
+// Incremental packing and command flags live in later steps.
 package image
