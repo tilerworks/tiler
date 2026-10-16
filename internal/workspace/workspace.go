@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -136,7 +137,9 @@ type member struct {
 // A read-write view merges the stack with fuse-overlayfs over an
 // upper and a work directory under runtime/up-<dev>-<ino>/; a
 // read-only chain merges lowerdir-only, and a read-only single image
-// mounts straight onto the target with no runtime state.
+// mounts straight onto the target with no runtime state. When Subdir
+// is set, every member is pre-checked with unsquashfs first and the
+// members missing the subdirectory are dropped before any mount.
 //
 // Both FUSE tools daemonize, so every exec is followed by a poll
 // that confirms the point is a live mount. A failing or vanished
@@ -158,7 +161,14 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	if req.Full == "" || req.RuntimeDir == "" || req.MergedDir == "" {
 		return nil, errors.New("workspace: full image, runtime dir, and merged dir are required")
 	}
+	if err := checkSubdir(req.Subdir); err != nil {
+		return nil, err
+	}
 	members, err := stack(req)
+	if err != nil {
+		return nil, err
+	}
+	members, err = pruneBySubdir(members, req, run)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +176,69 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 		return mountDirect(req, members[0], run, seam)
 	}
 	return mountOverlay(req, members, run, seam)
+}
+
+// checkSubdir validates the image-relative subdir shape before any
+// tool runs: a clean relative slash path with no empty, ".", or ".."
+// segment, so the mount root can never escape the image.
+func checkSubdir(subdir string) error {
+	if subdir == "" {
+		return nil
+	}
+	if path.IsAbs(subdir) || subdir != path.Clean(subdir) || hasDotSegment(subdir) {
+		return fmt.Errorf("workspace: subdir %q must be a clean relative image path", subdir)
+	}
+	return nil
+}
+
+// hasDotSegment reports an empty, ".", or ".." segment. A cleaned
+// relative path only carries them when it climbs above the root.
+func hasDotSegment(subdir string) bool {
+	for _, seg := range strings.Split(subdir, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneBySubdir pre-checks every member for the requested subdir and
+// drops the members that do not contain it: a layer that never
+// touched the subtree contributes nothing to the subtree view, and
+// every surviving member mounts with the same subdir option so the
+// stack paths align. A missing subdir inside an image fails with an
+// obscure tool error once mounted, so the check runs before any
+// mount command; when no member has the subdir nothing was created
+// and the error names the subdir and every image.
+func pruneBySubdir(members []member, req Request, run runFunc) ([]member, error) {
+	if req.Subdir == "" {
+		return members, nil
+	}
+	var kept []member
+	for _, m := range members {
+		// The exit status is the answer; the listing is discarded.
+		// -match aborts when the path resolves to nothing and keeps
+		// names literal; plain -ls lists the closest existing
+		// prefix and exits zero even when the subdir is absent.
+		if run("unsquashfs", "-ls", "-match", m.path, req.Subdir) == nil {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf(
+			"workspace: subdir %s is missing from every stack member (%s)",
+			req.Subdir, strings.Join(memberNames(members), ", "))
+	}
+	return kept, nil
+}
+
+// memberNames lists the published identities for an error message.
+func memberNames(members []member) []string {
+	names := make([]string, 0, len(members))
+	for _, m := range members {
+		names = append(names, m.fsname)
+	}
+	return names
 }
 
 // preflight checks the FUSE device and every tool this request
