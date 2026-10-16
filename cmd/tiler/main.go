@@ -9,8 +9,5 @@ import (
 )
 
 func main() {
-	cmd := cli.NewRootCmd()
-	if cmd == nil || cmd.Use == "" {
-		os.Exit(1)
-	}
+	os.Exit(cli.ExitCode(cli.NewRootCmd().Execute()))
 }
