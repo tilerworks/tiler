@@ -28,11 +28,14 @@ const (
 
 // Seams are the host operations a probe is allowed to perform.
 // Tests replace them. Production fills them from the linux host
-// package.
+// package plus the stdlib truncate probe.
 type Seams struct {
 	LookPath func(name string) (string, error)
 	Stat     func(name string) error
 	Run      func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// TruncateProbe creates and removes a sparse file of the given
+	// size in dir, returning the filesystem's verdict.
+	TruncateProbe func(dir string, size int64) error
 }
 
 // Result is one probe line: a stable name, a status (pass, fail,
@@ -93,12 +96,12 @@ var toolSpecs = []toolSpec{
 }
 
 // Probe runs every environment probe. A missing tool, an unparsable
-// banner, or an unavailable FUSE device becomes a fail result. The
-// options carry the configured storage directories and split
-// settings for the storage probes. An error is returned only when
-// the set cannot be built, including a cancelled context or seams
-// that were not supplied.
-func Probe(ctx context.Context, seams Seams, _ Options) ([]Result, error) {
+// banner, or an unavailable FUSE device becomes a fail result; the
+// storage probes degrade to warn or info instead. The options carry
+// the configured storage directories and split settings. An error is
+// returned only when the set cannot be built, including a cancelled
+// context or seams that were not supplied.
+func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err := contextErr(ctx, nil); err != nil {
 		return nil, err
 	}
@@ -113,7 +116,13 @@ func Probe(ctx context.Context, seams Seams, _ Options) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(append([]Result{device}, tools...), squashfuseSubdir(squash)), nil
+	limits, err := probeFileLimits(ctx, seams, opts)
+	if err != nil {
+		return nil, err
+	}
+	results := append([]Result{device}, tools...)
+	results = append(results, squashfuseSubdir(squash))
+	return append(results, limits...), nil
 }
 
 // Failed returns the names of the results whose status is fail, in
@@ -131,7 +140,7 @@ func Failed(results []Result) []string {
 }
 
 func (s Seams) ready() error {
-	if s.LookPath == nil || s.Stat == nil || s.Run == nil {
+	if s.LookPath == nil || s.Stat == nil || s.Run == nil || s.TruncateProbe == nil {
 		return errors.New("doctor seams are incomplete")
 	}
 	return nil
@@ -197,4 +206,12 @@ func pass(name, detail string) Result {
 
 func fail(name, detail string) Result {
 	return Result{Name: name, Status: statusFail, Detail: cleanDetail(detail)}
+}
+
+func warn(name, detail string) Result {
+	return Result{Name: name, Status: statusWarn, Detail: cleanDetail(detail)}
+}
+
+func info(name, detail string) Result {
+	return Result{Name: name, Status: statusInfo, Detail: cleanDetail(detail)}
 }

@@ -273,8 +273,8 @@ func assertResults(t *testing.T, results []Result, status, details map[string]st
 
 func assertProbeNames(t *testing.T, results []Result, rendered string) {
 	t.Helper()
-	if len(results) != len(toolSpecs)+2 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+2)
+	if len(results) != len(toolSpecs)+4 {
+		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+4)
 	}
 	for _, result := range results {
 		switch result.Status {
@@ -301,6 +301,7 @@ func byName(t *testing.T, results []Result) map[string]Result {
 	for _, name := range []string{
 		nameFuseDevice, nameSquashfuseLL, nameFuseOverlayfs, nameFusermount3,
 		nameMksquashfs, nameGit, nameSquashfuseSub,
+		nameFileLimitImages, nameFileLimitCache,
 	} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("missing probe %s", name)
@@ -327,10 +328,12 @@ type runResult struct {
 }
 
 type fakeHost struct {
-	missing map[string]error
-	statErr error
-	runs    map[string]runResult
-	calls   []string
+	missing       map[string]error
+	statErr       error
+	truncate      func(dir string, size int64) error
+	truncateCalls []string
+	runs          map[string]runResult
+	calls         []string
 }
 
 func healthyHost(squash string) *fakeHost {
@@ -367,7 +370,28 @@ func (f *fakeHost) output(binary, arg, out string, err error) {
 }
 
 func (f *fakeHost) seams() Seams {
-	return Seams{LookPath: f.lookPath, Stat: f.stat, Run: f.run}
+	truncate := f.truncate
+	if truncate == nil {
+		truncate = func(string, int64) error { return fs.ErrNotExist }
+	}
+	return Seams{
+		LookPath: f.lookPath,
+		Stat:     f.stat,
+		Run:      f.run,
+		TruncateProbe: func(dir string, size int64) error {
+			f.truncateCalls = append(f.truncateCalls, dir)
+			return truncate(dir, size)
+		},
+	}
+}
+
+func (f *fakeHost) truncateCalled(dir string) bool {
+	for _, call := range f.truncateCalls {
+		if call == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeHost) lookPath(name string) (string, error) {
