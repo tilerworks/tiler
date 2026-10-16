@@ -8,6 +8,7 @@ import (
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -127,14 +128,23 @@ func writeSideChains(w io.Writer, state image.State) error {
 func newImagesGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
-		Short: "Promote held chains and expire archives",
-		Args:  cobra.NoArgs,
+		Short: "Promote held chains, expire archives, and clean session records",
+		Long: "One garbage collection entry manages two kinds of expired\n" +
+			"objects: it promotes every unreferenced image hold into\n" +
+			"archives, deletes the archives past the retention rules, and\n" +
+			"then cleans the session records — deleting closed records past\n" +
+			"the session age limit and reporting active sessions whose\n" +
+			"mounts are all stale. Active session records are never\n" +
+			"deleted automatically.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("images gc: configuration is not loaded")
 			}
-			events, err := image.GC(cfg, image.SessionRefs{Dir: cfg.SessionsDir}, time.Now())
+			now := time.Now()
+			refs := session.Refs{Dir: cfg.SessionsDir}
+			events, gcErr := image.GC(cfg, refs, now)
 			out := cmd.OutOrStdout()
 			for _, event := range events {
 				if _, wErr := fmt.Fprintf(out, "%s %s/%s %s\n",
@@ -142,7 +152,15 @@ func newImagesGCCmd() *cobra.Command {
 					return wErr
 				}
 			}
-			if err != nil {
+			cleaned, cleanErr := sessionEngine(cfg).Cleanup(
+				cfg.SessionMaxAge, cfg.SessionAutocloseStale, now)
+			for _, event := range cleaned {
+				if _, wErr := fmt.Fprintf(out, "%s session %s\n",
+					event.Action, event.Session); wErr != nil {
+					return wErr
+				}
+			}
+			if err := errors.Join(gcErr, cleanErr); err != nil {
 				return fmt.Errorf("images gc: %w", err)
 			}
 			return nil
@@ -165,7 +183,7 @@ func newImagesRemoveCmd() *cobra.Command {
 			}
 			target := args[0]
 			outcome, err := image.RemoveTarget(cfg, target,
-				image.SessionRefs{Dir: cfg.SessionsDir})
+				session.Refs{Dir: cfg.SessionsDir})
 			if err != nil {
 				if isTargetUsage(err) {
 					return usageError{err}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 )
 
 // libFlags points the library directories at a temporary tree under
@@ -266,6 +267,44 @@ func TestBuildIncrementalRejectsSourceArgument(t *testing.T) {
 	_, _, _, err := runCmd(t, append(lib, "build", "sub")...)
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+}
+
+func TestBuildIdentityFallsBackToSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	// A killed daemon left an anonymous table entry: no source
+	// resolves through the library, and only the session record
+	// still names the image behind the view.
+	table := []mountinfo.Mount{{
+		Point:  merged,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "fuse-overlayfs",
+	}}
+	withBuildSeams(t, table)
+	writeTestFile(t, filepath.Join(merged, "base.txt"), "base")
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		libraryAction("alice/app", merged, session.ModeRW))
+	t.Chdir(merged)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+
+	// The recorded identity still refuses a conflicting explicit
+	// name and accepts a consistent one.
+	_, _, _, err = runCmd(t, append(lib, "build", "--full", "--image", "bob/other")...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("conflict: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
+	}
+	if _, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...); err != nil {
+		t.Fatalf("consistent build: %v\n%s", err, stderr)
 	}
 }
 

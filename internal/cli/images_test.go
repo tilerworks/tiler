@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jiangxin/tiler/internal/image"
+	"github.com/jiangxin/tiler/internal/session"
 )
 
 func mustList(t *testing.T, lib []string, args ...string) string {
@@ -40,15 +42,51 @@ func mustRemove(t *testing.T, lib []string, target string) string {
 	return stdout
 }
 
-// writeSession drops one session record that pins a full image.
+// writeSession drops one JSON session record whose mount action
+// pins a full image. A "closed" state closes the record and marks
+// the action unmounted; every other state keeps it active.
 func writeSession(t *testing.T, dir, name, owner, repo, fullID, state string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	now := time.Now().UTC()
+	action := session.Action{
+		Seq:        1,
+		Type:       session.TypeMount,
+		Image:      owner + "/" + repo,
+		Owner:      owner,
+		Repo:       repo,
+		FullID:     fullID,
+		Mountpoint: "/ws/" + name,
+		Mode:       session.ModeRW,
+		Status:     session.StatusMounted,
+		Timestamp:  now,
+	}
+	rec := session.Record{
+		Name:      name,
+		State:     session.StateActive,
+		Actions:   []session.Action{action},
+		CreatedAt: now,
+	}
+	if state == "closed" {
+		rec.State = session.StateClosed
+		rec.ClosedAt = now
+		rec.Actions[0].Status = session.StatusUnmounted
+	}
+	if err := (session.Store{Dir: dir}).Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	body := fmt.Sprintf("owner: %s\nrepo: %s\nfull_id: %s\nstate: %s\n",
-		owner, repo, fullID, state)
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+}
+
+// writeClosedSession drops one closed record completed at the given
+// time, aged past the default session retention.
+func writeClosedSession(t *testing.T, dir, name string, closedAt time.Time) {
+	t.Helper()
+	rec := session.Record{
+		Name:      name,
+		State:     session.StateClosed,
+		CreatedAt: closedAt.Add(-time.Hour),
+		ClosedAt:  closedAt,
+	}
+	if err := (session.Store{Dir: dir}).Save(rec); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -147,10 +185,11 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	_, lib := libFlags(home)
 	sessions := sessionsDir(home)
 	withBuildSeams(t, nil)
+	withSessionSeams(t, healthySessions)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
 	id1 := buildImage(t, lib, "alice/app", src)
-	writeSession(t, sessions, "s1.yaml", "alice", "app", id1, "running")
+	writeSession(t, sessions, "s1", "alice", "app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	id2 := buildImage(t, lib, "alice/app", src)
 
@@ -161,13 +200,70 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	if out := mustGC(t, lib); out != "" {
 		t.Fatalf("gc with a referenced hold printed %q", out)
 	}
-	writeSession(t, sessions, "s1.yaml", "alice", "app", id1, "closed")
+	writeSession(t, sessions, "s1", "alice", "app", id1, "closed")
 	want = fmt.Sprintf("archived alice/app %s\n", id1)
 	if out := mustGC(t, lib); out != want {
 		t.Fatalf("gc promotion:\n%s\nwant:\n%s", out, want)
 	}
 	if out := mustGC(t, lib); out != "" {
 		t.Fatalf("idle gc printed %q", out)
+	}
+}
+
+func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	sessions := sessionsDir(home)
+	withBuildSeams(t, nil)
+	withSessionSeams(t, healthySessions)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
+	id1 := buildImage(t, lib, "alice/app", src)
+	// The pinning record must exist before the second build, which
+	// is what retires the first chain to a hold instead of an
+	// archive.
+	writeSession(t, sessions, "live", "alice", "app", id1, "running")
+	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
+	activeID := buildImage(t, lib, "alice/app", src)
+	// An aged closed record is reclaimed; the active record both
+	// survives and keeps the hold out of the archives.
+	writeClosedSession(t, sessions, "old", time.Now().Add(-31*24*time.Hour))
+
+	if out := mustGC(t, lib); out != "removed session old\n" {
+		t.Fatalf("gc report:\n%s\nwant:\nremoved session old\n", out)
+	}
+	if _, err := os.Stat(filepath.Join(sessions, "old.json")); !os.IsNotExist(err) {
+		t.Fatalf("the aged record survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessions, "live.json")); err != nil {
+		t.Fatalf("the active record was deleted: %v", err)
+	}
+	want := fmt.Sprintf("alice/app %s chain=0\n  hold %s\n", activeID, id1)
+	if out := mustList(t, lib, "alice/app", "--archives"); out != want {
+		t.Fatalf("ls after gc:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	sessions := sessionsDir(home)
+	withBuildSeams(t, nil)
+	// Every recorded mount verifies dead, so the active session is
+	// reported stale and never deleted.
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.Health = func(string) bool { return false }
+	})
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
+	id1 := buildImage(t, lib, "alice/app", src)
+	writeSession(t, sessions, "dev", "alice", "app", id1, "running")
+
+	if out := mustGC(t, lib); out != "stale session dev\n" {
+		t.Fatalf("gc report:\n%s\nwant:\nstale session dev\n", out)
+	}
+	if _, err := os.Stat(filepath.Join(sessions, "dev.json")); err != nil {
+		t.Fatalf("the stale active record was deleted: %v", err)
 	}
 }
 
@@ -228,7 +324,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
 	id1 := buildImage(t, lib, "alice/app", src)
-	writeSession(t, sessions, "s1.yaml", "alice", "app", id1, "running")
+	writeSession(t, sessions, "s1", "alice", "app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	buildImage(t, lib, "alice/app", src)
 
@@ -246,7 +342,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 
 	// After the reference closes, gc promotes the hold and the
 	// archive target walks both rm phases.
-	writeSession(t, sessions, "s1.yaml", "alice", "app", id1, "closed")
+	writeSession(t, sessions, "s1", "alice", "app", id1, "closed")
 	mustGC(t, lib)
 	target := "alice/app/archives/" + id1
 	if out := mustRemove(t, lib, target); out != "deprecated "+target+"\n" {

@@ -9,6 +9,7 @@ import (
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -69,6 +70,18 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName stri
 		Incr:   incr,
 		Image:  imageName,
 		HasDir: len(args) == 1,
+		// The table paths answer while the view is listed; the
+		// session record answers when a killed daemon left the
+		// entry anonymous or it vanished entirely.
+		Identity: session.CombinedIdentity{
+			Primary: mountinfo.PathIdentity{
+				Table:     table,
+				ImagesDir: cfg.ImagesDir,
+			},
+			Fallback: session.Identity{
+				Store: session.Store{Dir: cfg.SessionsDir},
+			},
+		},
 	})
 	if err != nil {
 		// Every decision refusal is a problem with how the command
@@ -108,7 +121,7 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Name:    decision.Name.String(),
 		SrcDir:  decision.SrcDir,
 		Builder: Version,
-		Refs:    image.SessionRefs{Dir: cfg.SessionsDir},
+		Refs:    session.Refs{Dir: cfg.SessionsDir},
 		Run:     packTool,
 	})
 	if err != nil {
@@ -123,7 +136,7 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Config:     cfg,
 		Name:       decision.Name.String(),
 		Upper:      decision.Upper,
-		Refs:       image.SessionRefs{Dir: cfg.SessionsDir},
+		Refs:       session.Refs{Dir: cfg.SessionsDir},
 		Run:        packTool,
 		MountSmoke: incrSmoke,
 	})
