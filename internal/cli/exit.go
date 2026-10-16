@@ -2,7 +2,10 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 // usageError marks a command-line usage problem. Flag parse failures
@@ -13,6 +16,25 @@ type usageError struct{ err error }
 func (u usageError) Error() string { return u.err.Error() }
 
 func (u usageError) Unwrap() error { return u.err }
+
+// maxOneArg and exactOneArg are positional argument validators that
+// classify a wrong argument count as a usage error, so it exits 2
+// like a flag parse failure instead of looking like a runtime fault.
+func maxOneArg(cmd *cobra.Command, args []string) error {
+	if len(args) > 1 {
+		return usageError{fmt.Errorf("%s accepts at most one argument, received %d",
+			cmd.CommandPath(), len(args))}
+	}
+	return nil
+}
+
+func exactOneArg(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return usageError{fmt.Errorf("%s accepts exactly one argument, received %d",
+			cmd.CommandPath(), len(args))}
+	}
+	return nil
+}
 
 // ExitCode maps an execution error to a process exit code. A nil
 // error is success. A usage error, including a flag parse failure,

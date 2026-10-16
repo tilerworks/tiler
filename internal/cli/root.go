@@ -46,6 +46,8 @@ func NewRootCmd() *cobra.Command {
 	bindFlags(root, flags)
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newBuildCmd())
+	root.AddCommand(newImagesCmd())
 	return root
 }
 
