@@ -51,6 +51,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMountCmd())
 	root.AddCommand(newUmountCmd())
 	root.AddCommand(newSessionCmd())
+	root.AddCommand(newStatusCmd())
 	return root
 }
 

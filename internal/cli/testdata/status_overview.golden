@@ -1,0 +1,64 @@
+{
+  "current_session": "dev",
+  "sessions": [
+    {
+      "name": "dev",
+      "state": "active",
+      "created_at": "2026-10-17T03:15:00Z",
+      "closed_at": "0001-01-01T00:00:00Z",
+      "current": true,
+      "locked": false,
+      "actions": [
+        {
+          "seq": 1,
+          "type": "mount",
+          "image": "alice/app",
+          "mountpoint": "/ws/dev/app",
+          "mode": "rw",
+          "subdir": "",
+          "status": "mounted",
+          "health": "healthy",
+          "timestamp": "2026-10-17T03:15:00Z"
+        },
+        {
+          "seq": 2,
+          "type": "mount",
+          "image": "/images/tool.sqsh",
+          "mountpoint": "/ws/dev/tool",
+          "mode": "ro",
+          "subdir": "docs",
+          "status": "unmounted",
+          "health": "",
+          "timestamp": "2026-10-17T03:16:00Z"
+        },
+        {
+          "seq": 3,
+          "type": "umount",
+          "image": "/images/tool.sqsh",
+          "mountpoint": "/ws/dev/tool",
+          "mode": "",
+          "subdir": "",
+          "status": "unmounted",
+          "health": "",
+          "timestamp": "2026-10-17T03:17:00Z"
+        }
+      ]
+    },
+    {
+      "name": "old",
+      "state": "closed",
+      "created_at": "2026-10-16T03:15:00Z",
+      "closed_at": "2026-10-16T07:15:00Z",
+      "current": false,
+      "locked": false,
+      "actions": []
+    }
+  ],
+  "orphan_views": [
+    {
+      "point": "/ws/orphan",
+      "fstype": "fuse.fuse-overlayfs",
+      "runtime_dir": "/rt/up-3-3"
+    }
+  ]
+}

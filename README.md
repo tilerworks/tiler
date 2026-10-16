@@ -28,13 +28,13 @@ to `bin/tiler`.
 ## Usage
 
 The target workflow is: build an image, mount it, develop, finish the
-session, and show status. A quick start covers the available end of
-that workflow:
+session, and show status. A quick start covers the workflow:
 
 ```bash
 tiler build --image alice/app dir   # pack a prepared directory
 tiler mount alice/app work          # writable view over the image
 # develop inside work; changes land in the upper layer
+tiler status work                   # the covering session and its health
 tiler umount work                   # upper and work data survives
 ```
 
@@ -52,7 +52,18 @@ tiler session close feature                # reverse unmount, record kept
 Available now:
 
 - `tiler version` prints one version line.
-- `tiler doctor` probes `/dev/fuse` and the external tools.
+- `tiler doctor [--json]` probes `/dev/fuse`, the external tools,
+  and the squashfuse subdir baseline, then inspects the storage: a
+  sparse ladder detects a single-file size limit on the filesystems
+  behind the image library and the cache directory and advises
+  enabling split storage when one is found; a bounded performance
+  probe compares cold sequential and random reads of both
+  directories and turns the comparison into cache advice — the
+  latency baseline in that advice is a trend reference, not an SLA;
+  and the optional contrib helpers `concatfs` and `slowfs` are
+  looked up, with build guidance when missing — tiler never
+  installs them automatically. Any failed probe exits 1; warn and
+  info results never affect the exit code.
 - `tiler build [--full|--incr] [--image owner/repo] [dir]` packs a
   prepared directory into a full image, or, inside a writable merged
   view, appends the upper layer as one increment. A plain directory
@@ -60,9 +71,10 @@ Available now:
   a writable merged view defaults to an incremental build and infers
   the name from the mounted image. Success prints one line:
   `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`.
-- `tiler images ls [owner/repo] [--archives]` lists every active
-  image with its chain length. A name lists each chain id, and
-  `--archives` adds the archived and held chain ids.
+- `tiler images ls [owner/repo] [--archives] [--json]` lists every
+  active image with its chain length. A name lists each chain id, and
+  `--archives` adds the archived and held chain ids. `--json` renders
+  one machine-readable document instead.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass
@@ -131,13 +143,44 @@ Available now:
   unmounts every recorded view in reverse order, then marks the
   record closed and keeps it for audit. `session remove <name>`
   deletes a closed record and refuses an active one. `session
-  list` prints one line per record and `session show <name>` its
-  full action log. Implicit `auto-*` sessions accept the same
-  commands as explicit ones.
+  list [--json]` prints one line per record and `session show
+  <name> [--json]` its full action log; the `--json` form of show
+  is the record object itself. Implicit `auto-*` sessions accept
+  the same commands as explicit ones.
+- `tiler status [<path>] [--json]` reconciles the session records
+  with the real mount state. Without a path it prints one block
+  per record — every live mount action marked `healthy` or
+  `stale` — flags the session named by `TILER_SESSION_ID` as
+  `current`, and lists mounted tiler views that no active record
+  claims as `orphan` lines. With a path it reports the session
+  whose recorded view covers it: a deep path inside a merged view
+  and a path inside the runtime tree (an upper or a lower transit
+  point) both resolve back to the covering session, and a path no
+  session covers is an error.
 
-Planned commands, not available yet:
+The list and view commands carry a machine-readable form for CI
+gates and agent consumers. The schemas are stable and add-only,
+pinned by golden-file tests:
 
-- show status
+```bash
+tiler images ls --json | jq -e '.images | length > 0'    # a CI gate
+tiler status --json | jq -r '.sessions[].name'           # agent inventory
+tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
+```
+
+Every command shares one exit-code contract: 0 succeeds, 1 is a
+runtime or probe failure, and 2 is a usage error.
+
+`tiler doctor` prints one tab-separated line per probe, for
+example (details elided):
+
+```text
+file_limit_images	pass	no single-file size limit below 512 GiB
+storage_perf_images	info	seq 112.5 MiB/s in 145.6 ms; rand avg 6.12 ms ...
+storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
+cache_advice	warn	image storage random read averages 6.12 ms, ...
+contrib_concatfs	warn	optional tool; C sources ship in the contrib/ ...
+```
 
 ## User story
 
@@ -164,6 +207,13 @@ write-ahead: after a `kill -9` of tiler or a FUSE daemon, one
 `tiler session open <name>` replays the record, skips the views
 that are still healthy, cleans and rebuilds the dead ones, and the
 upper-layer data survives.
+
+Machines read the same command surface. Every list and view
+command — `images ls`, `session list`, `session show`, `status`,
+and `doctor` — carries a `--json` form with a stable, add-only
+schema pinned by golden files: a CI gate fails on a missing image
+or a stale mount, and an agent picks the cache setting from the
+doctor performance numbers without parsing human text.
 
 ## License
 

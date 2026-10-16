@@ -1,0 +1,18 @@
+{
+  "path": "/ws/dev/app/src/main.go",
+  "session": "dev",
+  "state": "active",
+  "mountpoint": "/ws/dev/app",
+  "stale": false,
+  "action": {
+    "seq": 1,
+    "type": "mount",
+    "image": "alice/app",
+    "mountpoint": "/ws/dev/app",
+    "mode": "rw",
+    "subdir": "",
+    "status": "mounted",
+    "health": "healthy",
+    "timestamp": "2026-10-17T03:15:00Z"
+  }
+}

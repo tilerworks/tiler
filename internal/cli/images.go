@@ -28,12 +28,14 @@ func newImagesCmd() *cobra.Command {
 
 func newImagesListCmd() *cobra.Command {
 	var archives bool
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "ls [owner/repo]",
 		Short: "List active images",
 		Long: "Without a name, list every active image in the library. With a\n" +
 			"name, also list each incremental chain id. --archives adds the\n" +
-			"archive and held chain ids.",
+			"archive and held chain ids. --json renders one machine-readable\n" +
+			"document instead of the human listing.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -42,33 +44,41 @@ func newImagesListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(args) == 1 {
-				return listOneImage(out, cfg, args[0], archives)
+				return listOneImage(out, cfg, args[0], archives, asJSON)
 			}
-			return listAllImages(out, cfg, archives)
+			return listAllImages(out, cfg, archives, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&archives, "archives", false, "include archive and held chain ids")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
 	return cmd
 }
 
-func listAllImages(w io.Writer, cfg config.Config, archives bool) error {
+// namedState pairs a canonical repository name with its listing
+// state. Both output forms render the same collected states.
+type namedState struct {
+	name  string
+	state image.State
+}
+
+func listAllImages(w io.Writer, cfg config.Config, archives, asJSON bool) error {
 	repos, err := image.ListRepos(cfg.ImagesDir)
 	if err != nil {
 		return fmt.Errorf("images ls: %w", err)
 	}
-	for _, repo := range repos {
-		state, err := image.Inspect(repo)
-		if err != nil {
-			return fmt.Errorf("images ls: %s/%s: %w", repo.Owner, repo.Repo, err)
-		}
-		if !state.HasActive {
-			continue
-		}
-		if err := writeImageLine(w, repo.Owner+"/"+repo.Repo, state); err != nil {
+	states, err := activeStates(repos)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeImagesJSON(w, states, archives)
+	}
+	for _, named := range states {
+		if err := writeImageLine(w, named.name, named.state); err != nil {
 			return err
 		}
 		if archives {
-			if err := writeSideChains(w, state); err != nil {
+			if err := writeSideChains(w, named.state); err != nil {
 				return err
 			}
 		}
@@ -76,7 +86,24 @@ func listAllImages(w io.Writer, cfg config.Config, archives bool) error {
 	return nil
 }
 
-func listOneImage(w io.Writer, cfg config.Config, name string, archives bool) error {
+// activeStates inspects every repository and keeps the ones with an
+// active image, in listing order.
+func activeStates(repos []image.Repo) ([]namedState, error) {
+	states := make([]namedState, 0, len(repos))
+	for _, repo := range repos {
+		state, err := image.Inspect(repo)
+		if err != nil {
+			return nil, fmt.Errorf("images ls: %s/%s: %w", repo.Owner, repo.Repo, err)
+		}
+		if !state.HasActive {
+			continue
+		}
+		states = append(states, namedState{name: repo.Owner + "/" + repo.Repo, state: state})
+	}
+	return states, nil
+}
+
+func listOneImage(w io.Writer, cfg config.Config, name string, archives, asJSON bool) error {
 	repo, err := image.OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
 		return usageError{err}
@@ -87,6 +114,10 @@ func listOneImage(w io.Writer, cfg config.Config, name string, archives bool) er
 	}
 	if !state.HasActive {
 		return fmt.Errorf("images ls: %s has no active image", name)
+	}
+	if asJSON {
+		named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
+		return writeImagesJSON(w, []namedState{named}, archives)
 	}
 	if err := writeImageLine(w, name, state); err != nil {
 		return err
@@ -123,6 +154,94 @@ func writeSideChains(w io.Writer, state image.State) error {
 		}
 	}
 	return nil
+}
+
+// imagesDocument is the images ls --json envelope: one object
+// holding every listed repository.
+type imagesDocument struct {
+	Images []imageJSON `json:"images"`
+}
+
+// imageJSON is one repository in the machine-readable listing. The
+// schema is add-only; golden files pin the shape.
+type imageJSON struct {
+	Name     string   `json:"name"`
+	Active   metaJSON `json:"active"`
+	Archives []string `json:"archives"`
+	Holds    []string `json:"holds"`
+}
+
+// metaJSON is the active image of one repository. image.Meta stays
+// yaml-only; this view is the JSON contract. Times are RFC3339.
+type metaJSON struct {
+	ID         string      `json:"id"`
+	Version    string      `json:"version"`
+	Kind       string      `json:"kind"`
+	Size       int64       `json:"size"`
+	SHA256     string      `json:"sha256"`
+	CreatedAt  string      `json:"created_at"`
+	Deprecated bool        `json:"deprecated"`
+	Chain      []chainJSON `json:"chain"`
+}
+
+// chainJSON is one incremental layer of the active image.
+type chainJSON struct {
+	ID        string `json:"id"`
+	Parent    string `json:"parent"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	CreatedAt string `json:"created_at"`
+}
+
+func writeImagesJSON(w io.Writer, states []namedState, archives bool) error {
+	doc := imagesDocument{Images: make([]imageJSON, 0, len(states))}
+	for _, named := range states {
+		doc.Images = append(doc.Images, newImageJSON(named.name, named.state, archives))
+	}
+	return writeJSON(w, doc)
+}
+
+// newImageJSON converts one repository state. Without the archives
+// flag the side chains stay empty arrays, mirroring the human form.
+func newImageJSON(name string, state image.State, archives bool) imageJSON {
+	view := imageJSON{
+		Name:     name,
+		Active:   newMetaJSON(state.Active),
+		Archives: []string{},
+		Holds:    []string{},
+	}
+	if archives {
+		if state.Archives != nil {
+			view.Archives = state.Archives
+		}
+		if state.Holds != nil {
+			view.Holds = state.Holds
+		}
+	}
+	return view
+}
+
+func newMetaJSON(meta image.Meta) metaJSON {
+	view := metaJSON{
+		ID:         meta.ID,
+		Version:    meta.Version,
+		Kind:       meta.Kind,
+		Size:       meta.Size,
+		SHA256:     meta.SHA256,
+		CreatedAt:  meta.CreatedAt.Format(time.RFC3339),
+		Deprecated: meta.Deprecated,
+		Chain:      make([]chainJSON, 0, len(meta.Chain)),
+	}
+	for _, entry := range meta.Chain {
+		view.Chain = append(view.Chain, chainJSON{
+			ID:        entry.ID,
+			Parent:    entry.Parent,
+			Size:      entry.Size,
+			SHA256:    entry.SHA256,
+			CreatedAt: entry.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return view
 }
 
 func newImagesGCCmd() *cobra.Command {

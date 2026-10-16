@@ -20,25 +20,63 @@ const (
 	nameSquashfuseSub  = "squashfuse_subdir"
 	statusPass         = "pass"
 	statusFail         = "fail"
+	statusWarn         = "warn"
+	statusInfo         = "info"
 	fuseDevicePath     = "/dev/fuse"
 	subdirBaselineText = "0.5.0"
 )
 
 // Seams are the host operations a probe is allowed to perform.
 // Tests replace them. Production fills them from the linux host
-// package.
+// package plus the stdlib truncate probe.
 type Seams struct {
 	LookPath func(name string) (string, error)
 	Stat     func(name string) error
 	Run      func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// TruncateProbe creates and removes a sparse file of the given
+	// size in dir, returning the filesystem's verdict.
+	TruncateProbe func(dir string, size int64) error
+	// Measure times cold sequential and random reads of a probe
+	// file in dir.
+	Measure func(ctx context.Context, dir string) (PerfNumbers, error)
 }
 
-// Result is one probe line: a stable name, pass or fail, and a
-// detail that keeps the reason for a failure.
+// Result is one probe line: a stable name, a status (pass, fail,
+// warn, or info), and a detail that keeps the reason for a failure
+// or summarizes a measurement. The optional structured fields carry
+// measurements for machine consumers of the JSON rendering; the
+// human rendering stays on the detail text. Fields are add-only.
 type Result struct {
-	Name   string
-	Status string
-	Detail string
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+	// LimitBytes is a detected single-file size limit in bytes.
+	LimitBytes *int64 `json:"limit_bytes,omitempty"`
+	// SeqReadMiBps is sequential read throughput in MiB per second.
+	SeqReadMiBps *float64 `json:"seq_read_mibps,omitempty"`
+	// SeqReadAvgMs is the full sequential read latency in
+	// milliseconds.
+	SeqReadAvgMs *float64 `json:"seq_read_avg_ms,omitempty"`
+	// RandReadAvgMs is average random read latency in milliseconds.
+	RandReadAvgMs *float64 `json:"rand_read_avg_ms,omitempty"`
+	// RandReadMaxMs is maximum random read latency in milliseconds.
+	RandReadMaxMs *float64 `json:"rand_read_max_ms,omitempty"`
+	// ToolPath is the resolved path of a probed external tool.
+	ToolPath string `json:"tool_path,omitempty"`
+}
+
+// Options carries the configuration inputs the storage probes need:
+// the directories to inspect and the split-storage settings that
+// shape probe advice.
+type Options struct {
+	// ImagesDir is the image library directory to probe.
+	ImagesDir string
+	// CacheDir is the local cache directory to probe.
+	CacheDir string
+	// SplitEnabled reports whether split image storage is on.
+	SplitEnabled bool
+	// SplitMode is the split storage mode when enabled.
+	SplitMode string
 }
 
 type toolSpec struct {
@@ -64,10 +102,12 @@ var toolSpecs = []toolSpec{
 }
 
 // Probe runs every environment probe. A missing tool, an unparsable
-// banner, or an unavailable FUSE device becomes a fail result. An
-// error is returned only when the set cannot be built, including a
-// cancelled context or seams that were not supplied.
-func Probe(ctx context.Context, seams Seams) ([]Result, error) {
+// banner, or an unavailable FUSE device becomes a fail result; the
+// storage probes degrade to warn or info instead. The options carry
+// the configured storage directories and split settings. An error is
+// returned only when the set cannot be built, including a cancelled
+// context or seams that were not supplied.
+func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err := contextErr(ctx, nil); err != nil {
 		return nil, err
 	}
@@ -82,11 +122,38 @@ func Probe(ctx context.Context, seams Seams) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(append([]Result{device}, tools...), squashfuseSubdir(squash)), nil
+	limits, err := probeFileLimits(ctx, seams, opts)
+	if err != nil {
+		return nil, err
+	}
+	perf, err := probePerf(ctx, seams, opts)
+	if err != nil {
+		return nil, err
+	}
+	results := append([]Result{device}, tools...)
+	results = append(results, squashfuseSubdir(squash))
+	results = append(results, limits...)
+	results = append(results, perf...)
+	return append(results, probeContrib(seams)...), nil
+}
+
+// Failed returns the names of the results whose status is fail, in
+// probe order. The CLI turns a non-empty list into a runtime error
+// so doctor exits nonzero on any failed probe, while warn and info
+// results never affect the exit code.
+func Failed(results []Result) []string {
+	var names []string
+	for _, result := range results {
+		if result.Status == statusFail {
+			names = append(names, result.Name)
+		}
+	}
+	return names
 }
 
 func (s Seams) ready() error {
-	if s.LookPath == nil || s.Stat == nil || s.Run == nil {
+	if s.LookPath == nil || s.Stat == nil || s.Run == nil ||
+		s.TruncateProbe == nil || s.Measure == nil {
 		return errors.New("doctor seams are incomplete")
 	}
 	return nil
@@ -152,4 +219,12 @@ func pass(name, detail string) Result {
 
 func fail(name, detail string) Result {
 	return Result{Name: name, Status: statusFail, Detail: cleanDetail(detail)}
+}
+
+func warn(name, detail string) Result {
+	return Result{Name: name, Status: statusWarn, Detail: cleanDetail(detail)}
+}
+
+func info(name, detail string) Result {
+	return Result{Name: name, Status: statusInfo, Detail: cleanDetail(detail)}
 }

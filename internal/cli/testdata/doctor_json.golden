@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "name": "fuse_device",
+      "status": "pass",
+      "detail": "/dev/fuse"
+    },
+    {
+      "name": "git",
+      "status": "pass",
+      "detail": "2.43.0",
+      "tool_path": "/usr/bin/git"
+    },
+    {
+      "name": "file_limit_images",
+      "status": "warn",
+      "detail": "single-file size limit <4 GiB> & split storage disabled",
+      "limit_bytes": 4294967296
+    },
+    {
+      "name": "storage_perf_cache",
+      "status": "info",
+      "detail": "seq 123.5 MiB/s rand avg 4.25 ms max 9.75 ms",
+      "seq_read_mibps": 123.5,
+      "rand_read_avg_ms": 4.25,
+      "rand_read_max_ms": 9.75
+    }
+  ]
+}

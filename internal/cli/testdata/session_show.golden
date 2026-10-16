@@ -1,0 +1,39 @@
+{
+  "name": "dev",
+  "state": "active",
+  "actions": [
+    {
+      "seq": 1,
+      "type": "mount",
+      "image": "alice/app",
+      "owner": "alice",
+      "repo": "app",
+      "full_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "mountpoint": "/ws/dev/app",
+      "mode": "rw",
+      "status": "mounted",
+      "timestamp": "2026-10-17T03:15:00Z"
+    },
+    {
+      "seq": 2,
+      "type": "mount",
+      "image": "/images/tool.sqsh",
+      "mountpoint": "/ws/dev/tool",
+      "mode": "ro",
+      "subdir": "docs",
+      "status": "unmounted",
+      "timestamp": "2026-10-17T03:16:00Z"
+    },
+    {
+      "seq": 3,
+      "type": "umount",
+      "image": "/images/tool.sqsh",
+      "mountpoint": "/ws/dev/tool",
+      "mode": "",
+      "status": "unmounted",
+      "timestamp": "2026-10-17T03:17:00Z"
+    }
+  ],
+  "created_at": "2026-10-17T03:15:00Z",
+  "closed_at": "0001-01-01T00:00:00Z"
+}

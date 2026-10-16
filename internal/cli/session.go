@@ -129,7 +129,8 @@ func newSessionRemoveCmd() *cobra.Command {
 }
 
 func newSessionListCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every session record",
 		Args:  cobra.NoArgs,
@@ -143,13 +144,20 @@ func newSessionListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeSessionList(cmd.OutOrStdout(), session.Summaries(records))
+			summaries := session.Summaries(records)
+			if asJSON {
+				return writeSessionListJSON(cmd.OutOrStdout(), summaries)
+			}
+			return writeSessionList(cmd.OutOrStdout(), summaries)
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
+	return cmd
 }
 
 func newSessionShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show one session record in detail",
 		Args:  exactOneArg,
@@ -162,9 +170,14 @@ func newSessionShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), rec)
+			}
 			return writeSessionShow(cmd.OutOrStdout(), rec)
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "render the record as a JSON document")
+	return cmd
 }
 
 // sessionCommandEngine loads the configuration, validates the name
@@ -244,6 +257,36 @@ func writeSessionList(w io.Writer, summaries []session.Summary) error {
 		}
 	}
 	return nil
+}
+
+// sessionsDocument is the session list --json envelope.
+type sessionsDocument struct {
+	Sessions []sessionSummaryJSON `json:"sessions"`
+}
+
+// sessionSummaryJSON is one list entry aligned with the Summary read
+// model. Times are RFC3339; a zero closed_at renders as-is, matching
+// the on-disk record behavior. The schema is add-only.
+type sessionSummaryJSON struct {
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Mounts    int    `json:"mounts"`
+	CreatedAt string `json:"created_at"`
+	ClosedAt  string `json:"closed_at"`
+}
+
+func writeSessionListJSON(w io.Writer, summaries []session.Summary) error {
+	doc := sessionsDocument{Sessions: make([]sessionSummaryJSON, 0, len(summaries))}
+	for _, summary := range summaries {
+		doc.Sessions = append(doc.Sessions, sessionSummaryJSON{
+			Name:      summary.Name,
+			State:     summary.State,
+			Mounts:    summary.Mounts,
+			CreatedAt: summary.Created.Format(time.RFC3339),
+			ClosedAt:  summary.Closed.Format(time.RFC3339),
+		})
+	}
+	return writeJSON(w, doc)
 }
 
 // writeSessionShow renders the record header and its action log.

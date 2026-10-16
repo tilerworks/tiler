@@ -140,7 +140,7 @@ func TestProbeShapes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := Probe(context.Background(), tt.host.seams())
+			results, err := Probe(context.Background(), tt.host.seams(), Options{})
 			if err != nil {
 				t.Fatalf("Probe: %v", err)
 			}
@@ -151,7 +151,7 @@ func TestProbeShapes(t *testing.T) {
 
 func TestMissingSquashfuseFailsSubdirWithReason(t *testing.T) {
 	host := healthyHost("0.5.0").without("squashfuse_ll")
-	results, err := Probe(context.Background(), host.seams())
+	results, err := Probe(context.Background(), host.seams(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestMissingSquashfuseFailsSubdirWithReason(t *testing.T) {
 
 func TestVersionFallbackUsesVWhenVersionFails(t *testing.T) {
 	host := healthyHost("0.5.0")
-	_, err := Probe(context.Background(), host.seams())
+	_, err := Probe(context.Background(), host.seams(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,9 +185,56 @@ func TestVersionFallbackUsesVWhenVersionFails(t *testing.T) {
 func TestProbeCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Probe(ctx, healthyHost("0.5.0").seams())
+	_, err := Probe(ctx, healthyHost("0.5.0").seams(), Options{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Probe err = %v, want context canceled", err)
+	}
+}
+
+func TestFailedCollectsFailingProbeNamesInOrder(t *testing.T) {
+	results := []Result{
+		{Name: nameFuseDevice, Status: statusPass, Detail: fuseDevicePath},
+		{Name: nameGit, Status: statusFail, Detail: "missing"},
+		{Name: "file_limit_images", Status: statusWarn, Detail: "limit found"},
+		{Name: nameSquashfuseLL, Status: statusFail, Detail: "unparsable version"},
+		{Name: "storage_perf_cache", Status: statusInfo, Detail: "measured"},
+	}
+	got := Failed(results)
+	want := []string{nameGit, nameSquashfuseLL}
+	if len(got) != len(want) {
+		t.Fatalf("Failed = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Failed = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestFailedWithoutFailuresIsEmpty(t *testing.T) {
+	results := []Result{
+		{Name: nameFuseDevice, Status: statusPass, Detail: fuseDevicePath},
+		{Name: "file_limit_images", Status: statusWarn, Detail: "limit found"},
+		{Name: "storage_perf_cache", Status: statusInfo, Detail: "measured"},
+	}
+	if got := Failed(results); len(got) != 0 {
+		t.Fatalf("Failed = %v, want empty", got)
+	}
+}
+
+func TestWriteRendersWarnAndInfoStatuses(t *testing.T) {
+	var buf bytes.Buffer
+	results := []Result{
+		{Name: "file_limit_images", Status: statusWarn, Detail: "limit found"},
+		{Name: "storage_perf_cache", Status: statusInfo, Detail: "seq 100 MiB/s"},
+	}
+	if err := Write(&buf, results); err != nil {
+		t.Fatal(err)
+	}
+	want := "file_limit_images\twarn\tlimit found\n" +
+		"storage_perf_cache\tinfo\tseq 100 MiB/s\n"
+	if buf.String() != want {
+		t.Fatalf("Write = %q, want %q", buf.String(), want)
 	}
 }
 
@@ -198,7 +245,7 @@ func TestDefaultSeamsListsEveryProbe(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	results, err := Probe(ctx, seams)
+	results, err := Probe(ctx, seams, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,11 +273,13 @@ func assertResults(t *testing.T, results []Result, status, details map[string]st
 
 func assertProbeNames(t *testing.T, results []Result, rendered string) {
 	t.Helper()
-	if len(results) != len(toolSpecs)+2 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+2)
+	if len(results) != len(toolSpecs)+9 {
+		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+9)
 	}
 	for _, result := range results {
-		if result.Status != statusPass && result.Status != statusFail {
+		switch result.Status {
+		case statusPass, statusFail, statusWarn, statusInfo:
+		default:
 			t.Fatalf("%s status = %s", result.Name, result.Status)
 		}
 		line := result.Name + "\t" + result.Status + "\t"
@@ -252,6 +301,9 @@ func byName(t *testing.T, results []Result) map[string]Result {
 	for _, name := range []string{
 		nameFuseDevice, nameSquashfuseLL, nameFuseOverlayfs, nameFusermount3,
 		nameMksquashfs, nameGit, nameSquashfuseSub,
+		nameFileLimitImages, nameFileLimitCache,
+		namePerfImages, namePerfCache, nameCacheAdvice,
+		nameContribConcatfs, nameContribSlowfs,
 	} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("missing probe %s", name)
@@ -278,10 +330,13 @@ type runResult struct {
 }
 
 type fakeHost struct {
-	missing map[string]error
-	statErr error
-	runs    map[string]runResult
-	calls   []string
+	missing       map[string]error
+	statErr       error
+	truncate      func(dir string, size int64) error
+	truncateCalls []string
+	measure       func(ctx context.Context, dir string) (PerfNumbers, error)
+	runs          map[string]runResult
+	calls         []string
 }
 
 func healthyHost(squash string) *fakeHost {
@@ -318,7 +373,35 @@ func (f *fakeHost) output(binary, arg, out string, err error) {
 }
 
 func (f *fakeHost) seams() Seams {
-	return Seams{LookPath: f.lookPath, Stat: f.stat, Run: f.run}
+	truncate := f.truncate
+	if truncate == nil {
+		truncate = func(string, int64) error { return fs.ErrNotExist }
+	}
+	measure := f.measure
+	if measure == nil {
+		measure = func(context.Context, string) (PerfNumbers, error) {
+			return PerfNumbers{}, fs.ErrNotExist
+		}
+	}
+	return Seams{
+		LookPath: f.lookPath,
+		Stat:     f.stat,
+		Run:      f.run,
+		TruncateProbe: func(dir string, size int64) error {
+			f.truncateCalls = append(f.truncateCalls, dir)
+			return truncate(dir, size)
+		},
+		Measure: measure,
+	}
+}
+
+func (f *fakeHost) truncateCalled(dir string) bool {
+	for _, call := range f.truncateCalls {
+		if call == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeHost) lookPath(name string) (string, error) {

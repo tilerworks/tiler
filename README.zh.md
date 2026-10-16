@@ -25,12 +25,13 @@ tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写�
 ## 使用
 
 目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速
-开始覆盖其中已可用的部分：
+开始覆盖整个工作流：
 
 ```bash
 tiler build --image alice/app dir   # 把准备好的目录打成镜像
 tiler mount alice/app work          # 在镜像上挂出可写视图
 # 在 work 内开发；改动都落在 upper 层
+tiler status work                   # 覆盖该路径的 session 与其健康
 tiler umount work                   # upper 与 work 数据保留
 ```
 
@@ -47,16 +48,23 @@ tiler session close feature                # 逆序卸载，记录保留
 当前可用：
 
 - `tiler version` 打印一行版本。
-- `tiler doctor` 探测 `/dev/fuse` 与外部工具。
+- `tiler doctor [--json]` 探测 `/dev/fuse`、外部工具与 squashfuse
+  subdir 基线，并进一步体检存储：稀疏阶梯探测镜像库与缓存目录
+  所在文件系统的单文件大小限制，发现限制且未启用分块时建议开启
+  分块存储；有界性能探测对比两个目录的冷读顺序/随机延迟与吞吐，
+  并据此给出缓存建议——建议中的延迟基线只是趋势参考，不是
+  SLA；可选的 contrib 辅助工具 `concatfs` 与 `slowfs` 一并探测，
+  缺失时输出构建指引，tiler 从不自动安装。存在 fail 探测项即
+  退出码 1；warn 与 info 不影响退出码。
 - `tiler build [--full|--incr] [--image owner/repo] [dir]` 把准备好
   的目录打成全量镜像；位于可写合并视图内时，默认把 upper 追加为
   一个增量层。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。构建
   成功打印一行：`full <owner>/<repo> <id>` 或
   `incr <owner>/<repo> <id>`。
-- `tiler images ls [owner/repo] [--archives]` 列出每个活跃镜像与
-  链长。给出名字则列出每个链 id，`--archives` 追加归档与 hold 中
-  的链 id。
+- `tiler images ls [owner/repo] [--archives] [--json]` 列出每个
+  活跃镜像与链长。给出名字则列出每个链 id，`--archives` 追加
+  归档与 hold 中的链 id；`--json` 改为渲染一份机器可读文档。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
@@ -104,12 +112,39 @@ tiler session close feature                # 逆序卸载，记录保留
   同样借此恢复：视图重新挂载，记录回到 active。`session close
   <name>` 逆序卸载每个记录在案的视图，随后置 closed 并保留记录
   供审计。`session remove <name>` 删除 closed 记录，active 拒绝。
-  `session list` 每条记录打印一行，`session show <name>` 展示完整
-  动作流水。隐式 `auto-*` session 与显式 session 接受同一套命令。
+  `session list [--json]` 每条记录打印一行，`session show <name>
+  [--json]` 展示完整动作流水，show 的 `--json` 形态就是记录对象
+  本身。隐式 `auto-*` session 与显式 session 接受同一套命令。
+- `tiler status [<path>] [--json]` 把 session 记录与真实挂载状态
+  对账。不带路径时每条记录输出一块——每个未卸载的挂载动作标注
+  `healthy` 或 `stale`——`TILER_SESSION_ID` 命名的 session 标记
+  `current`；挂载表中存在但无 active 记录认领的 tiler 视图列为
+  `orphan` 行。带路径时报告覆盖该路径的 session：合并视图内的
+  深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
+  覆盖 session；无 session 覆盖的路径报错。
 
-规划中、尚未提供的命令：
+列表/查看类命令都带机器可读形态，面向 CI 门禁与 Agent 消费。
+schema 稳定、字段只增不改，由 golden 文件测试钉住：
 
-- 查看状态
+```bash
+tiler images ls --json | jq -e '.images | length > 0'    # CI 门禁
+tiler status --json | jq -r '.sessions[].name'           # Agent 盘点
+tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
+```
+
+全部命令共享同一退出码契约：0 成功；1 运行或探测失败；2 usage
+错误。
+
+`tiler doctor` 每个探测项输出一行 tab 分隔文本，例如（详情从
+略）：
+
+```text
+file_limit_images	pass	no single-file size limit below 512 GiB
+storage_perf_images	info	seq 112.5 MiB/s in 145.6 ms; rand avg 6.12 ms ...
+storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
+cache_advice	warn	image storage random read averages 6.12 ms, ...
+contrib_concatfs	warn	optional tool; C sources ship in the contrib/ ...
+```
 
 ## 用户故事
 
@@ -130,6 +165,12 @@ lower 时，每个 upper 的稳态大约 6.5 MB。
 `kill -9` 杀掉 tiler 或 FUSE 守护进程后，一条 `tiler session open
 <name>` 按记录重放，仍健康的视图跳过，失活的清理后重建，upper
 层数据不丢。
+
+机器读同一套命令面。`images ls`、`session list`、`session show`、
+`status` 与 `doctor` 都带 `--json` 形态，schema 稳定、字段只增不
+改并由 golden 文件钉住：CI 门禁可以直接断言镜像齐全、没有 stale
+挂载，Agent 可以从 doctor 的性能数字决定要不要开启缓存，无需
+解析人类文本。
 
 ## 许可证
 
