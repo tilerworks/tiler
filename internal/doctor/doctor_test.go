@@ -273,8 +273,8 @@ func assertResults(t *testing.T, results []Result, status, details map[string]st
 
 func assertProbeNames(t *testing.T, results []Result, rendered string) {
 	t.Helper()
-	if len(results) != len(toolSpecs)+7 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+7)
+	if len(results) != len(toolSpecs)+9 {
+		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+9)
 	}
 	for _, result := range results {
 		switch result.Status {
@@ -303,6 +303,7 @@ func byName(t *testing.T, results []Result) map[string]Result {
 		nameMksquashfs, nameGit, nameSquashfuseSub,
 		nameFileLimitImages, nameFileLimitCache,
 		namePerfImages, namePerfCache, nameCacheAdvice,
+		nameContribConcatfs, nameContribSlowfs,
 	} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("missing probe %s", name)

@@ -217,7 +217,7 @@ func TestProbePerfAppendsAdviceAfterBothDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	perf := results[len(results)-3:]
+	perf := results[len(results)-5 : len(results)-2]
 	for i, want := range []string{namePerfImages, namePerfCache, nameCacheAdvice} {
 		if perf[i].Name != want {
 			t.Fatalf("result %d = %s, want %s", i, perf[i].Name, want)

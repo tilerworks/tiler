@@ -34,6 +34,13 @@ func TestDoctorPrintsEveryProbeName(t *testing.T) {
 		"mksquashfs",
 		"git",
 		"squashfuse_subdir",
+		"file_limit_images",
+		"file_limit_cache",
+		"storage_perf_images",
+		"storage_perf_cache",
+		"cache_advice",
+		"contrib_concatfs",
+		"contrib_slowfs",
 	} {
 		if !strings.Contains(stdout, name+"\t") {
 			t.Fatalf("stdout missing %s\n%s", name, stdout)
@@ -136,6 +143,48 @@ func TestDoctorJSONFailingProbeExitsOne(t *testing.T) {
 	if len(doc.Results) != 1 || doc.Results[0].Status != "fail" {
 		t.Fatalf("results = %+v, want the single fail rendered before the verdict",
 			doc.Results)
+	}
+}
+
+func TestDoctorContribWarningsKeepExitZero(t *testing.T) {
+	withWorkspace(t)
+	guidance := "optional tool; C sources ship in the contrib/ directory of " +
+		"the tiler source tree; tiler never installs it automatically"
+	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+		return []doctor.Result{
+			{Name: "contrib_concatfs", Status: "warn", Detail: guidance},
+			{Name: "contrib_slowfs", Status: "warn", Detail: guidance},
+		}, nil
+	})
+	stdout, stderr, err := runDoctorCmd(context.Background(), t)
+	if err != nil {
+		t.Fatalf("doctor with contrib warnings: %v\n%s", err, stderr)
+	}
+	for _, name := range []string{"contrib_concatfs", "contrib_slowfs"} {
+		if !strings.Contains(stdout, name+"\twarn\t") {
+			t.Fatalf("stdout missing the %s warn line\n%s", name, stdout)
+		}
+	}
+	if !strings.Contains(stdout, "contrib/ directory") ||
+		!strings.Contains(stdout, "never installs it automatically") {
+		t.Fatalf("stdout missing the guidance wording\n%s", stdout)
+	}
+
+	stdout, stderr, err = runDoctorCmd(context.Background(), t, "--json")
+	if err != nil {
+		t.Fatalf("doctor --json with contrib warnings: %v\n%s", err, stderr)
+	}
+	var doc doctorDocument
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("doctor --json is not parseable: %v\n%s", err, stdout)
+	}
+	if len(doc.Results) != 2 {
+		t.Fatalf("results = %d, want 2", len(doc.Results))
+	}
+	for _, result := range doc.Results {
+		if result.Status != "warn" || result.Detail != guidance {
+			t.Fatalf("result = %+v, want warn carrying the guidance", result)
+		}
 	}
 }
 

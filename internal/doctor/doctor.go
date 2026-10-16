@@ -133,7 +133,8 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	results := append([]Result{device}, tools...)
 	results = append(results, squashfuseSubdir(squash))
 	results = append(results, limits...)
-	return append(results, perf...), nil
+	results = append(results, perf...)
+	return append(results, probeContrib(seams)...), nil
 }
 
 // Failed returns the names of the results whose status is fail, in
