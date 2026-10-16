@@ -2,9 +2,9 @@ package doctor
 
 import "github.com/jiangxin/tiler/internal/host"
 
-// DefaultSeams returns the real LookPath, Stat, Run, and
-// TruncateProbe implementations. Construction fails on platforms
-// that have no host probe implementation. A missing tool is not a
+// DefaultSeams returns the real LookPath, Stat, Run, TruncateProbe,
+// and Measure implementations. Construction fails on platforms that
+// have no host probe implementation. A missing tool is not a
 // construction failure.
 func DefaultSeams() (Seams, error) {
 	if err := host.Available(); err != nil {
@@ -15,5 +15,6 @@ func DefaultSeams() (Seams, error) {
 		Stat:          host.Stat,
 		Run:           host.Run,
 		TruncateProbe: truncateProbe,
+		Measure:       measurePerf,
 	}, nil
 }

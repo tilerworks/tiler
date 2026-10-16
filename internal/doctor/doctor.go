@@ -36,6 +36,9 @@ type Seams struct {
 	// TruncateProbe creates and removes a sparse file of the given
 	// size in dir, returning the filesystem's verdict.
 	TruncateProbe func(dir string, size int64) error
+	// Measure times cold sequential and random reads of a probe
+	// file in dir.
+	Measure func(ctx context.Context, dir string) (PerfNumbers, error)
 }
 
 // Result is one probe line: a stable name, a status (pass, fail,
@@ -51,6 +54,9 @@ type Result struct {
 	LimitBytes *int64 `json:"limit_bytes,omitempty"`
 	// SeqReadMiBps is sequential read throughput in MiB per second.
 	SeqReadMiBps *float64 `json:"seq_read_mibps,omitempty"`
+	// SeqReadAvgMs is the full sequential read latency in
+	// milliseconds.
+	SeqReadAvgMs *float64 `json:"seq_read_avg_ms,omitempty"`
 	// RandReadAvgMs is average random read latency in milliseconds.
 	RandReadAvgMs *float64 `json:"rand_read_avg_ms,omitempty"`
 	// RandReadMaxMs is maximum random read latency in milliseconds.
@@ -120,9 +126,14 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	perf, err := probePerf(ctx, seams, opts)
+	if err != nil {
+		return nil, err
+	}
 	results := append([]Result{device}, tools...)
 	results = append(results, squashfuseSubdir(squash))
-	return append(results, limits...), nil
+	results = append(results, limits...)
+	return append(results, perf...), nil
 }
 
 // Failed returns the names of the results whose status is fail, in
@@ -140,7 +151,8 @@ func Failed(results []Result) []string {
 }
 
 func (s Seams) ready() error {
-	if s.LookPath == nil || s.Stat == nil || s.Run == nil || s.TruncateProbe == nil {
+	if s.LookPath == nil || s.Stat == nil || s.Run == nil ||
+		s.TruncateProbe == nil || s.Measure == nil {
 		return errors.New("doctor seams are incomplete")
 	}
 	return nil

@@ -82,10 +82,10 @@ func TestProbeAppendsFileLimitResultsAfterSubdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != len(toolSpecs)+4 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+4)
+	if len(results) != len(toolSpecs)+7 {
+		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+7)
 	}
-	limits := results[len(results)-2:]
+	limits := results[len(toolSpecs)+2 : len(toolSpecs)+4]
 	for i, want := range []struct {
 		name string
 		dir  string
