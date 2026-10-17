@@ -243,6 +243,12 @@ func (e *Engine) Close(name string, umount UmountFunc) error {
 		return err
 	}
 	defer release()
+	return e.closeLocked(name, umount)
+}
+
+// closeLocked performs the reverse-order teardown and the state
+// flip of Close. The caller holds the session's exclusive lock.
+func (e *Engine) closeLocked(name string, umount UmountFunc) error {
 	rec, err := e.Load(name)
 	if err != nil {
 		return err
@@ -271,6 +277,84 @@ func (e *Engine) Close(name string, umount UmountFunc) error {
 	closed.State = StateClosed
 	closed.ClosedAt = e.now()
 	return e.Save(closed)
+}
+
+// CloseImplicitFor closes the implicit auto-* session whose record
+// carries a mount at dir once no live view remains on it — the
+// lifecycle tail of an umount that removed the session's last view.
+// Explicitly named sessions never auto-close. The candidate is
+// picked under the non-blocking scan lock and the rule is re-checked
+// under the non-blocking exclusive lock that mutates, so a
+// concurrent mount that revived the session keeps it open; a busy
+// or unavailable lock skips the close, the conservative side that
+// leaves the record to the garbage collection fallback. The view at
+// dir is already down, so the idempotent umount seam makes the
+// reverse-order teardown a no-op and the record stays for audit in
+// the closed state. The return is the closed session name, empty
+// when nothing closed.
+func (e *Engine) CloseImplicitFor(dir string, umount UmountFunc) (string, error) {
+	health, err := e.healthFunc()
+	if err != nil {
+		return "", err
+	}
+	name, err := e.implicitCandidate(dir, health)
+	if err != nil || name == "" {
+		return "", err
+	}
+	return e.closeImplicit(name, dir, health, umount)
+}
+
+// implicitCandidate scans for the active implicit record covering
+// dir with no live view left. A record whose scan lock is busy is
+// skipped this round.
+func (e *Engine) implicitCandidate(dir string, health HealthFunc) (string, error) {
+	name := ""
+	err := e.eachRecord(func(rec Record) bool {
+		if implicitIdle(rec, dir, health) {
+			name = rec.Name
+			return true
+		}
+		return false
+	})
+	return name, err
+}
+
+// closeImplicit flips one scanned candidate under the non-blocking
+// exclusive lock, re-checking the rule under it so a mount that
+// landed between the scan and the lock keeps the session open.
+func (e *Engine) closeImplicit(
+	name, dir string,
+	health HealthFunc,
+	umount UmountFunc,
+) (string, error) {
+	release, err := e.lockFor(name, 0)
+	if err != nil {
+		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer release()
+	rec, err := e.Load(name)
+	if errors.Is(err, ErrNotFound) {
+		// A concurrent pass removed the record.
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !implicitIdle(rec, dir, health) {
+		return "", nil
+	}
+	return name, e.closeLocked(name, umount)
+}
+
+// implicitIdle reports whether one record is an active implicit
+// session covering dir with no live view left — the auto-close rule,
+// evaluated once by the scan and again under the mutating lock.
+func implicitIdle(rec Record, dir string, health HealthFunc) bool {
+	return rec.State == StateActive && implicitName(rec.Name) &&
+		recordsMountpoint(rec, dir) && !hasHealthyMount(rec, health)
 }
 
 // Remove deletes one closed record and its lock file. An active

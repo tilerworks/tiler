@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -534,6 +535,112 @@ func TestCloseUmountFailureKeepsRecordActive(t *testing.T) {
 	if rec.State != StateActive {
 		t.Fatalf("a failed close closed the record: %+v", rec)
 	}
+}
+
+func TestCloseImplicitForClosesRecordWithoutLiveViews(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	e.Health = func(string) bool { return false }
+	const auto = "auto-20261017T031500Z-01020304"
+	seedMounted(t, e, auto, "/ws/one")
+	var torn []string
+	name, err := e.CloseImplicitFor("/ws/one", func(point string) error {
+		torn = append(torn, point)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != auto {
+		t.Fatalf("closed %q, want %q", name, auto)
+	}
+	if len(torn) != 1 || torn[0] != "/ws/one" {
+		t.Errorf("umount calls = %v", torn)
+	}
+	rec, err := e.Load(auto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateClosed || rec.ClosedAt.IsZero() {
+		t.Fatalf("record = %+v", rec)
+	}
+	if rec.Actions[0].Status != StatusUnmounted {
+		t.Errorf("action = %+v", rec.Actions[0])
+	}
+}
+
+func TestCloseImplicitForKeepsLiveViewsAndExplicitSessions(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	const auto = "auto-20261017T031500Z-01020304"
+	e.Health = func(point string) bool { return point == "/ws/two" }
+	seedMounted(t, e, auto, "/ws/one", "/ws/two")
+	seedMounted(t, e, "dev", "/ws/three")
+	never := func(string) error { return errors.New("teardown attempted") }
+
+	// The implicit record still serves /ws/two, so the umount of
+	// /ws/one is not its last view.
+	name, err := e.CloseImplicitFor("/ws/one", never)
+	if err != nil || name != "" {
+		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+	}
+	assertRecordState(t, e, auto, StateActive)
+
+	// A dead explicit session never auto-closes, and a point no
+	// record covers is a no-op.
+	e.Health = func(string) bool { return false }
+	for _, miss := range []string{"/ws/three", "/ws/absent"} {
+		name, err = e.CloseImplicitFor(miss, never)
+		if err != nil || name != "" {
+			t.Fatalf("CloseImplicitFor(%s) = %q, %v", miss, name, err)
+		}
+	}
+	assertRecordState(t, e, "dev", StateActive)
+	assertRecordState(t, e, auto, StateActive)
+}
+
+func TestCloseImplicitForRechecksHealthUnderLock(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	const auto = "auto-20261017T031500Z-01020304"
+	seedMounted(t, e, auto, "/ws/one")
+	// The scan sees a dead view; a concurrent mount revives it
+	// before the mutating lock re-checks the rule.
+	calls := 0
+	e.Health = func(string) bool { calls++; return calls > 1 }
+	name, err := e.CloseImplicitFor("/ws/one", func(string) error {
+		return errors.New("teardown attempted")
+	})
+	if err != nil || name != "" {
+		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+	}
+	if calls < 2 {
+		t.Errorf("health calls = %d, want the under-lock re-check", calls)
+	}
+	assertRecordState(t, e, auto, StateActive)
+}
+
+func TestCloseImplicitForSkipsBusyRecords(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("advisory locking needs linux")
+	}
+	dir := t.TempDir()
+	e := newEngine(dir)
+	e.Health = func(string) bool { return false }
+	const auto = "auto-20261017T031500Z-01020304"
+	seedMounted(t, e, auto, "/ws/one")
+	release, err := e.lockSession(auto, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	name, err := e.CloseImplicitFor("/ws/one", func(string) error {
+		return errors.New("teardown attempted")
+	})
+	if err != nil || name != "" {
+		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+	}
+	assertRecordState(t, e, auto, StateActive)
 }
 
 func TestRemoveRejectsActiveAndDeletesClosed(t *testing.T) {

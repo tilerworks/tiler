@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -54,8 +55,23 @@ func runUmount(cmd *cobra.Command, args []string) error {
 	if removed == 0 {
 		return nil
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unmounted %s\n", dir)
-	return err
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "unmounted %s\n", dir); err != nil {
+		return err
+	}
+	closeImplicitSession(cmd, cfg, dir)
+	return nil
+}
+
+// closeImplicitSession closes the implicit auto-* session behind
+// the removed view once it was the session's last live view. The
+// view is already down, so a failing lookup or close warns instead
+// of failing the umount.
+func closeImplicitSession(cmd *cobra.Command, cfg config.Config, dir string) {
+	engine := sessionEngine(cfg)
+	if _, err := engine.CloseImplicitFor(dir, sessionUmount(cfg)); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+			"umount: warning: implicit session close: %v\n", err)
+	}
 }
 
 // reloadEntries re-reads the host mount table through the injected
