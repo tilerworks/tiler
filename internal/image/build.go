@@ -2,7 +2,6 @@ package image
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,26 +64,23 @@ type FullResult struct {
 // BuildFull packs a prepared source directory into the unique active
 // slot of the image library.
 //
-// With split storage in blocks mode the packed image is streamed
-// into byte blocks that publish as a directory payload; every other
-// split mode refuses full builds until its pipeline exists. The
-// source must exist and stay outside every reserved tree. When the
-// source is a git repository, it is sanitized first and any git
-// failure aborts the build before packing. mksquashfs writes a
-// synced temporary file inside the repository directory; the image
-// is hashed from disk, the metadata is validated, and the atomic
-// publish renames both into place, archiving the previous chain when
-// it is not referenced. An identical active image with an empty
-// chain is a no-op. Before returning, the published file is hashed
-// again and compared with the stored digest. A failed packer leaves
-// no active image and no temporary file behind.
+// Split storage selects the pipeline by mode: blocks streams the
+// packed image into byte blocks, and members packs every top-level
+// source directory as its own squashfs partition. Both publish a
+// directory payload atomically. The source must exist and stay
+// outside every reserved tree. When the source is a git repository,
+// it is sanitized first and any git failure aborts the build before
+// packing. mksquashfs writes a synced temporary file inside the
+// repository directory; the image is hashed from disk, the metadata
+// is validated, and the atomic publish renames both into place,
+// archiving the previous chain when it is not referenced. An
+// identical active image with an empty chain is a no-op. Before
+// returning, the published payload is hashed again and compared with
+// the stored manifest. A failed packer leaves no active image and no
+// temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
-	if req.Config.SplitEnabled && req.Config.SplitMode == config.SplitModeBlocks {
-		return buildBlocks(req)
-	}
 	if req.Config.SplitEnabled {
-		return FullResult{}, errors.New(
-			"build: split storage is enabled; full builds are refused")
+		return buildSplit(req)
 	}
 	repo, err := validateFull(req)
 	if err != nil {
@@ -103,6 +99,21 @@ func BuildFull(req FullRequest) (FullResult, error) {
 		return FullResult{}, err
 	}
 	return res, nil
+}
+
+// buildSplit dispatches a full build to the pipeline of the
+// configured split mode. Configuration validation admits only the
+// two known modes; anything else is refused here as well.
+func buildSplit(req FullRequest) (FullResult, error) {
+	switch req.Config.SplitMode {
+	case config.SplitModeBlocks:
+		return buildBlocks(req)
+	case config.SplitModeMembers:
+		return buildMembers(req)
+	default:
+		return FullResult{}, fmt.Errorf(
+			"build: unknown split mode %q", req.Config.SplitMode)
+	}
 }
 
 // toolRunner is the injected runner of a request or the exec

@@ -44,7 +44,7 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	if err := packStagedImage(toolRunner(req), req.SrcDir, staged); err != nil {
 		return FullResult{}, err
 	}
-	payloadTmp, err := makeBlocksTmpDir(repo)
+	payloadTmp, err := makePayloadTmpDir(repo, tempBlocksDirName)
 	if err != nil {
 		return FullResult{}, err
 	}
@@ -129,14 +129,14 @@ func packStagedImage(run ToolRunner, src, dst string) error {
 	return nil
 }
 
-// makeBlocksTmpDir creates the scratch payload directory inside the
+// makePayloadTmpDir creates the scratch payload directory inside the
 // repository directory, so the publish rename stays on the target
-// filesystem.
-func makeBlocksTmpDir(repo Repo) (string, error) {
+// filesystem. Both split forms stage their payload here.
+func makePayloadTmpDir(repo Repo, tempName func() (string, error)) (string, error) {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
-	name, err := tempBlocksDirName()
+	name, err := tempName()
 	if err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
