@@ -347,6 +347,8 @@ func TestLibraryNameMapping(t *testing.T) {
 	}{
 		{testImages + "/alice/app/image.sqsh", Name{"alice", "app"}},
 		{testImages + "/alice/app/incr/fedcba9876543210.sqsh", Name{"alice", "app"}},
+		{testImages + "/alice/app/members/src.sqsh", Name{"alice", "app"}},
+		{testImages + "/alice/app/members/worktree.sqsh", Name{"alice", "app"}},
 	}
 	for _, tc := range good {
 		got, ok := LibraryName(testImages, tc.path)
@@ -364,6 +366,14 @@ func TestLibraryNameMapping(t *testing.T) {
 		testImages + "/onlyowner/image.sqsh",
 		"/elsewhere/alice/app/image.sqsh",
 		testImages + "/bad owner/app/image.sqsh",
+		// Blocks payloads never carry an identity: a blocks mount
+		// publishes the canonical three-segment image.sqsh fsname.
+		testImages + "/alice/app/blocks/0123456789abcdef/blk.000",
+		testImages + "/alice/app/members/no-ext",
+		testImages + "/alice/app/members/.sqsh",
+		testImages + "/alice/app/members/..sqsh",
+		testImages + "/alice/app/members/bad name.sqsh",
+		testImages + "/alice/app/members/deep/name.sqsh",
 	}
 	for _, path := range bad {
 		if got, ok := LibraryName(testImages, path); ok {

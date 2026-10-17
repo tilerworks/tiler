@@ -61,23 +61,100 @@ func (e *Engine) resolveNormalizedPath(original, normalized string) (PathSession
 		return e.sessionForRuntimePath(normalized, table, health)
 	}
 	if view, ok := mountinfo.LongestView(table, normalized); ok {
-		return e.sessionForMountpoint(view.Point, health)
+		return e.sessionForMountpoint(view.Point, table, health)
 	}
 	return e.staleSessionForPath(original, normalized, health)
 }
 
 // sessionForMountpoint matches one exact mount point against the
-// active records and classifies the covering view's health.
-func (e *Engine) sessionForMountpoint(point string, health HealthFunc) (PathSession, error) {
+// active records and classifies the covering view's health. A point
+// no record claims exactly may still be a forest member submount:
+// the fallback resolves it through the parent combination.
+func (e *Engine) sessionForMountpoint(
+	point string,
+	table []mountinfo.Mount,
+	health HealthFunc,
+) (PathSession, error) {
 	rec, found, err := e.recordForMountpoint(point)
 	if err != nil {
 		return PathSession{}, err
 	}
 	if !found {
-		return PathSession{}, fmt.Errorf(
-			"session: no session covers the mount at %s", point)
+		return e.forestSessionForPoint(point, table, health)
 	}
 	return PathSession{Record: rec, Mountpoint: point, Stale: !health(point)}, nil
+}
+
+// forestSessionForPoint is the forest fallback on an exact-match
+// miss: the queried point is a member submount whose session records
+// the parent directory instead. The table entry at the point names
+// the member file, its library identity must match, and the recorded
+// action must sit at the point's parent directory. A point whose
+// identity no record claims reports the same miss as before, so a
+// foreign mount never resolves through the forest branch.
+func (e *Engine) forestSessionForPoint(
+	point string,
+	table []mountinfo.Mount,
+	health HealthFunc,
+) (PathSession, error) {
+	miss := fmt.Errorf("session: no session covers the mount at %s", point)
+	entry, found := entryAt(table, point)
+	if !found || e.ImagesDir == "" {
+		return PathSession{}, miss
+	}
+	name, ok := mountinfo.LibraryName(e.ImagesDir, entry.Source)
+	if !ok {
+		return PathSession{}, miss
+	}
+	parent := filepath.Dir(point)
+	rec, hit, err := e.recordForForestParent(parent, name)
+	if err != nil {
+		return PathSession{}, err
+	}
+	if !hit {
+		return PathSession{}, miss
+	}
+	return PathSession{Record: rec, Mountpoint: parent, Stale: !health(parent)}, nil
+}
+
+// recordForForestParent scans the active records for a mount action
+// recorded at the forest parent with the member's library identity.
+func (e *Engine) recordForForestParent(
+	parent string,
+	name mountinfo.Name,
+) (Record, bool, error) {
+	var (
+		found Record
+		hit   bool
+	)
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if action.Type == TypeMount && action.Status != StatusUnmounted &&
+				action.Mountpoint == parent &&
+				action.Owner == name.Owner && action.Repo == name.Repo {
+				found, hit = rec, true
+				return true
+			}
+		}
+		return false
+	})
+	return found, hit, err
+}
+
+// entryAt returns the last table entry at the exact point; later
+// mounts shadow earlier ones.
+func entryAt(table []mountinfo.Mount, point string) (mountinfo.Mount, bool) {
+	found := mountinfo.Mount{}
+	ok := false
+	for _, m := range table {
+		if m.Point == point {
+			found, ok = m, true
+		}
+	}
+	return found, ok
 }
 
 // staleSessionForPath is the fallback for a vanished table entry:
@@ -140,7 +217,7 @@ func (e *Engine) sessionForRuntimePath(
 	if runtimeDir != "" {
 		for _, mount := range table {
 			if viewRuntimeDir(mount) == runtimeDir {
-				return e.sessionForMountpoint(mount.Point, health)
+				return e.sessionForMountpoint(mount.Point, table, health)
 			}
 		}
 		return e.staleRuntimeSession(runtimeDir, health)

@@ -14,6 +14,9 @@ const (
 	ImageFile = "image.sqsh"
 	// IncrDir is the subdirectory holding incremental layer files.
 	IncrDir = "incr"
+	// MembersDir is the subdirectory holding the member partition
+	// files of a members-form split payload.
+	MembersDir = "members"
 	// SquashExt is the file extension of every packed image file.
 	SquashExt = ".sqsh"
 )
@@ -29,7 +32,7 @@ const (
 	dirArchives    = "archives"
 	dirHold        = "hold"
 	dirBlocks      = "blocks"
-	dirMembers     = "members"
+	dirMembers     = MembersDir
 	squashExt      = SquashExt
 
 	// blockNamePrefix and blockNameFmt name the byte blocks of one

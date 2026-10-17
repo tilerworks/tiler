@@ -254,6 +254,97 @@ func TestUnmountPathSweepsVanishedOverlayLowers(t *testing.T) {
 	}
 }
 
+func TestUnmountPathTearsDownOwnedChildrenInReverse(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "forest")
+	images := filepath.Join(dir, "images")
+	src := filepath.Join(parent, "src")
+	docs := filepath.Join(parent, "docs")
+	tools := filepath.Join(parent, "tools")
+	for _, point := range []string{src, docs, tools} {
+		if err := os.MkdirAll(point, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The parent itself is not a listed mount; the combination lives
+	// in its direct children, one of which is foreign.
+	table := []Entry{
+		{Point: src, FSType: "fuse", Source: filepath.Join(images, "alice/app/members/src.sqsh")},
+		{Point: docs, FSType: "fuse", Source: filepath.Join(images, "alice/app/members/docs.sqsh")},
+		{Point: tools, FSType: "fuse", Source: "/mnt/usb/tools"},
+	}
+	k := newFakeKernel()
+	k.live[src] = true
+	k.live[docs] = true
+	k.live[tools] = true
+	req := UnmountRequest{
+		Dir:        parent,
+		Table:      table,
+		RuntimeDir: filepath.Join(dir, "runtime"),
+		Owned: func(source string) bool {
+			return strings.HasPrefix(source, images+string(filepath.Separator))
+		},
+	}
+	removed, err := unmountPath(req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want the two library children", removed)
+	}
+	unmounts := k.find("fusermount3")
+	if len(unmounts) != 2 || unmounts[0][2] != docs || unmounts[1][2] != src {
+		t.Fatalf("calls = %v, want the owned children in reverse table order", unmounts)
+	}
+	if !k.live[tools] {
+		t.Error("the foreign child mount was touched")
+	}
+	// A repeat is idempotent: plain directories remove nothing and
+	// run nothing.
+	removed, err = unmountPath(req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("repeat removed = %d, want 0", removed)
+	}
+	if len(k.find("fusermount3")) != 2 {
+		t.Errorf("the repeat ran commands: %v", k.calls)
+	}
+}
+
+func TestUnmountPathWithoutOwnedLeavesChildren(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "forest")
+	child := filepath.Join(parent, "src")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k := newFakeKernel()
+	k.live[child] = true
+	req := UnmountRequest{
+		Dir: parent,
+		Table: []Entry{{
+			Point: child, FSType: "fuse",
+			Source: "/images/alice/app/members/src.sqsh",
+		}},
+		RuntimeDir: filepath.Join(dir, "runtime"),
+	}
+	removed, err := unmountPath(req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0 without an ownership predicate", removed)
+	}
+	if len(k.calls) != 0 {
+		t.Errorf("the unlisted parent ran commands: %v", k.calls)
+	}
+	if !k.live[child] {
+		t.Error("a child mount was torn down without an ownership predicate")
+	}
+}
+
 func TestUnmountPathForeignMountGetsSinglePointOnly(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "mnt")

@@ -68,6 +68,11 @@ type Engine struct {
 	// resolves back to the session owning the combination. Empty
 	// disables the runtime branch of the reverse lookup.
 	RuntimeDir string
+	// ImagesDir is the configured image library root. The members
+	// form forest combination resolves member mount sources against
+	// it for the combination health check and the forest reverse
+	// lookup. Empty disables both forest branches.
+	ImagesDir string
 	// LockTimeout bounds the exclusive-lock wait. Zero uses
 	// DefaultLockTimeout.
 	LockTimeout time.Duration
@@ -332,14 +337,22 @@ func (e *Engine) loadTable() ([]mountinfo.Mount, error) {
 }
 
 // healthFor builds the health check over one table snapshot: the
-// injected seam, or the shared two-condition check.
+// single-point check — the injected seam or the shared two-condition
+// check — extended with the members form forest combination, so a
+// recorded parent directory of a healthy member forest reports
+// healthy without being a mount itself. Overview annotations, the
+// open recovery decision, and the reverse lookup all share this one
+// closure.
 func (e *Engine) healthFor(table []mountinfo.Mount) HealthFunc {
-	if e.Health != nil {
-		return e.Health
+	single := e.Health
+	if single == nil {
+		single = func(point string) bool {
+			ok, err := Healthy(table, point)
+			return err == nil && ok
+		}
 	}
 	return func(point string) bool {
-		ok, err := Healthy(table, point)
-		return err == nil && ok
+		return single(point) || e.forestHealthy(table, point, single)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
@@ -32,6 +33,39 @@ func Healthy(table []mountinfo.Mount, point string) (bool, error) {
 // without real mounts.
 func classify(listed, live, readable bool) bool {
 	return (listed || live) && readable
+}
+
+// forestHealthy reports the health of a members form combination at
+// its parent directory: the parent itself is not a mount, at least
+// one direct child table entry has a source that resolves inside the
+// image library, and every such library child passes the shared
+// single-point check. Foreign child mounts never affect the
+// combination. Known edge: a member whose table entry vanished
+// entirely is invisible to this table-driven approximation and keeps
+// the forest reporting healthy; the next open's per-member reuse
+// detection catches that shape instead.
+func (e *Engine) forestHealthy(table []mountinfo.Mount, point string, single HealthFunc) bool {
+	if e.ImagesDir == "" {
+		return false
+	}
+	point = filepath.Clean(point)
+	if listed(table, point) || liveMount(point) {
+		return false
+	}
+	seen := false
+	for _, m := range table {
+		if m.Point == point || filepath.Dir(m.Point) != point {
+			continue
+		}
+		if _, ok := mountinfo.LibraryName(e.ImagesDir, m.Source); !ok {
+			continue
+		}
+		seen = true
+		if !single(m.Point) {
+			return false
+		}
+	}
+	return seen
 }
 
 // listed reports a mount table entry at the exact point.
