@@ -26,6 +26,7 @@ type rawPatch struct {
 	FuseOptions           *string            `yaml:"fuse_options"`
 	SplitEnabled          *bool              `yaml:"split_enabled"`
 	SplitMode             *string            `yaml:"split_mode"`
+	SplitRoute            *string            `yaml:"split_route"`
 	CacheEnabled          *bool              `yaml:"cache_enabled"`
 	LogLevel              *string            `yaml:"log_level"`
 }
@@ -117,6 +118,7 @@ func (raw rawPatch) patch() (Patch, error) {
 		FuseOptions:           raw.FuseOptions,
 		SplitEnabled:          raw.SplitEnabled,
 		SplitMode:             raw.SplitMode,
+		SplitRoute:            raw.SplitRoute,
 		CacheEnabled:          raw.CacheEnabled,
 		LogLevel:              raw.LogLevel,
 	}, nil

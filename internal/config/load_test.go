@@ -316,6 +316,12 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "negative session max age", doc: "session_max_age: -1h\n", want: "session_max_age"},
 		{name: "split enabled without mode", doc: "split_enabled: true\n", want: "split_enabled"},
 		{name: "mode set while split is off", doc: "split_mode: blocks\n", want: "split_mode"},
+		{name: "route set while split is off", doc: "split_route: concat\n", want: "split_route"},
+		{
+			name: "unknown route",
+			doc:  "split_enabled: true\nsplit_mode: blocks\nsplit_route: splice\n",
+			want: "split_route",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

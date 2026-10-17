@@ -91,8 +91,25 @@ type Request struct {
 	RuntimeDir string
 	// MergedDir is where the merged view is mounted.
 	MergedDir string
+	// Concat selects the optional zero-reassembly route for a
+	// byte-block payload: concatfs mounts the block directory at a
+	// runtime transit point, and the base layer mounts the virtual
+	// concatenated file instead of a materialized copy. Nil keeps
+	// the plain single-file behavior.
+	Concat *ConcatSource
 	// Run executes external tools. Nil runs them through exec.
 	Run func(name string, args ...string) error
+}
+
+// ConcatSource describes the concat view of a byte-block payload
+// directory.
+type ConcatSource struct {
+	// BlocksDir holds the byte blocks and the concat description
+	// file.
+	BlocksDir string
+	// ViewName is the description file name that concatfs exposes
+	// as the virtual concatenated image file.
+	ViewName string
 }
 
 // Workspace is a mounted merged view and its runtime state.
@@ -145,6 +162,12 @@ type member struct {
 // is set, every member is pre-checked with unsquashfs first and the
 // members missing the subdirectory are dropped before any mount.
 //
+// With Concat set, concatfs mounts the block directory at a
+// runtime transit point first and the base layer mounts the virtual
+// concatenated file from it — the zero-reassembly route for a
+// byte-block payload. The transit point is the first recorded mount,
+// so every teardown reaches it last.
+//
 // Both FUSE tools daemonize, so every exec is followed by a poll
 // that confirms the point is a live mount. A failing or vanished
 // mount tears down every point and directory this call created and
@@ -164,6 +187,9 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	}
 	if req.Full == "" || req.RuntimeDir == "" || req.MergedDir == "" {
 		return nil, errors.New("workspace: full image, runtime dir, and merged dir are required")
+	}
+	if req.Concat != nil && (req.Concat.BlocksDir == "" || req.Concat.ViewName == "") {
+		return nil, errors.New("workspace: concat source needs a blocks dir and a view name")
 	}
 	if err := CheckSubdir(req.Subdir); err != nil {
 		return nil, err
@@ -189,6 +215,13 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	}
 	if err := w.plan(req, members, run, seam); err != nil {
 		return nil, err
+	}
+	if req.Concat != nil {
+		if err := w.mountConcatBase(req, seam); err != nil {
+			return nil, err
+		}
+		base := concatTransit(w.runtimeDir)
+		members[len(members)-1].path = filepath.Join(base, req.Concat.ViewName)
 	}
 	if req.ReadOnly && len(members) == 1 {
 		return mountDirect(req, members[0], w, seam)
@@ -326,7 +359,8 @@ func conflictErr(point string, entry Entry) error {
 // fresh stack and clears any residue on the planned transit points.
 // The guard runs first so every refusal leaves the system
 // untouched. A read-only single member mounts directly and needs no
-// runtime planning.
+// runtime planning — unless a concat source is set, whose transit
+// point always lives under the runtime directory.
 func (w *Workspace) plan(
 	req Request,
 	members []member,
@@ -336,7 +370,7 @@ func (w *Workspace) plan(
 	if err := guardTarget(req.MergedDir); err != nil {
 		return w.fail(err)
 	}
-	if req.ReadOnly && len(members) == 1 {
+	if req.ReadOnly && len(members) == 1 && req.Concat == nil {
 		return nil
 	}
 	dev, ino, err := devIno(req.MergedDir)
@@ -348,6 +382,56 @@ func (w *Workspace) plan(
 		w.UpperDir = filepath.Join(w.runtimeDir, "upper")
 	}
 	if err := w.cleanLowers(req, len(members), run, seam); err != nil {
+		return w.fail(err)
+	}
+	if req.Concat != nil {
+		if err := w.cleanConcat(req, run, seam); err != nil {
+			return w.fail(err)
+		}
+	}
+	return nil
+}
+
+// concatTransit is the transit point under one runtime directory
+// where concatfs exposes the concatenated view of a block payload.
+func concatTransit(runtime string) string {
+	return filepath.Join(runtime, "concat")
+}
+
+// cleanConcat tears down a stale concat transit point an earlier
+// mount of the same target left behind, so a replay starts from one
+// consistent combination. A point that already reads as a plain
+// directory cleans up as a no-op.
+func (w *Workspace) cleanConcat(req Request, run runFunc, seam hooks) error {
+	point := concatTransit(w.runtimeDir)
+	if _, listed := findEntry(req.Table, point); !listed && !liveOf(seam, point) {
+		return nil
+	}
+	return cleanPoint(point, run, seam)
+}
+
+// mountConcatBase creates the concat transit point under the runtime
+// directory and starts concatfs on the block directory. The transit
+// point joins the teardown list as soon as the exec succeeds, and
+// the poll confirms the virtual view is up before the base layer
+// consumes it. Being the first recorded mount, the transit point is
+// torn down last.
+func (w *Workspace) mountConcatBase(req Request, seam hooks) error {
+	if err := w.mkdirNew(req.RuntimeDir); err != nil {
+		return w.fail(err)
+	}
+	if err := w.mkdirNew(w.runtimeDir); err != nil {
+		return w.fail(err)
+	}
+	transit := concatTransit(w.runtimeDir)
+	if err := w.mkdirNew(transit); err != nil {
+		return w.fail(err)
+	}
+	if err := w.run("concatfs", req.Concat.BlocksDir, transit); err != nil {
+		return w.fail(fmt.Errorf("workspace: %w", err))
+	}
+	w.mounts = append(w.mounts, transit)
+	if err := waitLive(transit, seam); err != nil {
 		return w.fail(err)
 	}
 	return nil
@@ -534,6 +618,9 @@ func preflight(req Request) error {
 	if req.Subdir != "" {
 		tools = append(tools, "unsquashfs")
 	}
+	if req.Concat != nil {
+		tools = append(tools, "concatfs")
+	}
 	return lookTools(tools...)
 }
 
@@ -607,7 +694,7 @@ func mountOverlay(req Request, members []member, w *Workspace, seam hooks) (*Wor
 			return nil, err
 		}
 	}
-	if err := w.mountMerged(req, seam); err != nil {
+	if err := w.mountMerged(req, points, seam); err != nil {
 		return nil, err
 	}
 	return w, nil
@@ -645,16 +732,18 @@ func (w *Workspace) mountPoint(m member, req Request, point string, seam hooks) 
 	return nil
 }
 
-// mountMerged merges the mounted lowers onto the target. A
+// mountMerged merges the mounted lowers onto the target. The lowers
+// are the member transit points only: the concat base transit point
+// joins w.mounts for teardown but is never an overlay lower. A
 // read-write view carries upperdir and workdir; a read-only chain
 // stays lowerdir-only.
-func (w *Workspace) mountMerged(req Request, seam hooks) error {
+func (w *Workspace) mountMerged(req Request, lowers []string, seam hooks) error {
 	upper, work := "", ""
 	if !req.ReadOnly {
 		upper = w.UpperDir
 		work = filepath.Join(w.runtimeDir, "work")
 	}
-	argv := overlayArgv(w.mounts, upper, work, req.FuseOptions, req.MergedDir)
+	argv := overlayArgv(lowers, upper, work, req.FuseOptions, req.MergedDir)
 	if err := w.run(argv[0], argv[1:]...); err != nil {
 		return w.fail(fmt.Errorf("workspace: %w", err))
 	}

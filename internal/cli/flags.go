@@ -24,6 +24,7 @@ type flagSet struct {
 	fuseOptions           string
 	split                 bool
 	splitMode             string
+	splitRoute            string
 	cache                 bool
 	logLevel              string
 }
@@ -42,6 +43,7 @@ func bindFlags(cmd *cobra.Command, flags *flagSet) {
 	set.StringVar(&flags.fuseOptions, "fuse-options", "", "opaque FUSE mount options")
 	set.BoolVar(&flags.split, "split", false, "enable split image storage")
 	set.StringVar(&flags.splitMode, "split-mode", "", "split storage mode: blocks or members")
+	set.StringVar(&flags.splitRoute, "split-route", "", "byte-block mount route: reassemble or concat")
 	set.BoolVar(&flags.cache, "cache", false, "copy images into the cache directory later")
 	set.StringVar(&flags.logLevel, "log-level", "", "log level: debug, info, warn, or error")
 }
@@ -68,6 +70,7 @@ func commandPatch(cmd *cobra.Command, flags *flagSet) (config.Patch, error) {
 		FuseOptions:           changedString(cmd, "fuse-options", &flags.fuseOptions),
 		SplitEnabled:          changedBool(cmd, "split", flags.split),
 		SplitMode:             changedString(cmd, "split-mode", &flags.splitMode),
+		SplitRoute:            changedString(cmd, "split-route", &flags.splitRoute),
 		CacheEnabled:          changedBool(cmd, "cache", flags.cache),
 		LogLevel:              changedString(cmd, "log-level", &flags.logLevel),
 	}, nil

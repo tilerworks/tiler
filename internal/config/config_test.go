@@ -27,7 +27,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.LogLevel != DefaultLogLevel {
 		t.Fatalf("log level = %q", cfg.LogLevel)
 	}
-	if cfg.SplitEnabled || cfg.SplitMode != "" || cfg.CacheEnabled {
+	if cfg.SplitEnabled || cfg.SplitMode != "" || cfg.SplitRoute != "" || cfg.CacheEnabled {
 		t.Fatalf("split or cache default is set: %+v", cfg)
 	}
 	if cfg.SessionMaxAge != DefaultSessionMaxAge {
@@ -209,6 +209,21 @@ func TestInvalidConfig(t *testing.T) {
 			doc:   "split_enabled: false\nsplit_mode: members\n",
 			field: "split_mode",
 		},
+		{
+			name:  "route set while split is off",
+			doc:   "split_route: concat\n",
+			field: "split_route",
+		},
+		{
+			name:  "route with members mode",
+			doc:   "split_enabled: true\nsplit_mode: members\nsplit_route: concat\n",
+			field: "split_route",
+		},
+		{
+			name:  "unknown route",
+			doc:   "split_enabled: true\nsplit_mode: blocks\nsplit_route: splice\n",
+			field: "split_route",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,6 +247,44 @@ func TestValidSplitModes(t *testing.T) {
 		if !got.SplitEnabled || got.SplitMode != mode {
 			t.Fatalf("mode %s: %+v", mode, got)
 		}
+	}
+}
+
+func TestValidSplitRoutes(t *testing.T) {
+	// The omitted and the explicit empty route both keep the default
+	// reassemble behavior; the two named routes pin the mount form.
+	for _, route := range []string{"", SplitRouteReassemble, SplitRouteConcat} {
+		doc := "split_enabled: true\nsplit_mode: blocks\n"
+		if route != "" {
+			doc += "split_route: " + route + "\n"
+		}
+		got, err := applyDoc(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.SplitRoute != route {
+			t.Fatalf("route %q: %+v", route, got)
+		}
+	}
+
+	// An explicit empty route in a nearer layer clears a lower value.
+	base := Defaults(testHome)
+	base.SplitEnabled = true
+	base.SplitMode = SplitModeBlocks
+	base.SplitRoute = SplitRouteConcat
+	patch, err := Decode([]byte("split_route: \"\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.SplitRoute == nil || *patch.SplitRoute != "" {
+		t.Fatal("explicit empty split_route was omitted")
+	}
+	got := patch.Apply(base)
+	if err := Validate(got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitRoute != "" {
+		t.Fatalf("explicit empty route did not clear the base: %+v", got)
 	}
 }
 

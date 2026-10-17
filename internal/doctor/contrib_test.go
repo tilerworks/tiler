@@ -117,18 +117,21 @@ func TestContribMissingToolIsNeverAFailure(t *testing.T) {
 }
 
 // assertContribGuidance pins the guidance wording: where the sources
-// ship, what an on-site build needs, and that tiler never installs
-// the tool itself.
+// ship — worded so it holds for every contrib tool — what an on-site
+// build needs, and that tiler never installs the tool itself.
 func assertContribGuidance(t *testing.T, detail string) {
 	t.Helper()
 	for _, want := range []string{
 		"optional tool",
-		"contrib/ directory of the tiler source tree",
+		"sources ship in the contrib/ directory of the tiler source tree",
 		"gcc and libfuse3-dev",
 		"tiler never installs it automatically",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("guidance = %q, want it to contain %q", detail, want)
 		}
+	}
+	if strings.Contains(detail, "C sources") {
+		t.Fatalf("guidance still pins the C language: %q", detail)
 	}
 }

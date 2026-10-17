@@ -1,0 +1,96 @@
+--- /tmp/concatfs-orig.c	2026-10-16 11:08:51.346340463 +0800
++++ /home/jiangxin.guest/work/tiler-plan/scripts/poc/vendor/concatfs.c	2026-10-16 11:08:50.686344198 +0800
+@@ -30,7 +30,7 @@
+   gcc -Wall concatfs.c `pkg-config fuse --cflags --libs` -o concatfs
+ */
+ 
+-#define FUSE_USE_VERSION 26
++#define FUSE_USE_VERSION 31
+ 
+ #include <fuse.h>
+ #include <stdio.h>
+@@ -38,6 +38,7 @@
+ #include <string.h>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <utime.h>
+ #include <libgen.h>
+ #include <pthread.h>
+ #include <limits.h>
+@@ -320,7 +321,7 @@
+ 	
+ 	return rv;
+ }
+-static int concatfs_getattr(const char *path, struct stat *stbuf)
++static int concatfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+ {
+ 	char fpath[PATH_MAX];
+     
+@@ -339,7 +340,7 @@
+ }
+ 
+ static int concatfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+-			    off_t offset, struct fuse_file_info *fi)
++			    off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
+ {
+ 	int retstat = 0;
+ 	DIR *dp;
+@@ -361,7 +362,7 @@
+ 	}
+ 	
+ 	do {
+-		if (filler(buf, de->d_name, NULL, 0) != 0) {
++		if (filler(buf, de->d_name, NULL, 0, 0) != 0) {
+ 			closedir(dp);
+ 			return -ENOMEM;
+ 		}
+@@ -510,7 +511,7 @@
+ 	return rv;
+ }
+ 
+-static int concatfs_rename(const char *path, const char *topath)
++static int concatfs_rename(const char *path, const char *topath, unsigned int flags)
+ {
+ 	int rv;
+ 	char fpath[PATH_MAX];
+@@ -542,7 +543,7 @@
+ 	return rv;
+ }
+ 
+-static int concatfs_chmod(const char *path, mode_t mode)
++static int concatfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
+ {
+ 	int rv;
+ 	char fpath[PATH_MAX];
+@@ -556,7 +557,7 @@
+ 	return rv;
+ }
+ 
+-static int concatfs_chown(const char *path, uid_t uid, gid_t gid)
++static int concatfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi)
+ {
+ 	int rv;
+ 	char fpath[PATH_MAX];
+@@ -570,7 +571,7 @@
+ 	return rv;
+ }
+ 
+-static int concatfs_truncate(const char *path, off_t nsize)
++static int concatfs_truncate(const char *path, off_t nsize, struct fuse_file_info *fi)
+ {
+ 	int rv;
+ 	char fpath[PATH_MAX];
+@@ -647,13 +648,11 @@
+ 	.chmod          = concatfs_chmod,
+ 	.chown          = concatfs_chown,
+ 	.truncate       = concatfs_truncate,
+-	.utime          = concatfs_utime,
+ 	.open		= concatfs_open,
+ 	.read		= concatfs_read,
+ 	.write          = concatfs_write,
+ 	.release        = concatfs_release,
+ 	.readdir	= concatfs_readdir,
+-	.access         = concatfs_access,
+ 	.create         = concatfs_create,
+ };
+ 
