@@ -95,16 +95,53 @@ func invalidTarget(target string) error {
 }
 
 // rejectReferenced refuses both rm stages while any reference pins
-// the target.
+// the target. A session pin names the session and the command that
+// releases it; a chain parent link names the shape instead, since
+// no session owns it.
 func (t rmTarget) rejectReferenced(refs Refs) error {
 	referenced, err := t.referenced(refs)
 	if err != nil {
 		return err
 	}
-	if referenced {
-		return errors.New("remove: target is still referenced; unmount it or wait for garbage collection")
+	if !referenced {
+		return nil
 	}
-	return nil
+	name, held, err := t.sessionHolder(refs)
+	if err != nil {
+		return err
+	}
+	if held {
+		return fmt.Errorf(
+			"remove: target is still referenced by session %s; "+
+				"run 'tiler session close %s' to release it "+
+				"(or 'tiler images gc --session-max-age ...' to age the session out)",
+			name, name)
+	}
+	return errors.New(
+		"remove: target is still referenced by another live chain; " +
+			"remove that chain first")
+}
+
+// sessionHolder names one active session pinning any full image the
+// target would take with it, mirroring the ids referenced checks.
+func (t rmTarget) sessionHolder(refs Refs) (string, bool, error) {
+	if refs == nil {
+		return "", false, nil
+	}
+	ids := []string{t.archive}
+	if t.archive == "" {
+		var err error
+		if ids, err = t.repoFullIDs(); err != nil {
+			return "", false, err
+		}
+	}
+	for _, id := range ids {
+		name, held, err := refs.Holder(refFor(t.repo, id))
+		if err != nil || held {
+			return name, held, err
+		}
+	}
+	return "", false, nil
 }
 
 // referenced reports the pins for the target shape. An archive is

@@ -332,6 +332,12 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	if ExitCode(err) != 1 || !strings.Contains(stderr, "referenced") {
 		t.Fatalf("ExitCode(%v) = %d stderr = %q", err, ExitCode(err), stderr)
 	}
+	// The refusal names the pinning session and how to release it.
+	for _, want := range []string{"s1", "session close s1"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr %q missing %q", stderr, want)
+		}
+	}
 	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)

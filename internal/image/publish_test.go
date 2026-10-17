@@ -1154,6 +1154,13 @@ func (h holdSet) Holds(ref Ref) (bool, error) {
 	return h.ids[ref.FullID], nil
 }
 
+func (h holdSet) Holder(ref Ref) (string, bool, error) {
+	if h.ids[ref.FullID] {
+		return "pinning-session", true, nil
+	}
+	return "", false, nil
+}
+
 func testRepo(t *testing.T) Repo {
 	t.Helper()
 	repo, err := OpenRepo(t.TempDir(), "alice/app")
