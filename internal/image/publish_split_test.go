@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // splitFixture pairs a valid split meta with the payload file bodies
@@ -557,16 +558,41 @@ func manifestNames(meta Meta) []string {
 	return names
 }
 
+// manifestMtimes lists the recorded modification times in manifest
+// order, parallel to manifestNames.
+func manifestMtimes(meta Meta) []int64 {
+	if PayloadKind(meta) == PayloadBlocks {
+		out := make([]int64, len(meta.Blocks))
+		for i, entry := range meta.Blocks {
+			out[i] = entry.MtimeUnix
+		}
+		return out
+	}
+	out := make([]int64, len(meta.Members))
+	for i, entry := range meta.Members {
+		out[i] = entry.MtimeUnix
+	}
+	return out
+}
+
 // writePayloadDir lays out the flat payload files of a fixture under
 // dir, which is a staged scratch directory, an active payload
-// directory, or the matching place inside a hold.
+// directory, or the matching place inside a hold. The file mtimes are
+// aligned with the manifest, so the seeded payload is as consistent
+// as a real build.
 func writePayloadDir(t *testing.T, dir string, fx splitFixture) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	mtimes := manifestMtimes(fx.meta)
 	for i, name := range manifestNames(fx.meta) {
-		if err := os.WriteFile(filepath.Join(dir, name), fx.bodies[i], 0o644); err != nil {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, fx.bodies[i], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Unix(mtimes[i], 0)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
