@@ -37,6 +37,18 @@ type mountFake struct {
 	removed    int
 	mountErr   error
 	umountErr  error
+
+	forestReqs   []workspace.ForestRequest
+	forestReused bool
+	forestErr    error
+
+	assembleCalls [][]string
+	assembleN     int
+	assembleOut   string
+	assembleErr   error
+
+	lookCalls   []string
+	lookMissing map[string]bool
 }
 
 func (f *mountFake) cache(cacheDir, src, want string) (string, string, error) {
@@ -66,23 +78,66 @@ func (f *mountFake) umount(req workspace.UnmountRequest) (int, error) {
 	return f.removed, nil
 }
 
+func (f *mountFake) forest(req workspace.ForestRequest) (*workspace.Workspace, error) {
+	f.forestReqs = append(f.forestReqs, req)
+	if f.forestErr != nil {
+		return nil, f.forestErr
+	}
+	return &workspace.Workspace{MergedDir: req.ParentDir, Reused: f.forestReused}, nil
+}
+
+// assemble records one materialization call and returns the
+// content-addressed cache path the real assembler would produce.
+func (f *mountFake) assemble(
+	cacheDir string,
+	blocks []image.BlockFile,
+	wantSHA string,
+	wantSize int64,
+) (string, error) {
+	f.assembleN++
+	f.assembleCalls = append(f.assembleCalls, []string{cacheDir, wantSHA, fmt.Sprint(wantSize), fmt.Sprint(len(blocks))})
+	if f.assembleErr != nil {
+		return "", f.assembleErr
+	}
+	out := f.assembleOut
+	if out == "" {
+		out = filepath.Join(cacheDir, wantSHA+image.SquashExt)
+	}
+	return out, nil
+}
+
+// lookPath reports every optional tool as present unless the test
+// marks it missing.
+func (f *mountFake) lookPath(name string) (string, error) {
+	f.lookCalls = append(f.lookCalls, name)
+	if f.lookMissing[name] {
+		return "", fmt.Errorf("exec: %s: executable file not found in $PATH", name)
+	}
+	return filepath.Join("/usr/bin", name), nil
+}
+
 // withMountSeams installs the fake engines, tool runner, cache, and
 // mount table for the command tests.
 func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	t.Helper()
 	withSessionLockSeam(t)
-	f := &mountFake{table: table}
+	f := &mountFake{table: table, lookMissing: map[string]bool{}}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
 	origMount, origUmount := mountEngine, unmountEngine
+	origForest, origAssemble, origLook := forestEngine, assembleBlocks, toolLookPath
 	t.Cleanup(func() {
 		mountRun, ensureCache, loadMountTable = origRun, origCache, origTable
 		mountEngine, unmountEngine = origMount, origUmount
+		forestEngine, assembleBlocks, toolLookPath = origForest, origAssemble, origLook
 	})
 	mountRun = f.runTool
 	ensureCache = f.cache
 	loadMountTable = func() ([]mountinfo.Mount, error) { return f.table, nil }
 	mountEngine = f.mount
 	unmountEngine = f.umount
+	forestEngine = f.forest
+	assembleBlocks = f.assemble
+	toolLookPath = f.lookPath
 	return f
 }
 

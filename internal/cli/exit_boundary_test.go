@@ -48,6 +48,20 @@ func TestExitCodeBoundaries(t *testing.T) {
 			args: []string{"session", "show", "ghost"}, want: 1},
 		{name: "reserved tree working directory is runtime",
 			seed: seedReservedCwd, args: []string{"version"}, want: 1},
+		{name: "members rw mount is usage",
+			seed: seedSplitMembers,
+			args: []string{"mount", "alice/forest", "/ws/forest"}, want: 2},
+		{name: "members subdir mount is usage",
+			seed: seedSplitMembers,
+			args: []string{"mount", "--read-only", "--subdir", "docs",
+				"alice/forest", "/ws/forest"}, want: 2},
+		{name: "corrupt block manifest mount is runtime",
+			seed: seedCorruptBlocks,
+			args: []string{"mount", "alice/data", "/ws/view"}, want: 1},
+		{name: "missing concat description mount is runtime",
+			seed: seedConcatWithoutView,
+			args: []string{"--split", "--split-mode", "blocks", "--split-route", "concat",
+				"mount", "alice/data", "/ws/view"}, want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,4 +104,41 @@ func seedReservedCwd(t *testing.T, home string) {
 		t.Fatal(err)
 	}
 	t.Chdir(inside)
+}
+
+// defaultImagesDir is the library root of the exit-boundary tests,
+// which run without the library flags.
+func defaultImagesDir(home string) string {
+	return filepath.Join(home, ".tiler", "images")
+}
+
+// seedSplitMembers installs the mount seams and a members-form
+// library fixture in the default location.
+func seedSplitMembers(t *testing.T, home string) {
+	t.Helper()
+	withMountSeams(t, nil)
+	writeMembersFixture(t, defaultImagesDir(home), "alice/forest", []fixtureMember{
+		{name: "docs", body: "docs-bytes"},
+		{name: "src", body: "src-bytes"},
+	})
+}
+
+// seedCorruptBlocks installs the mount seams and a blocks-form
+// library whose first block disagrees with its recorded size.
+func seedCorruptBlocks(t *testing.T, home string) {
+	t.Helper()
+	withMountSeams(t, nil)
+	imagesDir := defaultImagesDir(home)
+	id := writeBlocksFixture(t, imagesDir, "alice/data", []string{"one", "two"}, true)
+	writeSplitFile(t,
+		filepath.Join(imagesDir, "alice", "data", "blocks", id, "blk.000"),
+		"corrupted-and-longer")
+}
+
+// seedConcatWithoutView installs the mount seams and a blocks-form
+// library without the concat description file.
+func seedConcatWithoutView(t *testing.T, home string) {
+	t.Helper()
+	withMountSeams(t, nil)
+	writeBlocksFixture(t, defaultImagesDir(home), "alice/data", []string{"one", "two"}, false)
 }

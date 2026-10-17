@@ -105,7 +105,8 @@ func validateIncr(req IncrRequest) (Repo, Meta, error) {
 		return Repo{}, Meta{}, err
 	}
 	if req.Config.SplitEnabled {
-		return Repo{}, Meta{}, errors.New("build: split storage is enabled; incremental builds are refused")
+		return Repo{}, Meta{}, errors.New(
+			"build: split storage is enabled; the split forms cover full images only, so incremental builds are refused")
 	}
 	info, err := os.Stat(req.Upper)
 	if err != nil {

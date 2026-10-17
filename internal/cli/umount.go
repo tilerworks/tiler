@@ -44,6 +44,7 @@ func runUmount(cmd *cobra.Command, args []string) error {
 		Dir:        dir,
 		Table:      toEntries(table),
 		RuntimeDir: cfg.RuntimeDir,
+		Owned:      ownedLibrarySource(cfg.ImagesDir),
 		Reload:     reloadEntries,
 		Run:        mountRun,
 	})

@@ -44,6 +44,14 @@ type Target struct {
 	// manifest digest for members.
 	Size   int64
 	SHA256 string
+	// BlocksDir is the directory holding the byte blocks and the
+	// concat description file of a blocks target.
+	BlocksDir string
+	// ConcatView is the absolute path of the concat description
+	// file the optional zero-reassembly mount route consumes. Only
+	// blocks targets carry one; the file itself may be absent from
+	// a hand-crafted payload, which the mount route reports.
+	ConcatView string
 	// Blocks lists the byte-block files of a blocks target in
 	// manifest order.
 	Blocks []BlockFile
@@ -158,6 +166,10 @@ func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
 // blocks/<full-id>/ and returns the block facts with the logical
 // whole-image identity. A missing block names the entry.
 func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
+	blocksDir, err := repo.BlocksDirPath(meta.ID)
+	if err != nil {
+		return Target{}, fmt.Errorf("mount: %w", err)
+	}
 	blocks := make([]BlockFile, 0, len(meta.Blocks))
 	for _, entry := range meta.Blocks {
 		path, err := repo.BlockPath(meta.ID, entry.Name)
@@ -176,13 +188,15 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 		})
 	}
 	return Target{
-		Library: true,
-		Name:    name,
-		ID:      meta.ID,
-		Form:    PayloadBlocks,
-		Size:    meta.Size,
-		SHA256:  meta.SHA256,
-		Blocks:  blocks,
+		Library:    true,
+		Name:       name,
+		ID:         meta.ID,
+		Form:       PayloadBlocks,
+		Size:       meta.Size,
+		SHA256:     meta.SHA256,
+		BlocksDir:  blocksDir,
+		ConcatView: filepath.Join(blocksDir, fileConcatView),
+		Blocks:     blocks,
 	}, nil
 }
 
