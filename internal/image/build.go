@@ -3,9 +3,11 @@ package image
 import (
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +18,11 @@ import (
 // toolOutputLimit caps how much tool output one error carries.
 const toolOutputLimit = 2048
 
-// ToolRunner executes one external tool with an argument list. The
-// arguments go straight to exec, never through a shell.
-type ToolRunner func(name string, args ...string) error
+// ToolRunner executes one external tool with an argument list and
+// extra environment variables. The arguments go straight to exec,
+// never through a shell; the env entries are appended to the
+// inherited environment, and an empty env changes nothing.
+type ToolRunner func(name string, env []string, args ...string) error
 
 // FullRequest is one full image build. Callers or scene scripts
 // prepare the source directory first; the build only packs it.
@@ -205,8 +209,10 @@ func packTemp(repo Repo, src string, run ToolRunner) (string, error) {
 }
 
 // packFullImage is the mksquashfs argument list for a full image.
+// The creation timestamp is pinned so the same tree packs to the
+// same bytes.
 func packFullImage(run ToolRunner, src, dst string) error {
-	return run("mksquashfs", src, dst, "-comp", "zstd", "-noappend")
+	return run("mksquashfs", sourceDateEnv(src), src, dst, "-comp", "zstd", "-noappend")
 }
 
 // finishFull hashes the packed file, assembles and validates the
@@ -276,12 +282,52 @@ func hexDigest(sum [32]byte) string {
 
 // runTool is the default ToolRunner. A non-zero exit carries the
 // truncated combined output.
-func runTool(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+func runTool(name string, env []string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %w: %s", name, err, tailOutput(out))
 	}
 	return nil
+}
+
+// sourceDateEnv pins the filesystem creation time mksquashfs embeds,
+// so an unchanged tree packs to byte-identical images and the image
+// id stays reproducible. A SOURCE_DATE_EPOCH already in the
+// environment is honored; otherwise the epoch derives from the
+// newest mtime in the tree that is about to be packed.
+func sourceDateEnv(src string) []string {
+	return []string{"SOURCE_DATE_EPOCH=" + strconv.FormatInt(sourceDateEpoch(src), 10)}
+}
+
+// sourceDateEpoch is the deterministic build timestamp of one source
+// tree. Unreadable entries never abort the build; a tree with no
+// readable mtime falls back to the zero epoch, keeping same input
+// same output.
+func sourceDateEpoch(src string) int64 {
+	if value, ok := os.LookupEnv("SOURCE_DATE_EPOCH"); ok {
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	var newest int64
+	_ = filepath.WalkDir(src, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return nil
+		}
+		if m := info.ModTime().Unix(); m > newest {
+			newest = m
+		}
+		return nil
+	})
+	return newest
 }
 
 func tailOutput(out []byte) string {

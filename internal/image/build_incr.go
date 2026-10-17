@@ -193,9 +193,10 @@ func packIncrTemp(repo Repo, src string, run ToolRunner) (string, error) {
 
 // packIncrImage is the mksquashfs argument list for one layer.
 // Xattrs stay stored so whiteout markers in the user namespace
-// survive; mksquashfs keeps device nodes as they are.
+// survive; mksquashfs keeps device nodes as they are. The creation
+// timestamp is pinned so the same upper packs to the same bytes.
 func packIncrImage(run ToolRunner, src, dst string) error {
-	return run("mksquashfs", src, dst, "-comp", "zstd", "-noappend", "-xattrs")
+	return run("mksquashfs", sourceDateEnv(src), src, dst, "-comp", "zstd", "-noappend", "-xattrs")
 }
 
 // finishIncr hashes the packed layer, appends the chain entry, and
