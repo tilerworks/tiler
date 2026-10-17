@@ -343,6 +343,47 @@ func TestMountReuseKeepsOutputAndRecords(t *testing.T) {
 	}
 }
 
+func TestMountImplicitSessionDiscardsFailedAndReusedRecords(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	view := filepath.Join(work, "view")
+	sessions := sessionsDir(home)
+
+	// A failed implicit mount deletes its record instead of leaving
+	// an active name that pins the image.
+	f.mountErr = errors.New("workspace: refusing to restack")
+	_, _, _, err := runCmd(t, append(lib, "mount", img, view)...)
+	if ExitCode(err) != 1 {
+		t.Fatalf("failed mount: ExitCode(%v) = %d, want 1", err, ExitCode(err))
+	}
+	if names := listSessionNames(t, sessions); len(names) != 0 {
+		t.Fatalf("sessions after failure = %v, want none", names)
+	}
+
+	// A successful implicit mount keeps its record.
+	f.mountErr = nil
+	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
+	names := listSessionNames(t, sessions)
+	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
+		t.Fatalf("sessions = %v, want one auto-* record", names)
+	}
+
+	// An implicit remount that merely adopts the healthy view leaves
+	// no second record behind.
+	f.reused = true
+	mountOK(t, lib, "already mounted "+view+"\n", "mount", img, view)
+	if names := listSessionNames(t, sessions); len(names) != 1 {
+		t.Fatalf("sessions after reuse = %v, want the original record only", names)
+	}
+	rec := loadSessionRecord(t, sessions, names[0])
+	if len(rec.Actions) != 1 || rec.Actions[0].Status != session.StatusMounted {
+		t.Fatalf("original record actions = %+v", rec.Actions)
+	}
+}
+
 func TestMountIntoClosedSessionIsRefused(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)

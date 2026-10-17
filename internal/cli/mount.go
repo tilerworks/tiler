@@ -156,6 +156,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		func(session.Action) (session.Result, error) {
 			return runMountEngine(cfg, target, dir, flags, cmd.ErrOrStderr())
 		})
+	if implicit && (err != nil || result.Reused) {
+		// An implicit record whose action failed or merely adopted an
+		// already-healthy view never serves a live view of its own;
+		// keeping it would pin the image and leak an active name.
+		discardImplicitSession(engine, name, err == nil && result.Reused)
+	}
 	if err != nil {
 		return err
 	}
@@ -199,6 +205,14 @@ func newImplicitSession(engine *session.Engine) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// discardImplicitSession drops one implicit record that never came
+// to serve a live view. A discard failure is swallowed: the mount
+// outcome owns the command's error, and garbage collection remains
+// the fallback for the record.
+func discardImplicitSession(engine *session.Engine, name string, reused bool) {
+	_, _ = engine.Discard(name, reused)
 }
 
 // mountAction builds the record action for one mount. The identity

@@ -304,6 +304,40 @@ func (e *Engine) CloseImplicitFor(dir string, umount UmountFunc) (string, error)
 	return e.closeImplicit(name, dir, health, umount)
 }
 
+// Discard deletes one implicit record that never came to serve a
+// live view of its own. A mount that failed, or one that merely
+// adopted a view another session already serves, leaves such a
+// record behind; keeping it would pin the image and leak an active
+// name that no view answers to. A record with a mounted action that
+// was not an adoption describes a view this session serves, so it
+// stays. An explicit name is refused: named sessions answer to
+// close and remove alone. The return reports whether the record was
+// deleted.
+func (e *Engine) Discard(name string, reused bool) (bool, error) {
+	if !implicitName(name) {
+		return false, fmt.Errorf(
+			"session: %s is not an implicit session; close and remove it", name)
+	}
+	release, err := e.lockExclusive(name)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	rec, err := e.Load(name)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, action := range rec.Actions {
+		if action.Type == TypeMount && action.Status == StatusMounted && !reused {
+			return false, nil
+		}
+	}
+	return true, e.deleteRecordFiles(name)
+}
+
 // implicitCandidate scans for the active implicit record covering
 // dir with no live view left. A record whose scan lock is busy is
 // skipped this round.

@@ -537,6 +537,78 @@ func TestCloseUmountFailureKeepsRecordActive(t *testing.T) {
 	}
 }
 
+func TestDiscardDeletesImplicitRecordWithoutLiveAction(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	e.Health = func(string) bool { return false }
+	const auto = "auto-20261017T031500Z-01020304"
+	if err := e.New(auto); err != nil {
+		t.Fatal(err)
+	}
+	// One failed action: the mount never came up.
+	if _, err := e.Append(auto, mountAction("/ws/one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Writeback(auto, 1, StatusFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := e.Discard(auto, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("Discard kept a record with only a failed action")
+	}
+	if _, err := e.Load(auto); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load error = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, auto+".lock")); !os.IsNotExist(err) {
+		t.Errorf("lock file stat error = %v, want not-exist", err)
+	}
+}
+
+func TestDiscardKeepsServingRecordsAndExplicitSessions(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	const auto = "auto-20261017T031500Z-01020304"
+
+	// A mounted action that was not an adoption describes a view the
+	// session serves, so the record stays even when the view died:
+	// it is the recovery source for a later open.
+	seedMounted(t, e, auto, "/ws/one")
+	deleted, err := e.Discard(auto, false)
+	if err != nil || deleted {
+		t.Fatalf("Discard = %v, %v, want false, nil", deleted, err)
+	}
+	assertRecordState(t, e, auto, StateActive)
+
+	// The same record becomes discardable when the mount merely
+	// adopted a view another session already serves.
+	deleted, err = e.Discard(auto, true)
+	if err != nil || !deleted {
+		t.Fatalf("Discard = %v, %v, want true, nil", deleted, err)
+	}
+	if _, err := e.Load(auto); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load error = %v, want ErrNotFound", err)
+	}
+
+	// An explicit name is never discardable.
+	seedMounted(t, e, "dev", "/ws/two")
+	if _, err := e.Discard("dev", true); err == nil {
+		t.Fatal("Discard accepted an explicit name")
+	}
+	assertRecordState(t, e, "dev", StateActive)
+}
+
+func TestDiscardMissingRecordIsNoop(t *testing.T) {
+	e := newEngine(t.TempDir())
+	e.Health = func(string) bool { return false }
+	deleted, err := e.Discard("auto-20261017T031500Z-01020304", false)
+	if err != nil || deleted {
+		t.Fatalf("Discard = %v, %v, want false, nil", deleted, err)
+	}
+}
+
 func TestCloseImplicitForClosesRecordWithoutLiveViews(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
