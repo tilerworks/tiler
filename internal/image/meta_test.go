@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -192,6 +193,49 @@ func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
 	}
 	if loaded.Deprecated || loaded.Kind != KindFull {
 		t.Fatalf("loaded flags = %+v", loaded)
+	}
+}
+
+func TestSplitManifestRoundTrip(t *testing.T) {
+	for _, meta := range []Meta{validBlocksMeta(), validMembersMeta()} {
+		encoded, err := Encode(meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := Decode(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Blocks, meta.Blocks) {
+			t.Errorf("blocks = %+v, want %+v", got.Blocks, meta.Blocks)
+		}
+		if !reflect.DeepEqual(got.Members, meta.Members) {
+			t.Errorf("members = %+v, want %+v", got.Members, meta.Members)
+		}
+		if got.ID != meta.ID || got.SHA256 != meta.SHA256 ||
+			got.Size != meta.Size {
+			t.Errorf("identity changed on round trip: %+v", got)
+		}
+	}
+}
+
+func TestSingleFileMetaOmitsSplitKeys(t *testing.T) {
+	encoded, err := Encode(validMeta())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, key := range []string{"blocks:", "members:"} {
+		if strings.Contains(text, key) {
+			t.Fatalf("single-file meta grew %s:\n%s", key, text)
+		}
+	}
+	got, err := Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Blocks) != 0 || len(got.Members) != 0 {
+		t.Fatalf("split manifests appeared: %+v", got)
 	}
 }
 

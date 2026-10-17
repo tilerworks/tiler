@@ -589,7 +589,7 @@ func newFakeKernel() *fakeKernel {
 func (k *fakeKernel) run(name string, args ...string) error {
 	k.calls = append(k.calls, append([]string{name}, args...))
 	switch name {
-	case "squashfuse_ll", "fuse-overlayfs":
+	case "squashfuse_ll", "fuse-overlayfs", "concatfs":
 		k.live[args[len(args)-1]] = true
 	case "fusermount3":
 		point := args[len(args)-1]
@@ -1093,7 +1093,7 @@ func TestPreflightToolchain(t *testing.T) {
 	if err := available(); err != nil {
 		t.Skipf("mounting unavailable here: %v", err)
 	}
-	all := []string{"squashfuse_ll", "fusermount3", "fuse-overlayfs", "unsquashfs"}
+	all := []string{"squashfuse_ll", "fusermount3", "fuse-overlayfs", "unsquashfs", "concatfs"}
 	tests := []struct {
 		name    string
 		present []string
@@ -1116,6 +1116,15 @@ func TestPreflightToolchain(t *testing.T) {
 			present: []string{"squashfuse_ll", "fusermount3", "fuse-overlayfs"},
 			req:     Request{Subdir: "src"},
 			wantErr: "unsquashfs is missing",
+		},
+		{
+			name:    "a concat route needs concatfs",
+			present: []string{"squashfuse_ll", "fusermount3"},
+			req: Request{
+				ReadOnly: true,
+				Concat:   &ConcatSource{BlocksDir: "blocks", ViewName: "image.concat"},
+			},
+			wantErr: "concatfs is missing",
 		},
 		{
 			name:    "the complete toolchain passes",

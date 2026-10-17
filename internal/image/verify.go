@@ -28,18 +28,92 @@ func verifyFileSHA256(path, want string) error {
 // QuickCheck compares the recorded size and mtime with the file on
 // disk. Later mount commands use it as a cheap staleness probe.
 func QuickCheck(meta Meta, path string) error {
+	return quickCheckFile(path, meta.Size, meta.MtimeUnix)
+}
+
+func quickCheckFile(path string, size, mtime int64) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	if info.Size() != meta.Size {
+	if info.Size() != size {
 		return fmt.Errorf("image: %s size %d does not match meta %d",
-			path, info.Size(), meta.Size)
+			path, info.Size(), size)
 	}
-	if info.ModTime().Unix() != meta.MtimeUnix {
+	if info.ModTime().Unix() != mtime {
 		return fmt.Errorf("image: %s mtime does not match meta", path)
 	}
 	return nil
+}
+
+// QuickCheckTarget compares every payload file of a resolved split
+// target with its recorded size and mtime. It is the default cheap
+// probe before a split mount; the single-file stack form is probed
+// through QuickCheck by the caller instead.
+func QuickCheckTarget(t Target) error {
+	for _, file := range targetFiles(t) {
+		if err := quickCheckFile(file.path, file.size, file.mtime); err != nil {
+			return fmt.Errorf("mount: %s: %w", file.what, err)
+		}
+	}
+	return nil
+}
+
+// VerifyTarget re-hashes every payload file of a resolved split
+// target against its recorded digest. It is the full probe behind
+// --verify; the single-file stack form is verified through
+// VerifySHA256 by the caller instead.
+func VerifyTarget(t Target) error {
+	for _, file := range targetFiles(t) {
+		if err := verifyFileSHA256(file.path, file.sha); err != nil {
+			return fmt.Errorf("mount: %s: %w", file.what, err)
+		}
+	}
+	return nil
+}
+
+// payloadFile is one resolved payload file of a split target with
+// the facts its manifest records.
+type payloadFile struct {
+	what  string
+	path  string
+	size  int64
+	mtime int64
+	sha   string
+}
+
+// targetFiles flattens the manifest of a split target. The
+// single-file stack form has no split payload files and yields
+// nothing.
+func targetFiles(t Target) []payloadFile {
+	switch t.Form {
+	case PayloadBlocks:
+		files := make([]payloadFile, 0, len(t.Blocks))
+		for _, block := range t.Blocks {
+			files = append(files, payloadFile{
+				what:  "block " + block.Name,
+				path:  block.Path,
+				size:  block.Size,
+				mtime: block.MtimeUnix,
+				sha:   block.SHA256,
+			})
+		}
+		return files
+	case PayloadMembers:
+		files := make([]payloadFile, 0, len(t.Partitions))
+		for _, part := range t.Partitions {
+			files = append(files, payloadFile{
+				what:  "member " + part.Name,
+				path:  part.Path,
+				size:  part.Size,
+				mtime: part.MtimeUnix,
+				sha:   part.SHA256,
+			})
+		}
+		return files
+	default:
+		return nil
+	}
 }
 
 // fileSHA256 streams a file through sha256 without keeping a second

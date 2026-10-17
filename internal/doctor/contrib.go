@@ -7,8 +7,9 @@ const (
 	// contribGuidanceText explains where the optional helper tools
 	// come from and that tiler never installs them itself. It
 	// describes the design points in words and never cites external
-	// document numbers.
-	contribGuidanceText = "optional tool; C sources ship in the contrib/ " +
+	// document numbers. The wording holds for every contrib tool,
+	// whatever its language.
+	contribGuidanceText = "optional tool; sources ship in the contrib/ " +
 		"directory of the tiler source tree with origin, license, and " +
 		"build notes; an on-site build needs gcc and libfuse3-dev and " +
 		"takes about a second; tiler never installs it automatically"

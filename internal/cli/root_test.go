@@ -122,6 +122,70 @@ func TestSessionAutocloseFlagOverlaysOnlyWhenExplicit(t *testing.T) {
 	}
 }
 
+func TestSplitRouteFlagOverlaysOnlyWhenExplicit(t *testing.T) {
+	_, work := withWorkspace(t)
+	writeProjectConfig(t, work, strings.Join([]string{
+		"split_enabled: true",
+		"split_mode: blocks",
+		"split_route: reassemble",
+	}, "\n"))
+
+	cfg := mustRun(t, "version")
+	if cfg.SplitRoute != config.SplitRouteReassemble {
+		t.Fatalf("omitted --split-route changed the file value: %q", cfg.SplitRoute)
+	}
+
+	cfg = mustRun(t, "version", "--split-route", "concat")
+	if cfg.SplitRoute != config.SplitRouteConcat {
+		t.Fatalf("explicit --split-route did not override the file: %q", cfg.SplitRoute)
+	}
+
+	cfg = mustRun(t, "version", "--split-route", "")
+	if cfg.SplitRoute != "" {
+		t.Fatalf("explicit empty --split-route did not clear the file value: %q", cfg.SplitRoute)
+	}
+}
+
+func TestSplitRouteFlagRefusals(t *testing.T) {
+	_, work := withWorkspace(t)
+	tests := []struct {
+		name   string
+		config string
+		args   []string
+	}{
+		{
+			name:   "route while split is off",
+			config: "log_level: info\n",
+			args:   []string{"version", "--split-route", "concat"},
+		},
+		{
+			name:   "route with members mode",
+			config: "split_enabled: true\nsplit_mode: members\n",
+			args:   []string{"version", "--split-route", "concat"},
+		},
+		{
+			name:   "unknown route",
+			config: "split_enabled: true\nsplit_mode: blocks\n",
+			args:   []string{"version", "--split-route", "splice"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writeProjectConfig(t, work, tt.config)
+			_, stderr, _, err := runCmd(t, tt.args...)
+			if ExitCode(err) != 1 {
+				t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
+			}
+			if !strings.Contains(stderr, "split_route") {
+				t.Fatalf("stderr = %q, want it to name split_route", stderr)
+			}
+			if strings.Contains(stderr, "Usage:") {
+				t.Fatalf("config refusal printed usage: %q", stderr)
+			}
+		})
+	}
+}
+
 func withWorkspace(t *testing.T) (home, work string) {
 	t.Helper()
 	home = t.TempDir()

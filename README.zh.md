@@ -22,6 +22,12 @@ tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写�
 
 `git` 可选。doctor 总会列出它，缺少该二进制是一次失败的探测，而不是静默跳过。git 探测失败不会阻断其他检查。
 
+可选辅助工具以源码形式放在 `contrib/` 目录：`concatfs`（字节分块
+拼接视图路线；构建需要 gcc 与 libfuse3-dev）与 `slowfs`（延迟注入，
+用于慢速 NAS 对比；构建需要 Go 工具链）。每个目录都记录上游来源、
+许可与构建命令。场景需要而工具缺失时 tiler 会提示安装；tiler 从不
+自动安装它们。
+
 ## 使用
 
 目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速
@@ -61,10 +67,15 @@ tiler session close feature                # 逆序卸载，记录保留
   一个增量层。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。构建
   成功打印一行：`full <owner>/<repo> <id>` 或
-  `incr <owner>/<repo> <id>`。
+  `incr <owner>/<repo> <id>`。启用分块存储后，全量构建按所选分块
+  形态入库，而不再是单个 `image.sqsh`（见下文「分块存储」）；
+  split 开启期间增量构建被拒绝——分块形态只覆盖全量镜像。
 - `tiler images ls [owner/repo] [--archives] [--json]` 列出每个
   活跃镜像与链长。给出名字则列出每个链 id，`--archives` 追加
-  归档与 hold 中的链 id；`--json` 改为渲染一份机器可读文档。
+  归档与 hold 中的链 id。分块活跃位追加 `form=blocks` 或
+  `form=members` 标记；单名列表随之输出 `blocks <n>` 行或逐分区
+  一行 `member <name>`。`--json` 改为渲染一份机器可读文档，分块
+  活跃位新增 `form` 与 `members` 字段（契约只增不改）。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
@@ -77,7 +88,9 @@ tiler session close feature                # 逆序卸载，记录保留
   写：每个 squashfs 成员先只读挂到 `~/.tiler/runtime/` 下的转
   接点，再由 `fuse-overlayfs` 叠加在按挂载点（设备号,
   inode）命名的 upper 之上；同一目录重复挂载是幂等的，并复用
-  先前的改动。同一视图的健康挂载提示 `already mounted`；身份
+  先前的改动。分块载荷形态经同一引用解析，按各自的路线挂载
+  （见下文「分块存储」）。同一视图的健康挂载提示 `already
+  mounted`；身份
   不一致报冲突错误，绝不静默重挂。`--read-only` 把单镜像直接
   挂在 `<dir>`，带增量链时仅以 lowerdir 合并。`<image>` 是单
   个 squashfs 文件路径，或 `owner/repo` 库引用：库引用经活跃
@@ -123,6 +136,41 @@ tiler session close feature                # 逆序卸载，记录保留
   深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
   覆盖 session；无 session 覆盖的路径报错。
 
+### 分块存储
+
+分块存储是面向单文件大小受限存储的可选形态——配额型 NAS 共享、
+有 4 GiB 单文件上限的 FAT 类文件系统。形态完全由配置显式选择，
+不做运行期自动切换，默认关闭：
+
+```bash
+split_enabled: true          # --split
+split_mode: blocks           # --split-mode blocks|members
+split_route: reassemble      # --split-route reassemble|concat（仅 blocks）
+```
+
+- **blocks** 把全量镜像存为定长字节块（`blocks/<id>/blk.NNN`），
+  清单逐块记录 size、sha256 与 mtime。挂载默认走重组路线：块按
+  清单顺序流式拼接进 `<cache_dir>/<整体sha256>.sqsh`——逐块校验
+  加整体摘要校验——因此缓存目录需要整图大小的空间。
+  `split_route: concat` 改由 contrib 的 `concatfs` 把块目录挂成
+  一个虚拟拼接文件：零重组、不落缓存副本，挂载表身份仍是规范
+  库路径。两条路线都不再叠加 `cache_enabled` 的二次拷贝。
+  `concatfs` 缺失时降级重组直挂，并在 stderr 输出 contrib 构建
+  指引；tiler 从不自动安装或现场构建。
+- **members** 按顶层目录分区：每个分区是独立完整的 squashfs
+  （`members/<name>.sqsh`），整体身份是派生清单摘要。挂载是
+  只读子路径森林——每个分区挂在同一父目录的 `<dir>/<name>`
+  子路径下——森林是一个挂载组合：session 记录一条动作，
+  `status` 按成员挂载标注组合健康，一条 `session open` 逐成员
+  幂等重放（健康成员复用、失活成员清理重挂），`umount <父目录>`
+  逆序拆除全部成员子挂载。请求可写挂载或 `--subdir` 以 usage
+  错误拒绝并给出引导。
+
+doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会建议
+启用分块存储；按建议开启后，同一探测报告分块形态，构建即按
+所选形态入库。分块形态只覆盖全量镜像，split 开启期间增量链
+构建保持拒绝。
+
 列表/查看类命令都带机器可读形态，面向 CI 门禁与 Agent 消费。
 schema 稳定、字段只增不改，由 golden 文件测试钉住：
 
@@ -143,7 +191,7 @@ file_limit_images	pass	no single-file size limit below 512 GiB
 storage_perf_images	info	seq 112.5 MiB/s in 145.6 ms; rand avg 6.12 ms ...
 storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
 cache_advice	warn	image storage random read averages 6.12 ms, ...
-contrib_concatfs	warn	optional tool; C sources ship in the contrib/ ...
+contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
 ```
 
 ## 用户故事
@@ -165,6 +213,15 @@ lower 时，每个 upper 的稳态大约 6.5 MB。
 `kill -9` 杀掉 tiler 或 FUSE 守护进程后，一条 `tiler session open
 <name>` 按记录重放，仍健康的视图跳过，失活的清理后重建，upper
 层数据不丢。
+
+大镜像在受限存储上照常工作。目标文件系统有单文件大小上限时
+（配额型 NAS 共享、FAT 类卷），`tiler doctor` 报告限制并建议
+启用分块存储。开启 `split_enabled` 并选择 `split_mode: blocks`
+后，同一份镜像以逐块校验的字节块入库；挂载时在缓存目录重组，
+或在 contrib 的 `concatfs` 就位且 `split_route: concat` 时，把
+块目录以一个虚拟文件直接供给——完全不重组。顶层目录彼此独立的
+源树也可以改选 `split_mode: members` 分区入库，挂成只读子路径
+森林。同一个镜像库、同一套命令面，存储形态只是配置选择。
 
 机器读同一套命令面。`images ls`、`session list`、`session show`、
 `status` 与 `doctor` 都带 `--json` 形态，schema 稳定、字段只增不

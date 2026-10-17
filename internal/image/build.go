@@ -2,7 +2,6 @@ package image
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,6 +34,9 @@ type FullRequest struct {
 	Source  Source
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
+	// BlockSize is the byte-block chunk size of a blocks build. Zero
+	// selects DefaultBlockSize; tests inject small sizes.
+	BlockSize int64
 	// Refs protects referenced chains while the old image is
 	// replaced. A nil Refs holds nothing.
 	Refs Refs
@@ -52,7 +54,8 @@ type FullRequest struct {
 type FullResult struct {
 	// ID is the first 16 hex digits of the image sha256.
 	ID string
-	// Path is the published active image file.
+	// Path is the published active payload: the image file for the
+	// single-file form, or the blocks directory for a blocks build.
 	Path string
 	// SHA256 is the 64 hex digit image digest.
 	SHA256 string
@@ -61,7 +64,10 @@ type FullResult struct {
 // BuildFull packs a prepared source directory into the unique active
 // slot of the image library.
 //
-// Split storage refuses builds. The source must exist and stay
+// Split storage selects the pipeline by mode: blocks streams the
+// packed image into byte blocks, and members packs every top-level
+// source directory as its own squashfs partition. Both publish a
+// directory payload atomically. The source must exist and stay
 // outside every reserved tree. When the source is a git repository,
 // it is sanitized first and any git failure aborts the build before
 // packing. mksquashfs writes a synced temporary file inside the
@@ -69,10 +75,13 @@ type FullResult struct {
 // is validated, and the atomic publish renames both into place,
 // archiving the previous chain when it is not referenced. An
 // identical active image with an empty chain is a no-op. Before
-// returning, the published file is hashed again and compared with
-// the stored digest. A failed packer leaves no active image and no
+// returning, the published payload is hashed again and compared with
+// the stored manifest. A failed packer leaves no active image and no
 // temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
+	if req.Config.SplitEnabled {
+		return buildSplit(req)
+	}
 	repo, err := validateFull(req)
 	if err != nil {
 		return FullResult{}, err
@@ -80,24 +89,48 @@ func BuildFull(req FullRequest) (FullResult, error) {
 	if err := prepareScene(req); err != nil {
 		return FullResult{}, err
 	}
-	run := req.Run
-	if run == nil {
-		run = runTool
-	}
-	now := req.Now
-	if now == nil {
-		now = time.Now
-	}
-	imgTmp, err := packTemp(repo, req.SrcDir, run)
+	imgTmp, err := packTemp(repo, req.SrcDir, toolRunner(req))
 	if err != nil {
 		return FullResult{}, err
 	}
-	res, err := finishFull(repo, req, imgTmp, now)
+	res, err := finishFull(repo, req, imgTmp, buildNow(req))
 	if err != nil {
 		removeFile(imgTmp)
 		return FullResult{}, err
 	}
 	return res, nil
+}
+
+// buildSplit dispatches a full build to the pipeline of the
+// configured split mode. Configuration validation admits only the
+// two known modes; anything else is refused here as well.
+func buildSplit(req FullRequest) (FullResult, error) {
+	switch req.Config.SplitMode {
+	case config.SplitModeBlocks:
+		return buildBlocks(req)
+	case config.SplitModeMembers:
+		return buildMembers(req)
+	default:
+		return FullResult{}, fmt.Errorf(
+			"build: unknown split mode %q", req.Config.SplitMode)
+	}
+}
+
+// toolRunner is the injected runner of a request or the exec
+// default.
+func toolRunner(req FullRequest) ToolRunner {
+	if req.Run != nil {
+		return req.Run
+	}
+	return runTool
+}
+
+// buildNow is the injected clock of a request or time.Now.
+func buildNow(req FullRequest) func() time.Time {
+	if req.Now != nil {
+		return req.Now
+	}
+	return time.Now
 }
 
 // prepareScene sanitizes the source when it is a git repository. A
@@ -120,9 +153,6 @@ func validateFull(req FullRequest) (Repo, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
 		return Repo{}, err
-	}
-	if req.Config.SplitEnabled {
-		return Repo{}, errors.New("build: split storage is enabled; full builds are refused")
 	}
 	if err := checkSourceDir(req.SrcDir, req.Config); err != nil {
 		return Repo{}, err
@@ -161,11 +191,11 @@ func packTemp(repo Repo, src string, run ToolRunner) (string, error) {
 	tmp := filepath.Join(repo.Dir, name)
 	if err := packFullImage(run, src, tmp); err != nil {
 		removeFile(tmp)
-		return "", err
+		return "", failTool(tmp, err)
 	}
 	if err := syncFile(tmp); err != nil {
 		removeFile(tmp)
-		return "", fmt.Errorf("build: %w", err)
+		return "", failWrite(tmp, err)
 	}
 	if err := syncDir(repo.Dir, hooks{}); err != nil {
 		removeFile(tmp)
@@ -214,24 +244,30 @@ func packedMeta(repo Repo, req FullRequest, tmp string, now func() time.Time) (M
 	if err != nil {
 		return Meta{}, fmt.Errorf("build: %w", err)
 	}
-	meta := Meta{
-		ID:        ID(sum),
+	meta := newFullMeta(repo, req, now)
+	meta.ID = ID(sum)
+	meta.Size = info.Size()
+	meta.SHA256 = hexDigest(sum)
+	meta.MtimeUnix = info.ModTime().Unix()
+	if err := meta.Validate(); err != nil {
+		return Meta{}, fmt.Errorf("build: %w", err)
+	}
+	return meta, nil
+}
+
+// newFullMeta is the metadata skeleton every full build shares
+// before the payload facts are filled in.
+func newFullMeta(repo Repo, req FullRequest, now func() time.Time) Meta {
+	return Meta{
 		Owner:     repo.Owner,
 		Repo:      repo.Repo,
 		Version:   req.Version,
 		Kind:      KindFull,
 		Format:    Format{Type: FormatSquashfs, Compression: CompressionZstd},
-		Size:      info.Size(),
-		SHA256:    hexDigest(sum),
-		MtimeUnix: info.ModTime().Unix(),
 		Source:    req.Source,
 		CreatedAt: now().UTC(),
 		Builder:   req.Builder,
 	}
-	if err := meta.Validate(); err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
-	}
-	return meta, nil
 }
 
 func hexDigest(sum [32]byte) string {

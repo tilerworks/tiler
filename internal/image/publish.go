@@ -60,7 +60,7 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	if err := validatePublish(repo, data, meta); err != nil {
 		return err
 	}
-	existing, exists, err := preparePublish(repo, refs, seam)
+	existing, exists, err := preparePublish(repo, refs, seam, "")
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	if err := commit(repo, existing, exists, meta, imgTmp, metaTmp, refs, seam); err != nil {
+	if err := commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam); err != nil {
 		removeFile(imgTmp)
 		removeFile(metaTmp)
 		return err
@@ -90,7 +90,7 @@ func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam
 	if err := validateMeta(repo, meta); err != nil {
 		return err
 	}
-	existing, exists, err := preparePublish(repo, refs, seam)
+	existing, exists, err := preparePublish(repo, refs, seam, "")
 	if err != nil {
 		return err
 	}
@@ -104,14 +104,64 @@ func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam
 	if !match {
 		return errors.New("publish: payload does not match meta")
 	}
-	return commit(repo, existing, exists, meta, imgTmp, metaTmp, refs, seam)
+	return commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam)
+}
+
+// publishStagedPayload publishes a temporary split payload directory
+// and meta pair that already rest synced in the repository directory.
+// It is the directory-payload sibling of publishStaged: the payload
+// directory lands with one rename onto its final layout place, then
+// the meta rename follows, and a failure puts the previous active
+// payload back. The temps never survive the call: renamed on success,
+// removed on the idle no-op and on every error.
+func publishStagedPayload(
+	repo Repo,
+	meta Meta,
+	refs Refs,
+	payloadTmp, finalPayloadDir, metaTmp string,
+	seam hooks,
+) error {
+	defer func() { _ = os.RemoveAll(payloadTmp) }()
+	defer removeFile(metaTmp)
+	if err := validateMeta(repo, meta); err != nil {
+		return err
+	}
+	if PayloadKind(meta) == PayloadSingle {
+		return errors.New("publish: staged payload requires a split manifest")
+	}
+	existing, exists, err := preparePublish(repo, refs, seam, payloadTmp)
+	if err != nil {
+		return err
+	}
+	if exists && sameIdleFull(existing, meta) {
+		return nil
+	}
+	match, err := stagedPayloadMatches(payloadTmp, meta)
+	if err != nil {
+		return err
+	}
+	if !match {
+		return errors.New("publish: payload does not match meta")
+	}
+	return commit(repo, existing, exists, meta, payloadTmp, finalPayloadDir, metaTmp, refs, seam)
+}
+
+// stagedPayloadMatches checks a scratch payload directory against the
+// manifest that publishes with it. The scratch layout matches the
+// final one: block files and member files rest directly inside.
+func stagedPayloadMatches(payloadTmp string, meta Meta) (bool, error) {
+	if PayloadKind(meta) == PayloadBlocks {
+		return dirMatchesBlocks(payloadTmp, meta.Blocks)
+	}
+	return dirMatchesMembers(payloadTmp, meta.Members)
 }
 
 // preparePublish repairs the leftovers of earlier crashes and
 // archives the holds no reference pins, so the active slot is ready
-// for a new image.
-func preparePublish(repo Repo, refs Refs, seam hooks) (Meta, bool, error) {
-	if err := repairTornActive(repo, seam); err != nil {
+// for a new image. A split publish in progress passes its own
+// staging directory as keep so the repair sweep spares it.
+func preparePublish(repo Repo, refs Refs, seam hooks, keep string) (Meta, bool, error) {
+	if err := repairTornActive(repo, seam, keep); err != nil {
 		return Meta{}, false, err
 	}
 	if err := repairParkedArchives(repo, seam); err != nil {
@@ -156,33 +206,125 @@ func sameIdleFull(existing, next Meta) bool {
 		existing.ID == next.ID && existing.SHA256 == next.SHA256
 }
 
+// loadActive reads the active meta and checks that the payload of
+// its kind is in place. The payload shape follows from the meta, so
+// the meta leads: a slot whose meta rests without its payload fails
+// with the missing-payload error of its form, and a payload resting
+// without any meta stays ErrMetaMissing.
 func loadActive(repo Repo) (Meta, bool, error) {
-	_, err := os.Stat(repo.ImagePath())
-	if errors.Is(err, os.ErrNotExist) {
-		return missingImage(repo)
-	}
-	if err != nil {
-		return Meta{}, false, err
-	}
 	meta, err := Load(repo.MetaPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return Meta{}, false, ErrMetaMissing
+		return payloadWithoutMeta(repo)
 	}
 	if err != nil {
 		return Meta{}, false, err
+	}
+	there, err := activePayloadExists(repo, meta)
+	if err != nil {
+		return Meta{}, false, err
+	}
+	if !there {
+		return Meta{}, false, missingPayloadError(meta)
 	}
 	return meta, true, nil
 }
 
-func missingImage(repo Repo) (Meta, bool, error) {
-	_, err := os.Stat(repo.MetaPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return Meta{}, false, nil
-	}
+// payloadWithoutMeta handles a slot without an active meta. Any
+// payload form resting there is an orphan; a truly empty slot reports
+// no active image.
+func payloadWithoutMeta(repo Repo) (Meta, bool, error) {
+	there, err := anyPayloadExists(repo.Dir)
 	if err != nil {
 		return Meta{}, false, err
 	}
-	return Meta{}, false, errors.New("publish: active image missing")
+	if there {
+		return Meta{}, false, ErrMetaMissing
+	}
+	return Meta{}, false, nil
+}
+
+func missingPayloadError(meta Meta) error {
+	if PayloadKind(meta) == PayloadSingle {
+		return errors.New("publish: active image missing")
+	}
+	return errors.New("publish: active payload missing")
+}
+
+// payloadFormPaths lists the payload shapes as they rest in a
+// directory that preserves the active layout: the repository
+// directory, a hold, or an archive.
+func payloadFormPaths(dir string) []string {
+	return []string{
+		filepath.Join(dir, fileImage),
+		filepath.Join(dir, dirBlocks),
+		filepath.Join(dir, dirMembers),
+	}
+}
+
+// anyPayloadExists reports whether any payload form rests in a
+// directory. Presence decides the shape when the meta that would
+// name the kind is missing.
+func anyPayloadExists(dir string) (bool, error) {
+	for _, path := range payloadFormPaths(dir) {
+		there, err := pathExists(path)
+		if err != nil {
+			return false, err
+		}
+		if there {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// activePayloadPath is where the payload of the kind of meta rests
+// in the active slot.
+func activePayloadPath(repo Repo, meta Meta) (string, error) {
+	switch PayloadKind(meta) {
+	case PayloadBlocks:
+		return repo.BlocksDirPath(meta.ID)
+	case PayloadMembers:
+		return repo.MembersDirPath(), nil
+	default:
+		return repo.ImagePath(), nil
+	}
+}
+
+// payloadRoot is the outermost file or directory that carries the
+// payload of the kind of meta inside a directory preserving the
+// active layout. Moving the root as a whole keeps the layout
+// identical on both sides: the blocks wrapper travels with its
+// nested id directory.
+func payloadRoot(dir string, meta Meta) string {
+	switch PayloadKind(meta) {
+	case PayloadBlocks:
+		return filepath.Join(dir, dirBlocks)
+	case PayloadMembers:
+		return filepath.Join(dir, dirMembers)
+	default:
+		return filepath.Join(dir, fileImage)
+	}
+}
+
+func activePayloadExists(repo Repo, meta Meta) (bool, error) {
+	path, err := activePayloadPath(repo, meta)
+	if err != nil {
+		return false, err
+	}
+	return pathExists(path)
+}
+
+// holdPayloadPath is where the payload of the kind of meta rests
+// inside a hold directory; holds preserve the active layout.
+func holdPayloadPath(hold string, meta Meta) string {
+	switch PayloadKind(meta) {
+	case PayloadBlocks:
+		return filepath.Join(hold, dirBlocks, meta.ID)
+	case PayloadMembers:
+		return filepath.Join(hold, dirMembers)
+	default:
+		return filepath.Join(hold, fileImage)
+	}
 }
 
 func stage(dir string, data []byte, meta Meta, seam hooks) (string, string, error) {
@@ -227,7 +369,24 @@ func tempName(final string) (string, error) {
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(".%s.%d.%s", final, os.Getpid(), hex.EncodeToString(buf[:])), nil
+	return fmt.Sprintf("%s%d.%s", tempPrefix(final), os.Getpid(), hex.EncodeToString(buf[:])), nil
+}
+
+// tempPrefix is the dotted prefix every tempName output starts with.
+// Repair recognizes leftovers through it.
+func tempPrefix(final string) string {
+	return "." + final + "."
+}
+
+// isPayloadTempName reports whether name marks a scratch payload
+// directory of either split form.
+func isPayloadTempName(name string) bool {
+	for _, final := range []string{blocksTempFinal, membersTempFinal} {
+		if strings.HasPrefix(name, tempPrefix(final)) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeSynced(tmp string, data []byte) error {
@@ -250,21 +409,25 @@ func joinWriteErr(errs ...error) error {
 	return nil
 }
 
+// commit moves the existing active slot aside, renames the staged
+// payload and meta into place, and settles the holds. The payload
+// source is a temporary file or directory; the destination is its
+// final layout place for the kind of next.
 func commit(
 	repo Repo,
 	existing Meta,
 	exists bool,
 	next Meta,
-	imgTmp, metaTmp string,
+	payloadSrc, payloadDst, metaTmp string,
 	refs Refs,
 	seam hooks,
 ) error {
 	if exists {
-		if err := moveActiveToHold(repo, existing.ID, seam); err != nil {
+		if err := moveActiveToHold(repo, existing, seam); err != nil {
 			return err
 		}
 	}
-	if err := activate(repo, imgTmp, metaTmp, seam); err != nil {
+	if err := activate(repo, payloadSrc, payloadDst, metaTmp, seam); err != nil {
 		if !exists {
 			return err
 		}
@@ -286,8 +449,8 @@ func commit(
 	return finishHold(repo, existing, refs, seam)
 }
 
-func moveActiveToHold(repo Repo, id string, seam hooks) error {
-	hold, err := repo.HoldPath(id)
+func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
+	hold, err := repo.HoldPath(meta.ID)
 	if err != nil {
 		return err
 	}
@@ -307,7 +470,7 @@ func moveActiveToHold(repo Repo, id string, seam hooks) error {
 	if err := os.Mkdir(hold, 0o755); err != nil {
 		return err
 	}
-	moves, err := activeMoves(repo, hold)
+	moves, err := activeMoves(repo, hold, meta)
 	if err != nil {
 		removeEmpty(hold)
 		return err
@@ -315,10 +478,17 @@ func moveActiveToHold(repo Repo, id string, seam hooks) error {
 	return renameAll(hold, moves, seam)
 }
 
-func activeMoves(repo Repo, hold string) ([][2]string, error) {
+// activeMoves lists the renames that carry the active slot into a
+// hold. The hold preserves the active layout: the payload root meta
+// names plus meta.yaml, and incr/ only for the single-file form.
+// Directory payloads move as one rename each way.
+func activeMoves(repo Repo, hold string, meta Meta) ([][2]string, error) {
 	moves := [][2]string{
-		{repo.ImagePath(), filepath.Join(hold, fileImage)},
+		{payloadRoot(repo.Dir, meta), payloadRoot(hold, meta)},
 		{repo.MetaPath(), filepath.Join(hold, fileMeta)},
+	}
+	if PayloadKind(meta) != PayloadSingle {
+		return moves, nil
 	}
 	incr := filepath.Join(repo.Dir, dirIncr)
 	info, err := os.Stat(incr)
@@ -364,18 +534,38 @@ func undoMoves(done [][2]string) error {
 	return errors.Join(errs...)
 }
 
-func activate(repo Repo, imgTmp, metaTmp string, seam hooks) error {
-	if err := seam.do(imgTmp, repo.ImagePath()); err != nil {
-		// A sync error means the rename already published the file.
-		undoLanded(imgTmp, repo.ImagePath())
+// activate renames the staged payload onto its final place and then
+// the staged meta. The payload parent directory is created first;
+// only the blocks form nests its payload below the repository
+// directory. A failure removes whatever landed so the active slot is
+// never left one-sided.
+func activate(repo Repo, payloadSrc, payloadDst, metaTmp string, seam hooks) error {
+	if err := os.MkdirAll(filepath.Dir(payloadDst), 0o755); err != nil {
+		return err
+	}
+	if err := seam.do(payloadSrc, payloadDst); err != nil {
+		// A sync error means the rename already published the
+		// payload; a rename error leaves the destination absent.
+		// Clearing it is correct either way.
+		removePayload(repo, payloadDst)
 		return fmt.Errorf("publish: %w", err)
 	}
 	if err := seam.do(metaTmp, repo.MetaPath()); err != nil {
-		removeFile(repo.ImagePath())
+		removePayload(repo, payloadDst)
 		undoLanded(metaTmp, repo.MetaPath())
 		return fmt.Errorf("publish: %w", err)
 	}
 	return nil
+}
+
+// removePayload deletes a payload that landed in the active slot,
+// file or directory, together with the wrapper directory that only
+// the blocks form creates.
+func removePayload(repo Repo, dst string) {
+	_ = os.RemoveAll(dst)
+	if parent := filepath.Dir(dst); parent != repo.Dir {
+		removeEmpty(parent)
+	}
 }
 
 // undoLanded removes dst when src was already renamed onto it.
@@ -760,10 +950,16 @@ func reclaimHoldIncr(repo Repo, hold string, seam hooks) error {
 }
 
 // repairTornActive finishes a crash in the middle of activate or
-// restoreHold. A one-sided active file is either completed from hold
-// or removed when hold has nothing that matches it.
-func repairTornActive(repo Repo, seam hooks) error {
-	imgExists, err := pathExists(repo.ImagePath())
+// restoreHold. A one-sided active payload is either completed from
+// hold or removed when hold has nothing that matches it. Stray
+// scratch payload directories from crashed split builds are swept
+// first; keep names the staging directory of a publish in progress,
+// which the sweep must spare.
+func repairTornActive(repo Repo, seam hooks, keep string) error {
+	if err := sweepStrayPayloadTemps(repo, seam, keep); err != nil {
+		return err
+	}
+	payloadExists, err := anyPayloadExists(repo.Dir)
 	if err != nil {
 		return err
 	}
@@ -772,15 +968,48 @@ func repairTornActive(repo Repo, seam hooks) error {
 		return err
 	}
 	switch {
-	case !imgExists && metaExists:
+	case !payloadExists && metaExists:
 		return repairMissingImage(repo, seam)
-	case imgExists && !metaExists:
+	case payloadExists && !metaExists:
 		return repairMissingMeta(repo, seam)
-	case imgExists && metaExists:
+	case payloadExists && metaExists:
 		return repairMismatchedMeta(repo, seam)
 	default:
 		return nil
 	}
+}
+
+// sweepStrayPayloadTemps deletes scratch payload directories a
+// crashed split build left in the repository directory. They follow
+// the tempName pattern, so published layout directories never match.
+// The keep path, when set, is the staging directory of the publish
+// in progress and survives the sweep.
+func sweepStrayPayloadTemps(repo Repo, seam hooks, keep string) error {
+	entries, err := os.ReadDir(repo.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, entry := range entries {
+		if !isPayloadTempName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(repo.Dir, entry.Name())
+		if path == keep {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return syncDir(repo.Dir, seam)
 }
 
 func repairMissingImage(repo Repo, seam hooks) error {
@@ -792,15 +1021,16 @@ func repairMissingImage(repo Repo, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	heldImage, err := pathExists(filepath.Join(hold, fileImage))
+	heldPayload, err := pathExists(holdPayloadPath(hold, meta))
 	if err != nil {
 		return err
 	}
-	if heldImage {
+	if heldPayload {
 		return restoreHold(repo, meta.ID, seam)
 	}
-	// The meta was published and its image was deleted. Nothing in
-	// hold can supply that image, so drop the meta and publish again.
+	// The meta was published and its payload was deleted. Nothing in
+	// hold can supply that payload, so drop the meta and publish
+	// again.
 	if err := os.Remove(repo.MetaPath()); err != nil {
 		return err
 	}
@@ -808,17 +1038,29 @@ func repairMissingImage(repo Repo, seam hooks) error {
 }
 
 func repairMissingMeta(repo Repo, seam hooks) error {
-	id, ok, err := matchingPartialHold(repo, repo.ImagePath())
+	id, ok, err := matchingPartialHold(repo)
 	if err != nil {
 		return err
 	}
 	if ok {
 		return restoreHold(repo, id, seam)
 	}
-	if err := os.Remove(repo.ImagePath()); err != nil {
+	if err := removeActivePayload(repo.Dir); err != nil {
 		return err
 	}
 	return syncDir(repo.Dir, seam)
+}
+
+// removeActivePayload deletes every payload shape resting in a
+// directory that preserves the active layout. The meta that would
+// name the kind is missing in the repair paths, so presence decides.
+func removeActivePayload(dir string) error {
+	for _, path := range payloadFormPaths(dir) {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func repairMismatchedMeta(repo Repo, seam hooks) error {
@@ -833,19 +1075,19 @@ func repairMismatchedMeta(repo Repo, seam hooks) error {
 	if len(partial) == 0 {
 		return restoreLeftoverIncr(repo, active.ID)
 	}
-	match, err := fileMatchesMeta(repo.ImagePath(), active)
+	match, err := payloadMatchesMeta(repo, active)
 	if err != nil {
 		return err
 	}
 	if match {
 		return restoreLeftoverIncr(repo, active.ID)
 	}
-	id, ok, err := matchingPartialHold(repo, repo.ImagePath())
+	id, ok, err := matchingPartialHold(repo)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("publish: active image does not match meta")
+		return errors.New("publish: active payload does not match meta")
 	}
 	return restoreHold(repo, id, seam)
 }
@@ -861,11 +1103,11 @@ func partialHoldIDs(repo Repo) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		imageThere, err := pathExists(filepath.Join(hold, fileImage))
+		payloadThere, err := anyPayloadExists(hold)
 		if err != nil {
 			return nil, err
 		}
-		if imageThere {
+		if payloadThere {
 			continue
 		}
 		metaThere, err := pathExists(filepath.Join(hold, fileMeta))
@@ -879,9 +1121,10 @@ func partialHoldIDs(repo Repo) ([]string, error) {
 	return partial, nil
 }
 
-// matchingPartialHold is the hold whose meta matches imagePath and
-// whose image was already moved back. More than one match is an error.
-func matchingPartialHold(repo Repo, imagePath string) (string, bool, error) {
+// matchingPartialHold is the hold whose meta matches the payload
+// resting in the active slot and whose own payload was already moved
+// back. More than one match is an error.
+func matchingPartialHold(repo Repo) (string, bool, error) {
 	partial, err := partialHoldIDs(repo)
 	if err != nil {
 		return "", false, err
@@ -896,7 +1139,7 @@ func matchingPartialHold(repo Repo, imagePath string) (string, bool, error) {
 		if err != nil {
 			return "", false, err
 		}
-		ok, err := fileMatchesMeta(imagePath, meta)
+		ok, err := payloadMatchesMeta(repo, meta)
 		if err != nil {
 			return "", false, err
 		}
@@ -907,13 +1150,13 @@ func matchingPartialHold(repo Repo, imagePath string) (string, bool, error) {
 	switch len(matched) {
 	case 0:
 		if len(partial) > 0 {
-			return "", false, errors.New("publish: held meta does not match active image")
+			return "", false, errors.New("publish: held meta does not match the active payload")
 		}
 		return "", false, nil
 	case 1:
 		return matched[0], true, nil
 	default:
-		return "", false, errors.New("publish: multiple holds match the active image")
+		return "", false, errors.New("publish: multiple holds match the active payload")
 	}
 }
 
@@ -990,8 +1233,86 @@ func pathExists(path string) (bool, error) {
 	return false, err
 }
 
+// payloadMatchesMeta reports whether the payload resting in the
+// active slot matches meta: the whole-file digest for the single
+// form, per-block digests for blocks, and per-member digests plus
+// the derived whole digest for members. A payload that is absent or
+// incomplete is a mismatch rather than an error, so repair keeps
+// going; only genuine IO failures propagate.
+func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
+	switch PayloadKind(meta) {
+	case PayloadBlocks:
+		dir, err := repo.BlocksDirPath(meta.ID)
+		if err != nil {
+			return false, err
+		}
+		return dirMatchesBlocks(dir, meta.Blocks)
+	case PayloadMembers:
+		ok, err := dirMatchesMembers(repo.MembersDirPath(), meta.Members)
+		if err != nil || !ok {
+			return false, err
+		}
+		return membersDigest(meta.Members) == meta.SHA256, nil
+	default:
+		there, err := pathExists(repo.ImagePath())
+		if err != nil || !there {
+			return false, err
+		}
+		return fileMatchesMeta(repo.ImagePath(), meta)
+	}
+}
+
+// dirMatchesBlocks re-hashes every manifest block under dir. The
+// staged payload of a build and the published blocks directory share
+// the same flat layout.
+func dirMatchesBlocks(dir string, blocks []BlockEntry) (bool, error) {
+	there, err := pathExists(dir)
+	if err != nil || !there {
+		return false, err
+	}
+	for _, entry := range blocks {
+		if !isBlockName(entry.Name) {
+			return false, nil
+		}
+		ok, err := fileMatches(filepath.Join(dir, entry.Name), entry.Size, entry.SHA256)
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// dirMatchesMembers re-hashes every member file under dir. The
+// staged payload of a build and the published members directory
+// share the same flat layout.
+func dirMatchesMembers(dir string, members []MemberEntry) (bool, error) {
+	there, err := pathExists(dir)
+	if err != nil || !there {
+		return false, err
+	}
+	for _, entry := range members {
+		if checkSegment(entry.Name) != nil {
+			return false, nil
+		}
+		ok, err := fileMatches(filepath.Join(dir, entry.Name+squashExt), entry.Size, entry.SHA256)
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func fileMatchesMeta(path string, meta Meta) (bool, error) {
+	return fileMatches(path, meta.Size, meta.SHA256)
+}
+
+// fileMatches streams a file through sha256 and compares the digest
+// and the size. A missing file is a mismatch, not an error.
+func fileMatches(path string, size int64, want string) (bool, error) {
 	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -1002,9 +1323,14 @@ func fileMatchesMeta(path string, meta Meta) (bool, error) {
 		return false, err
 	}
 	got := hex.EncodeToString(sum.Sum(nil))
-	return got == meta.SHA256 && n == meta.Size, nil
+	return got == want && n == size, nil
 }
 
+// restoreHold moves a hold back onto the active slot. The hold
+// preserves the active layout, so every payload shape it owns moves
+// back symmetrically: the single file tolerates a missing source,
+// and a directory shape moves only when it rests in the hold and the
+// active slot lacks it.
 func restoreHold(repo Repo, id string, seam hooks) error {
 	hold, err := repo.HoldPath(id)
 	if err != nil {
@@ -1019,16 +1345,14 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 		{filepath.Join(hold, fileImage), repo.ImagePath()},
 		{filepath.Join(hold, fileMeta), repo.MetaPath()},
 	}
-	incrHold := filepath.Join(hold, dirIncr)
-	incrActive := filepath.Join(repo.Dir, dirIncr)
-	if _, err := os.Stat(incrHold); err == nil {
-		if _, dstErr := os.Stat(incrActive); errors.Is(dstErr, os.ErrNotExist) {
-			moves = append(moves, [2]string{incrHold, incrActive})
-		} else if dstErr != nil {
-			return dstErr
+	for _, pair := range [][2]string{
+		{filepath.Join(hold, dirBlocks), filepath.Join(repo.Dir, dirBlocks)},
+		{filepath.Join(hold, dirMembers), repo.MembersDirPath()},
+		{filepath.Join(hold, dirIncr), filepath.Join(repo.Dir, dirIncr)},
+	} {
+		if moves, err = appendPresentDirMove(moves, pair[0], pair[1]); err != nil {
+			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	for _, move := range moves {
 		if err := moveBack(move[0], move[1]); err != nil {
@@ -1044,6 +1368,25 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 	removeEmpty(hold)
 	removeEmpty(filepath.Dir(hold))
 	return nil
+}
+
+// appendPresentDirMove adds a directory move when the source exists
+// and the destination is free, the rule the incr restore always
+// followed.
+func appendPresentDirMove(moves [][2]string, src, dst string) ([][2]string, error) {
+	if _, err := os.Stat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return moves, nil
+		}
+		return nil, err
+	}
+	if _, err := os.Stat(dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return append(moves, [2]string{src, dst}), nil
+		}
+		return nil, err
+	}
+	return moves, nil
 }
 
 func moveBack(src, dst string) error {

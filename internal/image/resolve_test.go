@@ -424,18 +424,6 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 			},
 			wantText: []string{"the limit is 8"},
 		},
-		{
-			name: "split storage enabled",
-			prepare: func(t *testing.T) config.Config {
-				cfg := buildConfig(t)
-				repo := mustRepo(t, cfg)
-				seedChain(t, repo, 0)
-				cfg.SplitEnabled = true
-				cfg.SplitMode = config.SplitModeBlocks
-				return cfg
-			},
-			wantText: []string{"split storage is enabled"},
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

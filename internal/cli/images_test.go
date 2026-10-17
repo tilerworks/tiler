@@ -373,3 +373,32 @@ func TestImagesRemoveBadTargets(t *testing.T) {
 		t.Fatalf("missing argument: ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
 }
+
+func TestImagesListSplitForms(t *testing.T) {
+	home, _ := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	blocksID := writeBlocksFixture(t, imagesDir, "alice/data",
+		[]string{"block-one", "b2"}, true)
+	membersID := writeMembersFixture(t, imagesDir, "bob/forest", []fixtureMember{
+		{name: "docs", body: "docs-bytes"},
+		{name: "src", body: "src-bytes-longer"},
+	})
+
+	// The form marker is appended for split actives only.
+	want := fmt.Sprintf("alice/data %s chain=0 form=blocks\nbob/forest %s chain=0 form=members\n",
+		blocksID, membersID)
+	if out := mustList(t, lib); out != want {
+		t.Fatalf("ls all:\n%s\nwant:\n%s", out, want)
+	}
+	// The single-name listing expands the payload manifest.
+	want = fmt.Sprintf("alice/data %s chain=0 form=blocks\n  blocks 2\n", blocksID)
+	if out := mustList(t, lib, "alice/data"); out != want {
+		t.Fatalf("ls blocks:\n%s\nwant:\n%s", out, want)
+	}
+	want = fmt.Sprintf("bob/forest %s chain=0 form=members\n  member docs\n  member src\n",
+		membersID)
+	if out := mustList(t, lib, "bob/forest"); out != want {
+		t.Fatalf("ls members:\n%s\nwant:\n%s", out, want)
+	}
+}

@@ -211,6 +211,7 @@ type valueOrigin struct {
 	sessionMaxAge string
 	splitEnabled  string
 	splitMode     string
+	splitRoute    string
 }
 
 func (o *valueOrigin) note(p Patch, where string) {
@@ -232,6 +233,9 @@ func (o *valueOrigin) note(p Patch, where string) {
 	if p.SplitMode != nil {
 		o.splitMode = where
 	}
+	if p.SplitRoute != nil {
+		o.splitRoute = where
+	}
 }
 
 func (o valueOrigin) wrap(err error) error {
@@ -249,6 +253,8 @@ func (o valueOrigin) wrap(err error) error {
 		where = o.splitEnabled
 	case strings.HasPrefix(err.Error(), "split_mode:"):
 		where = o.splitMode
+	case strings.HasPrefix(err.Error(), "split_route:"):
+		where = o.splitRoute
 	}
 	if where == "" {
 		return err
