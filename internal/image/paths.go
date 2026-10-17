@@ -19,12 +19,29 @@ const (
 )
 
 const (
-	fileImage   = ImageFile
-	fileMeta    = "meta.yaml"
-	dirIncr     = IncrDir
-	dirArchives = "archives"
-	dirHold     = "hold"
-	squashExt   = SquashExt
+	fileImage = ImageFile
+	fileMeta  = "meta.yaml"
+	// fileConcatView is the concat description file inside a blocks
+	// payload directory. The marker in its name lets the optional
+	// concat FUSE tool recognize it as a concat description.
+	fileConcatView = fileImage + "-concat-view"
+	dirIncr        = IncrDir
+	dirArchives    = "archives"
+	dirHold        = "hold"
+	dirBlocks      = "blocks"
+	dirMembers     = "members"
+	squashExt      = SquashExt
+
+	// blockNamePrefix and blockNameFmt name the byte blocks of one
+	// split payload; the three-digit format bounds the manifest.
+	blockNamePrefix = "blk."
+	blockNameFmt    = blockNamePrefix + "%03d"
+	// maxBlocks is the manifest capacity of one blocks payload.
+	maxBlocks = 999
+	// tempPayloadSuffix marks a scratch payload directory that a
+	// publish renames into place; repair sweeps leftovers by the
+	// same prefix.
+	tempPayloadSuffix = ".tmp"
 )
 
 // ErrInvalidPath is a library-relative path that is absolute or
@@ -75,15 +92,82 @@ func (repo Repo) IncrPath(id string) (string, error) {
 
 // ArchivePath is archives/<full-id> for a retired chain.
 func (repo Repo) ArchivePath(id string) (string, error) {
-	return repo.chainPath(dirArchives, id)
+	return repo.idSubdir(dirArchives, id)
 }
 
 // HoldPath is hold/<full-id> for a chain waiting on a reference.
 func (repo Repo) HoldPath(id string) (string, error) {
-	return repo.chainPath(dirHold, id)
+	return repo.idSubdir(dirHold, id)
 }
 
-func (repo Repo) chainPath(kind, id string) (string, error) {
+// BlocksDirPath is blocks/<full-id>, the directory holding the byte
+// blocks of one split payload.
+func (repo Repo) BlocksDirPath(id string) (string, error) {
+	return repo.idSubdir(dirBlocks, id)
+}
+
+// MembersDirPath is the members/ directory holding the directory
+// partitions of one split payload.
+func (repo Repo) MembersDirPath() string {
+	return filepath.Join(repo.Dir, dirMembers)
+}
+
+// BlockPath is blocks/<full-id>/<name> for one manifest block. The
+// name must be the blk.NNN form, which also rules out path escapes.
+func (repo Repo) BlockPath(id, name string) (string, error) {
+	dir, err := repo.BlocksDirPath(id)
+	if err != nil {
+		return "", err
+	}
+	if !isBlockName(name) {
+		return "", invalidPath(name)
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// MemberPath is members/<name>.sqsh for one manifest member.
+func (repo Repo) MemberPath(name string) (string, error) {
+	if err := checkSegment(name); err != nil {
+		return "", invalidPath(name)
+	}
+	return filepath.Join(repo.Dir, memberImageName(name)), nil
+}
+
+// tempBlocksDirName is a scratch payload directory name for the
+// blocks form. It follows the tempName pattern, so repair recognizes
+// and sweeps a leftover after a crashed publish.
+func tempBlocksDirName() (string, error) {
+	return tempName(dirBlocks + tempPayloadSuffix)
+}
+
+// tempMembersDirName is a scratch payload directory name for the
+// members form, following the same tempName pattern.
+func tempMembersDirName() (string, error) {
+	return tempName(dirMembers + tempPayloadSuffix)
+}
+
+// memberImageName is the library-relative image path recorded for one
+// manifest member.
+func memberImageName(name string) string {
+	return dirMembers + "/" + name + squashExt
+}
+
+// isBlockName reports whether name is blk.NNN with exactly three
+// digits.
+func isBlockName(name string) bool {
+	digits, ok := strings.CutPrefix(name, blockNamePrefix)
+	if !ok || len(digits) != 3 {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (repo Repo) idSubdir(kind, id string) (string, error) {
 	if err := checkID(id); err != nil {
 		return "", err
 	}

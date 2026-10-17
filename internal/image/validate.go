@@ -12,6 +12,7 @@ func (m Meta) Validate() error {
 	var list issueList
 	m.checkIdentity(&list)
 	m.checkPayload(&list)
+	m.checkSplit(&list)
 	m.checkChain(&list)
 	return list.err()
 }
@@ -63,17 +64,111 @@ func (m Meta) checkChain(list *issueList) {
 	}
 }
 
+// checkSplit validates the split payload manifests. The single-file
+// form carries no manifest, so its rules stay untouched.
+func (m Meta) checkSplit(list *issueList) {
+	if len(m.Blocks) == 0 && len(m.Members) == 0 {
+		return
+	}
+	if len(m.Blocks) > 0 && len(m.Members) > 0 {
+		list.add("blocks and members: mutually exclusive")
+	}
+	if m.Kind != KindFull {
+		list.add("kind: must be full for split payloads")
+	}
+	if len(m.Chain) > 0 {
+		list.add("chain: must be empty for split payloads")
+	}
+	m.checkBlocks(list)
+	m.checkMembers(list)
+}
+
+// checkBlocks validates the byte-block manifest: names follow the
+// blk.NNN sequence in order, every entry records a positive size and
+// a lowercase sha256, and the manifest fits the naming capacity.
+func (m Meta) checkBlocks(list *issueList) {
+	if len(m.Blocks) > maxBlocks {
+		list.add("blocks: must hold at most %d entries", maxBlocks)
+	}
+	for i := range m.Blocks {
+		entry := &m.Blocks[i]
+		prefix := fmt.Sprintf("blocks[%d]", i)
+		if want := fmt.Sprintf(blockNameFmt, i); entry.Name != want {
+			list.add("%s.name: must be %s", prefix, want)
+		}
+		checkSize(prefix+".size", entry.Size, list)
+		checkSum(prefix+".sha256", entry.SHA256, list)
+	}
+}
+
+// checkMembers validates the directory-partition manifest. The
+// whole-image digest and size are only compared when every entry
+// passed its own checks, so one broken entry is not reported twice.
+func (m Meta) checkMembers(list *issueList) {
+	if len(m.Members) == 0 {
+		return
+	}
+	clean := true
+	for i := range m.Members {
+		before := len(list.items)
+		m.checkMemberEntry(i, list)
+		if len(list.items) != before {
+			clean = false
+		}
+	}
+	if !clean {
+		return
+	}
+	if isLowerHex(m.SHA256, sumHexLen) && m.SHA256 != membersDigest(m.Members) {
+		list.add("sha256: must equal the derived members manifest digest")
+	}
+	var total int64
+	for i := range m.Members {
+		total += m.Members[i].Size
+	}
+	if m.Size != total {
+		list.add("size: must equal the sum of member sizes")
+	}
+}
+
+// checkMemberEntry validates one manifest member: a legal unique
+// sorted name segment, the derived image path, and the recorded
+// facts.
+func (m Meta) checkMemberEntry(i int, list *issueList) {
+	entry := &m.Members[i]
+	prefix := fmt.Sprintf("members[%d]", i)
+	if err := checkSegment(entry.Name); err != nil {
+		list.add("%s.name: invalid segment", prefix)
+	} else if i > 0 {
+		switch prev := m.Members[i-1].Name; {
+		case entry.Name == prev:
+			list.add("%s.name: duplicate", prefix)
+		case entry.Name < prev:
+			list.add("%s.name: must be sorted by name", prefix)
+		}
+	}
+	if want := memberImageName(entry.Name); entry.Image != want {
+		list.add("%s.image: must be %s", prefix, want)
+	}
+	checkSize(prefix+".size", entry.Size, list)
+	checkSum(prefix+".sha256", entry.SHA256, list)
+	checkMtime(prefix+".mtime_unix", entry.MtimeUnix, list)
+}
+
 func checkDigest(id, sum, prefix string, list *issueList) {
 	idName := joinField(prefix, "id")
-	sumName := joinField(prefix, "sha256")
 	if !isLowerHex(id, idHexLen) {
 		list.add("%s: must be 16 lowercase hex digits", idName)
 	}
-	if !isLowerHex(sum, sumHexLen) {
-		list.add("%s: must be 64 lowercase hex digits", sumName)
-	}
+	checkSum(joinField(prefix, "sha256"), sum, list)
 	if isLowerHex(sum, sumHexLen) && id != sum[:idHexLen] {
 		list.add("%s: must be the first 16 hex digits of sha256", idName)
+	}
+}
+
+func checkSum(field, sum string, list *issueList) {
+	if !isLowerHex(sum, sumHexLen) {
+		list.add("%s: must be 64 lowercase hex digits", field)
 	}
 }
 
