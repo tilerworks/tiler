@@ -42,6 +42,10 @@ const (
 	// publish renames into place; repair sweeps leftovers by the
 	// same prefix.
 	tempPayloadSuffix = ".tmp"
+	// blocksTempFinal and membersTempFinal are the final names the
+	// tempName pattern consumes for scratch payload directories.
+	blocksTempFinal  = dirBlocks + tempPayloadSuffix
+	membersTempFinal = dirMembers + tempPayloadSuffix
 )
 
 // ErrInvalidPath is a library-relative path that is absolute or
@@ -137,13 +141,13 @@ func (repo Repo) MemberPath(name string) (string, error) {
 // blocks form. It follows the tempName pattern, so repair recognizes
 // and sweeps a leftover after a crashed publish.
 func tempBlocksDirName() (string, error) {
-	return tempName(dirBlocks + tempPayloadSuffix)
+	return tempName(blocksTempFinal)
 }
 
 // tempMembersDirName is a scratch payload directory name for the
 // members form, following the same tempName pattern.
 func tempMembersDirName() (string, error) {
-	return tempName(dirMembers + tempPayloadSuffix)
+	return tempName(membersTempFinal)
 }
 
 // memberImageName is the library-relative image path recorded for one
