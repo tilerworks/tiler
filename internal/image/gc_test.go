@@ -292,6 +292,13 @@ func (p pinRefs) Holds(ref Ref) (bool, error) {
 	return ref == p.pin, nil
 }
 
+func (p pinRefs) Holder(ref Ref) (string, bool, error) {
+	if ref == p.pin {
+		return "pinning-session", true, nil
+	}
+	return "", false, nil
+}
+
 // sessionRecordBody is one JSON session record in the shape the
 // session package writes, used to prove GC never touches the
 // sessions directory.
@@ -406,6 +413,13 @@ func TestRemoveTargetRefusesWhileReferenced(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "referenced") {
 			t.Fatalf("call %d: outcome = %s err = %v", i, outcome, err)
 		}
+		// The refusal names the pinning session and the command
+		// that releases it.
+		for _, want := range []string{"pinning-session", "session close"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("call %d: err %q missing %q", i, err, want)
+			}
+		}
 	}
 	loaded, err := Load(repo.MetaPath())
 	if err != nil {
@@ -492,6 +506,9 @@ func TestRemoveTargetWholeRepoRefusedByHoldReference(t *testing.T) {
 	_, err := RemoveTarget(cfg, "alice/app", refs)
 	if err == nil || !strings.Contains(err.Error(), "referenced") {
 		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "pinning-session") {
+		t.Fatalf("whole-repo refusal %q missing the holder name", err)
 	}
 	if _, statErr := os.Stat(repo.Dir); statErr != nil {
 		t.Fatalf("repo deleted while a hold is referenced: %v", statErr)

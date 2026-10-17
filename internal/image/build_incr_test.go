@@ -345,7 +345,7 @@ func TestBuildIncrSubdirMovesUpperWithoutCopy(t *testing.T) {
 		t.Logf("mknod unavailable; skipping only the device assertion: %v", err)
 	}
 	var packedSrc string
-	run := func(_ string, args ...string) error {
+	run := func(_ string, _ []string, args ...string) error {
 		packedSrc = args[0]
 		if data, readErr := os.ReadFile(filepath.Join(args[0], "new.txt")); readErr != nil || string(data) != "new" {
 			return fmt.Errorf("upper content missing under the prefix: %v", readErr)

@@ -50,7 +50,7 @@ func withBuildSeams(t *testing.T, table []mountinfo.Mount) {
 // digest, so equal trees pack to equal ids and different trees do not.
 func fakePacker(t *testing.T) image.ToolRunner {
 	t.Helper()
-	return func(name string, args ...string) error {
+	return func(name string, _ []string, args ...string) error {
 		if name != "mksquashfs" {
 			return fmt.Errorf("unexpected tool %q", name)
 		}
@@ -202,7 +202,7 @@ func TestBuildPackerFailureExitsOne(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
-	packTool = func(string, ...string) error { return errors.New("mksquashfs: boom") }
+	packTool = func(string, []string, ...string) error { return errors.New("mksquashfs: boom") }
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "f.txt"), "x")
 

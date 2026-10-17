@@ -26,12 +26,14 @@ func buildConfig(t *testing.T) config.Config {
 
 type fakeRunner struct {
 	calls [][]string
+	envs  [][]string
 	body  []byte
 	err   error
 }
 
-func (f *fakeRunner) run(name string, args ...string) error {
+func (f *fakeRunner) run(name string, env []string, args ...string) error {
 	f.calls = append(f.calls, append([]string{name}, args...))
+	f.envs = append(f.envs, env)
 	if f.err != nil {
 		return f.err
 	}
@@ -296,7 +298,7 @@ func TestBuildFullPackerFailureLeavesNoActive(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	partial := func(_ string, args ...string) error {
+	partial := func(_ string, _ []string, args ...string) error {
 		if writeErr := os.WriteFile(args[1], []byte("partial"), 0o644); writeErr != nil {
 			return writeErr
 		}
@@ -544,5 +546,102 @@ func TestTailOutputTruncatesLongOutput(t *testing.T) {
 	}
 	if short := tailOutput([]byte("  short \n")); short != "short" {
 		t.Fatalf("short output = %q", short)
+	}
+}
+
+// epochTree is a source tree whose newest mtime is the given Unix
+// second, with any inherited SOURCE_DATE_EPOCH cleared so the
+// derivation path runs.
+func epochTree(t *testing.T, unix int64) string {
+	t.Helper()
+	t.Setenv("SOURCE_DATE_EPOCH", "")
+	src := t.TempDir()
+	file := filepath.Join(src, "a.txt")
+	if err := os.WriteFile(file, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Unix(unix, 0)
+	if err := os.Chtimes(file, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	// The directory mtime participates in the derivation, so pin it
+	// after the write bumped it.
+	if err := os.Chtimes(src, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
+func TestSourceDateEpochDerivesFromTreeMtime(t *testing.T) {
+	src := epochTree(t, 1700000000)
+	// The same tree derives the same epoch on every call, so builds
+	// seconds apart pack identical bytes.
+	for i := 0; i < 2; i++ {
+		if got := sourceDateEpoch(src); got != 1700000000 {
+			t.Fatalf("call %d: epoch = %d", i, got)
+		}
+	}
+	// A changed tree derives a different epoch.
+	file := filepath.Join(src, "a.txt")
+	if err := os.WriteFile(file, []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Unix(1700009999, 0)
+	if err := os.Chtimes(file, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(src, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	if got := sourceDateEpoch(src); got != 1700009999 {
+		t.Fatalf("changed epoch = %d", got)
+	}
+}
+
+func TestSourceDateEpochHonorsEnvironment(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "1234567890")
+	src := epochTree(t, 1700000000)
+	t.Setenv("SOURCE_DATE_EPOCH", "1234567890")
+	if got := sourceDateEpoch(src); got != 1234567890 {
+		t.Fatalf("epoch = %d", got)
+	}
+}
+
+func TestSourceDateEpochIgnoresUnparsableEnvironment(t *testing.T) {
+	src := epochTree(t, 1700000000)
+	t.Setenv("SOURCE_DATE_EPOCH", "not-a-number")
+	if got := sourceDateEpoch(src); got != 1700000000 {
+		t.Fatalf("epoch = %d", got)
+	}
+}
+
+func TestSourceDateEpochFallsBackToZero(t *testing.T) {
+	// A tree with no readable mtime keeps the fixed zero epoch, so
+	// same input still packs to same output and the build never
+	// aborts on a stat failure.
+	t.Setenv("SOURCE_DATE_EPOCH", "")
+	if got := sourceDateEpoch(filepath.Join(t.TempDir(), "absent")); got != 0 {
+		t.Fatalf("epoch = %d", got)
+	}
+}
+
+func TestPackPathsExportSourceDateEpoch(t *testing.T) {
+	src := epochTree(t, 1700000000)
+	runner := &fakeRunner{body: []byte("packed")}
+	dst := filepath.Join(t.TempDir(), "out.sqsh")
+	if err := packFullImage(runner.run, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := packIncrImage(runner.run, src, dst+".incr"); err != nil {
+		t.Fatal(err)
+	}
+	want := "SOURCE_DATE_EPOCH=1700000000"
+	if len(runner.envs) != 2 {
+		t.Fatalf("envs = %v", runner.envs)
+	}
+	for i, env := range runner.envs {
+		if len(env) != 1 || env[0] != want {
+			t.Fatalf("pack %d env = %v, want [%s]", i, env, want)
+		}
 	}
 }

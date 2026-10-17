@@ -61,6 +61,26 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	assertRecordState(t, e, "fresh", StateClosed)
 }
 
+func TestCleanupRemovesImplicitRecordClosedByLastUmount(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	e.Health = func(string) bool { return false }
+	const auto = "auto-20261017T031500Z-01020304"
+	seedMounted(t, e, auto, "/ws/one")
+	if _, err := e.CloseImplicitFor("/ws/one", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// The auto-closed record enters the same age-based removal
+	// scope as any other closed record.
+	events, err := e.Cleanup(720*time.Hour, false, testNow.Add(721*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Session != auto || events[0].Action != CleanupRemoved {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
 func TestCleanupAgeRuleDisabledKeepsEverything(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)

@@ -145,6 +145,23 @@ func ImplicitName(now time.Time) (string, error) {
 	return implicitPrefix + stamp + "-" + hex.EncodeToString(buf), nil
 }
 
+// implicitName reports whether a session name was generated for an
+// implicit session. Only those auto-close with their last view.
+func implicitName(name string) bool {
+	return strings.HasPrefix(name, implicitPrefix)
+}
+
+// recordsMountpoint reports whether the record carries a mount
+// action at the exact point, whatever its status.
+func recordsMountpoint(rec Record, point string) bool {
+	for _, action := range rec.Actions {
+		if action.Type == TypeMount && action.Mountpoint == point {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks the record shape: a legal name, a known state, and
 // actions with known enums and unique positive sequence numbers.
 func (r Record) Validate() error {

@@ -39,7 +39,7 @@ type memberRunner struct {
 	err   error
 }
 
-func (m *memberRunner) run(name string, args ...string) error {
+func (m *memberRunner) run(name string, _ []string, args ...string) error {
 	m.calls = append(m.calls, append([]string{name}, args...))
 	if m.err != nil {
 		return m.err
@@ -292,7 +292,7 @@ func TestBuildMembersCleansUpOnPackFailure(t *testing.T) {
 	cfg := membersConfig(t)
 	src := memberTree(t, map[string]string{"alpha": "a", "beta": "b"})
 	var packed int
-	packer := func(_ string, args ...string) error {
+	packer := func(_ string, _ []string, args ...string) error {
 		if packed == 0 {
 			packed++
 			return os.WriteFile(args[1], []byte("first-member"), 0o644)

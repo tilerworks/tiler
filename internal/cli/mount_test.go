@@ -272,6 +272,8 @@ func TestMountFilePathImage(t *testing.T) {
 }
 
 func TestMountReusePrintsAlreadyMounted(t *testing.T) {
+	// Same-image half of the identity gate: the engine reports
+	// reuse and the CLI prints the reuse verb with exit 0.
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
@@ -289,6 +291,41 @@ func TestMountReusePrintsAlreadyMounted(t *testing.T) {
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
+	}
+	if code := ExitCode(err); code != 0 {
+		t.Errorf("ExitCode = %d, want 0", code)
+	}
+}
+
+func TestMountDifferentImageConflictsAndExitsNonZero(t *testing.T) {
+	// Different-image half of the identity gate (P4): the engine
+	// refuses to restack a live view over a different image and
+	// the CLI must surface the conflict with a non-zero exit, never
+	// the reuse verb.
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	view := filepath.Join(work, "view")
+	f.mountErr = errors.New(
+		`workspace: ` + view + ` already mounts a different view ` +
+			`(source "alice/app", upper "/runtime/up-1-2/upper"); ` +
+			`refusing to restack it silently; ` +
+			`unmount it first to serve a different image`)
+
+	stdout, _, _, err := runCmd(t, append(lib, "mount", img, view)...)
+	if code := ExitCode(err); code != 1 {
+		t.Fatalf("ExitCode(%v) = %d, want 1", err, code)
+	}
+	if !strings.Contains(err.Error(), "different view") {
+		t.Errorf("error %q does not surface the conflict", err.Error())
+	}
+	if strings.Contains(stdout, "already mounted") {
+		t.Errorf("a conflict printed the reuse verb: %q", stdout)
+	}
+	if len(f.mountReqs) != 1 {
+		t.Errorf("engine calls = %d, want 1", len(f.mountReqs))
 	}
 }
 

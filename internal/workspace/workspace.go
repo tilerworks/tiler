@@ -322,16 +322,22 @@ func identity(req Request, members []member, entry Entry) error {
 		}
 		return conflictErr(req.MergedDir, entry)
 	}
-	return overlayIdentity(req, entry, len(members), !req.ReadOnly)
+	return overlayIdentity(req, members, entry, !req.ReadOnly)
 }
 
 // overlayIdentity accepts a live overlay whose lowers are exactly
 // the planned transit points under one runtime directory of the
-// configured runtime root, with an upper for a read-write view and
-// none for a read-only chain. The live view masks the target's own
-// device and inode, so the runtime directory is read from the entry
-// instead of a fresh stat.
-func overlayIdentity(req Request, entry Entry, count int, writable bool) error {
+// configured runtime root, each transit point currently serving
+// the matching stack member's fsname, with an upper for a
+// read-write view and none for a read-only chain. The live view
+// masks the target's own device and inode, so the runtime directory
+// is read from the entry instead of a fresh stat. The image
+// identity check reads every planned transit point back from the
+// same injected table: a missing row, a non-squashfuse row, or a
+// source that differs from the requested member means the merged
+// view was built from a different image and must not be reused
+// silently.
+func overlayIdentity(req Request, members []member, entry Entry, writable bool) error {
 	runtime := ""
 	switch {
 	case writable && filepath.Base(entry.Upper) == "upper":
@@ -343,15 +349,51 @@ func overlayIdentity(req Request, entry Entry, count int, writable bool) error {
 		!underPrefix(runtime, req.RuntimeDir) {
 		return conflictErr(req.MergedDir, entry)
 	}
-	if !slices.Equal(entry.Lowers, plannedLowers(runtime, count)) {
+	lowers := plannedLowers(runtime, len(members))
+	if !slices.Equal(entry.Lowers, lowers) {
+		return conflictErr(req.MergedDir, entry)
+	}
+	liveSources, ok := liveLowerSources(req.Table, lowers)
+	if !ok || !slices.Equal(liveSources, memberNames(members)) {
 		return conflictErr(req.MergedDir, entry)
 	}
 	return nil
 }
 
+// liveLowerSources reports the fsname each planned transit point
+// currently publishes, in the given order. A missing table entry, a
+// non-squashfuse row, or an empty source makes the identity
+// unverifiable, so ok is false and the caller refuses to reuse
+// rather than silently serving a different image.
+func liveLowerSources(table []Entry, lowers []string) ([]string, bool) {
+	sources := make([]string, 0, len(lowers))
+	for _, point := range lowers {
+		entry, listed := findEntry(table, point)
+		if !listed || !isSquashfuseRow(entry) {
+			return nil, false
+		}
+		sources = append(sources, entry.Source)
+	}
+	return sources, true
+}
+
+// isSquashfuseRow reports whether a table row is a FUSE mount whose
+// source is the fsname squashfuse_ll published. The overlay merged
+// view itself is a fuse.fuse-overlayfs row, but its source is the
+// literal "overlay" and never a member fsname, so transit points
+// additionally require a non-empty source that does not collide
+// with that sentinel.
+func isSquashfuseRow(entry Entry) bool {
+	if entry.Source == "" || entry.Source == "overlay" {
+		return false
+	}
+	return entry.FSType == "fuse" || strings.HasPrefix(entry.FSType, "fuse.")
+}
+
 func conflictErr(point string, entry Entry) error {
 	return fmt.Errorf(
-		"workspace: %s already mounts a different view (source %q, upper %q); refusing to restack it silently",
+		"workspace: %s already mounts a different view (source %q, upper %q); "+
+			"refusing to restack it silently; unmount it first to serve a different image",
 		point, entry.Source, entry.Upper)
 }
 
@@ -595,7 +637,10 @@ func pruneBySubdir(members []member, req Request, run runFunc) ([]member, error)
 	return kept, nil
 }
 
-// memberNames lists the published identities for an error message.
+// memberNames lists the fsname each stack member publishes, in
+// mount order (newest increment first, base image last). The
+// identity check compares this sequence against the live transit
+// points; error messages join it for display.
 func memberNames(members []member) []string {
 	names := make([]string, 0, len(members))
 	for _, m := range members {

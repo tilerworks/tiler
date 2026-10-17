@@ -64,6 +64,37 @@ func TestRefsHoldsActiveLibraryMounts(t *testing.T) {
 	}
 }
 
+func TestRefsHolderNamesPinningSession(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", "/ws/view")
+	refs := Refs{Dir: dir}
+
+	name, held, err := refs.Holder(aliceRef())
+	if err != nil || !held || name != "dev" {
+		t.Fatalf("Holder = (%q, %v, %v)", name, held, err)
+	}
+	// Holds is the same answer reduced to its bool.
+	held, err = refs.Holds(aliceRef())
+	if err != nil || !held {
+		t.Fatalf("Holds = (%v, %v)", held, err)
+	}
+	// A probe nothing pins answers with an empty name.
+	probe := image.Ref{Owner: "alice", Repo: "app", FullID: "fedcba9876543210"}
+	name, held, err = refs.Holder(probe)
+	if err != nil || held || name != "" {
+		t.Fatalf("probe Holder = (%q, %v, %v)", name, held, err)
+	}
+	// After the session closes, nothing is named or held.
+	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	name, held, err = refs.Holder(aliceRef())
+	if err != nil || held || name != "" {
+		t.Fatalf("closed Holder = (%q, %v, %v)", name, held, err)
+	}
+}
+
 func TestRefsCountsCrashShapesConservatively(t *testing.T) {
 	for _, status := range []string{StatusPending, StatusFailed, StatusMounted} {
 		t.Run(status, func(t *testing.T) {

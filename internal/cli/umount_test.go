@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 )
 
 func TestUmountPrintsUnmountedWhenRemoved(t *testing.T) {
@@ -109,5 +110,65 @@ func TestUmountArgCount(t *testing.T) {
 	}
 	if _, _, _, err := runCmd(t, append(lib, "umount", view, view)...); ExitCode(err) != 2 {
 		t.Fatalf("two arguments: ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+}
+
+func TestUmountClosesImplicitSessionAfterLastView(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	view := filepath.Join(work, "view")
+	f := withMountSeams(t, nil)
+	f.removed = 1
+	const auto = "auto-20261017T031500Z-01020304"
+	writeSessionRecord(t, sessionsDir(home), auto,
+		libraryAction("alice/app", view, session.ModeRW))
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "umount", view)...)
+	if err != nil {
+		t.Fatalf("umount: %v\n%s", err, stderr)
+	}
+	if stdout != "unmounted "+view+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	rec := loadSessionRecord(t, sessionsDir(home), auto)
+	if rec.State != session.StateClosed || rec.ClosedAt.IsZero() {
+		t.Fatalf("record = %+v", rec)
+	}
+	for _, action := range rec.Actions {
+		if action.Type == session.TypeMount && action.Status != session.StatusUnmounted {
+			t.Errorf("action = %+v", action)
+		}
+	}
+}
+
+func TestUmountKeepsExplicitSessionAndLiveViewsActive(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	view := filepath.Join(work, "view")
+	other := filepath.Join(work, "other")
+	f := withMountSeams(t, nil)
+	f.removed = 1
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		libraryAction("alice/app", view, session.ModeRW))
+	const auto = "auto-20261017T031500Z-01020304"
+	writeSessionRecord(t, sessionsDir(home), auto,
+		libraryAction("alice/app", view, session.ModeRW),
+		libraryAction("alice/app", other, session.ModeRW))
+	// The second view of the implicit session still serves, so
+	// neither record may auto-close.
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.Health = func(point string) bool { return point == other }
+	})
+
+	if _, stderr, _, err := runCmd(t, append(lib, "umount", view)...); err != nil {
+		t.Fatalf("umount: %v\n%s", err, stderr)
+	}
+	rec := loadSessionRecord(t, sessionsDir(home), "dev")
+	if rec.State != session.StateActive {
+		t.Errorf("explicit record = %+v", rec)
+	}
+	rec = loadSessionRecord(t, sessionsDir(home), auto)
+	if rec.State != session.StateActive {
+		t.Errorf("implicit record with a live view = %+v", rec)
 	}
 }

@@ -17,30 +17,40 @@ type Refs struct {
 
 var _ image.Refs = Refs{}
 
-// Holds reports whether an active session pins the full image. Only
+// Holds reports whether an active session pins the full image. It
+// is the holder-name answer reduced to its bool.
+func (r Refs) Holds(ref image.Ref) (bool, error) {
+	_, held, err := r.Holder(ref)
+	return held, err
+}
+
+// Holder names the first active session pinning the full image. Only
 // library identities participate: a file-path image records no
 // owner, repository, or id and never protects. Actions already
 // unmounted do not pin; pending and failed actions do, because a
 // crashed execution may have left the mount up. A record another
-// process holds counts as holding — the conservative side that
-// never causes a wrong delete — and a corrupt record is reported
-// instead of ignored.
-func (r Refs) Holds(ref image.Ref) (bool, error) {
+// process holds counts as holding — its name is the conservative
+// answer that never causes a wrong delete — and a corrupt record is
+// reported instead of ignored.
+func (r Refs) Holder(ref image.Ref) (string, bool, error) {
 	if ref.Owner == "" || ref.Repo == "" || ref.FullID == "" {
-		return false, nil
+		return "", false, nil
 	}
 	store := Store(r)
 	names, err := store.names()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	for _, name := range names {
 		held, err := r.recordHolds(store, name, ref)
-		if err != nil || held {
-			return held, err
+		if err != nil {
+			return "", false, err
+		}
+		if held {
+			return name, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
 // recordHolds checks one record. A busy lock answers held without
