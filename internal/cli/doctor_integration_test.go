@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,6 +66,27 @@ func TestDoctorRealEnvironmentFullProbe(t *testing.T) {
 		case "pass", "fail", "warn", "info":
 		default:
 			t.Fatalf("%s has the illegal status %q", name, line.status)
+		}
+	}
+
+	// A tool that is actually installed must yield a parseable banner.
+	// Presence without a pass means the version probe drifted from the
+	// real tool output; only genuinely absent tools may fail. This is
+	// the assertion that catches a parser regression on a live host.
+	toolBinaries := map[string]string{
+		"squashfuse_ll":  "squashfuse_ll",
+		"fuse_overlayfs": "fuse-overlayfs",
+		"fusermount3":    "fusermount3",
+		"mksquashfs":     "mksquashfs",
+		"git":            "git",
+	}
+	for name, binary := range toolBinaries {
+		if _, lookErr := exec.LookPath(binary); lookErr != nil {
+			continue
+		}
+		if human[name].status != "pass" {
+			t.Fatalf("%s is installed but probe = %s (%q), want pass",
+				name, human[name].status, human[name].detail)
 		}
 	}
 

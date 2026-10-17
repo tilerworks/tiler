@@ -26,7 +26,9 @@ func TestProbeShapes(t *testing.T) {
 			details: map[string]string{
 				nameSquashfuseLL:  "0.5.0",
 				nameSquashfuseSub: "0.5.0",
-				nameFuseOverlayfs: "1.13.0",
+				nameFuseOverlayfs: "1.18",
+				nameFusermount3:   "3.14.0",
+				nameMksquashfs:    "4.6.1",
 				nameGit:           "2.43.0",
 			},
 		},
@@ -84,38 +86,6 @@ func TestProbeShapes(t *testing.T) {
 			details: map[string]string{
 				nameGit:           "unparsable version",
 				nameSquashfuseSub: "0.5.0",
-			},
-		},
-		{
-			// fuse-overlayfs 1.18 names itself with a trailing colon and
-			// reports a two-component version, surrounded by three-component
-			// lines that belong to other tools.
-			name: "fuse-overlayfs two-component colon banner",
-			host: healthyHost("0.5.0").withOutput("fuse-overlayfs", "--version", ""+
-				"fuse-overlayfs: version 1.18\n"+
-				"FUSE library version 3.14.0\n"+
-				"using FUSE kernel interface version 7.31\n"+
-				"fusermount3 version: 3.14.0\n", nil),
-			status: map[string]string{
-				nameFuseOverlayfs: statusPass,
-			},
-			details: map[string]string{
-				nameFuseOverlayfs: "1.18",
-			},
-		},
-		{
-			// squashfs-tools 4.6.1 rejects --version and -V, printing usage
-			// and exiting nonzero; only -version reports the banner.
-			name: "mksquashfs needs single-dash version flag",
-			host: healthyHost("0.5.0").
-				withOutput("mksquashfs", "--version", "SYNTAX:mksquashfs source1 ...\n", errors.New("exit status 1")).
-				withOutput("mksquashfs", "-V", "SYNTAX:mksquashfs source1 ...\n", errors.New("exit status 1")).
-				withOutput("mksquashfs", "-version", "mksquashfs version 4.6.1 (2023/03/25)\n", nil),
-			status: map[string]string{
-				nameMksquashfs: statusPass,
-			},
-			details: map[string]string{
-				nameMksquashfs: "4.6.1",
 			},
 		},
 		{
@@ -203,7 +173,12 @@ func TestMissingSquashfuseFailsSubdirWithReason(t *testing.T) {
 }
 
 func TestVersionFallbackUsesVWhenVersionFails(t *testing.T) {
-	host := healthyHost("0.5.0")
+	// Synthetic scenario for the second fallback argument. No tool in
+	// the real probe set fails --version yet answers -V today, so this
+	// behavior is constructed here rather than captured from a host.
+	host := healthyHost("0.5.0").
+		withOutput("fusermount3", "--version", "", errors.New("exit status 1")).
+		withOutput("fusermount3", "-V", "fusermount3 version: 3.14.1\n", nil)
 	_, err := Probe(context.Background(), host.seams(), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -373,13 +348,35 @@ type fakeHost struct {
 	calls         []string
 }
 
+// healthyHost models a real, healthy host. Every banner is captured
+// from the actual tool, keeping its exit code and name token, so the
+// parser is exercised against reality instead of an idealized
+// "tool version x.y.z" shape. The quirks that matter: squashfuse_ll
+// names itself "squashfuse" and exits 2; fuse-overlayfs prints a
+// two-component version behind a colon; fusermount3 answers --version
+// directly; mksquashfs rejects --version and -V and answers only
+// -version.
 func healthyHost(squash string) *fakeHost {
 	host := &fakeHost{runs: map[string]runResult{}}
-	host.output("squashfuse_ll", "--version", "FUSE library version: 3.16.2\nsquashfuse_ll version "+squash+"\n", nil)
-	host.output("fuse-overlayfs", "--version", "fuse-overlayfs version 1.13.0\n", nil)
-	host.output("fusermount3", "--version", "", errors.New("exit status 1"))
-	host.output("fusermount3", "-V", "fusermount3 version: 3.14.1\n", nil)
-	host.output("mksquashfs", "--version", "mksquashfs version 4.6.1\n", nil)
+	host.output("squashfuse_ll", "--version",
+		"squashfuse "+squash+" (c) 2012 Dave Vasilevsky\n\n"+
+			"Usage: squashfuse_ll [options] ARCHIVE MOUNTPOINT\n",
+		errors.New("exit status 2"))
+	host.output("fuse-overlayfs", "--version", ""+
+		"fuse-overlayfs: version 1.18\n"+
+		"FUSE library version 3.14.0\n"+
+		"using FUSE kernel interface version 7.31\n"+
+		"fusermount3 version: 3.14.0\n", nil)
+	host.output("fusermount3", "--version", "fusermount3 version: 3.14.0\n", nil)
+	host.output("mksquashfs", "--version",
+		"SYNTAX:mksquashfs source1 source2 ...  FILESYSTEM [OPTIONS]\n",
+		errors.New("exit status 1"))
+	host.output("mksquashfs", "-V",
+		"SYNTAX:mksquashfs source1 source2 ...  FILESYSTEM [OPTIONS]\n",
+		errors.New("exit status 1"))
+	host.output("mksquashfs", "-version",
+		"mksquashfs version 4.6.1 (2023/03/25)\n"+
+			"copyright (C) 2023 Phillip Lougher <phillip@squashfs.org.uk>\n", nil)
 	host.output("git", "--version", "git version 2.43.0\n", nil)
 	return host
 }
