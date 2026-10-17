@@ -68,6 +68,31 @@ func mountTest(t *testing.T, req Request, run runFunc, seam hooks) (*Workspace, 
 	return w, err
 }
 
+// stackLowerEntries builds the squashfuse_ll transit rows the mount
+// table would carry for a live stack of req's members under one
+// runtime directory, in mount order (newest increment first). It
+// mirrors the identity the engine publishes so a reuse test can
+// pin the table to the exact request. Members come from stack(req),
+// which fails only when the stack overflows the depth limit; that
+// never happens for a test fixture.
+func stackLowerEntries(t *testing.T, runtime string, req Request) []Entry {
+	t.Helper()
+	members, err := stack(req)
+	if err != nil {
+		t.Fatalf("stack: %v", err)
+	}
+	lowers := plannedLowers(runtime, len(members))
+	entries := make([]Entry, 0, len(members))
+	for i, m := range members {
+		entries = append(entries, Entry{
+			Point:  lowers[i],
+			FSType: "fuse",
+			Source: m.fsname,
+		})
+	}
+	return entries
+}
+
 func TestMountOrdersLowersNewestFirst(t *testing.T) {
 	req, dir := testRequest(t)
 	rec := &recRunner{}
@@ -705,13 +730,13 @@ func TestMountReusesLiveReadWriteView(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
-	req.Table = []Entry{{
+	req.Table = append([]Entry{{
 		Point:  req.MergedDir,
 		FSType: "fuse.fuse-overlayfs",
 		Source: "overlay",
 		Upper:  filepath.Join(runtime, "upper"),
 		Lowers: plannedLowers(runtime, 3),
-	}}
+	}}, stackLowerEntries(t, runtime, req)...)
 	rec := &recRunner{}
 	w, err := mountTest(t, req, rec.run, testHooks())
 	if err != nil {
@@ -758,12 +783,12 @@ func TestMountReusesLiveReadOnlyChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
-	req.Table = []Entry{{
+	req.Table = append([]Entry{{
 		Point:  req.MergedDir,
 		FSType: "fuse.fuse-overlayfs",
 		Source: "overlay",
 		Lowers: plannedLowers(runtime, 3),
-	}}
+	}}, stackLowerEntries(t, runtime, req)...)
 	rec := &recRunner{}
 	w, err := mountTest(t, req, rec.run, testHooks())
 	if err != nil {
@@ -780,6 +805,9 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 		readOnly bool
 		layers   bool
 		entry    func(req Request) Entry
+		// lowers optionally appends squashfuse_ll transit rows to
+		// the injected table. Nil leaves only the merged entry.
+		lowers func(t *testing.T, req Request) []Entry
 	}{
 		{
 			name: "read-write with a foreign upper",
@@ -822,6 +850,75 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 				}
 			},
 		},
+		{
+			// The overlay shape matches exactly, but the newest
+			// increment's transit point still serves a foreign
+			// image. Without a source-level check this would
+			// silently reuse the wrong view (P4).
+			name:   "read-write over a live lower serving a different image",
+			layers: true,
+			entry: func(req Request) Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  filepath.Join(runtime, "upper"),
+					Lowers: plannedLowers(runtime, 3),
+				}
+			},
+			lowers: func(t *testing.T, req Request) []Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				entries := stackLowerEntries(t, runtime, req)
+				entries[0].Source = "/elsewhere/foreign.sqsh"
+				return entries
+			},
+		},
+		{
+			// The overlay shape matches, but the mount table lost
+			// the base image's transit row. The identity check
+			// cannot confirm the live view serves the requested
+			// stack, so it conservatively refuses to reuse.
+			name:   "read-write with a missing lower transit row",
+			layers: true,
+			entry: func(req Request) Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  filepath.Join(runtime, "upper"),
+					Lowers: plannedLowers(runtime, 3),
+				}
+			},
+			lowers: func(t *testing.T, req Request) []Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				entries := stackLowerEntries(t, runtime, req)
+				return entries[:len(entries)-1]
+			},
+		},
+		{
+			// Same three-member shape, same runtime directory,
+			// same lower paths, but every transit point serves a
+			// different image. This is the concrete P4 replay:
+			// mount alice/app, then mount bob/tools on the same
+			// target while alice/app's view is live.
+			name:   "read-write with every lower serving a different image",
+			layers: true,
+			entry: func(req Request) Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				return Entry{
+					Point: req.MergedDir, Source: "overlay",
+					Upper:  filepath.Join(runtime, "upper"),
+					Lowers: plannedLowers(runtime, 3),
+				}
+			},
+			lowers: func(_ *testing.T, req Request) []Entry {
+				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				lowers := plannedLowers(runtime, 3)
+				return []Entry{
+					{Point: lowers[0], FSType: "fuse", Source: "/other/inc2.sqsh"},
+					{Point: lowers[1], FSType: "fuse", Source: "/other/inc1.sqsh"},
+					{Point: lowers[2], FSType: "fuse", Source: "/other/image.sqsh"},
+				}
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -834,6 +931,9 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			req.Table = []Entry{tc.entry(req)}
+			if tc.lowers != nil {
+				req.Table = append(req.Table, tc.lowers(t, req)...)
+			}
 			rec := &recRunner{}
 			_, err := mountTest(t, req, rec.run, testHooks())
 			if err == nil || !strings.Contains(err.Error(), "different view") {
