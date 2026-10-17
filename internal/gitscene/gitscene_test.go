@@ -71,10 +71,13 @@ func workTreeFixture(t *testing.T) (repo, gitDir string) {
 	t.Helper()
 	repo = t.TempDir()
 	gitDir = filepath.Join(repo, ".git")
-	for _, dir := range []string{filepath.Join(gitDir, "logs", "refs"), filepath.Join(gitDir, "hooks")} {
+	for _, dir := range []string{filepath.Join(gitDir, "logs", "refs"), filepath.Join(gitDir, "hooks"), filepath.Join(gitDir, "objects", "pack")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "objects", "pack", "pack-x.pack"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	for _, file := range []string{
 		filepath.Join(gitDir, "logs", "HEAD"),
@@ -142,6 +145,9 @@ func TestPrepareBareRepositoryUsesRepoDir(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, "objects", "pack"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, "objects", "pack", "pack-x.pack"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(repo, "hooks"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +176,23 @@ func TestPrepareBareRepositoryUsesRepoDir(t *testing.T) {
 	assertGone(t, filepath.Join(repo, "FETCH_HEAD"))
 	if !fake.has("commit-graph", "write", "--reachable") {
 		t.Error("indexes not written for a bare repository")
+	}
+}
+
+func TestPrepareSkipsMultiPackIndexWithoutPacks(t *testing.T) {
+	repo, gitDir := workTreeFixture(t)
+	if err := os.RemoveAll(filepath.Join(gitDir, "objects", "pack")); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeGit{respond: worktreeResponse}
+	if err := prepare(repo, fake.run); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.has("commit-graph", "write", "--reachable") {
+		t.Error("commit-graph not written for a loose-object repository")
+	}
+	if fake.has("multi-pack-index", "write") {
+		t.Error("multi-pack-index written without any pack file")
 	}
 }
 

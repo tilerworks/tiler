@@ -63,7 +63,7 @@ func prepare(dir string, run Runner) error {
 	if err := unsetLeakyConfig(dir, run); err != nil {
 		return err
 	}
-	return writeIndexes(dir, run)
+	return writeIndexes(dir, gitDir, run)
 }
 
 // detectBare verifies dir is a git repository and reports whether it
@@ -197,10 +197,19 @@ func isLeakyKey(key string) bool {
 }
 
 // writeIndexes pre-generates the read-side indexes an image consumer
-// would otherwise build on first use.
-func writeIndexes(dir string, run Runner) error {
+// would otherwise build on first use. The multi-pack-index only
+// applies to pack files, so a repository of loose objects alone
+// skips it instead of failing the preparation.
+func writeIndexes(dir, gitDir string, run Runner) error {
 	if _, err := run(dir, "git", "commit-graph", "write", "--reachable"); err != nil {
 		return fmt.Errorf("gitscene: %w", err)
+	}
+	packs, err := filepath.Glob(filepath.Join(gitDir, "objects", "pack", "*.pack"))
+	if err != nil {
+		return fmt.Errorf("gitscene: %w", err)
+	}
+	if len(packs) == 0 {
+		return nil
 	}
 	if _, err := run(dir, "git", "multi-pack-index", "write"); err != nil {
 		return fmt.Errorf("gitscene: %w", err)
