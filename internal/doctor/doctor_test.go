@@ -76,13 +76,46 @@ func TestProbeShapes(t *testing.T) {
 			name: "unparsable banner",
 			host: healthyHost("0.5.0").
 				withOutput("git", "--version", "git version unknown\n", nil).
-				withOutput("git", "-V", "still unknown\n", nil),
+				withOutput("git", "-V", "still unknown\n", nil).
+				withOutput("git", "-version", "still unknown\n", nil),
 			status: map[string]string{
 				nameGit: statusFail,
 			},
 			details: map[string]string{
 				nameGit:           "unparsable version",
 				nameSquashfuseSub: "0.5.0",
+			},
+		},
+		{
+			// fuse-overlayfs 1.18 names itself with a trailing colon and
+			// reports a two-component version, surrounded by three-component
+			// lines that belong to other tools.
+			name: "fuse-overlayfs two-component colon banner",
+			host: healthyHost("0.5.0").withOutput("fuse-overlayfs", "--version", ""+
+				"fuse-overlayfs: version 1.18\n"+
+				"FUSE library version 3.14.0\n"+
+				"using FUSE kernel interface version 7.31\n"+
+				"fusermount3 version: 3.14.0\n", nil),
+			status: map[string]string{
+				nameFuseOverlayfs: statusPass,
+			},
+			details: map[string]string{
+				nameFuseOverlayfs: "1.18",
+			},
+		},
+		{
+			// squashfs-tools 4.6.1 rejects --version and -V, printing usage
+			// and exiting nonzero; only -version reports the banner.
+			name: "mksquashfs needs single-dash version flag",
+			host: healthyHost("0.5.0").
+				withOutput("mksquashfs", "--version", "SYNTAX:mksquashfs source1 ...\n", errors.New("exit status 1")).
+				withOutput("mksquashfs", "-V", "SYNTAX:mksquashfs source1 ...\n", errors.New("exit status 1")).
+				withOutput("mksquashfs", "-version", "mksquashfs version 4.6.1 (2023/03/25)\n", nil),
+			status: map[string]string{
+				nameMksquashfs: statusPass,
+			},
+			details: map[string]string{
+				nameMksquashfs: "4.6.1",
 			},
 		},
 		{
@@ -109,7 +142,8 @@ func TestProbeShapes(t *testing.T) {
 			name: "unnamed version does not replace a versionless tool line",
 			host: healthyHost("0.5.0").
 				withOutput("git", "--version", "wrapper version 1.2.3\ngit version unknown\n", nil).
-				withOutput("git", "-V", "wrapper version 1.2.3\ngit version unknown\n", nil),
+				withOutput("git", "-V", "wrapper version 1.2.3\ngit version unknown\n", nil).
+				withOutput("git", "-version", "wrapper version 1.2.3\ngit version unknown\n", nil),
 			status: map[string]string{
 				nameGit: statusFail,
 			},

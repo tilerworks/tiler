@@ -9,9 +9,12 @@ import (
 	"strings"
 )
 
-// versionPattern is the required major.minor.patch shape. A shorter
-// number is not a version for these probes.
-var versionPattern = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+// versionPattern matches a dotted number with an optional patch
+// component. Tools differ in how many components they print:
+// fuse-overlayfs 1.18 reports only "1.18", so the patch group is
+// optional and defaults to zero. A bare major with no dot is still not
+// a version for these probes.
+var versionPattern = regexp.MustCompile(`(\d+)\.(\d+)(?:\.(\d+))?`)
 
 type version struct {
 	major int
@@ -30,13 +33,15 @@ func (v version) below(major, minor, patch int) bool {
 	return v.patch < patch
 }
 
-// readVersion runs --version and, when that output has no banner,
-// -V. A non-zero exit that still prints the tool banner counts as
-// success. Context cancellation aborts the whole result set.
+// readVersion runs --version and, when that output has no banner, -V
+// and then -version. squashfs-tools 4.6.1 rejects the first two and
+// only answers -version. A non-zero exit that still prints the tool
+// banner counts as success. Context cancellation aborts the whole
+// result set.
 func readVersion(ctx context.Context, seams Seams, path string, hints []string) (version, string, error) {
 	var lastErr error
 	sawOutput := false
-	for _, arg := range []string{"--version", "-V"} {
+	for _, arg := range []string{"--version", "-V", "-version"} {
 		ver, output, runErr, err := runVersion(ctx, seams, path, arg, hints)
 		if err != nil {
 			return version{}, "", err
@@ -118,9 +123,16 @@ func scoreLine(line string, hints []string) (version, int, bool) {
 	return ver, hintScore(trimmed, hints), true
 }
 
+// hintScore scores a line by whether it names one of the tool hints as
+// its own token. Surrounding punctuation is trimmed first so a banner
+// such as "fuse-overlayfs: version 1.18" still names its tool.
 func hintScore(line string, hints []string) int {
 	tokens := make(map[string]struct{})
 	for _, token := range strings.Fields(strings.ToLower(line)) {
+		token = strings.Trim(token, ".,:;!?()")
+		if token == "" {
+			continue
+		}
 		tokens[token] = struct{}{}
 	}
 	for i, hint := range hints {
@@ -138,9 +150,16 @@ func parseVersion(line string) (version, bool) {
 	}
 	major, err1 := strconv.Atoi(match[1])
 	minor, err2 := strconv.Atoi(match[2])
-	patch, err3 := strconv.Atoi(match[3])
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err1 != nil || err2 != nil {
 		return version{}, false
 	}
-	return version{major: major, minor: minor, patch: patch, raw: match[1] + "." + match[2] + "." + match[3]}, true
+	patch := 0
+	if match[3] != "" {
+		var err error
+		patch, err = strconv.Atoi(match[3])
+		if err != nil {
+			return version{}, false
+		}
+	}
+	return version{major: major, minor: minor, patch: patch, raw: match[0]}, true
 }
