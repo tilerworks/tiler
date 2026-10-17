@@ -144,10 +144,10 @@ func TestBuildFullRejectsInvalidName(t *testing.T) {
 	}
 }
 
-func TestBuildFullRefusesSplitStorage(t *testing.T) {
+func TestBuildFullRefusesMembersSplitStorage(t *testing.T) {
 	cfg := buildConfig(t)
 	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeBlocks
+	cfg.SplitMode = config.SplitModeMembers
 	runner := &fakeRunner{body: []byte("never-packed")}
 	_, err := BuildFull(FullRequest{
 		Config: cfg, Name: "alice/app", SrcDir: sourceDir(t),
