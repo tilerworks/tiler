@@ -40,11 +40,11 @@ cannot support them:
 
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
-- **No FUSE toolchain** — `tiler doctor` and the mount case
-  `t0003-image-mount.sh` need `/dev/fuse` and the external
-  FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
-  `fusermount3`, `mksquashfs`). Where they are absent, the case skips
-  rather than false-fails.
+- **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
+  `t0003-image-mount.sh` and `t0004-image-incr-cascade.sh` need
+  `/dev/fuse` and the external FUSE/squashfs tools (`squashfuse_ll`,
+  `fuse-overlayfs`, `fusermount3`, `mksquashfs`). Where they are
+  absent, the case skips rather than false-fails.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -65,6 +65,13 @@ equipped host, so a genuine regression is never masked by a skip.
   checks that mounting a different image onto a live view is refused as
   a conflict rather than silently restacked. Needs the FUSE toolchain;
   skips cleanly without it.
+- `e2e/t0004-image-incr-cascade.sh` — builds a base full image, mounts
+  it, and appends two distinct incremental layers, then confirms the
+  chain cascades in `images ls` and in `meta.yaml`. A fresh remount
+  serves the full plus both increments, `build --full` merges the live
+  view into a new full (replacing `meta.yaml` and clearing the chain),
+  and the old full + chain retire into a session-pinned `hold/`. Needs
+  the FUSE toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 
