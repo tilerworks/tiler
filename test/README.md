@@ -41,10 +41,11 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0006` need `/dev/fuse` and the external
+  `t0003` through `t0007` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
-  `fusermount3`, `mksquashfs`). Where they are absent, the case skips
-  rather than false-fails.
+  `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` also needs
+  `pgrep` to find the daemon it SIGKILLs. Where they are absent, the
+  case skips rather than false-fails.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -90,6 +91,14 @@ equipped host, so a genuine regression is never masked by a skip.
   closed), a mount into a closed session refused, and `remove`
   deleting the closed record. Needs the FUSE toolchain; skips cleanly
   without it.
+- `e2e/t0007-session-recovery.sh` — simulates a daemon crash by
+  SIGKILLing the FUSE process behind a named session's writable view
+  (a `kill_view` helper), confirms the write-ahead record survives
+  with its pre-crash `mounts=` count, then recovers with
+  `session open`: the stale view is replayed, the upper layer survives
+  (a file written before the crash is still there), a second `open` is
+  a pure no-op, and a closed session revives through `open`. Needs the
+  FUSE toolchain and `pgrep`; skips cleanly without them.
 
 ## Adding cases in later phases
 
