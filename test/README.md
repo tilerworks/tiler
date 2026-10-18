@@ -41,8 +41,7 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003-image-mount.sh`, `t0004-image-incr-cascade.sh`, and
-  `t0005-images-ls-gc-rm.sh` need `/dev/fuse` and the external
+  `t0003` through `t0006` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
   `fusermount3`, `mksquashfs`). Where they are absent, the case skips
   rather than false-fails.
@@ -80,6 +79,16 @@ equipped host, so a genuine regression is never masked by a skip.
   archives, the two-phase `images rm` (deprecate then remove), and
   `images rm` refused while an implicit `auto-*` session still
   references the image. Needs the FUSE toolchain; skips cleanly
+  without it.
+- `e2e/t0006-session-lifecycle.sh` — drives the `session` command over
+  a named session end to end: `new` (with duplicate and invalid-name
+  refusals), grouping views with `mount --session` and
+  `TILER_SESSION_ID`, `list`/`show` rendering (text and `--json`),
+  `show`/`open` on a missing record, `remove` refused while active,
+  `umount` of one view leaving the session active, `close` tearing the
+  views down in reverse and keeping the record (idempotent once
+  closed), a mount into a closed session refused, and `remove`
+  deleting the closed record. Needs the FUSE toolchain; skips cleanly
   without it.
 
 ## Adding cases in later phases
