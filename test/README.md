@@ -41,7 +41,7 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0007` need `/dev/fuse` and the external
+  `t0003` through `t0008` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` also needs
   `pgrep` to find the daemon it SIGKILLs. Where they are absent, the
@@ -99,6 +99,12 @@ equipped host, so a genuine regression is never masked by a skip.
   (a file written before the crash is still there), a second `open` is
   a pure no-op, and a closed session revives through `open`. Needs the
   FUSE toolchain and `pgrep`; skips cleanly without them.
+- `e2e/t0008-session-implicit.sh` — exercises the `session` command's
+  view of the implicit `auto-*` records a plain `mount` creates:
+  `list` renders the auto-named record, `show` (text and `--json`)
+  matches the named shape, umounting the last view auto-closes the
+  session, and an implicit session can still be `close`d and `remove`d
+  by name. Needs the FUSE toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 
