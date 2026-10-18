@@ -243,6 +243,52 @@ cache_advice	warn	image storage random read averages 6.12 ms, ...
 contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
 ```
 
+## Configuration
+
+tiler reads a layered YAML configuration. On first run it creates
+`$HOME/.tiler.yaml` from a commented template that pins the built-in
+defaults, so the file is a starting point to edit, never a
+requirement — a read-only HOME is tolerated and tiler falls back to
+the defaults, and an existing file is never rewritten.
+
+```yaml
+images_dir: ~/.tiler/images
+runtime_dir: ~/.tiler/runtime
+sessions_dir: ~/.tiler/sessions
+cache_dir: ~/.tiler/cache
+log_level: info
+```
+
+Values resolve in layers, each overriding the last: the built-in
+defaults, the user file `$HOME/.tiler.yaml`, the project-level
+`.tiler.yaml` files found by walking upward from the working
+directory, and the command-line flags. A relative path in a file
+resolves against that file's directory, and a `~/` prefix expands to
+`$HOME`.
+
+The upward walk stops at `$HOME` when the working directory is inside
+it, otherwise at the filesystem root. `TILER_CEILING_DIR` stops it
+earlier: when the ceiling is an ancestor of the working directory the
+ceiling's own `.tiler.yaml` still applies but nothing above it is
+read, and a ceiling that is not an ancestor is ignored. This bounds
+discovery inside a test sandbox or a checkout that must not inherit a
+parent directory's configuration.
+
+`tiler doctor` reports the resolved configuration before the probe
+table — the config file location and the core directories, one
+tab-separated `config` line each:
+
+```text
+config	path	/home/alice/.tiler.yaml
+config	images_dir	/home/alice/.tiler/images
+config	runtime_dir	/home/alice/.tiler/runtime
+```
+
+The `--json` form carries the same data as a top-level `config`
+object (`path`, `images_dir`, `runtime_dir`, `sessions_dir`,
+`cache_dir`, `log_level`) alongside `results`. The config section
+never affects the doctor verdict.
+
 ## User story
 
 A developer prepares a local environment quickly. On a new machine,

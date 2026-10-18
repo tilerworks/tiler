@@ -194,6 +194,46 @@ cache_advice	warn	image storage random read averages 6.12 ms, ...
 contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
 ```
 
+## 配置
+
+tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释、钉住
+内置默认值的模板创建 `$HOME/.tiler.yaml`——这个文件是供你编辑的
+起点，而非必需项：HOME 只读时会被容忍，tiler 回退到内置默认；
+已存在的文件绝不改写。
+
+```yaml
+images_dir: ~/.tiler/images
+runtime_dir: ~/.tiler/runtime
+sessions_dir: ~/.tiler/sessions
+cache_dir: ~/.tiler/cache
+log_level: info
+```
+
+取值按层解析，后者覆盖前者：内置默认、用户文件
+`$HOME/.tiler.yaml`、从工作目录向上遍历发现的项目级 `.tiler.yaml`，
+以及命令行 flag。文件内的相对路径以该文件所在目录为基准解析，
+`~/` 前缀展开为 `$HOME`。
+
+向上遍历在工作目录位于 `$HOME` 内时止于 `$HOME`，否则止于文件
+系统根。`TILER_CEILING_DIR` 可以更早截止：当截止目录是工作目录的
+祖先时，它自身的 `.tiler.yaml` 仍生效，但其上一律不读；不是祖先
+时忽略。它把配置发现约束在测试沙箱内，或某个不应继承父目录配置
+的检出内。
+
+`tiler doctor` 在探测表之前先报告解析后的配置——配置文件位置与
+核心目录，每项一行 tab 分隔的 `config` 行：
+
+```text
+config	path	/home/alice/.tiler.yaml
+config	images_dir	/home/alice/.tiler/images
+config	runtime_dir	/home/alice/.tiler/runtime
+```
+
+`--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
+`images_dir`、`runtime_dir`、`sessions_dir`、`cache_dir`、
+`log_level`）与 `results` 并列输出。config 段落不影响 doctor 的
+判定结果。
+
 ## 用户故事
 
 开发者用 tiler 快速制备本地环境。新机器上挂载本身毫秒级完成，工作
