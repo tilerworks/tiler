@@ -41,10 +41,11 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003-image-mount.sh` and `t0004-image-incr-cascade.sh` need
-  `/dev/fuse` and the external FUSE/squashfs tools (`squashfuse_ll`,
-  `fuse-overlayfs`, `fusermount3`, `mksquashfs`). Where they are
-  absent, the case skips rather than false-fails.
+  `t0003-image-mount.sh`, `t0004-image-incr-cascade.sh`, and
+  `t0005-images-ls-gc-rm.sh` need `/dev/fuse` and the external
+  FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
+  `fusermount3`, `mksquashfs`). Where they are absent, the case skips
+  rather than false-fails.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -72,6 +73,14 @@ equipped host, so a genuine regression is never masked by a skip.
   view into a new full (replacing `meta.yaml` and clearing the chain),
   and the old full + chain retire into a session-pinned `hold/`. Needs
   the FUSE toolchain; skips cleanly without it.
+- `e2e/t0005-images-ls-gc-rm.sh` — exercises the library subcommands
+  over a mounted image: `images ls` (all images, per-name chain,
+  `--json`), `images gc` promoting an unreferenced hold into an
+  archive, `images gc --keep-versions` expiring the older of two
+  archives, the two-phase `images rm` (deprecate then remove), and
+  `images rm` refused while an implicit `auto-*` session still
+  references the image. Needs the FUSE toolchain; skips cleanly
+  without it.
 
 ## Adding cases in later phases
 
