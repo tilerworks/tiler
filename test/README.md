@@ -40,20 +40,28 @@ cannot support them:
 
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
-- **No FUSE toolchain** — `tiler doctor` (and any future mount-based
-  case) needs `/dev/fuse` and the external FUSE/squashfs tools
-  (`squashfuse_ll`, `fuse-overlayfs`, `fusermount3`, `mksquashfs`).
-  Where they are absent, the case skips rather than false-fails.
+- **No FUSE toolchain** — `tiler doctor` and the mount case
+  `t0003-image-mount.sh` need `/dev/fuse` and the external
+  FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
+  `fusermount3`, `mksquashfs`). Where they are absent, the case skips
+  rather than false-fails.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
 
-## Phase 1 scope
+## Cases
 
-Phase 1 ships a single case, `e2e/t0000-doctor.sh`, which asserts only
-that `tiler doctor` exits 0. It proves the vendored framework runs
-inside the repository. It does not cover `tiler version`, build, mount,
-session, or `git clone --reference`.
+- `e2e/t0000-doctor.sh` — `tiler doctor` exits 0 on an equipped host.
+  Proves the vendored framework runs inside the repository.
+- `e2e/t0001-config-bootstrap.sh` — tiler creates `$HOME/.tiler.yaml`
+  from a template on first run, never rewrites an edited one, and
+  `doctor` reports the config location and core dirs (text and `--json`).
+- `e2e/t0002-config-ceiling.sh` — `TILER_CEILING_DIR` bounds the upward
+  project-config walk so it stays inside the sandbox.
+- `e2e/t0003-image-mount.sh` — builds a full image from a source tree,
+  mounts it read-write (writing into the upper layer), confirms a repeat
+  mount of the same view is idempotent (`already mounted`), then
+  umounts. Needs the FUSE toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 
