@@ -12,7 +12,7 @@ func TestOutsideReserved(t *testing.T) {
 	runtime := filepath.Join(data, "runtime")
 	sessions := filepath.Join(data, "sessions")
 	cache := filepath.Join(data, "cache")
-	cfg, err := Load(home, home, home, Patch{
+	cfg, err := Load(home, home, home, "", Patch{
 		ImagesDir:   &images,
 		RuntimeDir:  &runtime,
 		SessionsDir: &sessions,

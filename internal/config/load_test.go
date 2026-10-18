@@ -11,7 +11,7 @@ import (
 func TestLoadDefaultsWithoutFiles(t *testing.T) {
 	home := t.TempDir()
 	start := t.TempDir()
-	got, err := Load(start, home, start, Patch{})
+	got, err := Load(start, home, start, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestLoadFieldPriority(t *testing.T) {
 	writeConfig(t, app, "images_dir: near-images\n")
 
 	level := "error"
-	got, err := Load(app, home, base, Patch{LogLevel: &level})
+	got, err := Load(app, home, base, "", Patch{LogLevel: &level})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestLoadSessionAutocloseStaleLayers(t *testing.T) {
 	writeConfig(t, home, "session_autoclose_stale: true\n")
 	// A project file that omits the key keeps the user value.
 	writeConfig(t, proj, "log_level: warn\n")
-	got, err := Load(proj, home, base, Patch{})
+	got, err := Load(proj, home, base, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestLoadSessionAutocloseStaleLayers(t *testing.T) {
 	}
 	// The nearer project file flips it back off.
 	writeConfig(t, proj, "session_autoclose_stale: false\n")
-	got, err = Load(proj, home, base, Patch{})
+	got, err = Load(proj, home, base, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestLoadSessionAutocloseStaleLayers(t *testing.T) {
 	}
 	// The command line wins over both.
 	on := true
-	got, err = Load(proj, home, base, Patch{SessionAutocloseStale: &on})
+	got, err = Load(proj, home, base, "", Patch{SessionAutocloseStale: &on})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestLoadExplicitZeroOverridesLowerValue(t *testing.T) {
 		"max_age: 0s",
 	}, "\n"))
 
-	got, err := Load(proj, home, home, Patch{})
+	got, err := Load(proj, home, home, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestLoadCommandLineZeroOverridesFile(t *testing.T) {
 	writeConfig(t, home, "keep_versions: 4\ncache_enabled: true\n")
 	zero := 0
 	off := false
-	got, err := Load(home, home, home, Patch{KeepVersions: &zero, CacheEnabled: &off})
+	got, err := Load(home, home, home, "", Patch{KeepVersions: &zero, CacheEnabled: &off})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestLoadRelativePaths(t *testing.T) {
 	}, "\n"))
 	t.Chdir(cwd)
 
-	got, err := Load(near, home, base, Patch{})
+	got, err := Load(near, home, base, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestLoadRelativePaths(t *testing.T) {
 	}
 
 	runtime := "cli-rt"
-	got, err = Load(near, home, base, Patch{RuntimeDir: &runtime})
+	got, err = Load(near, home, base, "", Patch{RuntimeDir: &runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestLoadWalkInsideHomeSkipsHomeProjectFile(t *testing.T) {
 	writeConfig(t, home, "log_level: warn\nkeep_versions: 3\n")
 	writeConfig(t, app, "images_dir: imgs\n")
 
-	got, err := Load(app, home, base, Patch{})
+	got, err := Load(app, home, base, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestLoadWalkOutsideHomeStopsAtFilesystemRoot(t *testing.T) {
 	writeConfig(t, work, "images_dir: work-images\n")
 	writeConfig(t, proj, "images_dir: proj-images\n")
 
-	got, err := Load(proj, home, fsRoot, Patch{})
+	got, err := Load(proj, home, fsRoot, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestLoadWalkOutsideHomeStopsAtFilesystemRoot(t *testing.T) {
 func TestLoadStartAtHomeHasNoProjectFile(t *testing.T) {
 	home := t.TempDir()
 	writeConfig(t, home, "log_level: debug\n")
-	got, err := Load(home, home, home, Patch{})
+	got, err := Load(home, home, home, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestLoadFileErrorsIncludePath(t *testing.T) {
 	t.Run("unknown key", func(t *testing.T) {
 		home := t.TempDir()
 		path := writeConfig(t, home, "image_dir: /tmp\n")
-		_, err := Load(home, home, home, Patch{})
+		_, err := Load(home, home, home, "", Patch{})
 		if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "image_dir") {
 			t.Fatalf("error = %v", err)
 		}
@@ -280,7 +280,7 @@ func TestLoadFileErrorsIncludePath(t *testing.T) {
 	t.Run("invalid yaml", func(t *testing.T) {
 		home := t.TempDir()
 		path := writeConfig(t, home, "log_level: [\n")
-		_, err := Load(home, home, home, Patch{})
+		_, err := Load(home, home, home, "", Patch{})
 		if err == nil || !strings.Contains(err.Error(), path) {
 			t.Fatalf("error = %v", err)
 		}
@@ -297,7 +297,7 @@ func TestLoadFileErrorsIncludePath(t *testing.T) {
 		if _, err := os.ReadFile(path); err == nil {
 			t.Skip("this user can read a mode 000 file")
 		}
-		_, err := Load(home, home, home, Patch{})
+		_, err := Load(home, home, home, "", Patch{})
 		if err == nil || !strings.Contains(err.Error(), path) {
 			t.Fatalf("error = %v", err)
 		}
@@ -327,7 +327,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			path := writeConfig(t, home, tc.doc)
-			_, err := Load(home, home, home, Patch{})
+			_, err := Load(home, home, home, "", Patch{})
 			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), path) {
 				t.Fatalf("error = %v, want %s and %s", err, tc.want, path)
 			}
@@ -338,7 +338,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		home := t.TempDir()
 		path := writeConfig(t, home, "log_level: debug\n")
 		level := "verbose"
-		_, err := Load(home, home, home, Patch{LogLevel: &level})
+		_, err := Load(home, home, home, "", Patch{LogLevel: &level})
 		if err == nil || !strings.Contains(err.Error(), commandLineSource) || !strings.Contains(err.Error(), "log_level") || strings.Contains(err.Error(), path) {
 			t.Fatalf("error = %v", err)
 		}
@@ -350,7 +350,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		mustMkdir(t, proj)
 		writeConfig(t, home, "log_level: verbose\nkeep_versions: -3\n")
 		writeConfig(t, proj, "log_level: debug\nkeep_versions: 2\n")
-		got, err := Load(proj, home, home, Patch{})
+		got, err := Load(proj, home, home, "", Patch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,7 +365,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		mustMkdir(t, proj)
 		user := writeConfig(t, home, "log_level: debug\n")
 		path := writeConfig(t, proj, "log_level: verbose\n")
-		_, err := Load(proj, home, home, Patch{})
+		_, err := Load(proj, home, home, "", Patch{})
 		if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "log_level") || strings.Contains(err.Error(), user) {
 			t.Fatalf("error = %v", err)
 		}
@@ -376,17 +376,17 @@ func TestProjectPathsRejectsWalkBounds(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 
-	_, err := projectPaths(" ", home, root)
+	_, err := projectPaths(" ", home, root, "")
 	if err == nil || !strings.Contains(err.Error(), "start directory") {
 		t.Fatalf("blank start error = %v", err)
 	}
-	_, err = projectPaths(root, home, "\t")
+	_, err = projectPaths(root, home, "\t", "")
 	if err == nil || !strings.Contains(err.Error(), "filesystem root") {
 		t.Fatalf("blank root error = %v", err)
 	}
 
 	outside := t.TempDir()
-	_, err = projectPaths(outside, home, root)
+	_, err = projectPaths(outside, home, root, "")
 	if err == nil || !strings.Contains(err.Error(), outside) || !strings.Contains(err.Error(), root) {
 		t.Fatalf("outside root error = %v", err)
 	}
@@ -397,7 +397,7 @@ func TestProjectPathsRejectsWalkBounds(t *testing.T) {
 }
 
 func TestLoadEmptyHome(t *testing.T) {
-	_, err := Load(t.TempDir(), " ", t.TempDir(), Patch{})
+	_, err := Load(t.TempDir(), " ", t.TempDir(), "", Patch{})
 	if err == nil {
 		t.Fatal("empty home was accepted")
 	}
@@ -406,7 +406,7 @@ func TestLoadEmptyHome(t *testing.T) {
 func TestLoadCommandLineHomePrefixUsesInjectedHome(t *testing.T) {
 	home := t.TempDir()
 	dir := "~/images"
-	got, err := Load(home, home, home, Patch{ImagesDir: &dir})
+	got, err := Load(home, home, home, "", Patch{ImagesDir: &dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,6 +415,73 @@ func TestLoadCommandLineHomePrefixUsesInjectedHome(t *testing.T) {
 	}
 	if got.SessionMaxAge != 720*time.Hour {
 		t.Fatalf("session max age = %s", got.SessionMaxAge)
+	}
+}
+
+func TestLoadCeilingStopsUpwardWalk(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	zone := filepath.Join(home, "zone")
+	sandbox := filepath.Join(zone, "sandbox")
+	deep := filepath.Join(sandbox, "deep")
+	mustMkdir(t, deep)
+	writeConfig(t, zone, "runtime_dir: marker-runtime\n")
+
+	// Without a ceiling the walk reaches zone and applies the marker.
+	got, err := Load(deep, home, base, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RuntimeDir != filepath.Join(zone, "marker-runtime") {
+		t.Fatalf("control runtime = %q, want the zone marker", got.RuntimeDir)
+	}
+
+	// With the ceiling at sandbox, zone sits above it and is excluded, so
+	// the built-in default stands.
+	got, err = Load(deep, home, base, sandbox, Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RuntimeDir != filepath.Join(home, ".tiler", "runtime") {
+		t.Fatalf("ceiling runtime = %q, want the default", got.RuntimeDir)
+	}
+}
+
+func TestLoadCeilingIncludesOwnFile(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	sandbox := filepath.Join(home, "sandbox")
+	deep := filepath.Join(sandbox, "deep")
+	mustMkdir(t, deep)
+	writeConfig(t, sandbox, "runtime_dir: sandbox-runtime\n")
+
+	got, err := Load(deep, home, base, sandbox, Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RuntimeDir != filepath.Join(sandbox, "sandbox-runtime") {
+		t.Fatalf("runtime = %q, want the ceiling dir's own value", got.RuntimeDir)
+	}
+}
+
+func TestLoadCeilingIgnoredWhenNotAncestor(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	zone := filepath.Join(home, "zone")
+	deep := filepath.Join(zone, "deep")
+	mustMkdir(t, deep)
+	writeConfig(t, zone, "runtime_dir: marker-runtime\n")
+
+	// A ceiling that is not an ancestor of start is ignored, so the walk
+	// still reaches zone and applies the marker.
+	other := filepath.Join(base, "other")
+	mustMkdir(t, other)
+	got, err := Load(deep, home, base, other, Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RuntimeDir != filepath.Join(zone, "marker-runtime") {
+		t.Fatalf("runtime = %q, want the zone marker", got.RuntimeDir)
 	}
 }
 

@@ -93,7 +93,11 @@ func loadConfig(patch config.Patch) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("working directory: %w", err)
 	}
-	return config.Load(cwd, home, filesystemRoot, patch)
+	// TILER_CEILING_DIR bounds the upward project-config walk so discovery
+	// stays inside a sandbox (for example an e2e test workspace) and never
+	// picks up a stray .tiler.yaml higher in the tree.
+	ceiling := os.Getenv("TILER_CEILING_DIR")
+	return config.Load(cwd, home, filesystemRoot, ceiling, patch)
 }
 
 func remember(cmd *cobra.Command, cfg config.Config) {

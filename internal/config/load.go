@@ -22,7 +22,14 @@ const fileName = ".tiler.yaml"
 // declared it. A relative command-line path is resolved against the
 // process working directory. A ~/ prefix expands with home. Cleaning
 // is lexical only and does not evaluate symlinks.
-func Load(start, home, fsRoot string, cli Patch) (Config, error) {
+//
+// ceiling, when non-empty and an ancestor of start, stops the upward
+// project walk at that directory: the ceiling directory's own file is
+// still applied, but nothing above it is. This bounds discovery inside
+// a sandbox (for example a test workspace) so a stray .tiler.yaml higher
+// up the tree cannot leak in. A ceiling that is not an ancestor of start
+// is ignored, and the home user file is always applied regardless of it.
+func Load(start, home, fsRoot, ceiling string, cli Patch) (Config, error) {
 	if strings.TrimSpace(home) == "" {
 		return Config{}, errors.New("home directory is empty")
 	}
@@ -32,7 +39,7 @@ func Load(start, home, fsRoot string, cli Patch) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg, err = applyProjects(cfg, start, home, fsRoot, &origin)
+	cfg, err = applyProjects(cfg, start, home, fsRoot, ceiling, &origin)
 	if err != nil {
 		return Config{}, err
 	}
@@ -50,8 +57,8 @@ func userFile(home string) string {
 	return filepath.Join(home, fileName)
 }
 
-func applyProjects(cfg Config, start, home, fsRoot string, origin *valueOrigin) (Config, error) {
-	paths, err := projectPaths(start, home, fsRoot)
+func applyProjects(cfg Config, start, home, fsRoot, ceiling string, origin *valueOrigin) (Config, error) {
+	paths, err := projectPaths(start, home, fsRoot, ceiling)
 	if err != nil {
 		return Config{}, err
 	}
@@ -123,7 +130,7 @@ func needsWorkingDir(cli Patch) bool {
 	return false
 }
 
-func projectPaths(start, home, fsRoot string) ([]string, error) {
+func projectPaths(start, home, fsRoot, ceiling string) ([]string, error) {
 	if strings.TrimSpace(start) == "" {
 		return nil, errors.New("start directory is empty")
 	}
@@ -137,12 +144,22 @@ func projectPaths(start, home, fsRoot string) ([]string, error) {
 	if !insideHome && !isInside(start, fsRoot) {
 		return nil, fmt.Errorf("start directory %s is outside filesystem root %s", start, fsRoot)
 	}
+	// A ceiling only binds the walk when it is an ancestor of start;
+	// otherwise it is ignored and the home/fsRoot bounds stand.
+	ceilingActive := false
+	if strings.TrimSpace(ceiling) != "" {
+		ceiling = filepath.Clean(ceiling)
+		ceilingActive = isInside(start, ceiling)
+	}
 	var nearToFar []string
 	for dir := start; ; dir = filepath.Dir(dir) {
 		if insideHome && dir == home {
 			break
 		}
 		nearToFar = append(nearToFar, filepath.Join(dir, fileName))
+		if ceilingActive && dir == ceiling {
+			break
+		}
 		if stopWalk(dir, home, fsRoot, insideHome) {
 			break
 		}
