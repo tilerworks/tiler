@@ -1,2 +1,12 @@
 /bin/
 /coverage.out
+
+# tiler e2e run artifacts, scoped to test/e2e/ only. The vendored
+# framework under test/git-test-lib/ ships its own upstream .gitignore.
+# Never ignore vendored sources or case scripts, and do not add a
+# tracked fixture dir named out/test-results/chainlinttmp under test/.
+/test/e2e/test-results/
+/test/e2e/trash directory*/
+/test/e2e/.prove
+/test/e2e/chainlinttmp/
+/test/e2e/out/
