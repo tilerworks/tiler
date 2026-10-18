@@ -9,10 +9,14 @@
 #   1. build a full image from a plain source tree,
 #   2. mount it read-write and write into the upper layer,
 #   3. mount the same view again and confirm it is idempotent,
-#   4. umount the view.
+#   4. build a second image and confirm it gets a distinct id,
+#   5. mount the second image at its own target,
+#   6. refuse a different image mounted onto a live view (conflict),
+#   7. umount both views.
 #
-# It mirrors the build/mount/remount scenarios of the out-of-repo
-# tiler-demo smoke harness, re-expressed in the vendored git-test-lib
+# It mirrors the build/mount/remount and different-identity-conflict
+# scenarios of the out-of-repo tiler-demo smoke harness (run_tests.sh
+# and verify_gaps.sh G06), re-expressed in the vendored git-test-lib
 # framework so `make e2e` runs it.
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
@@ -21,10 +25,11 @@
 # than false-fails -- on a host without the toolchain.
 #
 # Scope guard: this case asserts build + mount + idempotent remount +
-# umount only. It does not cover sessions, crash recovery, incremental
-# builds, split storage, or read-only/subdir/cache mount variants.
+# distinct-image conflict + umount only. It does not cover sessions,
+# crash recovery, incremental builds, split storage, or
+# read-only/subdir/cache mount variants.
 
-test_description='tiler builds an image, mounts it, and remounts idempotently'
+test_description='tiler builds, mounts, remounts, and refuses a conflicting image'
 
 # Resolve paths against this script's location BEFORE sourcing the
 # framework: test-lib.sh moves the working directory into a per-run
@@ -68,18 +73,22 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 # tree and the reserved directories, so keep it under $HOME/work.
 src_dir=$HOME/src/app
 work_dir=$HOME/work/app
+src2_dir=$HOME/src/tools
+work2_dir=$HOME/work/tools
 
-# Guarantee the FUSE mount is torn down before the framework removes the
-# trash directory, even if an assertion fails or the run is interrupted.
-# `tiler umount` is idempotent; fusermount3 is the fallback for a view
-# whose daemon already died.
+# Guarantee every FUSE mount is torn down before the framework removes
+# the trash directory, even if an assertion fails or the run is
+# interrupted. `tiler umount` is idempotent; fusermount3 -uz is the
+# fallback for a view whose daemon already died.
 if test -n "$tiler_bin"
 then
 	test_atexit '
-		"$tiler_bin" umount "$work_dir" >/dev/null 2>&1 ||
-		fusermount3 -u "$work_dir" >/dev/null 2>&1 ||
-		fusermount3 -uz "$work_dir" >/dev/null 2>&1 ||
-		true
+		for _m in "$work_dir" "$work2_dir"
+		do
+			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
+			fusermount3 -uz "$_m" >/dev/null 2>&1 ||
+			true
+		done
 	'
 fi
 
@@ -107,8 +116,42 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'repeat mount of the same view is idemp
 	grep -Eq "^already mounted " remount.out
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'umount tears the view down' '
-	"$tiler_bin" umount "$work_dir"
+test_expect_success TILER,FUSE_TOOLCHAIN 'a second image builds with a distinct id' '
+	mkdir -p "$src2_dir" &&
+	echo "#!/bin/sh" >"$src2_dir/run.sh" &&
+	"$tiler_bin" build --image bob/tools "$src2_dir" >build2.out 2>build2.err &&
+	grep -Eq "^full bob/tools [0-9a-f]+" build2.out &&
+	id1=$(cut -d" " -f3 build.out) &&
+	id2=$(cut -d" " -f3 build2.out) &&
+	test -n "$id1" && test -n "$id2" &&
+	test "$id1" != "$id2"
+'
+
+test_expect_success TILER,FUSE_TOOLCHAIN 'the second image mounts at its own target' '
+	mkdir -p "$work2_dir" &&
+	"$tiler_bin" mount bob/tools "$work2_dir" >mount2.out 2>mount2.err &&
+	grep -Eq "^mounted " mount2.out &&
+	test -f "$work2_dir/run.sh" &&
+	test ! -e "$work2_dir/README.txt"
+'
+
+# work_dir is still live serving alice/app. Mounting a different image
+# there must be refused as a conflict, not silently restacked: the exit
+# is non-zero, the error names the refusal, and the live view still
+# serves alice/app (README.txt present, run.sh absent).
+test_expect_success TILER,FUSE_TOOLCHAIN 'a different image on a live view is refused' '
+	status=0 &&
+	{ "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err || status=$?; } &&
+	test "$status" -ne 0 &&
+	grep -q "already mounts a different view" conflict.err &&
+	grep -q "refusing to restack it silently" conflict.err &&
+	grep -q "hello tiler" "$work_dir/README.txt" &&
+	test ! -e "$work_dir/run.sh"
+'
+
+test_expect_success TILER,FUSE_TOOLCHAIN 'umount tears both views down' '
+	"$tiler_bin" umount "$work_dir" &&
+	"$tiler_bin" umount "$work2_dir"
 '
 
 test_done

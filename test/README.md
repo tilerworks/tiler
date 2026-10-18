@@ -60,8 +60,11 @@ equipped host, so a genuine regression is never masked by a skip.
   project-config walk so it stays inside the sandbox.
 - `e2e/t0003-image-mount.sh` — builds a full image from a source tree,
   mounts it read-write (writing into the upper layer), confirms a repeat
-  mount of the same view is idempotent (`already mounted`), then
-  umounts. Needs the FUSE toolchain; skips cleanly without it.
+  mount of the same view is idempotent (`already mounted`), builds a
+  second image with a distinct id and mounts it at its own target, and
+  checks that mounting a different image onto a live view is refused as
+  a conflict rather than silently restacked. Needs the FUSE toolchain;
+  skips cleanly without it.
 
 ## Adding cases in later phases
 
