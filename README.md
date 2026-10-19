@@ -98,7 +98,9 @@ Available now:
   auto-deleted but one whose mounts are all dead is reported
   stale, and with `session_autoclose_stale` enabled (off by
   default) an aged stale record flips to closed and becomes
-  eligible for a later removal.
+  eligible for a later removal. The one exception is a `--rm`
+  active record whose views are all dead: it is torn down, its
+  runtime purged, and its record removed whatever its age.
 - `tiler images rm <owner/repo[/archives/<id>]>` deprecates the
   target on the first call and removes it on the second. Both calls
   refuse while a reference pins the target.
@@ -137,8 +139,12 @@ Available now:
   runs: `--session <name>` attaches a session created with
   `session new`, the `TILER_SESSION_ID` environment variable binds
   one, and without either an implicit `auto-<timestamp>-<short
-  random>` session is created. A failed mount keeps its recorded
-  action failed, so a later `session open` retries it.
+  random>` session is created. `--rm` marks that implicit session
+  for removal: once its last view unmounts the record is deleted
+  and its runtime directory purged, upper data included. It cannot
+  combine with `--session` or `TILER_SESSION_ID` — use `session new
+  --rm <name>` for a named session. A failed mount keeps its
+  recorded action failed, so a later `session open` retries it.
 - `tiler umount <dir>` tears a view down by path: the merged point
   first, then the runtime transit points in reverse order. Each
   point falls back from `fusermount3 -u` to the lazy `-uz` when it
@@ -150,7 +156,9 @@ Available now:
   changes.
 - `tiler session` manages the mount sessions that crash recovery
   replays. `session new <name>` creates an empty record under
-  `~/.tiler/sessions/` and refuses a duplicate name. `session open
+  `~/.tiler/sessions/` and refuses a duplicate name; `--rm` marks
+  it so `session close` deletes the record and purges the runtime
+  of every view instead of keeping it for audit. `session open
   <name>` walks the record in mount order: a healthy view is
   skipped and a dead one is cleaned (`fusermount3 -u`, escalating
   to `-uz`) and rebuilt, so repeated opens are idempotent and one
@@ -158,7 +166,10 @@ Available now:
   the same way: its views remount and the record becomes active
   again. `session close <name>`
   unmounts every recorded view in reverse order, then marks the
-  record closed and keeps it for audit. `session remove <name>`
+  record closed and keeps it for audit — except a `--rm` session,
+  which is removed instead: its record is deleted and the runtime
+  directory of every view is purged, upper data included, and the
+  command prints `removed` rather than `closed`. `session remove <name>`
   deletes a closed record and refuses an active one. `session
   list [--json]` prints one line per record and `session show
   <name> [--json]` its full action log; the `--json` form of show

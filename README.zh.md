@@ -82,6 +82,8 @@ tiler session close feature                # 逆序卸载，记录保留
   的记录被删除；active 记录永不自动删除，但挂载全部失活的记录
   会报告 stale；开启 `session_autoclose_stale`（默认关）后，无挂
   载且超龄的 active 记录自动转 closed，进入之后的删除范围。
+  唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
+  都会被拆除视图、清理 runtime 并删除记录。
 - `tiler images rm <owner/repo[/archives/<id>]>` 第一次调用标记
   废弃，第二次物理删除。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
@@ -109,8 +111,12 @@ tiler session close feature                # 逆序卸载，记录保留
   都在引擎执行前先写进 session 记录（write-ahead）：`--session
   <name>` 挂进用 `session new` 创建的 session，环境变量
   `TILER_SESSION_ID` 绑定一个，两者都没有时自动创建隐式的
-  `auto-<时间戳>-<短随机>` session。挂载失败时动作以 failed 状态
-  留在记录里，之后 `session open` 会重试。
+  `auto-<时间戳>-<短随机>` session。`--rm` 把这个隐式 session
+  标记为待删：最后一个视图卸载后，记录被删除、runtime 目录被
+  清理，upper 数据一并抹除。它不能与 `--session` 或
+  `TILER_SESSION_ID` 同用——命名 session 请用 `session new --rm
+  <name>`。挂载失败时动作以 failed 状态留在记录里，之后
+  `session open` 会重试。
 - `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
   运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
   兜底，随后按挂载点（设备号, inode）对应的运行时目录扫表，
@@ -118,13 +124,18 @@ tiler session close feature                # 逆序卸载，记录保留
   `<dir>` 静默成功。upper 与 work 数据从不删除，同一目录之后
   再次挂载时复用先前的改动。
 - `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
-  new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错。
+  new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
+  `--rm` 标记的记录在 `session close` 时删除记录并清理每个视图
+  的 runtime，而不再保留供审计。
   `session open <name>` 按挂载顺序遍历记录：健康视图跳过，失活
   视图先清理（`fusermount3 -u`，失败转惰性 `-uz`）再重建，因此
   重复 open 幂等，崩溃后一条 open 恢复全部挂载。closed session
   同样借此恢复：视图重新挂载，记录回到 active。`session close
   <name>` 逆序卸载每个记录在案的视图，随后置 closed 并保留记录
-  供审计。`session remove <name>` 删除 closed 记录，active 拒绝。
+  供审计——但 `--rm` session 例外，它被直接删除：记录被删、每个
+  视图的 runtime 目录被清理（upper 数据一并抹除），命令打印
+  `removed` 而非 `closed`。`session remove <name>` 删除 closed
+  记录，active 拒绝。
   `session list [--json]` 每条记录打印一行，`session show <name>
   [--json]` 展示完整动作流水，show 的 `--json` 形态就是记录对象
   本身。隐式 `auto-*` session 与显式 session 接受同一套命令。
