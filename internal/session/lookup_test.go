@@ -243,11 +243,14 @@ func TestSessionForPathNormalizationFailureStillResolves(t *testing.T) {
 func TestSessionForPathReportsCorruptRecords(t *testing.T) {
 	e, dir := lookupEngine(t, nil, nil)
 	seedMounted(t, e, "dev", "/ws/view")
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(":::"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken", "session.json"), []byte(":::"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := e.SessionForPath("/ws/view/deep")
-	if err == nil || !strings.Contains(err.Error(), "broken.json") {
+	if err == nil || !strings.Contains(err.Error(), "session.json") {
 		t.Fatalf("error = %v, want the corrupt record reported", err)
 	}
 }

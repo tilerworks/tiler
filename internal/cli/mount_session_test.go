@@ -13,6 +13,7 @@ import (
 )
 
 // listSessionNames lists the recorded session names in a directory.
+// Each session owns one subdirectory of the sessions root.
 func listSessionNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -24,8 +25,8 @@ func listSessionNames(t *testing.T, dir string) []string {
 	}
 	var names []string
 	for _, entry := range entries {
-		if name, ok := strings.CutSuffix(entry.Name(), ".json"); ok {
-			names = append(names, name)
+		if entry.IsDir() {
+			names = append(names, entry.Name())
 		}
 	}
 	return names

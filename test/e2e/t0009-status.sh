@@ -269,7 +269,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'status lists a live view whose record 
 	"$tiler_bin" session list >l8.out 2>l8.err &&
 	auto=$(grep -E "^auto-[^ ]+ active mounts=1$" l8.out | head -1 | cut -d" " -f1) &&
 	test -n "$auto" &&
-	rm -f "$HOME/.tiler/sessions/$auto.json" &&
+	rm -rf "$HOME/.tiler/sessions/$auto" &&
 	"$tiler_bin" status >ov8.out 2>ov8.err &&
 	grep -Eq "^orphan " ov8.out &&
 	grep -qF "$orph_dir" ov8.out &&

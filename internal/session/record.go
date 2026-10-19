@@ -1,10 +1,11 @@
 // Package session owns the authoritative session records: ordered
 // action logs that survive crashes and drive recovery, reverse
-// lookup, and reference protection. A record is a JSON file under
-// the configured sessions directory; an appended action is durable
-// on disk before its mount executes. Mount and umount run through
-// injected seams in later lifecycle code, so this package never
-// hard-depends on the workspace engine.
+// lookup, and reference protection. Each session owns one directory
+// under the configured sessions root, holding its record JSON file
+// and advisory lock; an appended action is durable on disk before
+// its mount executes. Mount and umount run through injected seams
+// in later lifecycle code, so this package never hard-depends on
+// the workspace engine.
 package session
 
 import (
@@ -12,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -80,6 +82,13 @@ type Action struct {
 	// Subdir is the image-relative mount root, empty for whole
 	// images.
 	Subdir string `json:"subdir,omitempty"`
+	// RuntimeID names this mount's runtime directory under the
+	// session directory: m<seq>. The seq is unique within a record,
+	// so the runtime directory is unique within the session. Only a
+	// mount action carries it; a umount leaves it empty. The JSON key
+	// is additive and omitempty, so an older record round-trips
+	// unchanged.
+	RuntimeID string `json:"runtime_id,omitempty"`
 	// Status is pending, mounted, failed, or unmounted.
 	Status string `json:"status"`
 	// Timestamp is when the action was recorded.
@@ -131,6 +140,13 @@ func badNameRune(name string) bool {
 		}
 	}
 	return false
+}
+
+// runtimeIDOf names the per-mount runtime directory of a mount
+// action: m<seq>. The seq is unique within a record, so the id is
+// unique within the session that owns the runtime subtree.
+func runtimeIDOf(seq int) string {
+	return "m" + strconv.Itoa(seq)
 }
 
 // implicitPrefix starts every implicitly created session name.

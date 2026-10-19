@@ -492,21 +492,15 @@ func (e *Engine) Remove(name string) error {
 	return e.deleteRecordFiles(name)
 }
 
-// deleteRecordFiles removes the record and its lock file. The
-// caller holds the session's exclusive lock.
+// deleteRecordFiles removes the session's whole directory: its
+// record, lock, and any runtime subtree beneath it. The caller holds
+// the session's exclusive lock.
 func (s Store) deleteRecordFiles(name string) error {
-	recordPath, err := s.recordPath(name)
+	dir, err := s.sessionDir(name)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(recordPath); err != nil {
-		return fmt.Errorf("session: %w", err)
-	}
-	lockPath, err := s.lockPath(name)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
 	return nil

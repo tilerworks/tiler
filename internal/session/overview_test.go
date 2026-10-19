@@ -172,7 +172,10 @@ func TestOverviewEmptyStore(t *testing.T) {
 
 func TestOverviewReportsCorruptRecord(t *testing.T) {
 	e, dir := lookupEngine(t, nil, nil)
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken", "session.json"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,7 +188,7 @@ func TestOverviewRecordsRemovedAfterListingDropOut(t *testing.T) {
 	e, dir := lookupEngine(t, nil, nil)
 	seedMounted(t, e, "dev", "/ws/live")
 	seedMounted(t, e, "vanish", "/ws/gone")
-	if err := os.Remove(filepath.Join(dir, "vanish.json")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "vanish", "session.json")); err != nil {
 		t.Fatal(err)
 	}
 

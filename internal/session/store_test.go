@@ -35,7 +35,14 @@ func TestSaveLoadRoundTripCreatesPrivateFiles(t *testing.T) {
 	if info.Mode().Perm() != 0o700 {
 		t.Errorf("sessions dir mode = %v, want 0700", info.Mode().Perm())
 	}
-	info, err = os.Stat(filepath.Join(dir, "dev.json"))
+	info, err = os.Stat(filepath.Join(dir, "dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("session dir mode = %v, want 0700", info.Mode().Perm())
+	}
+	info, err = os.Stat(filepath.Join(dir, "dev", "session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +72,10 @@ func TestLoadRejectsInvalidName(t *testing.T) {
 func TestLoadReportsCorruptRecord(t *testing.T) {
 	dir := t.TempDir()
 	store := Store{Dir: dir}
-	if err := os.WriteFile(filepath.Join(dir, "bad.json"), []byte("{not json"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "bad"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad", "session.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load("bad"); err == nil || !strings.Contains(err.Error(), "parse") {
@@ -76,8 +86,11 @@ func TestLoadReportsCorruptRecord(t *testing.T) {
 func TestLoadRejectsForeignRecordName(t *testing.T) {
 	dir := t.TempDir()
 	store := Store{Dir: dir}
+	if err := os.MkdirAll(filepath.Join(dir, "dev"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"name":"other","state":"active","actions":null,"created_at":"2026-10-16T09:00:00Z","closed_at":"0001-01-01T00:00:00Z"}`
-	if err := os.WriteFile(filepath.Join(dir, "dev.json"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "dev", "session.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load("dev"); err == nil {
@@ -101,8 +114,15 @@ func TestSaveOverwriteLeavesSingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "dev.json" {
-		t.Fatalf("directory entries = %v, want only dev.json", entries)
+	if len(entries) != 1 || entries[0].Name() != "dev" || !entries[0].IsDir() {
+		t.Fatalf("directory entries = %v, want only dev/", entries)
+	}
+	inner, err := os.ReadDir(filepath.Join(dir, "dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inner) != 1 || inner[0].Name() != "session.json" {
+		t.Fatalf("session dir entries = %v, want only session.json", inner)
 	}
 	loaded, err := store.Load("dev")
 	if err != nil {
@@ -118,13 +138,14 @@ func TestSaveFailureLeavesNoPartialFile(t *testing.T) {
 	store := newRecord(t, dir, "dev")
 	// A record path that is a non-empty directory makes the final
 	// rename fail, the same way a half-occupied target would.
-	if err := os.Remove(filepath.Join(dir, "dev.json")); err != nil {
+	recPath := filepath.Join(dir, "dev", "session.json")
+	if err := os.Remove(recPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(dir, "dev.json"), 0o700); err != nil {
+	if err := os.Mkdir(recPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "dev.json", "inside"), []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(recPath, "inside"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rec, err := store.Load("dev")
@@ -139,7 +160,7 @@ func TestSaveFailureLeavesNoPartialFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "dev.json" {
+	if len(entries) != 1 || entries[0].Name() != "dev" {
 		t.Fatalf("failed write left residue: %v", entries)
 	}
 }
@@ -305,7 +326,8 @@ func TestListOrdersRecordsAndSkipsForeignFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(dir, "dir.json"), 0o700); err != nil {
+	// A stray directory holding no record is not a session.
+	if err := os.Mkdir(filepath.Join(dir, "stray"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	records, err := store.List()
@@ -324,17 +346,20 @@ func TestListOrdersRecordsAndSkipsForeignFiles(t *testing.T) {
 func TestListReportsCorruptRecords(t *testing.T) {
 	dir := t.TempDir()
 	store := newRecord(t, dir, "good")
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(":::"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken", "session.json"), []byte(":::"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := store.List()
 	if err == nil {
 		t.Fatal("List dropped a corrupt record silently")
 	}
-	if !strings.Contains(err.Error(), "broken.json") {
+	if !strings.Contains(err.Error(), "session.json") {
 		t.Fatalf("List error = %v, want the file name", err)
 	}
-	if err := os.Remove(filepath.Join(dir, "broken.json")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "broken", "session.json")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.List(); err != nil {
@@ -353,14 +378,58 @@ func TestListMissingDirIsEmpty(t *testing.T) {
 	}
 }
 
-func TestLockNameFlattensSeparators(t *testing.T) {
-	if got := lockName("a/b"); got != "a_b.lock" {
-		t.Errorf("lockName(a/b) = %q", got)
+func TestListSkipsInvalidSessionDirName(t *testing.T) {
+	dir := t.TempDir()
+	store := newRecord(t, dir, "dev")
+	// A stray directory whose name is no legal session name must be
+	// skipped, matching the scan path, so it cannot break a listing.
+	if err := os.Mkdir(filepath.Join(dir, "bad name"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if got := lockName(`a\b`); got != "a_b.lock" {
-		t.Errorf(`lockName(a\b) = %q`, got)
+	records, err := store.List()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := lockName("dev"); got != "dev.lock" {
-		t.Errorf("lockName(dev) = %q", got)
+	if len(records) != 1 || records[0].Name != "dev" {
+		t.Fatalf("records = %+v, want only dev", records)
+	}
+}
+
+func TestAppendAssignsRuntimeIDForMountsOnly(t *testing.T) {
+	dir := t.TempDir()
+	store := newRecord(t, dir, "dev")
+	first, err := store.Append("dev", Action{
+		Type: TypeMount, Image: "alice/app", Mode: ModeRW,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RuntimeID != "m1" {
+		t.Fatalf("first runtime id = %q, want m1", first.RuntimeID)
+	}
+	second, err := store.Append("dev", Action{
+		Type: TypeMount, Image: "alice/app", Mode: ModeRO,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.RuntimeID != "m2" {
+		t.Fatalf("second runtime id = %q, want m2", second.RuntimeID)
+	}
+	// A umount refers to an earlier mount and carries no runtime id.
+	umount, err := store.Append("dev", Action{Type: TypeUmount})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if umount.RuntimeID != "" {
+		t.Fatalf("umount runtime id = %q, want empty", umount.RuntimeID)
+	}
+	rec, err := store.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Actions[0].RuntimeID != "m1" || rec.Actions[1].RuntimeID != "m2" ||
+		rec.Actions[2].RuntimeID != "" {
+		t.Fatalf("runtime ids did not persist: %+v", rec.Actions)
 	}
 }

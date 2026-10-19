@@ -232,10 +232,10 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	if out := mustGC(t, lib); out != "removed session old\n" {
 		t.Fatalf("gc report:\n%s\nwant:\nremoved session old\n", out)
 	}
-	if _, err := os.Stat(filepath.Join(sessions, "old.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sessions, "old")); !os.IsNotExist(err) {
 		t.Fatalf("the aged record survived: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(sessions, "live.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(sessions, "live", "session.json")); err != nil {
 		t.Fatalf("the active record was deleted: %v", err)
 	}
 	want := fmt.Sprintf("alice/app %s chain=0\n  hold %s\n", activeID, id1)
@@ -262,7 +262,7 @@ func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
 	if out := mustGC(t, lib); out != "stale session dev\n" {
 		t.Fatalf("gc report:\n%s\nwant:\nstale session dev\n", out)
 	}
-	if _, err := os.Stat(filepath.Join(sessions, "dev.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(sessions, "dev", "session.json")); err != nil {
 		t.Fatalf("the stale active record was deleted: %v", err)
 	}
 }

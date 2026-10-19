@@ -388,7 +388,8 @@ func underPrefix(path, prefix string) bool {
 }
 
 // names lists the recorded session names in the store directory,
-// ordered by file name. A missing directory lists nothing.
+// ordered by directory name. Each session owns one subdirectory; a
+// missing sessions root lists nothing.
 func (s Store) names() ([]string, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
@@ -399,11 +400,10 @@ func (s Store) names() ([]string, error) {
 	}
 	var names []string
 	for _, entry := range entries {
-		name, ok := strings.CutSuffix(entry.Name(), recordExt)
-		if entry.IsDir() || !ok {
+		if !entry.IsDir() {
 			continue
 		}
-		names = append(names, name)
+		names = append(names, entry.Name())
 	}
 	return names, nil
 }
