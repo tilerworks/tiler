@@ -35,10 +35,25 @@ func doctorOptions(cfg config.Config) doctor.Options {
 	}
 }
 
-// doctorDocument is the --json envelope: one object holding the
-// full probe result list.
+// doctorDocument is the --json envelope: the resolved configuration
+// summary plus the full probe result list.
 type doctorDocument struct {
-	Results []doctor.Result `json:"results"`
+	Config  *doctor.ConfigSummary `json:"config"`
+	Results []doctor.Result       `json:"results"`
+}
+
+// configSummary maps the loaded configuration onto the config section
+// doctor reports: the user config file location and the core runtime
+// directories and log level.
+func configSummary(cfg config.Config) doctor.ConfigSummary {
+	return doctor.ConfigSummary{
+		Path:        cfg.UserFile(),
+		ImagesDir:   cfg.ImagesDir,
+		RuntimeDir:  cfg.RuntimeDir,
+		SessionsDir: cfg.SessionsDir,
+		CacheDir:    cfg.CacheDir,
+		LogLevel:    cfg.LogLevel,
+	}
 }
 
 func newDoctorCmd() *cobra.Command {
@@ -59,18 +74,23 @@ func newDoctorCmd() *cobra.Command {
 	return cmd
 }
 
-// writeDoctor renders the probe report first, human-readable or
-// JSON, then applies the verdict: any failed probe becomes a
-// runtime error listing the failed names, so doctor exits 1, while
-// warn and info results never affect the exit code.
+// writeDoctor renders the config section and the probe report first,
+// human-readable or JSON, then applies the verdict: any failed probe
+// becomes a runtime error listing the failed names, so doctor exits 1,
+// while warn and info results never affect the exit code. The config
+// section never affects the verdict.
 func writeDoctor(ctx context.Context, w io.Writer, cfg config.Config, asJSON bool) error {
 	results, err := runDoctor(ctx, cfg)
 	if err != nil {
 		return err
 	}
+	summary := configSummary(cfg)
 	if asJSON {
-		err = writeJSON(w, doctorDocument{Results: results})
+		err = writeJSON(w, doctorDocument{Config: &summary, Results: results})
 	} else {
+		if err = doctor.WriteConfig(w, summary); err != nil {
+			return err
+		}
 		err = doctor.Write(w, results)
 	}
 	if err != nil {

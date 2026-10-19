@@ -89,11 +89,20 @@ func loadConfig(patch config.Patch) (config.Config, error) {
 	if strings.TrimSpace(home) == "" {
 		return config.Config{}, errors.New("home directory is empty")
 	}
+	// Create $HOME/.tiler.yaml on first run so users have a documented,
+	// editable starting point. Best-effort: a write failure (for example a
+	// read-only home) must not stop tiler, because Load resolves the same
+	// defaults without the file.
+	_ = config.EnsureUserFile(home)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return config.Config{}, fmt.Errorf("working directory: %w", err)
 	}
-	return config.Load(cwd, home, filesystemRoot, patch)
+	// TILER_CEILING_DIR bounds the upward project-config walk so discovery
+	// stays inside a sandbox (for example an e2e test workspace) and never
+	// picks up a stray .tiler.yaml higher in the tree.
+	ceiling := os.Getenv("TILER_CEILING_DIR")
+	return config.Load(cwd, home, filesystemRoot, ceiling, patch)
 }
 
 func remember(cmd *cobra.Command, cfg config.Config) {

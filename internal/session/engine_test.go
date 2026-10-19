@@ -180,7 +180,7 @@ func TestRunMountRejectsClosedSession(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	seedMounted(t, e, "dev", filepath.Join(dir, "view"))
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	_, err := e.RunMount("dev", mountAction(filepath.Join(dir, "other")),
@@ -366,7 +366,7 @@ func TestOpenReopensClosedSession(t *testing.T) {
 	e := newEngine(dir)
 	view := filepath.Join(dir, "view")
 	seedMounted(t, e, "dev", view)
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	var log callLog
@@ -464,7 +464,7 @@ func TestCloseUnmountsInReverseOrderThenCloses(t *testing.T) {
 		log.add("umount %s", filepath.Base(point))
 		return nil
 	}
-	if err := e.Close("dev", umount); err != nil {
+	if _, err := e.Close("dev", umount); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(log.calls, ",") != "umount view2,umount view1" {
@@ -483,7 +483,7 @@ func TestCloseUnmountsInReverseOrderThenCloses(t *testing.T) {
 		}
 	}
 	// Closing again is a no-op, and the closed record can be removed.
-	if err := e.Close("dev", func(string) error {
+	if _, err := e.Close("dev", func(string) error {
 		t.Fatal("a closed session unmounted again")
 		return nil
 	}); err != nil {
@@ -502,7 +502,7 @@ func TestCloseTearsDownPendingCrashAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log callLog
-	if err := e.Close("dev", func(point string) error {
+	if _, err := e.Close("dev", func(point string) error {
 		log.add("umount %s", filepath.Base(point))
 		return nil
 	}); err != nil {
@@ -524,7 +524,7 @@ func TestCloseUmountFailureKeepsRecordActive(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	seedMounted(t, e, "dev", filepath.Join(dir, "view"))
-	err := e.Close("dev", func(string) error { return errors.New("device busy") })
+	_, err := e.Close("dev", func(string) error { return errors.New("device busy") })
 	if err == nil || !strings.Contains(err.Error(), "device busy") {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -534,6 +534,141 @@ func TestCloseUmountFailureKeepsRecordActive(t *testing.T) {
 	}
 	if rec.State != StateActive {
 		t.Fatalf("a failed close closed the record: %+v", rec)
+	}
+}
+
+func TestNewRemovableMarksRecord(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.NewRemovable("dev"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.RemoveOnClose || rec.State != StateActive {
+		t.Fatalf("record = %+v", rec)
+	}
+	// The duplicate refusal still holds for a --rm name.
+	if err := e.NewRemovable("dev"); err == nil {
+		t.Fatal("duplicate NewRemovable accepted")
+	}
+	// A plain New leaves the marker clear.
+	if err := e.New("plain"); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := e.Load("plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.RemoveOnClose {
+		t.Fatalf("a plain New was marked --rm: %+v", plain)
+	}
+}
+
+func TestCloseRemovablePurgesRuntimeAndDeletesRecord(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view1 := filepath.Join(dir, "view1")
+	view2 := filepath.Join(dir, "view2")
+	if err := e.NewRemovable("dev"); err != nil {
+		t.Fatal(err)
+	}
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}
+	for _, point := range []string{view1, view2} {
+		if _, err := e.RunMount("dev", mountAction(point), mount); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var purged, umounted []string
+	e.RemoveRuntime = func(point string) error {
+		purged = append(purged, filepath.Base(point))
+		return nil
+	}
+	removed, err := e.Close("dev", func(point string) error {
+		umounted = append(umounted, filepath.Base(point))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("a --rm close did not report removed")
+	}
+	// Every recorded view's runtime is purged exactly once, in
+	// record order, while the teardown itself runs in reverse.
+	if strings.Join(purged, ",") != "view1,view2" {
+		t.Fatalf("purged = %v", purged)
+	}
+	if strings.Join(umounted, ",") != "view2,view1" {
+		t.Fatalf("umounted = %v", umounted)
+	}
+	// The record and its lock file are gone, not kept closed.
+	if _, err := e.Load("dev"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load after --rm close = %v, want ErrNotFound", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dev.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("dev.json survived: %v", statErr)
+	}
+}
+
+func TestClosePlainRecordKeepsAuditAndSkipsPurge(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", filepath.Join(dir, "view"))
+	purged := false
+	e.RemoveRuntime = func(string) error {
+		purged = true
+		return nil
+	}
+	removed, err := e.Close("dev", func(string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("a plain close reported removed")
+	}
+	if purged {
+		t.Fatal("a plain close purged the runtime")
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateClosed || !rec.ClosedAt.Equal(testNow) {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
+func TestCloseRemovableDeletesRecordDespitePurgeError(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	if err := e.NewRemovable("dev"); err != nil {
+		t.Fatal(err)
+	}
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}
+	if _, err := e.RunMount("dev", mountAction(view), mount); err != nil {
+		t.Fatal(err)
+	}
+	e.RemoveRuntime = func(string) error { return errors.New("EBUSY") }
+	removed, err := e.Close("dev", func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "EBUSY") {
+		t.Fatalf("Close error = %v, want the purge failure", err)
+	}
+	if !removed {
+		t.Fatal("a failed purge blocked the removal report")
+	}
+	// The record is deleted anyway: dropping it unpins the image,
+	// the primary goal of a --rm close, and the purge error rides
+	// along without blocking it.
+	if _, loadErr := e.Load("dev"); !errors.Is(loadErr, ErrNotFound) {
+		t.Fatalf("Load after failed purge = %v, want ErrNotFound", loadErr)
 	}
 }
 
@@ -727,7 +862,7 @@ func TestRemoveRejectsActiveAndDeletesClosed(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dir, "dev.json")); statErr != nil {
 		t.Fatalf("refused remove deleted the record: %v", statErr)
 	}
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Remove("dev"); err != nil {
@@ -770,7 +905,7 @@ func TestEngineOperationsUseRealLocksOnLinux(t *testing.T) {
 	if _, err := e.RunMount("dev", mountAction("/view"), seed); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Remove("dev"); err != nil {

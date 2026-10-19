@@ -400,3 +400,62 @@ func TestMountIntoClosedSessionIsRefused(t *testing.T) {
 		t.Fatalf("closed session: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
 	}
 }
+
+func TestMountRemovableMarksImplicitSession(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	view := filepath.Join(work, "view")
+	sessions := sessionsDir(home)
+
+	// --rm on an implicit mount marks the auto-* record it creates.
+	mountOK(t, lib, "mounted "+view+"\n", "mount", "--rm", img, view)
+	names := listSessionNames(t, sessions)
+	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
+		t.Fatalf("sessions = %v, want one auto-* record", names)
+	}
+	if rec := loadSessionRecord(t, sessions, names[0]); !rec.RemoveOnClose {
+		t.Fatalf("implicit --rm record not marked: %+v", rec)
+	}
+	// show flags the implicit --rm session with the rm marker.
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", names[0])...)
+	if err != nil {
+		t.Fatalf("session show: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, names[0]+" active rm") {
+		t.Fatalf("show stdout = %q", stdout)
+	}
+}
+
+func TestMountRemovableRejectsNamedSession(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	view := filepath.Join(work, "view")
+	mustSessionNew(t, lib, "dev")
+
+	// --rm cannot target a session named by --session; the usage
+	// error points at the named-session route instead.
+	_, _, _, err := runCmd(t, append(lib, "mount", "--rm", "--session", "dev", img, view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "session new --rm") {
+		t.Fatalf("--session: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
+	}
+	// Nor one named by the environment variable.
+	t.Setenv(sessionEnvVar, "dev")
+	_, _, _, err = runCmd(t, append(lib, "mount", "--rm", img, view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), sessionEnvVar) {
+		t.Fatalf("env: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
+	}
+	// The named session is untouched: a refused --rm mount records
+	// no action and creates no implicit session.
+	if rec := loadSessionRecord(t, sessionsDir(home), "dev"); len(rec.Actions) != 0 {
+		t.Fatalf("a refused --rm mount recorded an action: %+v", rec.Actions)
+	}
+	if names := listSessionNames(t, sessionsDir(home)); len(names) != 1 {
+		t.Fatalf("sessions = %v, want only the named record", names)
+	}
+}

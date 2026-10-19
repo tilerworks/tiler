@@ -100,6 +100,12 @@ type Record struct {
 	// ClosedAt is when the record reached the closed state; it stays
 	// zero while active.
 	ClosedAt time.Time `json:"closed_at"`
+	// RemoveOnClose marks a --rm session: closing it deletes the
+	// record and purges the runtime directory of every view, upper
+	// data included, instead of keeping the record for audit. The
+	// JSON key is additive and omitempty, so a record without it
+	// round-trips unchanged.
+	RemoveOnClose bool `json:"remove_on_close,omitempty"`
 }
 
 // ErrInvalidName is a session name that is not a safe single path

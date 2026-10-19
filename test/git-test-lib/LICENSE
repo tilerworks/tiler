@@ -1,0 +1,14 @@
+git-test-lib is vendored into the tiler repository as a pinned
+snapshot. See VENDORED.md in this directory for provenance and the
+reproducible update procedure.
+
+Upstream: https://github.com/jiangxin/git-test-lib
+Pinned commit: 7b81101bd0d9e9f6c1841281d6fa02e3c1ee0691
+
+This framework is derived from the Git project's test suite and is
+distributed under the GNU General Public License version 2. The full
+license text is provided verbatim in the COPYING file in this
+directory. Upstream ships no separate LICENSE file; this notice is a
+tiler-added pointer to COPYING and does not replace it.
+
+Copyright (c) 2005 Junio C Hamano and Git project contributors.

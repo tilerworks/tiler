@@ -78,6 +78,10 @@ type Config struct {
 	// even when the four directories are moved elsewhere. Load and
 	// Defaults set it; Apply keeps the value from the lower config.
 	reservedRoot string
+	// userFile is the $HOME/.tiler.yaml path. Defaults sets it and
+	// Apply keeps the value from the lower config, so it survives
+	// project and command-line overlays.
+	userFile string
 }
 
 // Patch records fields present in one document. Nil means omitted.
@@ -111,7 +115,15 @@ func Defaults(home string) Config {
 		SessionMaxAge: DefaultSessionMaxAge,
 		LogLevel:      DefaultLogLevel,
 		reservedRoot:  root,
+		userFile:      filepath.Join(home, fileName),
 	}
+}
+
+// UserFile returns the $HOME/.tiler.yaml path this config resolved
+// from. It is the canonical user-level config location whether or not
+// the file exists on disk.
+func (c Config) UserFile() string {
+	return c.userFile
 }
 
 // Apply copies each present patch field onto base. Omitted fields stay

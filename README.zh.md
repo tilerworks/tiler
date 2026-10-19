@@ -82,6 +82,8 @@ tiler session close feature                # 逆序卸载，记录保留
   的记录被删除；active 记录永不自动删除，但挂载全部失活的记录
   会报告 stale；开启 `session_autoclose_stale`（默认关）后，无挂
   载且超龄的 active 记录自动转 closed，进入之后的删除范围。
+  唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
+  都会被拆除视图、清理 runtime 并删除记录。
 - `tiler images rm <owner/repo[/archives/<id>]>` 第一次调用标记
   废弃，第二次物理删除。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
@@ -109,8 +111,12 @@ tiler session close feature                # 逆序卸载，记录保留
   都在引擎执行前先写进 session 记录（write-ahead）：`--session
   <name>` 挂进用 `session new` 创建的 session，环境变量
   `TILER_SESSION_ID` 绑定一个，两者都没有时自动创建隐式的
-  `auto-<时间戳>-<短随机>` session。挂载失败时动作以 failed 状态
-  留在记录里，之后 `session open` 会重试。
+  `auto-<时间戳>-<短随机>` session。`--rm` 把这个隐式 session
+  标记为待删：最后一个视图卸载后，记录被删除、runtime 目录被
+  清理，upper 数据一并抹除。它不能与 `--session` 或
+  `TILER_SESSION_ID` 同用——命名 session 请用 `session new --rm
+  <name>`。挂载失败时动作以 failed 状态留在记录里，之后
+  `session open` 会重试。
 - `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
   运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
   兜底，随后按挂载点（设备号, inode）对应的运行时目录扫表，
@@ -118,13 +124,18 @@ tiler session close feature                # 逆序卸载，记录保留
   `<dir>` 静默成功。upper 与 work 数据从不删除，同一目录之后
   再次挂载时复用先前的改动。
 - `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
-  new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错。
+  new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
+  `--rm` 标记的记录在 `session close` 时删除记录并清理每个视图
+  的 runtime，而不再保留供审计。
   `session open <name>` 按挂载顺序遍历记录：健康视图跳过，失活
   视图先清理（`fusermount3 -u`，失败转惰性 `-uz`）再重建，因此
   重复 open 幂等，崩溃后一条 open 恢复全部挂载。closed session
   同样借此恢复：视图重新挂载，记录回到 active。`session close
   <name>` 逆序卸载每个记录在案的视图，随后置 closed 并保留记录
-  供审计。`session remove <name>` 删除 closed 记录，active 拒绝。
+  供审计——但 `--rm` session 例外，它被直接删除：记录被删、每个
+  视图的 runtime 目录被清理（upper 数据一并抹除），命令打印
+  `removed` 而非 `closed`。`session remove <name>` 删除 closed
+  记录，active 拒绝。
   `session list [--json]` 每条记录打印一行，`session show <name>
   [--json]` 展示完整动作流水，show 的 `--json` 形态就是记录对象
   本身。隐式 `auto-*` session 与显式 session 接受同一套命令。
@@ -193,6 +204,46 @@ storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
 cache_advice	warn	image storage random read averages 6.12 ms, ...
 contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
 ```
+
+## 配置
+
+tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释、钉住
+内置默认值的模板创建 `$HOME/.tiler.yaml`——这个文件是供你编辑的
+起点，而非必需项：HOME 只读时会被容忍，tiler 回退到内置默认；
+已存在的文件绝不改写。
+
+```yaml
+images_dir: ~/.tiler/images
+runtime_dir: ~/.tiler/runtime
+sessions_dir: ~/.tiler/sessions
+cache_dir: ~/.tiler/cache
+log_level: info
+```
+
+取值按层解析，后者覆盖前者：内置默认、用户文件
+`$HOME/.tiler.yaml`、从工作目录向上遍历发现的项目级 `.tiler.yaml`，
+以及命令行 flag。文件内的相对路径以该文件所在目录为基准解析，
+`~/` 前缀展开为 `$HOME`。
+
+向上遍历在工作目录位于 `$HOME` 内时止于 `$HOME`，否则止于文件
+系统根。`TILER_CEILING_DIR` 可以更早截止：当截止目录是工作目录的
+祖先时，它自身的 `.tiler.yaml` 仍生效，但其上一律不读；不是祖先
+时忽略。它把配置发现约束在测试沙箱内，或某个不应继承父目录配置
+的检出内。
+
+`tiler doctor` 在探测表之前先报告解析后的配置——配置文件位置与
+核心目录，每项一行 tab 分隔的 `config` 行：
+
+```text
+config	path	/home/alice/.tiler.yaml
+config	images_dir	/home/alice/.tiler/images
+config	runtime_dir	/home/alice/.tiler/runtime
+```
+
+`--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
+`images_dir`、`runtime_dir`、`sessions_dir`、`cache_dir`、
+`log_level`）与 `results` 并列输出。config 段落不影响 doctor 的
+判定结果。
 
 ## 用户故事
 

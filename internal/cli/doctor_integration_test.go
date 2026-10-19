@@ -187,6 +187,10 @@ func parseDoctorLines(t *testing.T, stdout string) map[string]doctorLine {
 		if len(fields) != 3 {
 			t.Fatalf("bad doctor line %q", line)
 		}
+		if fields[0] == "config" {
+			// The config section precedes the probes and is not a probe.
+			continue
+		}
 		lines[fields[0]] = doctorLine{status: fields[1], detail: fields[2]}
 	}
 	return lines

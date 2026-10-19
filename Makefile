@@ -16,7 +16,24 @@ test: ## go test ./... -race -cover
 cover: ## write coverage.out and open the HTML report
 	go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out
 
-help: ## show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-8s %s\n", $$1, $$2}'
+e2e: ## run shell e2e cases under test/e2e/ (skips cleanly without the toolchain)
+	@set -e; \
+	if test ! -x bin/tiler && ! command -v tiler >/dev/null 2>&1; then \
+		echo "e2e: no tiler binary found (run 'make build'); cases needing it will skip"; \
+	fi; \
+	cd test/e2e; \
+	ran=0; \
+	for t in t[0-9][0-9][0-9][0-9]-*.sh; do \
+		test -e "$$t" || continue; \
+		ran=1; \
+		echo "==> test/e2e/$$t"; \
+		sh "$$t"; \
+	done; \
+	if test $$ran -eq 0; then \
+		echo "e2e: no cases found under test/e2e/"; \
+	fi
 
-.PHONY: build fmt lint test cover help
+help: ## show available targets
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-8s %s\n", $$1, $$2}'
+
+.PHONY: build fmt lint test cover e2e help

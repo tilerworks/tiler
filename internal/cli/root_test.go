@@ -186,6 +186,73 @@ func TestSplitRouteFlagRefusals(t *testing.T) {
 	}
 }
 
+func TestRunCreatesUserConfigFile(t *testing.T) {
+	home, _ := withWorkspace(t)
+	path := filepath.Join(home, ".tiler.yaml")
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("user config already exists before any command")
+	}
+	if _, _, _, err := runCmd(t, "version"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("user config not created: %v", err)
+	}
+	for _, want := range []string{
+		"images_dir: ~/.tiler/images",
+		"runtime_dir: ~/.tiler/runtime",
+		"sessions_dir: ~/.tiler/sessions",
+		"cache_dir: ~/.tiler/cache",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("created config missing %q\n%s", want, data)
+		}
+	}
+}
+
+func TestRunKeepsExistingUserConfig(t *testing.T) {
+	home, _ := withWorkspace(t)
+	writeProjectConfig(t, home, "log_level: debug\n")
+	if _, _, _, err := runCmd(t, "version"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".tiler.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "log_level: debug\n" {
+		t.Fatalf("existing user config was rewritten:\n%s", data)
+	}
+}
+
+func TestCeilingDirBoundsProjectWalk(t *testing.T) {
+	home, _ := withWorkspace(t)
+	// A marker project file above the ceiling sets a distinctive dir.
+	zone := filepath.Join(home, "zone")
+	sandbox := filepath.Join(zone, "sandbox")
+	deep := filepath.Join(sandbox, "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectConfig(t, zone, "runtime_dir: marker-runtime\n")
+	t.Chdir(deep)
+
+	// Without a ceiling the walk reaches zone and applies the marker.
+	cfg := mustRun(t, "version")
+	if cfg.RuntimeDir != filepath.Join(zone, "marker-runtime") {
+		t.Fatalf("control runtime_dir = %q, want the zone marker", cfg.RuntimeDir)
+	}
+
+	// With the ceiling at sandbox, zone sits above it and is excluded, so
+	// the default runtime dir stands.
+	t.Setenv("TILER_CEILING_DIR", sandbox)
+	cfg = mustRun(t, "version")
+	if cfg.RuntimeDir != filepath.Join(home, ".tiler", "runtime") {
+		t.Fatalf("ceiling runtime_dir = %q, want the default", cfg.RuntimeDir)
+	}
+}
+
 func withWorkspace(t *testing.T) (home, work string) {
 	t.Helper()
 	home = t.TempDir()

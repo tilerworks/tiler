@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/mountinfo"
@@ -63,6 +64,14 @@ type Engine struct {
 	Health HealthFunc
 	// Clean overrides the stale-point teardown. Nil uses CleanStale.
 	Clean CleanFunc
+	// RemoveRuntime purges the runtime directory of one mountpoint:
+	// the <RuntimeDir>/up-<dev>-<ino> combination the mount engine
+	// built for it, upper and work data included. Nil derives the
+	// directory from the point's device and inode and removes it
+	// wholesale; a point with no derivable runtime directory is a
+	// no-op. The --rm close path and the gc purge of a stale --rm
+	// record share it, and tests inject a fake to observe the calls.
+	RemoveRuntime func(mountpoint string) error
 	// RuntimeDir is the configured runtime tree. A path inside it —
 	// an upper, a work directory, or a lower transit point —
 	// resolves back to the session owning the combination. Empty
@@ -89,6 +98,21 @@ type Engine struct {
 // lock. A name already recorded — an explicit session or an implicit
 // auto-* one — is refused.
 func (e *Engine) New(name string) error {
+	return e.newRecord(name, false)
+}
+
+// NewRemovable creates one fresh active record marked for removal on
+// close: a --rm session deletes itself and purges its runtime when it
+// closes instead of staying closed for audit. It shares New's
+// exclusive lock and duplicate refusal.
+func (e *Engine) NewRemovable(name string) error {
+	return e.newRecord(name, true)
+}
+
+// newRecord creates one fresh active record carrying the --rm marker
+// under the session's exclusive lock. A name already recorded is
+// refused.
+func (e *Engine) newRecord(name string, removeOnClose bool) error {
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -101,7 +125,12 @@ func (e *Engine) New(name string) error {
 	case !errors.Is(err, ErrNotFound):
 		return err
 	}
-	return e.Save(Record{Name: name, State: StateActive, CreatedAt: e.now()})
+	return e.Save(Record{
+		Name:          name,
+		State:         StateActive,
+		CreatedAt:     e.now(),
+		RemoveOnClose: removeOnClose,
+	})
 }
 
 // RunMount records one mount action write-ahead and executes it
@@ -231,30 +260,35 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 	return nil
 }
 
-// Close tears every recorded mount down in reverse record order and
-// marks the record closed, keeping it for audit. The cascade inside
-// one view is the umount seam's business. An action that never
-// reached its writeback — pending after a crash — is torn down too;
-// the idempotent umount makes that safe. Closing a closed session
-// is a no-op.
-func (e *Engine) Close(name string, umount UmountFunc) error {
+// Close tears every recorded mount down in reverse record order. A
+// plain record is then marked closed and kept for audit; a --rm
+// record is deleted instead and the runtime directory of every view
+// is purged, upper data included. The cascade inside one view is the
+// umount seam's business. An action that never reached its writeback
+// — pending after a crash — is torn down too; the idempotent umount
+// makes that safe. Closing a closed session is a no-op. The return
+// reports whether the record was removed, which is how the command
+// layer tells a --rm deletion from an audit-kept close.
+func (e *Engine) Close(name string, umount UmountFunc) (bool, error) {
 	release, err := e.lockExclusive(name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer release()
 	return e.closeLocked(name, umount)
 }
 
-// closeLocked performs the reverse-order teardown and the state
-// flip of Close. The caller holds the session's exclusive lock.
-func (e *Engine) closeLocked(name string, umount UmountFunc) error {
+// closeLocked performs the reverse-order teardown of Close and then
+// either flips the record to closed or, for a --rm record, purges
+// its runtime and deletes it. The caller holds the session's
+// exclusive lock. The return reports whether the record was removed.
+func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 	rec, err := e.Load(name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if rec.State == StateClosed {
-		return nil
+		return false, nil
 	}
 	for i := len(rec.Actions) - 1; i >= 0; i-- {
 		action := rec.Actions[i]
@@ -263,20 +297,66 @@ func (e *Engine) closeLocked(name string, umount UmountFunc) error {
 			continue
 		}
 		if err := umount(action.Mountpoint); err != nil {
-			return fmt.Errorf("session: %s: close seq %d: %w",
+			return false, fmt.Errorf("session: %s: close seq %d: %w",
 				name, action.Seq, err)
 		}
 		if err := e.Writeback(name, action.Seq, StatusUnmounted, ""); err != nil {
-			return err
+			return false, err
 		}
+	}
+	if rec.RemoveOnClose {
+		return true, e.purgeRemovable(name, rec)
 	}
 	closed, err := e.Load(name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	closed.State = StateClosed
 	closed.ClosedAt = e.now()
-	return e.Save(closed)
+	return false, e.Save(closed)
+}
+
+// purgeRemovable removes the runtime directory of every recorded
+// view and then deletes the record. The views are already down, so
+// each runtime directory is safe to remove wholesale. A purge
+// failure is collected and reported but never blocks the record
+// deletion: dropping the record is what unpins the image, the
+// primary goal of a --rm close.
+func (e *Engine) purgeRemovable(name string, rec Record) error {
+	var errs []error
+	for _, action := range rec.Actions {
+		if action.Type != TypeMount || action.Mountpoint == "" {
+			continue
+		}
+		if err := e.removeRuntime(action.Mountpoint); err != nil {
+			errs = append(errs, fmt.Errorf(
+				"session: %s: purge runtime of %s: %w",
+				name, action.Mountpoint, err))
+		}
+	}
+	if err := e.deleteRecordFiles(name); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// removeRuntime purges the runtime directory of one mountpoint
+// through the injected seam, defaulting to the device-and-inode
+// derivation the mount engine, the residue sweep, and the reverse
+// lookup all share. A point with no derivable runtime directory —
+// off Linux, or a mountpoint that no longer exists — purges nothing.
+func (e *Engine) removeRuntime(mountpoint string) error {
+	if e.RemoveRuntime != nil {
+		return e.RemoveRuntime(mountpoint)
+	}
+	if e.RuntimeDir == "" || mountpoint == "" {
+		return nil
+	}
+	dirName, ok := runtimeNameOf(mountpoint)
+	if !ok {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(e.RuntimeDir, dirName))
 }
 
 // CloseImplicitFor closes the implicit auto-* session whose record
@@ -380,7 +460,8 @@ func (e *Engine) closeImplicit(
 	if !implicitIdle(rec, dir, health) {
 		return "", nil
 	}
-	return name, e.closeLocked(name, umount)
+	_, err = e.closeLocked(name, umount)
+	return name, err
 }
 
 // implicitIdle reports whether one record is an active implicit
