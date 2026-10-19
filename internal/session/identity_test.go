@@ -38,7 +38,7 @@ func TestIdentityLookupFromActiveRecord(t *testing.T) {
 	if err := e.Writeback("dev", 1, StatusMounted, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := ident.Lookup(view); ok || err != nil {

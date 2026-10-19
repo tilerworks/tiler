@@ -117,6 +117,58 @@ func TestRecordJSONContractKeys(t *testing.T) {
 	}
 }
 
+func TestRecordRemoveOnCloseJSON(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Dir: dir}
+	// A --rm record round-trips its marker and carries the key.
+	if err := store.Save(Record{
+		Name:          "rm",
+		State:         StateActive,
+		CreatedAt:     time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+		RemoveOnClose: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load("rm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.RemoveOnClose {
+		t.Fatalf("--rm marker did not round-trip: %+v", loaded)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "rm.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["remove_on_close"] != true {
+		t.Errorf("remove_on_close = %v, want true", doc["remove_on_close"])
+	}
+	// A plain record omits the additive key entirely, so existing
+	// records and goldens stay byte-for-byte unchanged.
+	if err := store.Save(Record{
+		Name:      "plain",
+		State:     StateActive,
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(dir, "plain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc = nil
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc["remove_on_close"]; ok {
+		t.Errorf("a plain record carried remove_on_close: %v", doc["remove_on_close"])
+	}
+}
+
 func TestValidateNameMatrix(t *testing.T) {
 	valid := []string{
 		"dev",

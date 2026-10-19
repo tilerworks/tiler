@@ -55,7 +55,7 @@ func TestRefsHoldsActiveLibraryMounts(t *testing.T) {
 		t.Fatalf("empty ref held = %v (%v)", held, err)
 	}
 	// A closed record pins nothing.
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	held, err = refs.Holds(aliceRef())
@@ -86,7 +86,7 @@ func TestRefsHolderNamesPinningSession(t *testing.T) {
 		t.Fatalf("probe Holder = (%q, %v, %v)", name, held, err)
 	}
 	// After the session closes, nothing is named or held.
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	name, held, err = refs.Holder(aliceRef())

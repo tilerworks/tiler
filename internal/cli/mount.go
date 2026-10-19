@@ -47,6 +47,7 @@ type mountFlags struct {
 	subdir   string
 	verify   bool
 	session  string
+	rm       bool
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -69,7 +70,13 @@ func newMountCmd() *cobra.Command {
 			"Every mount is recorded write-ahead in a session: --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +
 			"binds one, and without either an implicit auto-* session is\n" +
-			"created. 'session open' later replays the record.",
+			"created. 'session open' later replays the record.\n" +
+			"\n" +
+			"--rm marks the implicit auto-* session for removal: once its\n" +
+			"last view is unmounted the record is deleted and its runtime\n" +
+			"purged, upper data included. --rm cannot target a session\n" +
+			"named by --session or " + sessionEnvVar + "; use 'session new\n" +
+			"--rm <name>' for a named session.",
 		Args: exactTwoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMount(cmd, args, flags)
@@ -79,6 +86,8 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.subdir, "subdir", "", "image subdirectory exposed as the mount root")
 	cmd.Flags().BoolVar(&flags.verify, "verify", false, "re-verify every recorded digest with sha256")
 	cmd.Flags().StringVar(&flags.session, "session", "", "session that records this mount")
+	cmd.Flags().BoolVar(&flags.rm, "rm", false,
+		"remove the implicit session and purge its runtime when its last view unmounts")
 	return cmd
 }
 
@@ -139,9 +148,15 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err != nil {
 		return err
 	}
+	if flags.rm && !implicit {
+		return usageError{errors.New(
+			"mount: --rm applies to the implicit session mount creates;" +
+				" it cannot target a session named by --session or " + sessionEnvVar +
+				"; create one with 'session new --rm <name>'")}
+	}
 	engine := sessionEngine(cfg)
 	if implicit {
-		if name, err = newImplicitSession(engine); err != nil {
+		if name, err = newImplicitSession(engine, flags.rm); err != nil {
 			return err
 		}
 	}
@@ -195,13 +210,20 @@ func resolveMountSession(flag string) (string, bool, error) {
 
 // newImplicitSession creates the single-action session a mount
 // without context records into. Implicit sessions are isomorphic
-// with explicit ones and answer to the same session commands.
-func newImplicitSession(engine *session.Engine) (string, error) {
+// with explicit ones and answer to the same session commands. With
+// removeOnClose the record is marked --rm, so it deletes itself and
+// purges its runtime once its last view unmounts.
+func newImplicitSession(engine *session.Engine, removeOnClose bool) (string, error) {
 	name, err := session.ImplicitName(time.Now().UTC())
 	if err != nil {
 		return "", fmt.Errorf("mount: %w", err)
 	}
-	if err := engine.New(name); err != nil {
+	if removeOnClose {
+		err = engine.NewRemovable(name)
+	} else {
+		err = engine.New(name)
+	}
+	if err != nil {
 		return "", err
 	}
 	return name, nil

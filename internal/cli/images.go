@@ -298,7 +298,9 @@ func newImagesGCCmd() *cobra.Command {
 			"then cleans the session records — deleting closed records past\n" +
 			"the session age limit and reporting active sessions whose\n" +
 			"mounts are all stale. Active session records are never\n" +
-			"deleted automatically.",
+			"deleted automatically, except a --rm one whose views are all\n" +
+			"dead: it is torn down, its runtime purged, and its record\n" +
+			"removed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -316,7 +318,7 @@ func newImagesGCCmd() *cobra.Command {
 				}
 			}
 			cleaned, cleanErr := sessionEngine(cfg).Cleanup(
-				cfg.SessionMaxAge, cfg.SessionAutocloseStale, now)
+				cfg.SessionMaxAge, cfg.SessionAutocloseStale, now, sessionUmount(cfg))
 			for _, event := range cleaned {
 				if _, wErr := fmt.Fprintf(out, "%s session %s\n",
 					event.Action, event.Session); wErr != nil {

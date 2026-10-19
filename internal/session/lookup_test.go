@@ -198,7 +198,7 @@ func TestSessionForPathIgnoresClosedAndUnmounted(t *testing.T) {
 	view := "/ws/view"
 	e, _ := lookupEngine(t, nil, map[string]bool{})
 	seedMounted(t, e, "dev", view)
-	if err := e.Close("dev", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.SessionForPath(view + "/deep"); err == nil {
@@ -273,7 +273,7 @@ func TestListShowAndSummariesReadModel(t *testing.T) {
 	e := newEngine(dir)
 	seedMounted(t, e, "dev", "/ws/one", "/ws/two")
 	seedMounted(t, e, "done", "/ws/three")
-	if err := e.Close("done", func(string) error { return nil }); err != nil {
+	if _, err := e.Close("done", func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 

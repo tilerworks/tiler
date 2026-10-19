@@ -39,25 +39,37 @@ func newSessionCmd() *cobra.Command {
 }
 
 func newSessionNewCmd() *cobra.Command {
-	return &cobra.Command{
+	var removeOnClose bool
+	cmd := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Create an empty session",
 		Long: "New creates an empty session record. Mounts join it through\n" +
 			"the mount command's --session flag or the TILER_SESSION_ID\n" +
-			"environment variable. A name that already exists is refused.",
+			"environment variable. A name that already exists is refused.\n" +
+			"With --rm the session deletes itself when it closes: 'session\n" +
+			"close' removes the record and purges the runtime of every view,\n" +
+			"upper data included, instead of keeping the record for audit.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, engine, err := sessionCommandEngine(cmd, "session new", args[0])
 			if err != nil {
 				return err
 			}
-			if err := engine.New(args[0]); err != nil {
+			if removeOnClose {
+				err = engine.NewRemovable(args[0])
+			} else {
+				err = engine.New(args[0])
+			}
+			if err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", args[0])
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&removeOnClose, "rm", false,
+		"delete the session and purge its runtime when it closes")
+	return cmd
 }
 
 func newSessionOpenCmd() *cobra.Command {
@@ -90,17 +102,25 @@ func newSessionCloseCmd() *cobra.Command {
 		Short: "Unmount everything and close the record",
 		Long: "Close unmounts every recorded view in reverse mount order and\n" +
 			"then marks the record closed. The record is kept for audit;\n" +
-			"upper data survives, and 'session remove' deletes it later.",
+			"upper data survives, and 'session remove' deletes it later. A\n" +
+			"session created with --rm is deleted instead: its record is\n" +
+			"removed and the runtime of every view is purged, upper data\n" +
+			"included.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, engine, err := sessionCommandEngine(cmd, "session close", args[0])
 			if err != nil {
 				return err
 			}
-			if err := engine.Close(args[0], sessionUmount(cfg)); err != nil {
+			removed, err := engine.Close(args[0], sessionUmount(cfg))
+			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "closed %s\n", args[0])
+			verb := "closed"
+			if removed {
+				verb = "removed"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", verb, args[0])
 			return err
 		},
 	}
@@ -295,8 +315,12 @@ func writeSessionListJSON(w io.Writer, summaries []session.Summary) error {
 
 // writeSessionShow renders the record header and its action log.
 func writeSessionShow(w io.Writer, rec session.Record) error {
+	state := rec.State
+	if rec.RemoveOnClose {
+		state += " rm"
+	}
 	header := fmt.Sprintf("%s %s created=%s",
-		rec.Name, rec.State, rec.CreatedAt.Format(time.RFC3339))
+		rec.Name, state, rec.CreatedAt.Format(time.RFC3339))
 	if !rec.ClosedAt.IsZero() {
 		header += " closed=" + rec.ClosedAt.Format(time.RFC3339)
 	}

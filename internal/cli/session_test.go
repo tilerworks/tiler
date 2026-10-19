@@ -338,6 +338,61 @@ func TestSessionShowRendersActionLog(t *testing.T) {
 	}
 }
 
+func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	var purged []string
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.RemoveRuntime = func(point string) error {
+			purged = append(purged, point)
+			return nil
+		}
+	})
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	view := filepath.Join(work, "view")
+	sessions := sessionsDir(home)
+
+	// A --rm session is created marked, and show flags it.
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "new", "--rm", "dev")...)
+	if err != nil {
+		t.Fatalf("session new --rm: %v\n%s", err, stderr)
+	}
+	if stdout != "created dev\n" {
+		t.Fatalf("new stdout = %q", stdout)
+	}
+	if rec := loadSessionRecord(t, sessions, "dev"); !rec.RemoveOnClose {
+		t.Fatalf("record not marked --rm: %+v", rec)
+	}
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "show", "dev")...)
+	if err != nil {
+		t.Fatalf("session show: %v\n%s", err, stderr)
+	}
+	if !strings.HasPrefix(stdout, "dev active rm created=2026-") {
+		t.Fatalf("show stdout = %q", stdout)
+	}
+
+	// Mounting into the named --rm session records a live view.
+	mountOK(t, lib, "mounted "+view+"\n", "mount", "--session", "dev", img, view)
+
+	// Closing it deletes the record, purges the runtime of the view,
+	// and reports "removed" rather than the audit-keeping "closed".
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "close", "dev")...)
+	if err != nil {
+		t.Fatalf("session close: %v\n%s", err, stderr)
+	}
+	if stdout != "removed dev\n" {
+		t.Fatalf("close stdout = %q", stdout)
+	}
+	if len(purged) != 1 || purged[0] != view {
+		t.Fatalf("purged = %v, want [%s]", purged, view)
+	}
+	if names := listSessionNames(t, sessions); len(names) != 0 {
+		t.Fatalf("sessions after --rm close = %v, want none", names)
+	}
+}
+
 func TestSessionGroupWithoutSubcommandShowsHelp(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
