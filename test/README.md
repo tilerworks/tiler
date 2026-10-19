@@ -41,11 +41,12 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0008` need `/dev/fuse` and the external
+  `t0003` through `t0009` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
-  `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` also needs
-  `pgrep` to find the daemon it SIGKILLs. Where they are absent, the
-  case skips rather than false-fails.
+  `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
+  stale case in `t0009-status.sh` also need `pgrep` to find the daemon
+  they SIGKILL. Where they are absent, the case skips rather than
+  false-fails.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -105,6 +106,16 @@ equipped host, so a genuine regression is never masked by a skip.
   matches the named shape, umounting the last view auto-closes the
   session, and an implicit session can still be `close`d and `remove`d
   by name. Needs the FUSE toolchain; skips cleanly without it.
+- `e2e/t0009-status.sh` — drives the `status` command over real mounts
+  in both forms. The no-path overview reports an empty store, a healthy
+  session marked `current` via `TILER_SESSION_ID` (and a marker that
+  matches no record, which is not an error), a closed session with no
+  live views, and a live view whose record was deleted out-of-band as an
+  `orphan`. The path form resolves a deep path and the mountpoint to the
+  covering session, refuses an uncovered path (exit 1), and marks a
+  SIGKILLed view `stale`. Every case is asserted in both text and
+  `--json`. Needs the FUSE toolchain (the stale case also needs
+  `pgrep`); skips cleanly without them.
 
 ## Adding cases in later phases
 
