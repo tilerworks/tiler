@@ -32,6 +32,82 @@ func blocksRequest(cfg config.Config, src string, run ToolRunner, blockSize int6
 	}
 }
 
+func TestBuildFullSplitSizeSelectsBlocks(t *testing.T) {
+	cfg := blocksConfig(t)
+	cfg.SplitSize = 24
+	src := sourceDir(t)
+	body := []byte(strings.Repeat("0123456789abcdef", 4))
+	res, err := BuildFull(FullRequest{
+		Config:  cfg,
+		Name:    "alice/app",
+		SrcDir:  src,
+		Builder: "test",
+		Now:     fixedNow,
+		Run:     (&fakeRunner{body: body}).run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Blocks) != 3 {
+		t.Fatalf("SplitSize blocks = %+v, want 3", loaded.Blocks)
+	}
+	blocksDir, err := repo.BlocksDirPath(res.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != blocksDir {
+		t.Fatalf("path = %s, want %s", res.Path, blocksDir)
+	}
+	if _, err := os.Stat(repo.ImagePath()); !os.IsNotExist(err) {
+		t.Fatalf("SplitSize build left image.sqsh: %v", err)
+	}
+}
+
+func TestBuildFullZeroSplitSizeSingleFile(t *testing.T) {
+	cfg := blocksConfig(t)
+	if cfg.SplitSize != 0 {
+		t.Fatalf("split size = %d, want 0", cfg.SplitSize)
+	}
+	src := sourceDir(t)
+	body := []byte("single-file-payload")
+	res, err := BuildFull(FullRequest{
+		Config:  cfg,
+		Name:    "alice/app",
+		SrcDir:  src,
+		Builder: "test",
+		Now:     fixedNow,
+		Run:     (&fakeRunner{body: body}).run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != repo.ImagePath() {
+		t.Fatalf("path = %s, want %s", res.Path, repo.ImagePath())
+	}
+	if _, err := os.Stat(repo.ImagePath()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Blocks) != 0 {
+		t.Fatalf("single-file meta has blocks: %+v", loaded.Blocks)
+	}
+}
+
 func TestBuildBlocksPublishesSplitPayload(t *testing.T) {
 	cfg := blocksConfig(t)
 	src := sourceDir(t)

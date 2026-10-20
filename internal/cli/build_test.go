@@ -167,6 +167,83 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 	}
 }
 
+func TestBuildHelpShowsSplit(t *testing.T) {
+	_, _ = withWorkspace(t)
+	stdout, stderr, _, err := runCmd(t, "build", "--help")
+	if err != nil {
+		t.Fatalf("build --help: %v\n%s", err, stderr)
+	}
+	help := stdout + stderr
+	if !strings.Contains(help, "--split") {
+		t.Fatalf("build help missing --split:\n%s", help)
+	}
+}
+
+func TestBuildSplitFlagProducesBlocks(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	stdout, stderr, _, err := runCmd(t, append(lib,
+		"build", "--split", "16", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	id := buildOutput(t, stdout)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
+	if err != nil || len(names) < 2 {
+		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
+	}
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); !os.IsNotExist(err) {
+		t.Fatalf("split build left a single-file image: %v", err)
+	}
+}
+
+func TestBuildSplitZeroYieldsSingleFile(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	writeProjectConfig(t, work, "split_size: 16\n")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	stdout, stderr, _, err := runCmd(t, append(lib,
+		"build", "--split", "0", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	_ = buildOutput(t, stdout)
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
+		t.Fatalf("explicit --split 0 left no image.sqsh: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "blocks")); !os.IsNotExist(err) {
+		t.Fatalf("--split 0 published blocks: %v", err)
+	}
+}
+
+func TestBuildSplitFlagOverridesConfig(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	writeProjectConfig(t, work, "split_size: 0\n")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	stdout, stderr, _, err := runCmd(t, append(lib,
+		"build", "--split", "16", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	id := buildOutput(t, stdout)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	if _, err := os.Stat(blocksDir); err != nil {
+		t.Fatalf("CLI --split did not override config: %v", err)
+	}
+}
+
 func TestBuildUsageErrorsExitTwo(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
@@ -183,6 +260,7 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 		{name: "bad image name", args: []string{"build", "--image", "nope", src}},
 		{name: "incr outside a view", args: []string{"build", "--incr", "--image", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
+		{name: "bad split size", args: []string{"build", "--split", "1.5G", "--image", "alice/app", src}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

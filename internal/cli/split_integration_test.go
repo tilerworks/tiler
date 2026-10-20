@@ -56,14 +56,14 @@ func splitSource(t *testing.T) string {
 }
 
 // buildSplitBlocks packs src as a blocks payload with a small
-// test-injected block size, so a modest tree spans several blocks.
+// SplitSize, so a modest tree spans several blocks.
 func buildSplitBlocks(t *testing.T, cfg config.Config, name, src string, blockSize int64) image.FullResult {
 	t.Helper()
+	cfg.SplitSize = blockSize
 	res, err := image.BuildFull(image.FullRequest{
 		Config: cfg, Name: name, SrcDir: src,
 		Version: "v1", Builder: "test",
-		BlockSize: blockSize,
-		Refs:      session.Refs{Dir: cfg.SessionsDir},
+		Refs: session.Refs{Dir: cfg.SessionsDir},
 	})
 	if err != nil {
 		t.Fatal(err)

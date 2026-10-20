@@ -30,6 +30,7 @@ func newBuildCmd() *cobra.Command {
 		full      bool
 		incr      bool
 		imageName string
+		split     string
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
@@ -40,19 +41,28 @@ func newBuildCmd() *cobra.Command {
 			"--full packs the whole view instead.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(cmd, args, full, incr, imageName)
+			return runBuild(cmd, args, full, incr, imageName, split)
 		},
 	}
 	cmd.Flags().BoolVar(&full, "full", false, "force a full build")
 	cmd.Flags().BoolVar(&incr, "incr", false, "force an incremental build")
 	cmd.Flags().StringVar(&imageName, "image", "", "explicit owner/repo image name")
+	cmd.Flags().StringVar(&split, "split", "",
+		"block size for split builds (e.g. 512M, 2G); 0 disables for this build")
 	return cmd
 }
 
-func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName string) error {
+func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split string) error {
 	cfg, ok := loadedConfig(cmd)
 	if !ok {
 		return errors.New("build: configuration is not loaded")
+	}
+	if cmd.Flags().Changed("split") {
+		size, err := config.ParseByteSize(split)
+		if err != nil {
+			return usageError{fmt.Errorf("split: %w", err)}
+		}
+		cfg.SplitSize = size
 	}
 	target, err := buildTarget(args)
 	if err != nil {

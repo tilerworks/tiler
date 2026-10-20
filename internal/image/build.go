@@ -39,8 +39,10 @@ type FullRequest struct {
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
 	// BlockSize, when positive, selects the blocks pipeline and is the
-	// chunk size. Zero keeps the single-file pipeline. Tests inject a
-	// small size; production builds leave it zero.
+	// chunk size. Zero lets Config.SplitSize decide: a positive
+	// SplitSize selects blocks with that size; zero keeps the
+	// single-file pipeline. Tests may inject a small BlockSize
+	// directly.
 	BlockSize int64
 	// Refs protects referenced chains while the old image is
 	// replaced. A nil Refs holds nothing.
@@ -69,12 +71,14 @@ type FullResult struct {
 // BuildFull packs a prepared source directory into the unique active
 // slot of the image library.
 //
-// A positive BlockSize selects the blocks pipeline. Zero, which is
-// what production builds pass, packs one image file. BuildMembers
-// packs the members form; configuration does not select it. The
-// source must exist and stay outside every reserved tree. When the
-// source is a git repository, it is sanitized first and any git
-// failure aborts the build before
+// A positive BlockSize, or a positive Config.SplitSize when BlockSize
+// is unset, selects the blocks pipeline with that chunk size. Zero
+// SplitSize and BlockSize packs one image file. Production builds
+// leave BlockSize zero and rely on SplitSize from configuration or
+// `tiler build --split`. BuildMembers packs the members form;
+// configuration does not select it. The source must exist and stay
+// outside every reserved tree. When the source is a git repository,
+// it is sanitized first and any git failure aborts the build before
 // packing. mksquashfs writes a synced temporary file inside the
 // repository directory; the image is hashed from disk, the metadata
 // is validated, and the atomic publish renames both into place,
@@ -84,6 +88,9 @@ type FullResult struct {
 // the stored manifest. A failed packer leaves no active image and no
 // temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
+	if req.BlockSize <= 0 && req.Config.SplitSize > 0 {
+		req.BlockSize = req.Config.SplitSize
+	}
 	if req.BlockSize > 0 {
 		return buildBlocks(req)
 	}

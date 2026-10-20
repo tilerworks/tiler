@@ -13,16 +13,12 @@ import (
 	"time"
 )
 
-// DefaultBlockSize is the byte-block chunk size of a blocks build
-// when the request does not inject one. The library layer enforces
-// no range so tests can split with small blocks.
-const DefaultBlockSize int64 = 512 * 1024 * 1024
-
 // buildBlocks is the byte-block full build pipeline: pack the whole
 // image into a local staging directory, stream it into blocks inside
 // the repository, and publish the directory payload atomically. The
 // staging directory and the scratch payload directory never survive
-// the call.
+// the call. Callers must set a positive BlockSize (BuildFull copies
+// SplitSize when needed).
 func buildBlocks(req FullRequest) (FullResult, error) {
 	repo, err := validateFull(req)
 	if err != nil {
@@ -33,7 +29,7 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	}
 	blockSize := req.BlockSize
 	if blockSize <= 0 {
-		blockSize = DefaultBlockSize
+		return FullResult{}, errors.New("build: positive block size is required")
 	}
 	stageDir, err := makeStagingDir(req.Config.CacheDir)
 	if err != nil {
