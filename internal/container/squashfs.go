@@ -144,10 +144,10 @@ func (squashfs) Detect(path string) (bool, error) {
 	return magic == magicHSQS || magic == magicSQSH, nil
 }
 
-// sourceDateEnv pins the filesystem creation time mksquashfs embeds,
-// so an unchanged tree packs to byte-identical images. A
-// SOURCE_DATE_EPOCH already in the environment is honored; otherwise
-// the epoch is the newest mtime in the tree about to be packed.
+// sourceDateEnv pins the image build time the packer embeds, so an
+// unchanged tree packs to byte-identical images. A SOURCE_DATE_EPOCH
+// already in the environment is honored; otherwise the epoch is the
+// newest mtime in the tree about to be packed.
 func sourceDateEnv(src string) []string {
 	epoch := sourceDateEpoch(src)
 	return []string{"SOURCE_DATE_EPOCH=" + strconv.FormatInt(epoch, 10)}
