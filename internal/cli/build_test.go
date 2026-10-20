@@ -412,3 +412,31 @@ func TestBuildReadOnlyViewNeedsExplicitFull(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 }
+
+func TestExceedsHalfBase(t *testing.T) {
+	if exceedsHalfBase(100, 40, 10) {
+		t.Fatal("exactly half must stay incremental")
+	}
+	if !exceedsHalfBase(100, 40, 11) {
+		t.Fatal("just over half must promote")
+	}
+	if exceedsHalfBase(0, 10, 10) || exceedsHalfBase(-1, 10, 10) {
+		t.Fatal("non-positive base must not promote")
+	}
+}
+
+func TestTreeBytesSumsFilesNotDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "abcd")
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "sub", "b.txt"), "xy")
+	got, err := treeBytes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 6 {
+		t.Fatalf("treeBytes = %d, want 6", got)
+	}
+}
