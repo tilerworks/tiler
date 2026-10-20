@@ -524,19 +524,20 @@ func TestBuildIncrMountSmokeGate(t *testing.T) {
 	}
 }
 
-func TestBuildIncrRefusesSplitStorage(t *testing.T) {
+func TestBuildIncrZeroSplitSizeDoesNotRefuse(t *testing.T) {
 	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeMembers
+	if cfg.SplitSize != 0 {
+		t.Fatalf("split size = %d, want split off", cfg.SplitSize)
+	}
 	runner := &fakeRunner{body: []byte("never-packed")}
 	_, err := BuildIncr(IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upperDir(t), Run: runner.run,
 	})
-	if err == nil || !strings.Contains(err.Error(), "split") {
-		t.Fatalf("err = %v", err)
+	if err == nil || strings.Contains(err.Error(), "split") {
+		t.Fatalf("err = %v, want a non-split failure", err)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("packer ran despite split storage: %v", runner.calls)
+		t.Fatalf("packer ran: %v", runner.calls)
 	}
 }
 
@@ -557,4 +558,313 @@ func TestBuildIncrUpperMustBeDirectory(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// seedBlocksActive publishes a blocks-form full image for incr tests.
+func seedBlocksActive(t *testing.T, cfg config.Config, body []byte, blockSize int64) (Repo, Meta) {
+	t.Helper()
+	src := sourceDir(t)
+	_, err := BuildFull(FullRequest{
+		Config:    cfg,
+		Name:      "alice/app",
+		SrcDir:    src,
+		Builder:   "test",
+		Now:       fixedNow,
+		Run:       (&fakeRunner{body: body}).run,
+		BlockSize: blockSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if PayloadKind(loaded) != PayloadBlocks {
+		t.Fatalf("active form = %s, want blocks", PayloadKind(loaded))
+	}
+	return repo, loaded
+}
+
+func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	repo, active := seedBlocksActive(t, cfg,
+		[]byte(strings.Repeat("0123456789abcdef", 4)), 24)
+	body := []byte(strings.Repeat("fedcba9876543210", 4)) // 64 bytes
+	var smoked []string
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Source: Source{Commit: "abc123"}, Now: fixedNow,
+		Run: (&fakeRunner{body: body}).run,
+		MountSmoke: func(image string) error {
+			smoked = append(smoked, image)
+			return nil
+		},
+	}
+	res, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	wantDir, err := repo.BlocksDirPath(ID(sum))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ID != ID(sum) || res.Path != wantDir || res.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("result = %+v, want path %s", res, wantDir)
+	}
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocks incr left incr/: %v", err)
+	}
+	parts := [][]byte{body[0:24], body[24:48], body[48:64]}
+	for i, part := range parts {
+		assertBytes(t, filepath.Join(wantDir, fmt.Sprintf(blockNameFmt, i)), part)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ID != active.ID || len(loaded.Chain) != 1 {
+		t.Fatalf("active meta = %+v", loaded)
+	}
+	entry := loaded.Chain[0]
+	if entry.Parent != active.ID || entry.ID != res.ID ||
+		entry.Size != int64(len(body)) || entry.SHA256 != res.SHA256 ||
+		len(entry.Blocks) != 3 || entry.Source != req.Source ||
+		!entry.CreatedAt.Equal(fixedNow()) {
+		t.Fatalf("chain entry = %+v", entry)
+	}
+	for i, block := range entry.Blocks {
+		partSum := sha256.Sum256(parts[i])
+		if block.Name != fmt.Sprintf(blockNameFmt, i) ||
+			block.Size != int64(len(parts[i])) ||
+			block.SHA256 != hex.EncodeToString(partSum[:]) {
+			t.Fatalf("chain blocks[%d] = %+v", i, block)
+		}
+	}
+	if len(smoked) != 1 {
+		t.Fatalf("smoke gate saw %v", smoked)
+	}
+	assertBytes(t, smoked[0], body)
+	assertNoTemps(t, repo.Dir)
+}
+
+func TestBuildIncrSingleKeepsIncrSqsh(t *testing.T) {
+	cfg := buildConfig(t)
+	if cfg.SplitSize != 0 {
+		t.Fatalf("split size = %d, want 0", cfg.SplitSize)
+	}
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedActive(t, repo, []byte("base-full"), false)
+	body := []byte("single-layer")
+	res, err := BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Now: fixedNow, Run: (&fakeRunner{body: body}).run, MountSmoke: skipSmoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath, err := repo.IncrPath(res.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != wantPath {
+		t.Fatalf("path = %s, want %s", res.Path, wantPath)
+	}
+	assertBytes(t, wantPath, body)
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Chain) != 1 || len(loaded.Chain[0].Blocks) != 0 {
+		t.Fatalf("chain = %+v", loaded.Chain)
+	}
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirBlocks)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("single incr created blocks/: %v", err)
+	}
+}
+
+func TestBuildIncrRefusesSplitOnSingleActive(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedActive(t, repo, []byte("base-full"), false)
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Run: runner.run,
+	})
+	if err == nil || !strings.Contains(err.Error(), "single form") ||
+		!strings.Contains(err.Error(), "full image") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on refused incr: %v", runner.calls)
+	}
+}
+
+func TestBuildIncrRefusesZeroSplitOnBlocksActive(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	seedBlocksActive(t, cfg, []byte(strings.Repeat("0123456789abcdef", 4)), 24)
+	cfg.SplitSize = 0
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err := BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Run: runner.run,
+	})
+	if err == nil || !strings.Contains(err.Error(), "blocks form") ||
+		!strings.Contains(err.Error(), "full image") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on refused incr: %v", runner.calls)
+	}
+}
+
+func TestBuildIncrBlocksSameDigestIsNoOp(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	repo, _ := seedBlocksActive(t, cfg,
+		[]byte(strings.Repeat("0123456789abcdef", 4)), 24)
+	body := []byte(strings.Repeat("stable-layer-pad!", 4)) // 64 bytes
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
+		MountSmoke: skipSmoke,
+	}
+	req.Run = (&fakeRunner{body: body}).run
+	first, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Run = (&fakeRunner{body: body}).run
+	second, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.Path != first.Path {
+		t.Fatalf("rebuild = %+v, want %+v", second, first)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Chain) != 1 {
+		t.Fatalf("chain appended twice: %+v", loaded.Chain)
+	}
+	entries, err := os.ReadDir(filepath.Join(repo.Dir, dirBlocks))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// full blocks dir + one incr blocks dir
+	if len(entries) != 2 {
+		t.Fatalf("blocks entries = %v", entries)
+	}
+	assertNoTemps(t, repo.Dir)
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocks incr left incr/: %v", err)
+	}
+}
+
+func TestBuildIncrBlocksRestoresMissingDir(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	repo, _ := seedBlocksActive(t, cfg,
+		[]byte(strings.Repeat("0123456789abcdef", 4)), 24)
+	body := []byte(strings.Repeat("restore-blocks!!", 4)) // 64 bytes
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
+		MountSmoke: skipSmoke,
+	}
+	req.Run = (&fakeRunner{body: body}).run
+	first, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(first.Path); err != nil {
+		t.Fatal(err)
+	}
+	req.Run = (&fakeRunner{body: body}).run
+	second, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.Path != first.Path || second.SHA256 != first.SHA256 {
+		t.Fatalf("restore = %+v, want %+v", second, first)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Chain) != 1 || len(loaded.Chain[0].Blocks) != len(before.Chain[0].Blocks) {
+		t.Fatalf("chain = %+v", loaded.Chain)
+	}
+	for i, block := range loaded.Chain[0].Blocks {
+		want := before.Chain[0].Blocks[i]
+		if block.Name != want.Name || block.Size != want.Size || block.SHA256 != want.SHA256 {
+			t.Fatalf("blocks[%d] = %+v, want %+v", i, block, want)
+		}
+	}
+	ok, err := dirMatchesBlocks(second.Path, loaded.Chain[0].Blocks)
+	if err != nil || !ok {
+		t.Fatalf("restored blocks dir match = %v, %v", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocks restore left incr/: %v", err)
+	}
+}
+
+func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	repo, active := seedBlocksActive(t, cfg,
+		[]byte(strings.Repeat("0123456789abcdef", 4)), 24)
+	body := []byte(strings.Repeat("doomed-blocks-pad", 4)) // 68 bytes
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t), Now: fixedNow,
+		Run: (&fakeRunner{body: body}).run,
+	}
+	err := buildIncrWithErrorOnMetaRename(t, repo, req)
+	if err == nil || !strings.Contains(err.Error(), "meta rename failed") {
+		t.Fatalf("err = %v", err)
+	}
+	loaded, loadErr := Load(repo.MetaPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.ID != active.ID || len(loaded.Chain) != 0 {
+		t.Fatalf("old meta changed: %+v", loaded)
+	}
+	sum := sha256.Sum256(body)
+	doomed, err := repo.BlocksDirPath(ID(sum))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(doomed); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("fresh blocks dir left behind: %v", statErr)
+	}
+	fullDir, err := repo.BlocksDirPath(active.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(fullDir); statErr != nil {
+		t.Fatalf("full blocks dir: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("blocks incr left incr/: %v", statErr)
+	}
+	assertNoTemps(t, repo.Dir)
 }

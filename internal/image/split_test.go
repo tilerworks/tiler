@@ -9,6 +9,14 @@ import (
 	"testing"
 )
 
+func TestValidateSingleChainRejectsBlocks(t *testing.T) {
+	meta := validMeta()
+	entry := validEntry(meta.ID, "fedcba9876543210")
+	entry.Blocks = blocksSeq(1)
+	meta.Chain = []ChainEntry{entry}
+	assertIssues(t, meta, []string{"chain[0].blocks: must be empty for single payloads"})
+}
+
 func TestValidateBlocksManifestRules(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -30,11 +38,19 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 			wants:  []string{"kind: must be full for split payloads"},
 		},
 		{
-			name: "chain must stay empty",
+			name: "chain with blocks is valid",
+			mutate: func(m *Meta) {
+				entry := validEntry(m.ID, "fedcba9876543210")
+				entry.Blocks = blocksSeq(1)
+				m.Chain = []ChainEntry{entry}
+			},
+		},
+		{
+			name: "chain entry missing blocks",
 			mutate: func(m *Meta) {
 				m.Chain = []ChainEntry{validEntry(m.ID, "fedcba9876543210")}
 			},
-			wants: []string{"chain: must be empty for split payloads"},
+			wants: []string{"chain[0].blocks: must be set for blocks payloads"},
 		},
 		{
 			name:   "foreign name format",
@@ -115,7 +131,7 @@ func TestValidateMembersManifestRules(t *testing.T) {
 			mutate: func(m *Meta) {
 				m.Chain = []ChainEntry{validEntry(m.ID, "fedcba9876543210")}
 			},
-			wants: []string{"chain: must be empty for split payloads"},
+			wants: []string{"chain: must be empty for members payloads"},
 		},
 		{
 			name:   "empty name segment",

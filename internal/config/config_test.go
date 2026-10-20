@@ -27,7 +27,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.LogLevel != DefaultLogLevel {
 		t.Fatalf("log level = %q", cfg.LogLevel)
 	}
-	if cfg.SplitEnabled || cfg.SplitMode != "" || cfg.SplitRoute != "" || cfg.CacheEnabled {
+	if cfg.SplitSize != 0 || cfg.CacheEnabled {
 		t.Fatalf("split or cache default is set: %+v", cfg)
 	}
 	if cfg.SessionMaxAge != DefaultSessionMaxAge {
@@ -70,6 +70,7 @@ func TestExplicitZeroDiffersFromDefault(t *testing.T) {
 	base.MaxAge = 10 * time.Hour
 	base.SessionMaxAge = 48 * time.Hour
 	base.CacheEnabled = true
+	base.SplitSize = 4096
 	base.LogLevel = "warn"
 
 	patch, err := Decode([]byte(strings.Join([]string{
@@ -77,7 +78,7 @@ func TestExplicitZeroDiffersFromDefault(t *testing.T) {
 		"max_age: 0s",
 		"session_max_age: 0",
 		"cache_enabled: false",
-		"split_enabled: false",
+		"split_size: 0",
 	}, "\n")))
 	if err != nil {
 		t.Fatal(err)
@@ -102,8 +103,8 @@ func TestExplicitZeroDiffersFromDefault(t *testing.T) {
 	if got.KeepVersions != 0 || got.MaxAge != 0 || got.SessionMaxAge != 0 {
 		t.Fatalf("explicit zeros not applied: %+v", got)
 	}
-	if got.CacheEnabled || got.SplitEnabled {
-		t.Fatalf("explicit false not applied: %+v", got)
+	if got.CacheEnabled || got.SplitSize != 0 {
+		t.Fatalf("explicit false or zero not applied: %+v", got)
 	}
 	if got.LogLevel != "warn" {
 		t.Fatalf("omitted log level changed to %q", got.LogLevel)
@@ -251,33 +252,14 @@ func TestInvalidConfig(t *testing.T) {
 		{name: "non-scalar max age", doc: "max_age:\n  - 1h\n", field: "max_age"},
 		{name: "negative day max age", doc: "max_age: -2d\n", field: "max_age"},
 		{name: "negative session max age", doc: "session_max_age: -1h\n", field: "session_max_age"},
-		{name: "split enabled without mode", doc: "split_enabled: true\n", field: "split_enabled"},
-		{
-			name:  "split enabled with unknown mode",
-			doc:   "split_enabled: true\nsplit_mode: shards\n",
-			field: "split_mode",
-		},
-		{name: "mode set while split is off", doc: "split_mode: blocks\n", field: "split_mode"},
-		{
-			name:  "mode set while split is explicitly off",
-			doc:   "split_enabled: false\nsplit_mode: members\n",
-			field: "split_mode",
-		},
-		{
-			name:  "route set while split is off",
-			doc:   "split_route: concat\n",
-			field: "split_route",
-		},
-		{
-			name:  "route with members mode",
-			doc:   "split_enabled: true\nsplit_mode: members\nsplit_route: concat\n",
-			field: "split_route",
-		},
-		{
-			name:  "unknown route",
-			doc:   "split_enabled: true\nsplit_mode: blocks\nsplit_route: splice\n",
-			field: "split_route",
-		},
+		{name: "negative split size", doc: "split_size: -1\n", field: "split_size"},
+		{name: "fractional split size", doc: "split_size: 1.5\n", field: "split_size"},
+		{name: "iec split size", doc: "split_size: 2ki\n", field: "split_size"},
+		{name: "unknown split suffix", doc: "split_size: 2p\n", field: "split_size"},
+		{name: "non-scalar split size", doc: "split_size:\n  - 2G\n", field: "split_size"},
+		{name: "removed split_enabled", doc: "split_enabled: true\n", field: "split_enabled"},
+		{name: "removed split_mode", doc: "split_mode: blocks\n", field: "split_mode"},
+		{name: "removed split_route", doc: "split_route: concat\n", field: "split_route"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -292,53 +274,48 @@ func TestInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestValidSplitModes(t *testing.T) {
-	for _, mode := range []string{SplitModeBlocks, SplitModeMembers} {
-		got, err := applyDoc("split_enabled: true\nsplit_mode: " + mode + "\n")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !got.SplitEnabled || got.SplitMode != mode {
-			t.Fatalf("mode %s: %+v", mode, got)
-		}
-	}
-}
-
-func TestValidSplitRoutes(t *testing.T) {
-	// The omitted and the explicit empty route both keep the default
-	// reassemble behavior; the two named routes pin the mount form.
-	for _, route := range []string{"", SplitRouteReassemble, SplitRouteConcat} {
-		doc := "split_enabled: true\nsplit_mode: blocks\n"
-		if route != "" {
-			doc += "split_route: " + route + "\n"
-		}
-		got, err := applyDoc(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.SplitRoute != route {
-			t.Fatalf("route %q: %+v", route, got)
-		}
-	}
-
-	// An explicit empty route in a nearer layer clears a lower value.
-	base := Defaults(testHome)
-	base.SplitEnabled = true
-	base.SplitMode = SplitModeBlocks
-	base.SplitRoute = SplitRouteConcat
-	patch, err := Decode([]byte("split_route: \"\"\n"))
+func TestSplitSizeYAML(t *testing.T) {
+	got, err := applyDoc("split_size: 2G\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if patch.SplitRoute == nil || *patch.SplitRoute != "" {
-		t.Fatal("explicit empty split_route was omitted")
+	if got.SplitSize != 2<<30 {
+		t.Fatalf("split_size = %d, want %d", got.SplitSize, int64(2)<<30)
 	}
-	got := patch.Apply(base)
+
+	got, err = applyDoc("log_level: debug\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitSize != 0 {
+		t.Fatalf("omitted split_size = %d, want 0", got.SplitSize)
+	}
+
+	// An explicit zero in a nearer layer clears a lower value.
+	base := Defaults(testHome)
+	base.SplitSize = 2 << 30
+	patch, err := Decode([]byte("split_size: 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.SplitSize == nil || *patch.SplitSize != 0 {
+		t.Fatal("explicit zero split_size was omitted")
+	}
+	got = patch.Apply(base)
 	if err := Validate(got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SplitRoute != "" {
-		t.Fatalf("explicit empty route did not clear the base: %+v", got)
+	if got.SplitSize != 0 {
+		t.Fatalf("explicit zero did not clear the base: %+v", got)
+	}
+}
+
+func TestValidateRejectsNegativeSplitSize(t *testing.T) {
+	cfg := Defaults(testHome)
+	cfg.SplitSize = -1
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "split_size") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

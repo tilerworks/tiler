@@ -27,6 +27,7 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		"cache_dir: ~/.tiler/cache",
 		"log_level: info",
 		"merged root",
+		"# split_size: 2G",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("template missing %q\n%s", want, data)
@@ -34,6 +35,11 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if strings.Contains(string(data), "runtime_dir") {
 		t.Fatalf("template still mentions runtime_dir:\n%s", data)
+	}
+	for _, banned := range []string{"split_enabled", "split_mode", "split_route"} {
+		if strings.Contains(string(data), banned) {
+			t.Fatalf("template still mentions %s:\n%s", banned, data)
+		}
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -50,6 +56,9 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if cfg.ImagesDir != filepath.Join(home, ".tiler", "images") {
 		t.Fatalf("images = %q after loading the created file", cfg.ImagesDir)
+	}
+	if cfg.SplitSize != 0 {
+		t.Fatalf("split size = %d, want the commented example to stay off", cfg.SplitSize)
 	}
 	if cfg.UserFile() != path {
 		t.Fatalf("UserFile() = %q, want %q", cfg.UserFile(), path)

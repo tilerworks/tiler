@@ -73,10 +73,9 @@ type Options struct {
 	ImagesDir string
 	// CacheDir is the local cache directory to probe.
 	CacheDir string
-	// SplitEnabled reports whether split image storage is on.
-	SplitEnabled bool
-	// SplitMode is the split storage mode when enabled.
-	SplitMode string
+	// SplitSize is the configured block size in bytes. Zero means
+	// split storage is off; a positive value shapes probe advice.
+	SplitSize int64
 }
 
 type toolSpec struct {

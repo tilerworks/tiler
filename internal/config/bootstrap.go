@@ -21,6 +21,7 @@ images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache
 log_level: info
+# split_size: 2G                # 0 disables splitting; bare bytes or k/m/g/t
 `
 
 // EnsureUserFile creates $HOME/.tiler.yaml from userFileTemplate when

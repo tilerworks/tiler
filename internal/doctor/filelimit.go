@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 	// recognizable.
 	probeFilePattern = "tiler-doctor-*"
 
-	splitGuidanceText = "enable split storage (blocks or members) in the configuration"
+	splitGuidanceText = "set split_size or pass tiler build --split <size>"
 )
 
 // truncateProbe creates a sparse probe file in dir and extends it to
@@ -112,8 +113,8 @@ func limitResult(name string, accepted int64, opts Options) Result {
 	} else {
 		detail = "single-file size limit below " + formatGiB(ladderStart)
 	}
-	if opts.SplitEnabled {
-		return info(name, detail+"; split storage ("+opts.SplitMode+") is enabled")
+	if opts.SplitSize > 0 {
+		return info(name, detail+"; split_size "+formatSplitSize(opts.SplitSize)+" is enabled")
 	}
 	return warn(name, detail+"; "+splitGuidanceText)
 }
@@ -121,4 +122,23 @@ func limitResult(name string, accepted int64, opts Options) Result {
 // formatGiB renders a byte size that is a whole number of GiB.
 func formatGiB(size int64) string {
 	return fmt.Sprintf("%d GiB", size>>30)
+}
+
+// formatSplitSize renders a SplitSize value with a 1024-based unit
+// when it divides evenly, otherwise as a bare byte count.
+func formatSplitSize(n int64) string {
+	for _, unit := range []struct {
+		suffix string
+		size   int64
+	}{
+		{"T", 1 << 40},
+		{"G", 1 << 30},
+		{"M", 1 << 20},
+		{"K", 1 << 10},
+	} {
+		if n >= unit.size && n%unit.size == 0 {
+			return fmt.Sprintf("%d%s", n/unit.size, unit.suffix)
+		}
+	}
+	return strconv.FormatInt(n, 10)
 }

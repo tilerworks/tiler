@@ -122,67 +122,51 @@ func TestSessionAutocloseFlagOverlaysOnlyWhenExplicit(t *testing.T) {
 	}
 }
 
-func TestSplitRouteFlagOverlaysOnlyWhenExplicit(t *testing.T) {
+func TestSplitSizeFileLoads(t *testing.T) {
 	_, work := withWorkspace(t)
-	writeProjectConfig(t, work, strings.Join([]string{
-		"split_enabled: true",
-		"split_mode: blocks",
-		"split_route: reassemble",
-	}, "\n"))
+	writeProjectConfig(t, work, "split_size: 2G\n")
 
 	cfg := mustRun(t, "version")
-	if cfg.SplitRoute != config.SplitRouteReassemble {
-		t.Fatalf("omitted --split-route changed the file value: %q", cfg.SplitRoute)
+	if cfg.SplitSize != 2<<30 {
+		t.Fatalf("split_size = %d, want 2G", cfg.SplitSize)
 	}
 
-	cfg = mustRun(t, "version", "--split-route", "concat")
-	if cfg.SplitRoute != config.SplitRouteConcat {
-		t.Fatalf("explicit --split-route did not override the file: %q", cfg.SplitRoute)
-	}
-
-	cfg = mustRun(t, "version", "--split-route", "")
-	if cfg.SplitRoute != "" {
-		t.Fatalf("explicit empty --split-route did not clear the file value: %q", cfg.SplitRoute)
+	writeProjectConfig(t, work, "split_size: 0\n")
+	cfg = mustRun(t, "version")
+	if cfg.SplitSize != 0 {
+		t.Fatalf("explicit zero split_size = %d", cfg.SplitSize)
 	}
 }
 
-func TestSplitRouteFlagRefusals(t *testing.T) {
+func TestRemovedSplitFlagsAndKeys(t *testing.T) {
 	_, work := withWorkspace(t)
-	tests := []struct {
-		name   string
-		config string
-		args   []string
-	}{
-		{
-			name:   "route while split is off",
-			config: "log_level: info\n",
-			args:   []string{"version", "--split-route", "concat"},
-		},
-		{
-			name:   "route with members mode",
-			config: "split_enabled: true\nsplit_mode: members\n",
-			args:   []string{"version", "--split-route", "concat"},
-		},
-		{
-			name:   "unknown route",
-			config: "split_enabled: true\nsplit_mode: blocks\n",
-			args:   []string{"version", "--split-route", "splice"},
-		},
+	for _, args := range [][]string{
+		{"--split"},
+		{"--split-mode", "blocks"},
+		{"--split-route", "concat"},
+		{"version", "--split"},
+	} {
+		_, stderr, _, err := runCmd(t, args...)
+		if ExitCode(err) != 2 {
+			t.Fatalf("%v: ExitCode(%v) = %d, stderr %q", args, err, ExitCode(err), stderr)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			writeProjectConfig(t, work, tt.config)
-			_, stderr, _, err := runCmd(t, tt.args...)
-			if ExitCode(err) != 1 {
-				t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
-			}
-			if !strings.Contains(stderr, "split_route") {
-				t.Fatalf("stderr = %q, want it to name split_route", stderr)
-			}
-			if strings.Contains(stderr, "Usage:") {
-				t.Fatalf("config refusal printed usage: %q", stderr)
-			}
-		})
+
+	stdout, stderr, _, err := runCmd(t, "--help")
+	if err != nil {
+		t.Fatalf("help: %v\n%s", err, stderr)
+	}
+	help := stdout + stderr
+	for _, flag := range []string{"--split", "--split-mode", "--split-route"} {
+		if strings.Contains(help, flag) {
+			t.Fatalf("help still documents %s:\n%s", flag, help)
+		}
+	}
+
+	writeProjectConfig(t, work, "split_enabled: true\n")
+	_, stderr, _, err = runCmd(t, "version")
+	if ExitCode(err) != 1 || !strings.Contains(stderr, "split_enabled") {
+		t.Fatalf("project old key: ExitCode(%v) stderr %q", err, stderr)
 	}
 }
 
@@ -204,6 +188,7 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 		"images_dir: ~/.tiler/images",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
+		"# split_size: 2G",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("created config missing %q\n%s", want, data)
@@ -211,6 +196,9 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 	}
 	if strings.Contains(string(data), "runtime_dir") {
 		t.Fatalf("created config still mentions runtime_dir:\n%s", data)
+	}
+	if strings.Contains(string(data), "split_enabled") {
+		t.Fatalf("created config still mentions split_enabled:\n%s", data)
 	}
 }
 

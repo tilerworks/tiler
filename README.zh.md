@@ -67,9 +67,11 @@ tiler session close feature                # 逆序卸载，记录保留
   一个增量层。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。构建
   成功打印一行：`full <owner>/<repo> <id>` 或
-  `incr <owner>/<repo> <id>`。启用分块存储后，全量构建按所选分块
-  形态入库，而不再是单个 `image.sqsh`（见下文「分块存储」）；
-  split 开启期间增量构建被拒绝——分块形态只覆盖全量镜像。
+  `incr <owner>/<repo> <id>`。当 `split_size`（或
+  `tiler build --split <size>`）大于零时，全量与增量构建都按该块
+  大小切成字节块入库，而不再是单个 `image.sqsh` /
+  `incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
+  blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
 - `tiler images ls [owner/repo] [--archives] [--json]` 列出每个
   活跃镜像与链长。给出名字则列出每个链 id，`--archives` 追加
   归档与 hold 中的链 id。分块活跃位追加 `form=blocks` 或
@@ -150,37 +152,31 @@ tiler session close feature                # 逆序卸载，记录保留
 ### 分块存储
 
 分块存储是面向单文件大小受限存储的可选形态——配额型 NAS 共享、
-有 4 GiB 单文件上限的 FAT 类文件系统。形态完全由配置显式选择，
-不做运行期自动切换，默认关闭：
+有 4 GiB 单文件上限的 FAT 类文件系统。通过配置或构建旗标给出块
+大小；缺省 `0` 表示不分块，保持单文件布局：
 
-```bash
-split_enabled: true          # --split
-split_mode: blocks           # --split-mode blocks|members
-split_route: reassemble      # --split-route reassemble|concat（仅 blocks）
+```yaml
+split_size: 2G    # tiler build 的默认块大小；0 = 关
 ```
 
-- **blocks** 把全量镜像存为定长字节块（`blocks/<id>/blk.NNN`），
-  清单逐块记录 size、sha256 与 mtime。挂载默认走重组路线：块按
-  清单顺序流式拼接进 `<cache_dir>/<整体sha256>.sqsh`——逐块校验
-  加整体摘要校验——因此缓存目录需要整图大小的空间。
-  `split_route: concat` 改由 contrib 的 `concatfs` 把块目录挂成
-  一个虚拟拼接文件：零重组、不落缓存副本，挂载表身份仍是规范
-  库路径。两条路线都不再叠加 `cache_enabled` 的二次拷贝。
-  `concatfs` 缺失时降级重组直挂，并在 stderr 输出 contrib 构建
-  指引；tiler 从不自动安装或现场构建。
-- **members** 按顶层目录分区：每个分区是独立完整的 squashfs
-  （`members/<name>.sqsh`），整体身份是派生清单摘要。挂载是
-  只读子路径森林——每个分区挂在同一父目录的 `<dir>/<name>`
-  子路径下——森林是一个挂载组合：session 记录一条动作，
-  `status` 按成员挂载标注组合健康，一条 `session open` 逐成员
-  幂等重放（健康成员复用、失活成员清理重挂），`umount <父目录>`
-  逆序拆除全部成员子挂载。请求可写挂载或 `--subdir` 以 usage
-  错误拒绝并给出引导。
+```bash
+tiler build --split 64k --full --image owner/repo /path/to/src
+tiler build --split 0 ...   # 本次构建不分块
+```
 
-doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会建议
-启用分块存储；按建议开启后，同一探测报告分块形态，构建即按
-所选形态入库。分块形态只覆盖全量镜像，split 开启期间增量链
-构建保持拒绝。
+有效块大小大于零时，**全量与每一层增量**都存为定长字节块
+（`blocks/<layer-id>/blk.NNN`）。元数据上的 digest/size 仍描述
+该层整份逻辑 squashfs。挂载时对每层重组进
+`<cache_dir>/<layer-sha256>.sqsh`（逐块校验再校验整体摘要），再按
+newest-incr-first 走与单文件链相同的 overlay。缓存目录需要容纳
+重组后的各层。形态混用会被拒绝：blocks 活跃位不能追加单文件
+incr，single 活跃位不能追加切块层——需先用匹配形态做 full 重建。
+可选的 contrib `concatfs` 仍可手工使用，但 tiler 不再从配置或
+旗标选择 concat 挂载路线。
+
+doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会建议设置
+`split_size`（或 `tiler build --split`）；`split_size` 为正时，同一
+探测会带上已配置的块大小。
 
 列表/查看类命令都带机器可读形态，面向 CI 门禁与 Agent 消费。
 schema 稳定、字段只增不改，由 golden 文件测试钉住：
@@ -276,12 +272,10 @@ lower 时，每个 upper 的稳态大约 6.5 MB。
 
 大镜像在受限存储上照常工作。目标文件系统有单文件大小上限时
 （配额型 NAS 共享、FAT 类卷），`tiler doctor` 报告限制并建议
-启用分块存储。开启 `split_enabled` 并选择 `split_mode: blocks`
-后，同一份镜像以逐块校验的字节块入库；挂载时在缓存目录重组，
-或在 contrib 的 `concatfs` 就位且 `split_route: concat` 时，把
-块目录以一个虚拟文件直接供给——完全不重组。顶层目录彼此独立的
-源树也可以改选 `split_mode: members` 分区入库，挂成只读子路径
-森林。同一个镜像库、同一套命令面，存储形态只是配置选择。
+设置 `split_size` / `tiler build --split`。块大小为正时，全量与
+增量层都以逐块校验的字节块入库；挂载时在缓存目录逐层重组再
+overlay。同一个镜像库、同一套命令面，块大小只是配置（或单次
+构建旗标）选择。
 
 机器读同一套命令面。`images ls`、`session list`、`session show`、
 `status` 与 `doctor` 都带 `--json` 形态，schema 稳定、字段只增不

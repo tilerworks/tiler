@@ -38,8 +38,11 @@ type FullRequest struct {
 	Source  Source
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
-	// BlockSize is the byte-block chunk size of a blocks build. Zero
-	// selects DefaultBlockSize; tests inject small sizes.
+	// BlockSize, when positive, selects the blocks pipeline and is the
+	// chunk size. Zero lets Config.SplitSize decide: a positive
+	// SplitSize selects blocks with that size; zero keeps the
+	// single-file pipeline. Tests may inject a small BlockSize
+	// directly.
 	BlockSize int64
 	// Refs protects referenced chains while the old image is
 	// replaced. A nil Refs holds nothing.
@@ -68,10 +71,12 @@ type FullResult struct {
 // BuildFull packs a prepared source directory into the unique active
 // slot of the image library.
 //
-// Split storage selects the pipeline by mode: blocks streams the
-// packed image into byte blocks, and members packs every top-level
-// source directory as its own squashfs partition. Both publish a
-// directory payload atomically. The source must exist and stay
+// A positive BlockSize, or a positive Config.SplitSize when BlockSize
+// is unset, selects the blocks pipeline with that chunk size. Zero
+// SplitSize and BlockSize packs one image file. Production builds
+// leave BlockSize zero and rely on SplitSize from configuration or
+// `tiler build --split`. BuildMembers packs the members form;
+// configuration does not select it. The source must exist and stay
 // outside every reserved tree. When the source is a git repository,
 // it is sanitized first and any git failure aborts the build before
 // packing. mksquashfs writes a synced temporary file inside the
@@ -83,8 +88,11 @@ type FullResult struct {
 // the stored manifest. A failed packer leaves no active image and no
 // temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
-	if req.Config.SplitEnabled {
-		return buildSplit(req)
+	if req.BlockSize <= 0 && req.Config.SplitSize > 0 {
+		req.BlockSize = req.Config.SplitSize
+	}
+	if req.BlockSize > 0 {
+		return buildBlocks(req)
 	}
 	repo, err := validateFull(req)
 	if err != nil {
@@ -103,21 +111,6 @@ func BuildFull(req FullRequest) (FullResult, error) {
 		return FullResult{}, err
 	}
 	return res, nil
-}
-
-// buildSplit dispatches a full build to the pipeline of the
-// configured split mode. Configuration validation admits only the
-// two known modes; anything else is refused here as well.
-func buildSplit(req FullRequest) (FullResult, error) {
-	switch req.Config.SplitMode {
-	case config.SplitModeBlocks:
-		return buildBlocks(req)
-	case config.SplitModeMembers:
-		return buildMembers(req)
-	default:
-		return FullResult{}, fmt.Errorf(
-			"build: unknown split mode %q", req.Config.SplitMode)
-	}
 }
 
 // toolRunner is the injected runner of a request or the exec

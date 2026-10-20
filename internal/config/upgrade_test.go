@@ -62,6 +62,45 @@ func TestUpgradeUserFileRewritesLegacy(t *testing.T) {
 	}
 }
 
+func TestUpgradeUserFileStripsSplitKeys(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, fileName)
+	legacy := strings.Join([]string{
+		"version: 1",
+		"split_enabled: true",
+		"split_mode: blocks",
+		"split_route: concat",
+		"log_level: debug",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpgradeUserFile(home); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, key := range []string{"split_enabled", "split_mode", "split_route"} {
+		if strings.Contains(got, key) {
+			t.Fatalf("upgraded file still has %s:\n%s", key, got)
+		}
+	}
+	if !strings.Contains(got, "log_level: debug") {
+		t.Fatalf("upgraded file dropped log_level:\n%s", got)
+	}
+	cfg, err := Load(home, home, home, "", Patch{})
+	if err != nil {
+		t.Fatalf("Load after upgrade: %v", err)
+	}
+	if cfg.SplitSize != 0 || cfg.LogLevel != "debug" {
+		t.Fatalf("loaded = %+v", cfg)
+	}
+}
+
 func TestUpgradeUserFileSkipsCurrent(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, fileName)

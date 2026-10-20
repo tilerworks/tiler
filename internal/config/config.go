@@ -23,18 +23,6 @@ const (
 	// DefaultSessionMaxAge is thirty days. Callers must keep an
 	// explicit zero distinct from this default.
 	DefaultSessionMaxAge = 720 * time.Hour
-
-	// SplitModeBlocks stores a split image as content blocks.
-	SplitModeBlocks = "blocks"
-	// SplitModeMembers stores a split image as member files.
-	SplitModeMembers = "members"
-
-	// SplitRouteReassemble materializes the byte blocks into one
-	// cache file before mounting. It is the default route.
-	SplitRouteReassemble = "reassemble"
-	// SplitRouteConcat mounts a concat FUSE view of the block
-	// directory without any reassembly.
-	SplitRouteConcat = "concat"
 )
 
 // Config is the resolved settings after defaults and overlays.
@@ -68,15 +56,10 @@ type Config struct {
 	SquashfsOptions string
 	// FuseOptions is an opaque FUSE option string for a later mount.
 	FuseOptions string
-	// SplitEnabled selects split image storage.
-	SplitEnabled bool
-	// SplitMode is blocks or members when split is enabled, and empty
-	// when split is off.
-	SplitMode string
-	// SplitRoute selects the byte-block mount route: reassemble or
-	// concat. Empty behaves as reassemble. A route is meaningful only
-	// with split enabled in blocks mode.
-	SplitRoute string
+	// SplitSize is the block size in bytes. Zero disables splitting.
+	// An explicit zero is distinct from an omitted key only on Patch;
+	// both resolve to the same off state here.
+	SplitSize int64
 	// CacheEnabled selects a later copy into CacheDir.
 	CacheEnabled bool
 	// LogLevel is debug, info, warn, or error.
@@ -103,9 +86,7 @@ type Patch struct {
 	SessionAutocloseStale *bool
 	SquashfsOptions       *string
 	FuseOptions           *string
-	SplitEnabled          *bool
-	SplitMode             *string
-	SplitRoute            *string
+	SplitSize             *int64
 	CacheEnabled          *bool
 	LogLevel              *string
 }
@@ -146,9 +127,7 @@ func (p Patch) Apply(base Config) Config {
 	base.SessionAutocloseStale = overlay(base.SessionAutocloseStale, p.SessionAutocloseStale)
 	base.SquashfsOptions = overlay(base.SquashfsOptions, p.SquashfsOptions)
 	base.FuseOptions = overlay(base.FuseOptions, p.FuseOptions)
-	base.SplitEnabled = overlay(base.SplitEnabled, p.SplitEnabled)
-	base.SplitMode = overlay(base.SplitMode, p.SplitMode)
-	base.SplitRoute = overlay(base.SplitRoute, p.SplitRoute)
+	base.SplitSize = overlay(base.SplitSize, p.SplitSize)
 	base.CacheEnabled = overlay(base.CacheEnabled, p.CacheEnabled)
 	base.LogLevel = overlay(base.LogLevel, p.LogLevel)
 	return base
@@ -178,7 +157,10 @@ func Validate(cfg Config) error {
 	if cfg.SessionMaxAge < 0 {
 		return errors.New("session_max_age: must not be negative")
 	}
-	return validateSplit(cfg.SplitEnabled, cfg.SplitMode, cfg.SplitRoute)
+	if cfg.SplitSize < 0 {
+		return errors.New("split_size: must not be negative")
+	}
+	return nil
 }
 
 func validateLogLevel(level string) error {
@@ -188,34 +170,4 @@ func validateLogLevel(level string) error {
 	default:
 		return fmt.Errorf("log_level: unknown value %q", level)
 	}
-}
-
-func validateSplit(enabled bool, mode, route string) error {
-	switch mode {
-	case "", SplitModeBlocks, SplitModeMembers:
-	default:
-		return fmt.Errorf("split_mode: unknown value %q", mode)
-	}
-	if enabled && mode == "" {
-		return errors.New("split_enabled: requires split_mode blocks or members")
-	}
-	if !enabled && mode != "" {
-		return errors.New("split_mode: must be empty when split_enabled is false")
-	}
-	return validateSplitRoute(enabled, mode, route)
-}
-
-// validateSplitRoute accepts the empty default plus the two known
-// routes. A chosen route pins the byte-block mount form, so it is
-// admitted only for an enabled blocks split.
-func validateSplitRoute(enabled bool, mode, route string) error {
-	switch route {
-	case "", SplitRouteReassemble, SplitRouteConcat:
-	default:
-		return fmt.Errorf("split_route: unknown value %q", route)
-	}
-	if route != "" && (!enabled || mode != SplitModeBlocks) {
-		return errors.New("split_route: requires split_enabled with split_mode blocks")
-	}
-	return nil
 }

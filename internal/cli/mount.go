@@ -3,9 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -38,8 +36,6 @@ var (
 	forestEngine = workspace.MountForest
 	// unmountEngine tears a view down by path.
 	unmountEngine = workspace.UnmountPath
-	// toolLookPath probes one optional tool on PATH.
-	toolLookPath = exec.LookPath
 )
 
 // mountFlags carries the local flags of one mount invocation.
@@ -134,17 +130,6 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 				"mount: the members split form takes no --subdir; every partition mounts at its own subpath")}
 		}
 	}
-	// The concat route mounts the virtual whole image through a
-	// runtime transit point, but the subdir probe runs before any
-	// mount and needs a real image file to read. Refuse the
-	// combination deterministically — the same command must not
-	// succeed or fail with the tool's presence — instead of failing
-	// with a misleading missing-subdir error deep in the engine.
-	if target.Form == image.PayloadBlocks && flags.subdir != "" &&
-		cfg.SplitRoute == config.SplitRouteConcat {
-		return usageError{errors.New(
-			"mount: --subdir needs a materialized image file, which the concat route does not create; a subdir view requires the reassemble route (clear split_route)")}
-	}
 	name, implicit, err := resolveMountSession(flags.session)
 	if err != nil {
 		return err
@@ -177,7 +162,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	result, err := engine.RunMount(name, action,
 		func(stored session.Action) (session.Result, error) {
 			return runMountEngine(cfg, target, dir, flags,
-				sessionRuntimeDir(cfg, name, stored), cmd.ErrOrStderr())
+				sessionRuntimeDir(cfg, name, stored))
 		})
 	if implicit && (err != nil || result.Reused) {
 		// An implicit record whose action failed or merely adopted an
@@ -334,9 +319,8 @@ func sessionRuntimeDir(cfg config.Config, name string, action session.Action) st
 // the execution half of one write-ahead record. Both the mount
 // command and the session replay run through it. The target's split
 // form selects the engine: the single-file cascade keeps the plain
-// stack mount, a blocks payload picks its materialization route,
-// and a members payload mounts the subpath forest. stderr carries
-// the degrade guidance of the concat route. runtimeDir is the
+// stack mount, a blocks payload reassembles into the cache, and a
+// members payload mounts the subpath forest. runtimeDir is the
 // session-scoped combination directory for this action.
 func runMountEngine(
 	cfg config.Config,
@@ -344,11 +328,10 @@ func runMountEngine(
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
-	stderr io.Writer,
 ) (session.Result, error) {
 	switch target.Form {
 	case image.PayloadBlocks:
-		return runBlocksEngine(cfg, target, dir, flags, runtimeDir, stderr)
+		return runBlocksEngine(cfg, target, dir, flags, runtimeDir)
 	case image.PayloadMembers:
 		return runForestEngine(cfg, target, dir)
 	default:
@@ -356,48 +339,35 @@ func runMountEngine(
 	}
 }
 
-// concatDegradeGuidance is the stderr note of the concat route
-// falling back to reassembly: where the tool source ships, how to
-// build it, and that tiler never installs it by itself.
-const concatDegradeGuidance = "mount: the concat route needs concatfs, which is not on PATH;" +
-	" falling back to the reassembly route; build concatfs from the contrib/concatfs/" +
-	" directory of the tiler source tree (gcc + pkg-config fuse3);" +
-	" tiler never installs it automatically"
-
-// runBlocksEngine mounts a blocks payload through the configured
-// byte-block route. The concat route probes the optional tool and
-// mounts the block directory as one virtual file with no cache
-// copy; a missing tool degrades to the reassembly route with the
-// install guidance on stderr. The reassembly route materializes the
-// logical whole image into the cache directory, content-addressed
-// by its digest, so sessions share one verified copy. Both routes
-// publish the canonical library path as the mount table identity,
-// and neither stacks the cache_enabled copy on top — the payload is
-// already local.
+// runBlocksEngine mounts a blocks payload by reassembling every
+// stack layer into the cache directory, content-addressed by its
+// digest, then overlaying them newest-incr-first. Sessions share
+// one verified copy per layer. It publishes the canonical library
+// path as the mount table identity and does not stack the
+// cache_enabled copy on top — the payload is already local.
 func runBlocksEngine(
 	cfg config.Config,
 	target image.Target,
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
-	stderr io.Writer,
 ) (session.Result, error) {
-	req, err := blocksRequest(cfg, target, dir, flags, runtimeDir, stderr)
+	req, err := blocksRequest(cfg, target, dir, flags, runtimeDir)
 	if err != nil {
 		return session.Result{}, err
 	}
 	return runEngine(req)
 }
 
-// blocksRequest assembles the stack-engine request of a blocks
-// payload with the logical whole image as its single member.
+// blocksRequest reassembles every blocks-form stack layer and
+// builds the overlay request. Layers arrive oldest-first (full,
+// then chain); the workspace reverses them so the newest wins.
 func blocksRequest(
 	cfg config.Config,
 	target image.Target,
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
-	stderr io.Writer,
 ) (workspace.Request, error) {
 	repo, err := image.OpenRepo(cfg.ImagesDir, target.Name)
 	if err != nil {
@@ -407,14 +377,29 @@ func blocksRequest(
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
-	// The canonical library path is the identity both routes
-	// publish; for the reassembly route the mounted bytes are the
-	// materialized cache copy, so the fsname override keeps the
-	// mount table pointing at the logical image.
+	layers := target.Members
+	if len(layers) == 0 {
+		layers = []image.Member{{
+			Size: target.Size, SHA256: target.SHA256, Blocks: target.Blocks,
+		}}
+	}
+	mounted := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		materialized, err := assembleBlocks(
+			cfg.CacheDir, layer.Blocks, layer.SHA256, layer.Size)
+		if err != nil {
+			return workspace.Request{}, fmt.Errorf("mount: %w", err)
+		}
+		mounted = append(mounted, materialized)
+	}
+	// The canonical library path is the mount-table identity; the
+	// mounted bytes are the materialized cache copies, so the
+	// fsname override keeps the table pointing at the logical image.
 	canonical := repo.ImagePath()
-	req := workspace.Request{
-		Full:            canonical,
+	return workspace.Request{
+		Full:            mounted[0],
 		FullFSName:      canonical,
+		Layers:          mounted[1:],
 		ReadOnly:        flags.readOnly,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
@@ -423,35 +408,7 @@ func blocksRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
-	}
-	if cfg.SplitRoute == config.SplitRouteConcat {
-		if _, lookErr := toolLookPath("concatfs"); lookErr == nil {
-			// A hand-crafted payload may lack the description
-			// file; the explicit route choice makes that an
-			// environment failure, never a silent degrade.
-			if _, statErr := os.Stat(target.ConcatView); statErr != nil {
-				return workspace.Request{}, fmt.Errorf(
-					"mount: the concat route needs the description file beside the blocks: %w",
-					statErr)
-			}
-			req.Concat = &workspace.ConcatSource{
-				BlocksDir: target.BlocksDir,
-				ViewName:  filepath.Base(target.ConcatView),
-			}
-			return req, nil
-		}
-		if stderr != nil {
-			if _, wErr := fmt.Fprintln(stderr, concatDegradeGuidance); wErr != nil {
-				return workspace.Request{}, fmt.Errorf("mount: %w", wErr)
-			}
-		}
-	}
-	materialized, err := assembleBlocks(cfg.CacheDir, target.Blocks, target.SHA256, target.Size)
-	if err != nil {
-		return workspace.Request{}, fmt.Errorf("mount: %w", err)
-	}
-	req.Full = materialized
-	return req, nil
+	}, nil
 }
 
 // runForestEngine mounts a members payload as the subpath forest

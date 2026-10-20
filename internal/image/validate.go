@@ -48,6 +48,7 @@ func (m Meta) checkChain(list *issueList) {
 		seen[m.ID] = struct{}{}
 	}
 	parent := m.ID
+	blocksForm := len(m.Blocks) > 0
 	for i := range m.Chain {
 		entry := &m.Chain[i]
 		prefix := fmt.Sprintf("chain[%d]", i)
@@ -59,13 +60,22 @@ func (m Meta) checkChain(list *issueList) {
 		if entry.Parent != parent {
 			list.add("%s.parent: must continue the linear chain", prefix)
 		}
+		switch {
+		case blocksForm && len(entry.Blocks) == 0:
+			list.add("%s.blocks: must be set for blocks payloads", prefix)
+		case !blocksForm && len(entry.Blocks) > 0:
+			list.add("%s.blocks: must be empty for single payloads", prefix)
+		}
+		checkBlockList(prefix+".blocks", entry.Blocks, list)
 		noteDuplicate(prefix, entry.ID, seen, list)
 		parent = entry.ID
 	}
 }
 
 // checkSplit validates the split payload manifests. The single-file
-// form carries no manifest, so its rules stay untouched.
+// form carries no manifest, so its rules stay untouched. Blocks may
+// carry a chain whose entries each hold their own Blocks list;
+// members still forbid a chain.
 func (m Meta) checkSplit(list *issueList) {
 	if len(m.Blocks) == 0 && len(m.Members) == 0 {
 		return
@@ -76,23 +86,26 @@ func (m Meta) checkSplit(list *issueList) {
 	if m.Kind != KindFull {
 		list.add("kind: must be full for split payloads")
 	}
-	if len(m.Chain) > 0 {
-		list.add("chain: must be empty for split payloads")
+	if len(m.Members) > 0 && len(m.Chain) > 0 {
+		list.add("chain: must be empty for members payloads")
 	}
-	m.checkBlocks(list)
+	checkBlockList("blocks", m.Blocks, list)
 	m.checkMembers(list)
 }
 
-// checkBlocks validates the byte-block manifest: names follow the
+// checkBlockList validates one byte-block manifest: names follow the
 // blk.NNN sequence in order, every entry records a positive size and
 // a lowercase sha256, and the manifest fits the naming capacity.
-func (m Meta) checkBlocks(list *issueList) {
-	if len(m.Blocks) > maxBlocks {
-		list.add("blocks: must hold at most %d entries", maxBlocks)
+func checkBlockList(field string, blocks []BlockEntry, list *issueList) {
+	if len(blocks) == 0 {
+		return
 	}
-	for i := range m.Blocks {
-		entry := &m.Blocks[i]
-		prefix := fmt.Sprintf("blocks[%d]", i)
+	if len(blocks) > maxBlocks {
+		list.add("%s: must hold at most %d entries", field, maxBlocks)
+	}
+	for i := range blocks {
+		entry := &blocks[i]
+		prefix := fmt.Sprintf("%s[%d]", field, i)
 		if want := fmt.Sprintf(blockNameFmt, i); entry.Name != want {
 			list.add("%s.name: must be %s", prefix, want)
 		}

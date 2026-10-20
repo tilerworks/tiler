@@ -48,7 +48,8 @@ type IncrRequest struct {
 type IncrResult struct {
 	// ID is the first 16 hex digits of the layer sha256.
 	ID string
-	// Path is the published incr/<id>.sqsh file.
+	// Path is the published layer: incr/<id>.sqsh for a single-file
+	// layer, or blocks/<id>/ when SplitSize is positive.
 	Path string
 	// SHA256 is the 64 hex digit layer digest.
 	SHA256 string
@@ -62,8 +63,10 @@ type IncrResult struct {
 // the upper under the image layout with rename, never copy, so
 // device nodes keep their inode type; the upper is moved back even
 // when packing fails. mksquashfs keeps xattrs so whiteout and
-// opaque markers survive. The layer is renamed into incr/ first and
-// the metadata is replaced atomically afterwards; a failed metadata
+// opaque markers survive. An unsplit layer is renamed into incr/
+// first. A split layer is packed outside incr/ and published as
+// blocks/<id>/, so the blocks layout never gains an incr/ directory.
+// Metadata is replaced atomically afterwards; a failed metadata
 // replace deletes the fresh layer and keeps the old metadata. A
 // digest already in the chain is an idempotent success.
 func BuildIncr(req IncrRequest) (IncrResult, error) {
@@ -92,9 +95,19 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 	if now == nil {
 		now = time.Now
 	}
-	tmp, err := packIncrTemp(repo, src, run)
-	if err != nil {
-		return IncrResult{}, err
+	var tmp string
+	if req.Config.SplitSize > 0 {
+		var stage string
+		stage, tmp, err = packIncrStaged(req.Config.CacheDir, src, run)
+		if err != nil {
+			return IncrResult{}, err
+		}
+		defer func() { _ = os.RemoveAll(stage) }()
+	} else {
+		tmp, err = packIncrTemp(repo, src, run)
+		if err != nil {
+			return IncrResult{}, err
+		}
 	}
 	return finishIncr(repo, req, active, tmp, now, seam)
 }
@@ -103,10 +116,6 @@ func validateIncr(req IncrRequest) (Repo, Meta, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
 		return Repo{}, Meta{}, err
-	}
-	if req.Config.SplitEnabled {
-		return Repo{}, Meta{}, errors.New(
-			"build: split storage is enabled; the split forms cover full images only, so incremental builds are refused")
 	}
 	info, err := os.Stat(req.Upper)
 	if err != nil {
@@ -127,7 +136,30 @@ func validateIncr(req IncrRequest) (Repo, Meta, error) {
 			"build: chain already holds %d layers; build a new full image instead",
 			len(active.Chain))
 	}
+	if err := checkIncrForm(active, req.Config.SplitSize); err != nil {
+		return Repo{}, Meta{}, err
+	}
 	return repo, active, nil
+}
+
+// checkIncrForm keeps the active payload form aligned with the
+// effective split size. Blocks layers only append onto blocks; a
+// single-file active only accepts an unsplit build. A mismatch
+// points at a full rebuild so the library stays consistent.
+func checkIncrForm(active Meta, splitSize int64) error {
+	kind := PayloadKind(active)
+	switch {
+	case splitSize > 0 && kind != PayloadBlocks:
+		return fmt.Errorf(
+			"build: active image is %s form but split size is set; build a new full image with --split first",
+			kind)
+	case splitSize == 0 && kind != PayloadSingle:
+		return fmt.Errorf(
+			"build: active image is %s form but split is off; build a new full image without --split first",
+			kind)
+	default:
+		return nil
+	}
 }
 
 // stageUpper returns the directory to pack and a restore function.
@@ -191,6 +223,30 @@ func packIncrTemp(repo Repo, src string, run ToolRunner) (string, error) {
 	return tmp, nil
 }
 
+// packIncrStaged packs a blocks incr into a cache staging file. The
+// packed bytes stay outside incr/, which is not part of a blocks
+// layout. The caller removes stage after the split finishes.
+func packIncrStaged(cacheDir, src string, run ToolRunner) (stage, tmp string, err error) {
+	stage, err = makeStagingDir(cacheDir)
+	if err != nil {
+		return "", "", err
+	}
+	tmp = filepath.Join(stage, fileImage)
+	if err = packIncrImage(run, src, tmp); err != nil {
+		_ = os.RemoveAll(stage)
+		return "", "", err
+	}
+	if err = syncFile(tmp); err != nil {
+		_ = os.RemoveAll(stage)
+		return "", "", fmt.Errorf("build: %w", err)
+	}
+	if err = syncDir(stage, hooks{}); err != nil {
+		_ = os.RemoveAll(stage)
+		return "", "", fmt.Errorf("build: %w", err)
+	}
+	return stage, tmp, nil
+}
+
 // packIncrImage is the mksquashfs argument list for one layer.
 // Xattrs stay stored so whiteout markers in the user namespace
 // survive; mksquashfs keeps device nodes as they are. The creation
@@ -200,7 +256,9 @@ func packIncrImage(run ToolRunner, src, dst string) error {
 }
 
 // finishIncr hashes the packed layer, appends the chain entry, and
-// publishes layer and metadata.
+// publishes layer and metadata. A positive SplitSize splits the
+// packed bytes into blocks/<id>/; otherwise the layer lands as
+// incr/<id>.sqsh.
 func finishIncr(
 	repo Repo,
 	req IncrRequest,
@@ -216,9 +274,30 @@ func finishIncr(
 	}
 	id := ID(sum)
 	if chainHasID(active.Chain, id) {
+		if req.Config.SplitSize > 0 {
+			return reuseChainLayerBlocks(repo, active, id, sum, tmp, seam)
+		}
 		return reuseChainLayer(repo, id, sum, tmp, seam)
 	}
-	entry, err := chainEntry(req, active, id, sum, tmp, now)
+	if req.Config.SplitSize > 0 {
+		return finishIncrBlocks(repo, req, active, id, sum, tmp, now, seam)
+	}
+	return finishIncrSingle(repo, req, active, id, sum, tmp, now, seam)
+}
+
+// finishIncrSingle publishes one unsplit layer beside the active
+// single-file full image.
+func finishIncrSingle(
+	repo Repo,
+	req IncrRequest,
+	active Meta,
+	id string,
+	sum [32]byte,
+	tmp string,
+	now func() time.Time,
+	seam hooks,
+) (IncrResult, error) {
+	entry, err := chainEntry(req, active, id, sum, tmp, now, nil)
 	if err != nil {
 		removeFile(tmp)
 		return IncrResult{}, err
@@ -246,12 +325,84 @@ func finishIncr(
 		removeFile(final)
 		return IncrResult{}, err
 	}
-	smoke := req.MountSmoke
-	if smoke == nil {
-		smoke = defaultMountSmoke
+	if err := runIncrSmoke(req, final, entry); err != nil {
+		return IncrResult{}, err
 	}
-	if err := smoke(final); err != nil && !errors.Is(err, ErrSmokeSkipped) {
-		return IncrResult{}, fmt.Errorf("build: quality gate: %w", err)
+	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
+}
+
+// finishIncrBlocks splits the packed layer into blocks/<id>/ and
+// records the block manifest on the new chain entry. Digest and size
+// stay those of the whole logical squashfs; no incr/<id>.sqsh is
+// written.
+func finishIncrBlocks(
+	repo Repo,
+	req IncrRequest,
+	active Meta,
+	id string,
+	sum [32]byte,
+	tmp string,
+	now func() time.Time,
+	seam hooks,
+) (IncrResult, error) {
+	info, err := os.Stat(tmp)
+	if err != nil {
+		removeFile(tmp)
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	payloadTmp, err := makePayloadTmpDir(repo, tempBlocksDirName)
+	if err != nil {
+		removeFile(tmp)
+		return IncrResult{}, err
+	}
+	defer func() { _ = os.RemoveAll(payloadTmp) }()
+	split, err := splitStagedImage(tmp, payloadTmp, req.Config.SplitSize)
+	removeFile(tmp)
+	if err != nil {
+		return IncrResult{}, err
+	}
+	if hexDigest(split.whole) != hexDigest(sum) {
+		return IncrResult{}, errors.New("build: split digest does not match packed layer")
+	}
+	entry := ChainEntry{
+		ID:        id,
+		Parent:    lastChainID(active),
+		Size:      split.size,
+		SHA256:    hexDigest(split.whole),
+		MtimeUnix: info.ModTime().Unix(),
+		Source:    req.Source,
+		CreatedAt: now().UTC(),
+		Blocks:    split.blocks,
+	}
+	next := active
+	next.Chain = append(slices.Clone(active.Chain), entry)
+	if err := next.Validate(); err != nil {
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	final, err := repo.BlocksDirPath(id)
+	if err != nil {
+		return IncrResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	if err := seam.do(payloadTmp, final); err != nil {
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	ok, err := dirMatchesBlocks(final, entry.Blocks)
+	if err != nil || !ok {
+		_ = os.RemoveAll(final)
+		if err != nil {
+			return IncrResult{}, fmt.Errorf("build: %w", err)
+		}
+		return IncrResult{}, fmt.Errorf("build: %s does not match the block manifest", final)
+	}
+	if err := replaceMeta(repo, active, next, seam); err != nil {
+		_ = os.RemoveAll(final)
+		return IncrResult{}, err
+	}
+	if err := runIncrSmoke(req, final, entry); err != nil {
+		return IncrResult{}, err
 	}
 	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
 }
@@ -271,8 +422,47 @@ func defaultMountSmoke(path string) error {
 	return err
 }
 
-// reuseChainLayer is the idempotent rebuild of a layer the chain
-// already lists. A missing file is put back from the fresh bytes.
+// runIncrSmoke runs the quality gate on a single-file layer path, or
+// on a reassembled blocks layer when the entry carries a Blocks
+// manifest.
+func runIncrSmoke(req IncrRequest, path string, entry ChainEntry) error {
+	smoke := req.MountSmoke
+	if smoke == nil {
+		smoke = defaultMountSmoke
+	}
+	target := path
+	if len(entry.Blocks) > 0 {
+		assembled, err := assembleIncrBlocks(req.Config.CacheDir, path, entry)
+		if err != nil {
+			return fmt.Errorf("build: quality gate: %w", err)
+		}
+		target = assembled
+	}
+	if err := smoke(target); err != nil && !errors.Is(err, ErrSmokeSkipped) {
+		return fmt.Errorf("build: quality gate: %w", err)
+	}
+	return nil
+}
+
+// assembleIncrBlocks materializes blocks/<id>/ into the content-
+// addressed cache so the smoke gate can mount a real squashfs file.
+func assembleIncrBlocks(cacheDir, blocksDir string, entry ChainEntry) (string, error) {
+	files := make([]BlockFile, 0, len(entry.Blocks))
+	for _, block := range entry.Blocks {
+		files = append(files, BlockFile{
+			Path:      filepath.Join(blocksDir, block.Name),
+			Name:      block.Name,
+			Size:      block.Size,
+			MtimeUnix: block.MtimeUnix,
+			SHA256:    block.SHA256,
+		})
+	}
+	return AssembleBlocks(cacheDir, files, entry.SHA256, entry.Size)
+}
+
+// reuseChainLayer is the idempotent rebuild of a single-file layer
+// the chain already lists. A missing file is put back from the
+// fresh bytes.
 func reuseChainLayer(repo Repo, id string, sum [32]byte, tmp string, seam hooks) (IncrResult, error) {
 	path, err := repo.IncrPath(id)
 	if err != nil {
@@ -296,6 +486,85 @@ func reuseChainLayer(repo Repo, id string, sum [32]byte, tmp string, seam hooks)
 	return IncrResult{ID: id, Path: path, SHA256: hexDigest(sum)}, nil
 }
 
+// reuseChainLayerBlocks is the idempotent rebuild of a blocks layer
+// the chain already lists. A missing directory is rebuilt from the
+// fresh packed bytes; an existing directory is re-checked against
+// the recorded manifest.
+func reuseChainLayerBlocks(
+	repo Repo,
+	active Meta,
+	id string,
+	sum [32]byte,
+	tmp string,
+	seam hooks,
+) (IncrResult, error) {
+	entry, ok := chainEntryByID(active.Chain, id)
+	if !ok {
+		removeFile(tmp)
+		return IncrResult{}, fmt.Errorf("build: chain entry %s is missing", id)
+	}
+	path, err := repo.BlocksDirPath(id)
+	if err != nil {
+		removeFile(tmp)
+		return IncrResult{}, err
+	}
+	there, err := pathExists(path)
+	if err != nil {
+		removeFile(tmp)
+		return IncrResult{}, err
+	}
+	if there {
+		removeFile(tmp)
+		match, err := dirMatchesBlocks(path, entry.Blocks)
+		if err != nil {
+			return IncrResult{}, fmt.Errorf("build: %w", err)
+		}
+		if !match {
+			return IncrResult{}, fmt.Errorf("build: %s does not match the block manifest", path)
+		}
+		return IncrResult{ID: id, Path: path, SHA256: hexDigest(sum)}, nil
+	}
+	payloadTmp, err := makePayloadTmpDir(repo, tempBlocksDirName)
+	if err != nil {
+		removeFile(tmp)
+		return IncrResult{}, err
+	}
+	defer func() { _ = os.RemoveAll(payloadTmp) }()
+	split, err := splitStagedImage(tmp, payloadTmp, entryBlockSize(entry))
+	removeFile(tmp)
+	if err != nil {
+		return IncrResult{}, err
+	}
+	if hexDigest(split.whole) != hexDigest(sum) {
+		return IncrResult{}, errors.New("build: split digest does not match packed layer")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	if err := seam.do(payloadTmp, path); err != nil {
+		return IncrResult{}, fmt.Errorf("build: %w", err)
+	}
+	match, err := dirMatchesBlocks(path, entry.Blocks)
+	if err != nil || !match {
+		_ = os.RemoveAll(path)
+		if err != nil {
+			return IncrResult{}, fmt.Errorf("build: %w", err)
+		}
+		return IncrResult{}, fmt.Errorf("build: %s does not match the block manifest", path)
+	}
+	return IncrResult{ID: id, Path: path, SHA256: hexDigest(sum)}, nil
+}
+
+// entryBlockSize recovers the block size used when the layer was
+// first published: every full block shares that size, and a single
+// short block uses its recorded size.
+func entryBlockSize(entry ChainEntry) int64 {
+	if len(entry.Blocks) == 0 {
+		return entry.Size
+	}
+	return entry.Blocks[0].Size
+}
+
 // chainEntry assembles the new chain member. Its parent is the last
 // chain member, or the full image id when the chain is empty.
 func chainEntry(
@@ -305,6 +574,7 @@ func chainEntry(
 	sum [32]byte,
 	tmp string,
 	now func() time.Time,
+	blocks []BlockEntry,
 ) (ChainEntry, error) {
 	info, err := os.Stat(tmp)
 	if err != nil {
@@ -318,6 +588,7 @@ func chainEntry(
 		MtimeUnix: info.ModTime().Unix(),
 		Source:    req.Source,
 		CreatedAt: now().UTC(),
+		Blocks:    blocks,
 	}, nil
 }
 
@@ -355,4 +626,13 @@ func chainHasID(chain []ChainEntry, id string) bool {
 	return slices.ContainsFunc(chain, func(entry ChainEntry) bool {
 		return entry.ID == id
 	})
+}
+
+func chainEntryByID(chain []ChainEntry, id string) (ChainEntry, bool) {
+	for _, entry := range chain {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return ChainEntry{}, false
 }

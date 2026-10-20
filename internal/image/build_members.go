@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 )
 
-// buildMembers is the multi-member full build pipeline: partition
+// BuildMembers is the multi-member full build pipeline: partition
 // the source by top-level directory, pack each partition into its
 // own complete squashfs inside a scratch payload directory, and
 // publish the directory payload atomically. The scratch directory
 // never survives the call.
-func buildMembers(req FullRequest) (FullResult, error) {
+func BuildMembers(req FullRequest) (FullResult, error) {
 	repo, err := validateFull(req)
 	if err != nil {
 		return FullResult{}, err
@@ -50,7 +50,8 @@ func memberPartitions(src string) ([]string, error) {
 		if !entry.IsDir() {
 			return nil, fmt.Errorf("build: source entry %s is not a directory; "+
 				"the members form partitions top-level directories only; "+
-				"use split_mode blocks to store a mixed source", entry.Name())
+				"use the blocks pipeline (split_size / build --split) to store a mixed source",
+				entry.Name())
 		}
 		if err := checkSegment(entry.Name()); err != nil {
 			return nil, fmt.Errorf(

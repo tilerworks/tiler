@@ -95,16 +95,25 @@ type Partition struct {
 // Member is one squashfs file of the stack with the facts recorded in
 // metadata, so callers can run the cheap quick check by default and a
 // full sha256 verification on demand. A file-path member records zero
-// facts because no metadata exists for it.
+// facts because no metadata exists for it. For a blocks-form target,
+// Path stays empty and Blocks holds the layer's byte-block files;
+// mount reassembles each layer before stacking.
 type Member struct {
 	// Path is the full image file or an incr/<id>.sqsh layer file.
+	// Empty for a blocks-form layer until reassembly fills a cache path.
 	Path string
+	// ID is the full or incremental image id of a blocks-form layer.
+	// Empty for the single-file cascade and for file-path mounts.
+	ID string
 	// Size is the recorded payload size in bytes.
 	Size int64
 	// MtimeUnix is the recorded modification time.
 	MtimeUnix int64
 	// SHA256 is the recorded content digest.
 	SHA256 string
+	// Blocks is the byte-block manifest of one blocks-form layer.
+	// Empty for the single-file cascade and for members partitions.
+	Blocks []BlockFile
 }
 
 // ResolveMount turns a mount argument into what a mount consumes:
@@ -162,29 +171,44 @@ func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
 	return Target{Library: true, Name: name, ID: meta.ID, Members: members}, nil
 }
 
-// resolveBlocks checks that every manifest block file rests in
-// blocks/<full-id>/ and returns the block facts with the logical
-// whole-image identity. A missing block names the entry.
+// resolveBlocks expands the full image blocks plus every chain layer
+// that carries its own Blocks manifest into an ordered mountable
+// stack (full first, then chain oldest-first). A chain entry without
+// Blocks is a corrupt or unsupported layout. A missing block file
+// names the entry.
 func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
-	blocksDir, err := repo.BlocksDirPath(meta.ID)
+	if depth := 1 + len(meta.Chain); depth > maxStackDepth {
+		return Target{}, fmt.Errorf(
+			"mount: %s stack holds %d members; the limit is %d",
+			name, depth, maxStackDepth)
+	}
+	fullBlocks, blocksDir, err := resolveLayerBlocks(repo, meta.ID, meta.Blocks)
 	if err != nil {
 		return Target{}, fmt.Errorf("mount: %w", err)
 	}
-	blocks := make([]BlockFile, 0, len(meta.Blocks))
-	for _, entry := range meta.Blocks {
-		path, err := repo.BlockPath(meta.ID, entry.Name)
+	members := []Member{{
+		ID:        meta.ID,
+		Size:      meta.Size,
+		MtimeUnix: meta.MtimeUnix,
+		SHA256:    meta.SHA256,
+		Blocks:    fullBlocks,
+	}}
+	for _, entry := range meta.Chain {
+		if len(entry.Blocks) == 0 {
+			return Target{}, fmt.Errorf(
+				"mount: chain layer %s: blocks form requires a blocks manifest",
+				entry.ID)
+		}
+		layerBlocks, _, err := resolveLayerBlocks(repo, entry.ID, entry.Blocks)
 		if err != nil {
-			return Target{}, fmt.Errorf("mount: block %s: %w", entry.Name, err)
+			return Target{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
 		}
-		if _, err := os.Stat(path); err != nil {
-			return Target{}, fmt.Errorf("mount: block %s: %w", entry.Name, err)
-		}
-		blocks = append(blocks, BlockFile{
-			Path:      path,
-			Name:      entry.Name,
+		members = append(members, Member{
+			ID:        entry.ID,
 			Size:      entry.Size,
 			MtimeUnix: entry.MtimeUnix,
 			SHA256:    entry.SHA256,
+			Blocks:    layerBlocks,
 		})
 	}
 	return Target{
@@ -196,8 +220,37 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 		SHA256:     meta.SHA256,
 		BlocksDir:  blocksDir,
 		ConcatView: filepath.Join(blocksDir, fileConcatView),
-		Blocks:     blocks,
+		Blocks:     fullBlocks,
+		Members:    members,
 	}, nil
+}
+
+// resolveLayerBlocks checks that every manifest block of one layer
+// rests in blocks/<id>/ and returns the block facts with the layer
+// directory.
+func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile, string, error) {
+	blocksDir, err := repo.BlocksDirPath(id)
+	if err != nil {
+		return nil, "", err
+	}
+	blocks := make([]BlockFile, 0, len(entries))
+	for _, entry := range entries {
+		path, err := repo.BlockPath(id, entry.Name)
+		if err != nil {
+			return nil, "", fmt.Errorf("block %s: %w", entry.Name, err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			return nil, "", fmt.Errorf("block %s: %w", entry.Name, err)
+		}
+		blocks = append(blocks, BlockFile{
+			Path:      path,
+			Name:      entry.Name,
+			Size:      entry.Size,
+			MtimeUnix: entry.MtimeUnix,
+			SHA256:    entry.SHA256,
+		})
+	}
+	return blocks, blocksDir, nil
 }
 
 // resolveMembers checks that every member file rests in members/ and

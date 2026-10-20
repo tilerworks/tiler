@@ -87,7 +87,7 @@ func newSessionOpenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := engine.Open(args[0], sessionMount(cfg, args[0], cmd.ErrOrStderr())); err != nil {
+			if err := engine.Open(args[0], sessionMount(cfg, args[0])); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "opened %s\n", args[0])
@@ -235,9 +235,8 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 
 // sessionMount resolves one recorded action back into an engine
 // request: the image reference resolves through the library, and
-// the execution shares the mount command's engine half. stderr
-// carries the concat route's degrade guidance during a replay.
-func sessionMount(cfg config.Config, name string, stderr io.Writer) session.MountFunc {
+// the execution shares the mount command's engine half.
+func sessionMount(cfg config.Config, name string) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		target, err := image.ResolveMount(cfg, action.Image)
 		if err != nil {
@@ -246,7 +245,7 @@ func sessionMount(cfg config.Config, name string, stderr io.Writer) session.Moun
 		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
 			readOnly: action.Mode == session.ModeRO,
 			subdir:   action.Subdir,
-		}, sessionRuntimeDir(cfg, name, action), stderr)
+		}, sessionRuntimeDir(cfg, name, action))
 	}
 }
 

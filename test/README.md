@@ -41,7 +41,7 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0011` need `/dev/fuse` and the external
+  `t0003` through `t0012` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
   stale case in `t0009-status.sh` also need `pgrep` to find the daemon
@@ -136,6 +136,14 @@ equipped host, so a genuine regression is never masked by a skip.
   (session-scoped upper isolation), and that each session owns its own
   `sessions/<name>/runtime/m1/` tree. Needs the FUSE toolchain; skips
   cleanly without it.
+- `e2e/t0012-build-split-size.sh` — builds a full image with a small
+  `--split` into multiple blocks, mounts it, writes the upper, builds
+  an incr with the same `--split` into `blocks/<incr-id>/`, remounts
+  to verify the upper file, then publishes a second full of the same
+  name while that view is still mounted so the old full and incr retire
+  into a session-pinned `hold/<id>/blocks/` (not archives). Omitting
+  `--split` or setting project `split_size: 0` stays a single
+  `image.sqsh`. Needs the FUSE toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 

@@ -146,26 +146,6 @@ func TestBuildFullRejectsInvalidName(t *testing.T) {
 	}
 }
 
-func TestBuildFullRefusesUnknownSplitMode(t *testing.T) {
-	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = "shards"
-	runner := &fakeRunner{body: []byte("never-packed")}
-	_, err := BuildFull(FullRequest{
-		Config: cfg, Name: "alice/app", SrcDir: sourceDir(t),
-		Builder: "test", Run: runner.run,
-	})
-	if err == nil || !strings.Contains(err.Error(), "split") {
-		t.Fatalf("err = %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("packer ran despite unknown split mode: %v", runner.calls)
-	}
-	if _, statErr := os.Stat(filepath.Join(cfg.ImagesDir, "alice", "app", fileImage)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("active image err = %v", statErr)
-	}
-}
-
 func TestBuildFullRefusesReservedSource(t *testing.T) {
 	cfg := buildConfig(t)
 	src := filepath.Join(cfg.ImagesDir, "inside")

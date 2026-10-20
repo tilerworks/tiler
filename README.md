@@ -26,11 +26,12 @@ to `bin/tiler`.
 `git` is optional. Doctor always lists it, and a missing binary is a failed probe rather than a silent skip. A failed git probe does not block the other checks.
 
 Optional helper tools ship as sources under `contrib/`: `concatfs`
-(the byte-block concat view route; build needs gcc and libfuse3-dev)
-and `slowfs` (latency injection for slow-NAS comparisons; build
-needs a Go toolchain). Each directory records the upstream origin,
-license, and build command. tiler prompts when a scenario needs one
-and it is missing; it never installs them automatically.
+(optional helper for manual byte-block concat; build needs gcc and
+libfuse3-dev) and `slowfs` (latency injection for slow-NAS
+comparisons; build needs a Go toolchain). Each directory records the
+upstream origin, license, and build command. tiler prompts when a
+scenario needs one and it is missing; it never installs them
+automatically. tiler does not select concatfs as a mount route.
 
 ## Usage
 
@@ -78,10 +79,11 @@ Available now:
   a writable merged view defaults to an incremental build and infers
   the name from the mounted image. Success prints one line:
   `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`. With
-  split storage enabled a full build stores the chosen split payload
-  form instead of one `image.sqsh` (see Split storage below), and
-  incremental builds are refused while split is on — the split forms
-  cover full images only.
+  `split_size` (or `tiler build --split <size>`) greater than zero,
+  full and incremental builds store verified byte blocks instead of
+  one `image.sqsh` / `incr/<id>.sqsh` (see Split storage below). The
+  active form must stay consistent: blocks active only appends
+  blocks layers; single active only appends single layers.
 - `tiler images ls [owner/repo] [--archives] [--json]` lists every
   active image with its chain length. A name lists each chain id, and
   `--archives` adds the archived and held chain ids. A split active
@@ -187,47 +189,38 @@ Available now:
 
 ### Split storage
 
-Split storage is an opt-in storage form for targets whose filesystem
-caps single-file size — quota'd NAS shares, FAT-class volumes with a
-4 GiB limit. The shape is chosen by configuration, never switched at
-runtime, and off by default:
+Split storage is an opt-in form for targets whose filesystem caps
+single-file size — quota'd NAS shares, FAT-class volumes with a
+4 GiB limit. Set a block size in configuration or on the build
+command; zero (the default) keeps the single-file layout:
 
-```bash
-split_enabled: true          # --split
-split_mode: blocks           # --split-mode blocks|members
-split_route: reassemble      # --split-route reassemble|concat (blocks only)
+```yaml
+split_size: 2G    # default for tiler build; 0 = off
 ```
 
-- **blocks** stores the full image as fixed-size byte blocks
-  (`blocks/<id>/blk.NNN`) whose manifest records size, sha256, and
-  mtime per block. Mounting defaults to the reassembly route: the
-  blocks stream into `<cache_dir>/<whole-sha256>.sqsh` — every block
-  verified, then the whole digest — so the cache directory needs
-  room for the whole image. `split_route: concat` mounts the block
-  directory through the contrib `concatfs` as one virtual
-  concatenated file instead: zero reassembly and no cache copy,
-  while the mount table still shows the canonical library path.
-  Both routes skip the extra `cache_enabled` copy. A missing
-  `concatfs` degrades to the reassembly route and prints the
-  contrib build guidance on stderr; tiler never installs or builds
-  it automatically.
-- **members** partitions the source by top-level directory: each
-  partition is a complete squashfs at `members/<name>.sqsh`, and
-  the whole-image identity is the derived manifest digest. Mounting
-  is a read-only subpath forest — every partition at `<dir>/<name>`
-  under one parent directory — and the forest is one combination:
-  one session action records the parent, `status` annotates its
-  health from the member mounts, one `session open` replays member
-  by member (healthy members reused, dead ones cleaned and
-  remounted), and `umount <parent>` tears the member submounts down
-  in reverse. A writable request or `--subdir` is refused as a
-  usage error with guidance.
+```bash
+tiler build --split 64k --full --image owner/repo /path/to/src
+tiler build --split 0 ...   # this build stays single-file
+```
+
+When the effective size is greater than zero, **full and each
+incremental layer** are stored as fixed-size byte blocks under
+`blocks/<layer-id>/blk.NNN`. Digests and sizes on metadata still
+describe the whole logical squashfs per layer. Mounting reassembles
+every layer into `<cache_dir>/<layer-sha256>.sqsh` (each block
+verified, then the whole digest) and stacks them newest-incr-first
+with the same overlay path as a single-file chain. The cache
+directory needs room for the reassembled layers. Mixing forms is
+refused: a blocks active cannot append a single-file incr, and a
+single active cannot append blocks — rebuild with a matching full
+first. The optional contrib `concatfs` helper remains available for
+manual use, but tiler no longer selects a concat mount route from
+configuration or flags.
 
 When the doctor single-file limit probe finds a cap on the image
-library or the cache directory, it advises enabling split storage;
-after enabling it the same probe reports the split shape, and builds
-store the payload in the chosen form. Split forms cover full images
-only, so incremental chain builds stay refused while split is on.
+library or the cache directory, it advises setting `split_size` (or
+`tiler build --split`); with a positive `split_size` the same probe
+reports the configured block size.
 
 The list and view commands carry a machine-readable form for CI
 gates and agent consumers. The schemas are stable and add-only,
@@ -341,15 +334,11 @@ upper-layer data survives.
 A large image on limited storage keeps working through the same
 library. When the target filesystem caps single-file size — a
 quota'd NAS share or a FAT-class volume — `tiler doctor` reports
-the limit and advises split storage. Enabling `split_enabled` with
-`split_mode: blocks` stores the same image as verified byte blocks;
-mounting reassembles them in the cache directory or, with the
-contrib `concatfs` on PATH and `split_route: concat`, serves the
-blocks as one virtual file with no reassembly at all. A source tree
-of independent top-level directories can instead partition into
-`split_mode: members` and mount as a read-only forest of subpaths.
-One library, one command surface — the storage shape is a
-configuration choice.
+the limit and advises `split_size` / `tiler build --split`. With a
+positive block size, full and incremental layers store as verified
+byte blocks; mounting reassembles each layer in the cache directory
+and overlays them. One library, one command surface — the block
+size is a configuration (or per-build flag) choice.
 
 Machines read the same command surface. Every list and view
 command — `images ls`, `session list`, `session show`, `status`,
