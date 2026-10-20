@@ -236,6 +236,213 @@ func TestHoldRestoreSymmetryForSplitPayloads(t *testing.T) {
 	}
 }
 
+func TestPublishHoldRestoreChainBlockDirs(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks))
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPayloadAt(t, holdPayloadPath(hold, fx.meta), fx)
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	if err := restoreHold(repo, fx.meta.ID, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertActivePayload(t, repo, fx)
+	layerDir, err := repo.BlocksDirPath(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(layerDir, "blk.000"), []byte("layer-body"))
+	assertGone(t, hold)
+	assertGone(t, filepath.Join(repo.Dir, dirHold))
+}
+
+func TestRestoreHoldMergesChainBlockDir(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo.Dir, dirBlocks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fullDst, err := repo.BlocksDirPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(hold, dirBlocks, fx.meta.ID), fullDst); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreHold(repo, fx.meta.ID, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	layerDir, err := repo.BlocksDirPath(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(layerDir, "blk.000"), []byte("layer-body"))
+	assertActivePayload(t, repo, fx)
+	assertGone(t, filepath.Join(hold, dirBlocks, layer))
+	assertGone(t, hold)
+}
+
+func TestPublishArchivesChainBlockDirs(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	next := []byte("replacement-full")
+	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, fx.meta.ID))
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+	arch, err := repo.ArchivePath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPayloadAt(t, holdPayloadPath(arch, fx.meta), fx)
+	assertBytes(t, filepath.Join(arch, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertGone(t, filepath.Join(repo.Dir, dirHold, fx.meta.ID))
+}
+
+func TestPublishRepublishReturnsChainBlockDirs(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	other := blocksFixture([][]byte{[]byte("other-full")})
+	refs := holdSet{ids: map[string]bool{fx.meta.ID: true}}
+	if err := publishSplit(t, repo, other, refs, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	if err := publishSplit(t, repo, fx, refs, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	layerDir, err := repo.BlocksDirPath(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(layerDir, "blk.000"), []byte("layer-body"))
+	assertActivePayload(t, repo, fx)
+	assertGone(t, filepath.Join(hold, dirBlocks, layer))
+	if _, statErr := os.Stat(hold); statErr != nil {
+		t.Fatalf("referenced hold deleted: %v", statErr)
+	}
+}
+
+func TestPublishReclaimsChainBlockDirFromStaleHold(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	other := blocksFixture([][]byte{[]byte("other-full")})
+	refs := holdSet{ids: map[string]bool{fx.meta.ID: true}}
+	if err := publishSplit(t, repo, other, refs, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(repo.Dir, dirBlocks)); err != nil {
+		t.Fatal(err)
+	}
+	writePayloadDir(t, finalPayloadDir(t, repo, fx.meta), fx)
+	if err := Store(repo.MetaPath(), fx.meta); err != nil {
+		t.Fatal(err)
+	}
+	next := []byte("image-c")
+	if err := repo.Publish(next, metaFor(next), refs); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertPayloadAt(t, holdPayloadPath(hold, fx.meta), fx)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+}
+
+// TestPublishRepairsTornBlocksHold covers a crash after the whole
+// blocks/ tree reached the hold but meta.yaml is still active. The
+// next publish must restore (then archive) the chain, not stick on
+// "active payload missing".
+func TestPublishRepairsTornBlocksHold(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hold, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(repo.Dir, dirBlocks),
+		filepath.Join(hold, dirBlocks)); err != nil {
+		t.Fatal(err)
+	}
+	next := []byte("after-tear")
+	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks))
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+	assertGone(t, filepath.Join(repo.Dir, dirHold, fx.meta.ID))
+	arch, err := repo.ArchivePath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(arch, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertPayloadAt(t, holdPayloadPath(arch, fx.meta), fx)
+}
+
+// TestPublishSweepsTornChainBlockDir covers a partial restore that
+// left one chain layer directory in the active slot after the rest of
+// the hold (full payload and meta) moved back. Sweep must reclaim it
+// into the hold before archive, not delete it as an orphan.
+func TestPublishSweepsTornChainBlockDir(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(hold, dirBlocks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fullDir, err := repo.BlocksDirPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(fullDir, filepath.Join(hold, dirBlocks, fx.meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(repo.MetaPath(), filepath.Join(hold, fileMeta)); err != nil {
+		t.Fatal(err)
+	}
+	next := []byte("after-tear")
+	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+	arch, err := repo.ArchivePath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(arch, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertPayloadAt(t, holdPayloadPath(arch, fx.meta), fx)
+}
+
 func TestRepairPayloadWithoutMeta(t *testing.T) {
 	cases := []struct {
 		name string
@@ -596,6 +803,35 @@ func writePayloadDir(t *testing.T, dir string, fx splitFixture) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// seedBlocksWithChain publishes a blocks full image plus one chain
+// layer directory blocks/<id>/, and returns the layer id.
+func seedBlocksWithChain(t *testing.T, repo Repo, layerBody []byte) (splitFixture, string) {
+	t.Helper()
+	fx := blocksFixture([][]byte{[]byte("full-a"), []byte("full-b")})
+	const layer = "fedcba9876543210"
+	if fx.meta.ID == layer {
+		t.Fatal("fixture id collided with the chain layer id")
+	}
+	entry := validEntry(fx.meta.ID, layer)
+	entry.Blocks = blocksSeq(1)
+	fx.meta.Chain = []ChainEntry{entry}
+	if err := fx.meta.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	seedSplitActive(t, repo, fx)
+	dir, err := repo.BlocksDirPath(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blk.000"), layerBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fx, layer
 }
 
 func seedSplitActive(t *testing.T, repo Repo, fx splitFixture) {

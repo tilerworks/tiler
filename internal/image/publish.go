@@ -48,7 +48,8 @@ type hooks struct {
 // The next publish repairs a crash that restored only part of the
 // previous chain, dropped one active file, or parked an archive
 // beside its final name. Layer files left in the active incr
-// directory move into the one hold whose chain lists them.
+// directory, and blocks/<id> directories a chain lists, move into
+// the one hold whose chain lists them.
 // Unreferenced holds are archived even when another image is already
 // active, and republishing a pinned id returns the chain layers its
 // hold still owns instead of deleting them.
@@ -464,6 +465,9 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 	if err := reclaimHoldIncr(repo, hold, seam); err != nil {
 		return err
 	}
+	if err := reclaimHoldBlocks(repo, hold, seam); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(hold); err != nil {
 		return err
 	}
@@ -481,7 +485,11 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 // activeMoves lists the renames that carry the active slot into a
 // hold. The hold preserves the active layout: the payload root meta
 // names plus meta.yaml, and incr/ only for the single-file form.
-// Directory payloads move as one rename each way.
+// Directory payloads move as one rename each way. For blocks that
+// one rename is the whole blocks/ tree, so chain layer directories
+// reclaimed into the active slot travel with the full image. Do not
+// MkdirAll the hold blocks/ destination first: rename onto an
+// existing directory fails.
 func activeMoves(repo Repo, hold string, meta Meta) ([][2]string, error) {
 	moves := [][2]string{
 		{payloadRoot(repo.Dir, meta), payloadRoot(hold, meta)},
@@ -519,6 +527,7 @@ func restore(hold string, done [][2]string, cause error) error {
 	if undoErr := undoMoves(done); undoErr != nil {
 		return fmt.Errorf("publish: %w (undo: %v)", cause, undoErr)
 	}
+	removeEmpty(filepath.Join(hold, dirBlocks))
 	removeEmpty(hold)
 	removeEmpty(filepath.Dir(hold))
 	return fmt.Errorf("publish: %w", cause)
@@ -594,6 +603,9 @@ func archiveUnreferencedHolds(repo Repo, refs Refs, seam hooks) error {
 	if err := sweepActiveIncr(repo, ids, seam); err != nil {
 		return err
 	}
+	if err := sweepActiveBlockDirs(repo, ids, seam); err != nil {
+		return err
+	}
 	var pending []string
 	for _, id := range ids {
 		held, err := heldBy(refs, refFor(repo, id))
@@ -651,6 +663,78 @@ func sweepActiveIncr(repo Repo, holdIDs []string, seam hooks) error {
 	}
 	removeEmpty(incr)
 	return nil
+}
+
+// sweepActiveBlockDirs moves blocks/<id> directories left in the
+// active slot into the one hold whose chain lists that id. A crashed
+// restore or return of chain layers can leave one directory behind
+// after the rest of the hold moved; deleting that directory as an
+// orphan payload would drop the layer. Directories the active meta
+// still claims, several holds claim, or no hold claims stay where
+// they are.
+func sweepActiveBlockDirs(repo Repo, holdIDs []string, seam hooks) error {
+	dir := filepath.Join(repo.Dir, dirBlocks)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	active, err := activeBlockOwners(repo)
+	if err != nil {
+		return err
+	}
+	claims, err := holdChainClaims(repo, holdIDs)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := sweepOneBlockDir(repo, entry, active, claims, seam); err != nil {
+			return err
+		}
+	}
+	removeEmpty(dir)
+	return nil
+}
+
+func sweepOneBlockDir(repo Repo, entry os.DirEntry, active map[string]bool, claims map[string][]string, seam hooks) error {
+	if !entry.IsDir() {
+		return nil
+	}
+	id := entry.Name()
+	if checkID(id) != nil || active[id] || len(claims[id]) != 1 {
+		return nil
+	}
+	return moveBlockDirIntoHold(repo, id, claims[id][0], seam)
+}
+
+// activeBlockOwners lists the full id and chain ids of the active
+// meta. A slot without meta claims nothing, which is what a torn
+// restore looks like after meta.yaml has already reached the hold.
+func activeBlockOwners(repo Repo) (map[string]bool, error) {
+	meta, err := Load(repo.MetaPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := chainIDs(meta)
+	if meta.ID != "" {
+		ids[meta.ID] = true
+	}
+	return ids, nil
+}
+
+func moveBlockDirIntoHold(repo Repo, id, holdID string, seam hooks) error {
+	hold, err := repo.HoldPath(holdID)
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(repo.Dir, dirBlocks, id)
+	dst := filepath.Join(hold, dirBlocks, id)
+	return moveIfAbsent(src, dst, seam)
 }
 
 func moveLayerIntoHold(repo Repo, incr, name, holdID string, seam hooks) error {
@@ -889,33 +973,53 @@ func retireStaleHold(repo Repo, id string, chain []ChainEntry, refs Refs, seam h
 	return removeHold(repo, id)
 }
 
-// returnChainLayers moves the layer files the chain lists from the
-// hold back into the active incr directory. Files the active slot
-// already has stay untouched.
+// returnChainLayers moves the layers the chain lists from the hold
+// back into the active slot. Single-file layers come from incr/;
+// blocks layers come from blocks/<id>/. Files the active slot already
+// has stay untouched.
 func returnChainLayers(repo Repo, hold string, chain []ChainEntry, seam hooks) error {
 	for _, entry := range chain {
-		dst, err := repo.IncrPath(entry.ID)
-		if err != nil {
-			return err
-		}
-		there, err := pathExists(dst)
-		if err != nil || there {
-			return err
-		}
-		src := filepath.Join(hold, dirIncr, entry.ID+squashExt)
-		inHold, err := pathExists(src)
-		if err != nil || !inHold {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := seam.do(src, dst); err != nil {
+		if err := returnOneLayer(repo, hold, entry, seam); err != nil {
 			return err
 		}
 	}
 	removeEmpty(filepath.Join(hold, dirIncr))
+	removeEmpty(filepath.Join(hold, dirBlocks))
 	return nil
+}
+
+func returnOneLayer(repo Repo, hold string, entry ChainEntry, seam hooks) error {
+	if len(entry.Blocks) > 0 {
+		dst, err := repo.BlocksDirPath(entry.ID)
+		if err != nil {
+			return err
+		}
+		src := filepath.Join(hold, dirBlocks, entry.ID)
+		return moveIfAbsent(src, dst, seam)
+	}
+	dst, err := repo.IncrPath(entry.ID)
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(hold, dirIncr, entry.ID+squashExt)
+	return moveIfAbsent(src, dst, seam)
+}
+
+// moveIfAbsent renames src onto dst when dst is free and src exists.
+// A missing source or an occupied destination is left as it is.
+func moveIfAbsent(src, dst string, seam hooks) error {
+	there, err := pathExists(dst)
+	if err != nil || there {
+		return err
+	}
+	present, err := pathExists(src)
+	if err != nil || !present {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return seam.do(src, dst)
 }
 
 // reclaimHoldIncr moves the layer files a stale hold of the active id
@@ -943,6 +1047,31 @@ func reclaimHoldIncr(repo Repo, hold string, seam hooks) error {
 			return err
 		}
 		if err := seam.do(filepath.Join(hold, dirIncr, entry.Name()), dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reclaimHoldBlocks moves blocks/<id> directories a stale hold of the
+// active id owns but the active slot lacks. The following removal of
+// the hold would otherwise delete chain layers that the fresh hold
+// is supposed to carry.
+func reclaimHoldBlocks(repo Repo, hold string, seam hooks) error {
+	entries, err := os.ReadDir(filepath.Join(hold, dirBlocks))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		src := filepath.Join(hold, dirBlocks, entry.Name())
+		dst := filepath.Join(repo.Dir, dirBlocks, entry.Name())
+		if err := moveIfAbsent(src, dst, seam); err != nil {
 			return err
 		}
 	}
@@ -1038,6 +1167,16 @@ func repairMissingImage(repo Repo, seam hooks) error {
 }
 
 func repairMissingMeta(repo Repo, seam hooks) error {
+	ids, err := listHoldIDs(repo)
+	if err != nil {
+		return err
+	}
+	// Salvage chain layer directories before the orphan-payload
+	// cleanup. A blocks/<id> left beside a missing meta looks like a
+	// payload and would be deleted with it.
+	if err := sweepActiveBlockDirs(repo, ids, seam); err != nil {
+		return err
+	}
 	id, ok, err := matchingPartialHold(repo)
 	if err != nil {
 		return err
@@ -1345,8 +1484,11 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 		{filepath.Join(hold, fileImage), repo.ImagePath()},
 		{filepath.Join(hold, fileMeta), repo.MetaPath()},
 	}
+	moves, err = appendBlocksRestore(moves, hold, repo.Dir)
+	if err != nil {
+		return err
+	}
 	for _, pair := range [][2]string{
-		{filepath.Join(hold, dirBlocks), filepath.Join(repo.Dir, dirBlocks)},
 		{filepath.Join(hold, dirMembers), repo.MembersDirPath()},
 		{filepath.Join(hold, dirIncr), filepath.Join(repo.Dir, dirIncr)},
 	} {
@@ -1365,9 +1507,44 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 	if err := syncDir(filepath.Dir(hold), seam); err != nil {
 		return err
 	}
+	removeEmpty(filepath.Join(hold, dirBlocks))
 	removeEmpty(hold)
 	removeEmpty(filepath.Dir(hold))
 	return nil
+}
+
+// appendBlocksRestore adds the blocks directory move. When the active
+// slot already has blocks/, each held layer directory is merged in
+// instead, so a chain dir that did not travel with the full image
+// still returns.
+func appendBlocksRestore(moves [][2]string, hold, repoDir string) ([][2]string, error) {
+	src := filepath.Join(hold, dirBlocks)
+	dst := filepath.Join(repoDir, dirBlocks)
+	if _, err := os.Stat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return moves, nil
+		}
+		return nil, err
+	}
+	if _, err := os.Stat(dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return append(moves, [2]string{src, dst}), nil
+		}
+		return nil, err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		childSrc := filepath.Join(src, entry.Name())
+		childDst := filepath.Join(dst, entry.Name())
+		moves, err = appendPresentDirMove(moves, childSrc, childDst)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return moves, nil
 }
 
 // appendPresentDirMove adds a directory move when the source exists
