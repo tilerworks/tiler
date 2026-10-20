@@ -198,23 +198,23 @@ func TestErofsPackArgv(t *testing.T) {
 	}{
 		{
 			name: "full default compression",
-			want: []string{"-U", "clear", "-zzstd", dst, src},
+			want: []string{"-U", erofsNilUUID, "-zzstd", dst, src},
 		},
 		{
 			name: "full gzip maps to deflate",
 			comp: "gzip",
-			want: []string{"-U", "clear", "-zdeflate", dst, src},
+			want: []string{"-U", erofsNilUUID, "-zdeflate", dst, src},
 		},
 		{
 			name: "full lz4",
 			comp: "lz4",
-			want: []string{"-U", "clear", "-zlz4", dst, src},
+			want: []string{"-U", erofsNilUUID, "-zlz4", dst, src},
 		},
 		{
 			name: "incremental keeps the same command",
 			incr: true,
 			comp: "zstd",
-			want: []string{"-U", "clear", "-zzstd", dst, src},
+			want: []string{"-U", erofsNilUUID, "-zzstd", dst, src},
 		},
 	}
 	for _, tc := range cases {
@@ -256,7 +256,7 @@ func TestErofsPackHonorsSourceDateEpoch(t *testing.T) {
 	if len(runner.calls) != 1 || !slices.Equal(runner.calls[0].env, want) {
 		t.Fatalf("env = %v", runner.calls)
 	}
-	if !slices.Equal(runner.calls[0].args, []string{"-U", "clear", "-zzstd", dst, src}) {
+	if !slices.Equal(runner.calls[0].args, []string{"-U", erofsNilUUID, "-zzstd", dst, src}) {
 		t.Fatalf("args = %q", runner.calls[0].args)
 	}
 }

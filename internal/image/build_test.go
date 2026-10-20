@@ -45,8 +45,8 @@ func (f *fakeRunner) run(name string, env []string, args ...string) error {
 }
 
 // fakePackDst is the image file the packer would create. mksquashfs
-// takes source then destination. mkfs.erofs takes -U clear, the
-// compression flag, the destination, then the source.
+// takes source then destination. mkfs.erofs takes -U and the nil
+// UUID, the compression flag, the destination, then the source.
 func fakePackDst(name string, args []string) (string, error) {
 	idx := 1
 	if name == "mkfs.erofs" {
@@ -649,7 +649,7 @@ func TestBuildFullPacksRequestedContainer(t *testing.T) {
 			case "mksquashfs":
 				want = []string{"mksquashfs", src, call[2], "-comp", tc.wantComp, "-noappend"}
 			case "mkfs.erofs":
-				want = []string{"mkfs.erofs", "-U", "clear", tc.wantComp, call[4], src}
+				want = []string{"mkfs.erofs", "-U", "00000000-0000-0000-0000-000000000000", tc.wantComp, call[4], src}
 			default:
 				t.Fatalf("unexpected packer %s", tc.wantName)
 			}

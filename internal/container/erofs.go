@@ -14,6 +14,11 @@ const (
 	erofsType        = "erofs"
 	erofsComp        = "zstd"
 	erofsMagicOffset = 1024
+	// erofsNilUUID pins the superblock UUID. mkfs.erofs 1.8 accepts
+	// the word "clear" for this value; 1.7 (Ubuntu 24.04) rejects
+	// that word and prints its usage. The nil UUID is the same pin
+	// on both.
+	erofsNilUUID = "00000000-0000-0000-0000-000000000000"
 )
 
 // On-disk superblock magic at byte 1024: the little-endian encoding
@@ -68,7 +73,7 @@ func (e erofs) pack(run ToolRunner, src, dst, compression string) error {
 	if run == nil {
 		return errErofsRunner
 	}
-	return run("mkfs.erofs", sourceDateEnv(src), "-U", "clear", flag, dst, src)
+	return run("mkfs.erofs", sourceDateEnv(src), "-U", erofsNilUUID, flag, dst, src)
 }
 
 // compressionFlag is the mkfs.erofs -z argument. gzip stays gzip in
