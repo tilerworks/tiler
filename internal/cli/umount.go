@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -41,10 +42,11 @@ func runUmount(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("umount: %w", err)
 	}
+	entries := toEntries(table)
 	removed, err := unmountEngine(workspace.UnmountRequest{
 		Dir:        dir,
-		Table:      toEntries(table),
-		RuntimeDir: cfg.RuntimeDir,
+		Table:      entries,
+		RuntimeDir: resolveCombinationRuntime(cfg, dir, entries),
 		Owned:      ownedLibrarySource(cfg.ImagesDir),
 		Reload:     reloadEntries,
 		Run:        mountRun,
@@ -82,4 +84,42 @@ func reloadEntries() ([]workspace.Entry, error) {
 		return nil, err
 	}
 	return toEntries(table), nil
+}
+
+// resolveCombinationRuntime recovers the session-scoped combination
+// directory for one mountpoint: prefer the live table entry's
+// upper/lower path, then fall back to the covering session record's
+// RuntimeID when the overlay entry has already vanished or does not
+// expose a recoverable combination path.
+func resolveCombinationRuntime(
+	cfg config.Config,
+	dir string,
+	table []workspace.Entry,
+) string {
+	for i := len(table) - 1; i >= 0; i-- {
+		if table[i].Point != dir {
+			continue
+		}
+		if runtime := workspace.CombinationRuntime(table[i]); runtime != "" {
+			return runtime
+		}
+		break
+	}
+	engine := sessionEngine(cfg)
+	hit, err := engine.SessionForPath(dir)
+	if err != nil {
+		return ""
+	}
+	for _, action := range hit.Record.Actions {
+		if action.Type != session.TypeMount || action.Status == session.StatusUnmounted {
+			continue
+		}
+		if action.Mountpoint != hit.Mountpoint && action.Mountpoint != dir {
+			continue
+		}
+		if runtime := sessionRuntimeDir(cfg, hit.Record.Name, action); runtime != "" {
+			return runtime
+		}
+	}
+	return ""
 }

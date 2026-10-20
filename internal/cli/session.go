@@ -87,7 +87,7 @@ func newSessionOpenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := engine.Open(args[0], sessionMount(cfg, cmd.ErrOrStderr())); err != nil {
+			if err := engine.Open(args[0], sessionMount(cfg, args[0], cmd.ErrOrStderr())); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "opened %s\n", args[0])
@@ -228,8 +228,8 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 		LoadTable: func() ([]mountinfo.Mount, error) {
 			return loadMountTable()
 		},
-		RuntimeDir: cfg.RuntimeDir,
-		ImagesDir:  cfg.ImagesDir,
+		SessionsDir: cfg.SessionsDir,
+		ImagesDir:   cfg.ImagesDir,
 	}
 }
 
@@ -237,7 +237,7 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 // request: the image reference resolves through the library, and
 // the execution shares the mount command's engine half. stderr
 // carries the concat route's degrade guidance during a replay.
-func sessionMount(cfg config.Config, stderr io.Writer) session.MountFunc {
+func sessionMount(cfg config.Config, name string, stderr io.Writer) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		target, err := image.ResolveMount(cfg, action.Image)
 		if err != nil {
@@ -246,24 +246,27 @@ func sessionMount(cfg config.Config, stderr io.Writer) session.MountFunc {
 		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
 			readOnly: action.Mode == session.ModeRO,
 			subdir:   action.Subdir,
-		}, stderr)
+		}, sessionRuntimeDir(cfg, name, action), stderr)
 	}
 }
 
 // sessionUmount tears one recorded point down through the same
 // engine the umount command uses. The cascade inside one view, the
 // forest combination under a recorded parent, and the idempotent
-// already-unmounted answer come from the engine.
+// already-unmounted answer come from the engine. The combination
+// directory is recovered from the mount table entry or, when the
+// overlay is already gone, from the covering session record.
 func sessionUmount(cfg config.Config) session.UmountFunc {
 	return func(mountpoint string) error {
 		table, err := loadMountTable()
 		if err != nil {
 			return fmt.Errorf("session: %w", err)
 		}
+		entries := toEntries(table)
 		_, err = unmountEngine(workspace.UnmountRequest{
 			Dir:        mountpoint,
-			Table:      toEntries(table),
-			RuntimeDir: cfg.RuntimeDir,
+			Table:      entries,
+			RuntimeDir: resolveCombinationRuntime(cfg, mountpoint, entries),
 			Owned:      ownedLibrarySource(cfg.ImagesDir),
 			Reload:     reloadEntries,
 			Run:        mountRun,

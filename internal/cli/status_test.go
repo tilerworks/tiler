@@ -22,27 +22,28 @@ func statusView(point, runtimeDir string) mountinfo.Mount {
 
 // withStatusSeeds installs the fake table and health seams and drops
 // one active and one closed record into the session store.
-func withStatusSeeds(t *testing.T, home string, healthy map[string]bool) (lib []string, runtime string) {
+func withStatusSeeds(t *testing.T, home string, healthy map[string]bool) (lib []string, sessions string) {
 	t.Helper()
 	_, lib = libFlags(home)
-	runtime = filepath.Join(home, "lib", "runtime")
+	sessions = sessionsDir(home)
+	devRT := filepath.Join(sessions, "dev", "runtime", "m1")
+	orphanRT := filepath.Join(sessions, "orphan", "runtime", "m1")
 	table := []mountinfo.Mount{
-		statusView("/ws/dev", filepath.Join(runtime, "up-1-2")),
-		statusView("/ws/orphan", filepath.Join(runtime, "up-3-3")),
+		statusView("/ws/dev", devRT),
+		statusView("/ws/orphan", orphanRT),
 	}
 	withSessionSeams(t, func(engine *session.Engine) {
 		engine.LoadTable = func() ([]mountinfo.Mount, error) { return table, nil }
 		engine.Health = func(point string) bool { return healthy[point] }
 	})
-	sessions := sessionsDir(home)
 	writeSession(t, sessions, "dev", "alice", "app", "0123456789abcdef", "running")
 	writeSession(t, sessions, "old", "alice", "app", "0123456789abcdef", "closed")
-	return lib, runtime
+	return lib, sessions
 }
 
 func TestStatusOverviewRendering(t *testing.T) {
 	home, _ := withWorkspace(t)
-	lib, runtime := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
+	lib, sessions := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
 	t.Setenv("TILER_SESSION_ID", "dev")
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "status")...)
@@ -64,7 +65,8 @@ func TestStatusOverviewRendering(t *testing.T) {
 	if !strings.HasPrefix(lines[2], "old closed created=") {
 		t.Fatalf("old header = %q, want the closed summary", lines[2])
 	}
-	want = "orphan /ws/orphan fuse.fuse-overlayfs " + filepath.Join(runtime, "up-3-3")
+	want = "orphan /ws/orphan fuse.fuse-overlayfs " +
+		filepath.Join(sessions, "orphan", "runtime", "m1")
 	if lines[3] != want {
 		t.Fatalf("orphan line = %q, want %q", lines[3], want)
 	}
@@ -107,7 +109,7 @@ func TestStatusOverviewWithoutRecords(t *testing.T) {
 
 func TestStatusPathRendering(t *testing.T) {
 	home, work := withWorkspace(t)
-	lib, runtime := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
+	lib, sessions := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
 
 	_, stderr, _, err := runCmd(t, append(lib, "status", filepath.Join(work, "elsewhere"))...)
 	if ExitCode(err) != 1 {
@@ -129,7 +131,7 @@ func TestStatusPathRendering(t *testing.T) {
 
 	// A runtime directory path resolves back to the same session.
 	stdout, stderr, _, err = runCmd(t, append(lib, "status",
-		filepath.Join(runtime, "up-1-2", "upper"))...)
+		filepath.Join(sessions, "dev", "runtime", "m1", "upper"))...)
 	if err != nil {
 		t.Fatalf("status runtime path: %v\n%s", err, stderr)
 	}

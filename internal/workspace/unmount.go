@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 // UnmountRequest drives a path-based unmount.
@@ -14,7 +12,12 @@ type UnmountRequest struct {
 	Dir string
 	// Table is the mount table snapshot taken before teardown.
 	Table []Entry
-	// RuntimeDir is the prefix that marks tiler transit points.
+	// RuntimeDir is the session-scoped combination directory for
+	// this mount (sessions/<name>/runtime/m<seq>). It marks tiler
+	// transit points for lower teardown and is the residue sweep
+	// root. Empty skips lower teardown and the residue sweep, which
+	// keeps an already-unmounted target without a recoverable
+	// combination directory idempotent.
 	RuntimeDir string
 	// Owned reports whether a mount source resolves inside the
 	// image library. When Dir itself is not a listed mount, the
@@ -33,15 +36,14 @@ type UnmountRequest struct {
 // UnmountPath tears down whatever the path holds and reports how
 // many mount points it removed; zero means the target was not
 // mounted. The target point comes down first, then the overlay
-// lowers it lists under the runtime prefix in reverse lowerdir
-// order; a target that is not itself a listed mount takes the
-// forest branch instead, tearing down the owned direct child mounts
-// in reverse order. Then a residue sweep of the runtime directory
-// derived from the target's device and inode catches lowers the
-// table no longer connects to the target. An unmounted or
-// already-vanished target succeeds silently, and runtime upper and
-// work data is never deleted so a remount of the same directory
-// reuses it.
+// lowers it lists under the combination directory in reverse
+// lowerdir order; a target that is not itself a listed mount takes
+// the forest branch instead, tearing down the owned direct child
+// mounts in reverse order. Then a residue sweep of the combination
+// directory catches lowers the table no longer connects to the
+// target. An unmounted or already-vanished target succeeds
+// silently, and runtime upper and work data is never deleted so a
+// remount of the same session action reuses it.
 func UnmountPath(req UnmountRequest) (int, error) {
 	run := req.Run
 	if run == nil {
@@ -51,8 +53,8 @@ func UnmountPath(req UnmountRequest) (int, error) {
 }
 
 func unmountPath(req UnmountRequest, run runFunc, seam hooks) (int, error) {
-	if req.Dir == "" || req.RuntimeDir == "" {
-		return 0, errors.New("workspace: dir and runtime dir are required")
+	if req.Dir == "" {
+		return 0, errors.New("workspace: dir is required")
 	}
 	removed := 0
 	entry, listed := findEntry(req.Table, req.Dir)
@@ -126,6 +128,9 @@ func teardownListed(req UnmountRequest, entry Entry, run runFunc, seam hooks) (i
 	if err != nil {
 		return 0, err
 	}
+	if req.RuntimeDir == "" {
+		return removed, nil
+	}
 	for i := len(entry.Lowers) - 1; i >= 0; i-- {
 		lower := entry.Lowers[i]
 		if lower == req.RuntimeDir || !underPrefix(lower, req.RuntimeDir) {
@@ -142,22 +147,22 @@ func teardownListed(req UnmountRequest, entry Entry, run runFunc, seam hooks) (i
 
 // sweepRuntime is the residue fallback for the shape where the
 // overlay entry is already gone but squashfuse lowers remain
-// listed. The target's device and inode name the runtime directory;
-// every mount still listed under it comes down in reverse order. A
-// target that cannot be statted has no derivable runtime directory
-// and sweeps nothing, which keeps an absent target idempotent.
+// listed. Every mount still listed under the caller-supplied
+// combination directory comes down in reverse order. An empty
+// combination directory sweeps nothing, which keeps an absent
+// target without recoverable session context idempotent.
 func sweepRuntime(req UnmountRequest, run runFunc, seam hooks) (int, error) {
-	dev, ino, err := devIno(req.Dir)
-	if err != nil {
+	if req.RuntimeDir == "" {
 		return 0, nil
 	}
 	table := req.Table
 	if req.Reload != nil {
+		var err error
 		if table, err = req.Reload(); err != nil {
 			return 0, fmt.Errorf("workspace: %w", err)
 		}
 	}
-	runtime := filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
+	runtime := filepath.Clean(req.RuntimeDir)
 	var points []string
 	for _, entry := range table {
 		if entry.Point != runtime && underPrefix(entry.Point, runtime) {
@@ -173,6 +178,19 @@ func sweepRuntime(req UnmountRequest, run runFunc, seam hooks) (int, error) {
 		removed += n
 	}
 	return removed, nil
+}
+
+// CombinationRuntime is the session-scoped combination directory a
+// table entry's mount lives in: the parent of its upper for a
+// writable view, or of its newest lower for a read-only chain.
+func CombinationRuntime(entry Entry) string {
+	switch {
+	case entry.Upper != "" && filepath.Base(entry.Upper) == "upper":
+		return filepath.Dir(entry.Upper)
+	case entry.Upper == "" && len(entry.Lowers) > 0:
+		return filepath.Dir(entry.Lowers[0])
+	}
+	return ""
 }
 
 // removePoint tears one point down when something is still mounted

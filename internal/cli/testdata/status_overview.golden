@@ -58,7 +58,7 @@
     {
       "point": "/ws/orphan",
       "fstype": "fuse.fuse-overlayfs",
-      "runtime_dir": "/rt/up-3-3"
+      "runtime_dir": "/sessions/orphan/runtime/m1"
     }
   ]
 }

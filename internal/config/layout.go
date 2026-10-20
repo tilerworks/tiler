@@ -11,6 +11,10 @@ import (
 // descendants, plus the resolved images, runtime, sessions, and cache
 // directories. Comparison is lexical. The path does not need to exist,
 // and symlinks are not evaluated.
+//
+// Note: runtime_dir remains in the reserved set for this step while
+// Config.RuntimeDir is still parsed; per-mount runtime now lives under
+// sessions_dir and is covered by that root.
 func OutsideReserved(path string, cfg Config) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -33,17 +37,4 @@ func OutsideReserved(path string, cfg Config) error {
 		return fmt.Errorf("%s is inside reserved %s %s", abs, root.name, filepath.Clean(root.dir))
 	}
 	return nil
-}
-
-// RuntimeDirName returns the runtime directory name for a mount
-// point's device and inode. The same pair always yields the same
-// name, so two mounts of one path share a directory and two devices
-// do not collide when their inode numbers match.
-//
-// Inode reuse after delete and recreate makes this a directory name
-// only, not an identity. A later session record and the mount point
-// path decide identity. The caller supplies device and inode; this
-// function does not stat.
-func RuntimeDirName(dev, ino uint64) string {
-	return fmt.Sprintf("up-%d-%d", dev, ino)
 }

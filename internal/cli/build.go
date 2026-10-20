@@ -63,7 +63,9 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName stri
 		return fmt.Errorf("build: %w", err)
 	}
 	decision, err := mountinfo.Decide(target, table, mountinfo.Prefixes{
-		RuntimeDir: cfg.RuntimeDir,
+		// Combination dirs live under sessions/<name>/runtime/;
+		// the legacy global runtime_dir is not that tree.
+		RuntimeDir: cfg.SessionsDir,
 		ImagesDir:  cfg.ImagesDir,
 	}, mountinfo.Explicit{
 		Full:   full,

@@ -19,9 +19,3 @@ func liveMount(string) bool {
 func stillAttached(string) bool {
 	return false
 }
-
-// runtimeNameOf needs the stat device and inode numbers, so the
-// runtime reverse resolution stays unavailable off Linux.
-func runtimeNameOf(string) (string, bool) {
-	return "", false
-}

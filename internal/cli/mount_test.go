@@ -212,8 +212,14 @@ func TestMountLibraryImagePrintsMounted(t *testing.T) {
 	if req.ReadOnly || req.Subdir != "" || req.FullFSName != "" {
 		t.Errorf("flags leaked: %+v", req)
 	}
-	if req.MergedDir != view || req.RuntimeDir != filepath.Join(home, "lib", "runtime") {
-		t.Errorf("dirs = %+v", req)
+	if req.MergedDir != view {
+		t.Errorf("merged = %s, want %s", req.MergedDir, view)
+	}
+	// Implicit auto-* session name varies; require sessions/<auto>/runtime/m1.
+	if !strings.HasSuffix(req.RuntimeDir, filepath.Join("runtime", "m1")) ||
+		!strings.HasPrefix(req.RuntimeDir, sessionsDir(home)+string(filepath.Separator)) {
+		t.Errorf("runtime = %s, want under %s/.../runtime/m1",
+			req.RuntimeDir, sessionsDir(home))
 	}
 	if req.Run == nil {
 		t.Fatal("the tool runner seam is not wired")

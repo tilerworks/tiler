@@ -5,9 +5,40 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
+	"github.com/jiangxin/tiler/internal/workspace"
 )
+
+func TestResolveCombinationRuntimeFromTable(t *testing.T) {
+	home, work := withWorkspace(t)
+	view := filepath.Join(work, "view")
+	runtime := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
+	cfg := config.Config{SessionsDir: sessionsDir(home)}
+	got := resolveCombinationRuntime(cfg, view, []workspace.Entry{{
+		Point:  view,
+		Upper:  filepath.Join(runtime, "upper"),
+		Lowers: []string{filepath.Join(runtime, "lower-0")},
+	}})
+	if got != runtime {
+		t.Fatalf("runtime = %q, want %q", got, runtime)
+	}
+}
+
+func TestResolveCombinationRuntimeFromSession(t *testing.T) {
+	home, work := withWorkspace(t)
+	view := filepath.Join(work, "view")
+	withMountSeams(t, nil)
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		libraryAction("alice/app", view, session.ModeRW))
+	cfg := config.Config{SessionsDir: sessionsDir(home)}
+	want := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
+	got := resolveCombinationRuntime(cfg, view, nil)
+	if got != want {
+		t.Fatalf("runtime = %q, want %q", got, want)
+	}
+}
 
 func TestUmountPrintsUnmountedWhenRemoved(t *testing.T) {
 	home, work := withWorkspace(t)
@@ -28,7 +59,9 @@ func TestUmountPrintsUnmountedWhenRemoved(t *testing.T) {
 		t.Fatalf("engine calls = %d", len(f.umountReqs))
 	}
 	req := f.umountReqs[0]
-	if req.Dir != view || req.RuntimeDir != filepath.Join(home, "lib", "runtime") {
+	// The fixture table has no upper/lower, so the combination
+	// directory cannot be recovered and the residue sweep is skipped.
+	if req.Dir != view || req.RuntimeDir != "" {
 		t.Errorf("request = %+v", req)
 	}
 	if len(req.Table) != 1 || req.Table[0].Point != view {

@@ -67,7 +67,7 @@ type Orphan struct {
 // Overview reconciles every record with one mount table snapshot.
 // Records are read under the non-blocking lock and a busy one is
 // marked locked without expanding its actions. Orphan detection
-// needs the configured runtime tree: an empty RuntimeDir skips it.
+// needs the configured sessions root: an empty SessionsDir skips it.
 func (e *Engine) Overview(current string) (Overview, error) {
 	names, err := e.names()
 	if err != nil {
@@ -165,18 +165,18 @@ func collectClaimed(claimed map[string]bool, view View) {
 
 // orphanViews lists the mounted tiler view combinations no readable
 // active record claims. Only entries whose runtime combination
-// directory lives under the configured runtime tree are candidates,
+// directory lives under the configured sessions root are candidates,
 // so status never guesses tiler ownership of foreign mounts; a
 // read-only direct mount without a runtime trace never lists.
 func (e *Engine) orphanViews(table []mountinfo.Mount, claimed map[string]bool) []Orphan {
-	if e.RuntimeDir == "" {
+	if e.SessionsDir == "" {
 		return nil
 	}
 	var order []string
 	groups := map[string][]mountinfo.Mount{}
 	for _, mount := range table {
 		runtimeDir := viewRuntimeDir(mount)
-		if runtimeDir == "" || !underPrefix(runtimeDir, e.RuntimeDir) {
+		if runtimeDir == "" || !underPrefix(runtimeDir, e.SessionsDir) {
 			continue
 		}
 		if _, ok := groups[runtimeDir]; !ok {
@@ -190,7 +190,7 @@ func (e *Engine) orphanViews(table []mountinfo.Mount, claimed map[string]bool) [
 		if claimsAny(entries, claimed) {
 			continue
 		}
-		orphans = append(orphans, orphanOf(entries, e.RuntimeDir, runtimeDir))
+		orphans = append(orphans, orphanOf(entries, e.SessionsDir, runtimeDir))
 	}
 	return orphans
 }

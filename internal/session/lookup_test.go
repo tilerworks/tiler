@@ -109,16 +109,18 @@ func TestSessionForPathListedButDeadReportsStale(t *testing.T) {
 func TestSessionForPathRuntimeCombinationResolves(t *testing.T) {
 	view := "/ws/view"
 	roView := "/ws/ro-chain"
+	devRT := "/sessions/dev/runtime/m1"
+	readerRT := "/sessions/reader/runtime/m1"
 	table := []mountinfo.Mount{
-		overlayEntry(view, "/rt/up-1-2"),
+		overlayEntry(view, devRT),
 		{
 			Point:  roView,
 			FSType: "fuse.fuse-overlayfs",
-			Lowers: []string{"/rt/up-3-4/lower-0", "/rt/up-3-4/lower-1"},
+			Lowers: []string{readerRT + "/lower-0", readerRT + "/lower-1"},
 		},
 	}
 	e, _ := lookupEngine(t, table, map[string]bool{view: true, roView: true})
-	e.RuntimeDir = "/rt"
+	e.SessionsDir = "/sessions"
 	seedMounted(t, e, "dev", view)
 	seedMounted(t, e, "reader", roView)
 
@@ -126,11 +128,11 @@ func TestSessionForPathRuntimeCombinationResolves(t *testing.T) {
 		path string
 		want string
 	}{
-		{path: "/rt/up-1-2/upper/new.txt", want: "dev"},
-		{path: "/rt/up-1-2/work", want: "dev"},
-		{path: "/rt/up-1-2/lower-0/deep", want: "dev"},
-		{path: "/rt/up-1-2", want: "dev"},
-		{path: "/rt/up-3-4/lower-1/image.sqsh-content", want: "reader"},
+		{path: devRT + "/upper/new.txt", want: "dev"},
+		{path: devRT + "/work", want: "dev"},
+		{path: devRT + "/lower-0/deep", want: "dev"},
+		{path: devRT, want: "dev"},
+		{path: readerRT + "/lower-1/image.sqsh-content", want: "reader"},
 	}
 	for _, tc := range paths {
 		hit, err := e.SessionForPath(tc.path)
@@ -311,16 +313,16 @@ func TestListShowAndSummariesReadModel(t *testing.T) {
 }
 
 func TestViewRuntimeDirLayout(t *testing.T) {
-	writable := overlayEntry("/ws/view", "/rt/up-1-2")
-	if got := viewRuntimeDir(writable); got != "/rt/up-1-2" {
+	writable := overlayEntry("/ws/view", "/sessions/dev/runtime/m1")
+	if got := viewRuntimeDir(writable); got != "/sessions/dev/runtime/m1" {
 		t.Errorf("writable runtime = %q", got)
 	}
 	readOnly := mountinfo.Mount{
 		Point:  "/ws/ro",
 		FSType: "fuse.fuse-overlayfs",
-		Lowers: []string{"/rt/up-3-4/lower-0", "/rt/up-3-4/lower-1"},
+		Lowers: []string{"/sessions/reader/runtime/m1/lower-0", "/sessions/reader/runtime/m1/lower-1"},
 	}
-	if got := viewRuntimeDir(readOnly); got != "/rt/up-3-4" {
+	if got := viewRuntimeDir(readOnly); got != "/sessions/reader/runtime/m1" {
 		t.Errorf("read-only runtime = %q", got)
 	}
 	plain := mountinfo.Mount{Point: "/ws/x", FSType: "fuse", Source: "x"}
@@ -329,19 +331,52 @@ func TestViewRuntimeDirLayout(t *testing.T) {
 	}
 }
 
-func TestRuntimeSegment(t *testing.T) {
+func TestSessionRuntimeOf(t *testing.T) {
 	tests := []struct {
 		path string
-		want string
+		name string
+		dir  string
+		ok   bool
 	}{
-		{path: "/rt/up-1-2/upper/x", want: "/rt/up-1-2"},
-		{path: "/rt/up-1-2", want: "/rt/up-1-2"},
-		{path: "/rt", want: ""},
-		{path: "/other/up-1-2", want: ""},
+		{path: "/sessions/dev/runtime/m1/upper/x", name: "dev", dir: "/sessions/dev/runtime/m1", ok: true},
+		{path: "/sessions/dev/runtime/m1", name: "dev", dir: "/sessions/dev/runtime/m1", ok: true},
+		{path: "/sessions/dev/session.json", ok: false},
+		{path: "/sessions/dev", ok: false},
+		{path: "/other/dev/runtime/m1", ok: false},
 	}
 	for _, tc := range tests {
-		if got := runtimeSegment("/rt", tc.path); got != tc.want {
-			t.Errorf("runtimeSegment(%q) = %q, want %q", tc.path, got, tc.want)
+		name, dir, ok := sessionRuntimeOf("/sessions", tc.path)
+		if ok != tc.ok || name != tc.name || dir != tc.dir {
+			t.Errorf("sessionRuntimeOf(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.path, name, dir, ok, tc.name, tc.dir, tc.ok)
 		}
+	}
+}
+
+func TestSessionForRuntimePathAfterEntryVanished(t *testing.T) {
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, "sessions")
+	view := filepath.Join(dir, "view")
+	if err := os.MkdirAll(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e := newEngine(sessions)
+	e.SessionsDir = sessions
+	e.LoadTable = nil
+	seedMounted(t, e, "dev", view)
+	runtimeDir := filepath.Join(sessions, "dev", "runtime", "m1")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "upper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	hit, err := e.SessionForPath(filepath.Join(runtimeDir, "upper", "new.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit.Record.Name != "dev" || hit.Mountpoint != view || !hit.Stale {
+		t.Fatalf("hit = %+v", hit)
+	}
+	if _, err := e.SessionForPath(filepath.Join(sessions, "other", "runtime", "m1", "upper")); err == nil {
+		t.Fatal("a foreign runtime directory resolved")
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
@@ -58,22 +57,6 @@ func deviceOf(path string) (uint64, error) {
 		return 0, errors.New("session: cannot read the device number")
 	}
 	return st.Dev, nil
-}
-
-// runtimeNameOf derives the runtime directory name of a point from
-// its device and inode — the reverse of the name the mount engine
-// gave the combination at mount time. A point that cannot be
-// statted has no derivable name.
-func runtimeNameOf(point string) (string, bool) {
-	info, err := os.Stat(point)
-	if err != nil {
-		return "", false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return "", false
-	}
-	return config.RuntimeDirName(st.Dev, st.Ino), true
 }
 
 // answers reports whether the connection behind point still serves

@@ -65,18 +65,19 @@ type Engine struct {
 	// Clean overrides the stale-point teardown. Nil uses CleanStale.
 	Clean CleanFunc
 	// RemoveRuntime purges the runtime directory of one mountpoint:
-	// the <RuntimeDir>/up-<dev>-<ino> combination the mount engine
-	// built for it, upper and work data included. Nil derives the
-	// directory from the point's device and inode and removes it
-	// wholesale; a point with no derivable runtime directory is a
+	// the sessions/<name>/runtime/m<seq> combination the mount
+	// engine built for it, upper and work data included. Nil derives
+	// the directory from the session name and the action's RuntimeID
+	// and removes it wholesale; a mount with no RuntimeID is a
 	// no-op. The --rm close path and the gc purge of a stale --rm
 	// record share it, and tests inject a fake to observe the calls.
 	RemoveRuntime func(mountpoint string) error
-	// RuntimeDir is the configured runtime tree. A path inside it —
-	// an upper, a work directory, or a lower transit point —
-	// resolves back to the session owning the combination. Empty
-	// disables the runtime branch of the reverse lookup.
-	RuntimeDir string
+	// SessionsDir is the configured sessions root. A path under
+	// <SessionsDir>/<name>/runtime/... — an upper, a work directory,
+	// or a lower transit point — resolves back to the session owning
+	// the combination. Empty disables the runtime branch of the
+	// reverse lookup. It is the same tree Store.Dir points at.
+	SessionsDir string
 	// ImagesDir is the configured image library root. The members
 	// form forest combination resolves member mount sources against
 	// it for the combination health check and the forest reverse
@@ -317,10 +318,12 @@ func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 }
 
 // purgeRemovable removes the runtime directory of every recorded
-// view and then deletes the record. The views are already down, so
-// each runtime directory is safe to remove wholesale. A purge
-// failure is collected and reported but never blocks the record
-// deletion: dropping the record is what unpins the image, the
+// view and then deletes the session directory. The views are already
+// down, so each runtime directory is safe to remove wholesale. When
+// no RemoveRuntime seam is injected, deleting the session directory
+// clears the record, lock, and every runtime subtree in one step. A
+// purge failure is collected and reported but never blocks the
+// record deletion: dropping the record is what unpins the image, the
 // primary goal of a --rm close.
 func (e *Engine) purgeRemovable(name string, rec Record) error {
 	var errs []error
@@ -328,7 +331,7 @@ func (e *Engine) purgeRemovable(name string, rec Record) error {
 		if action.Type != TypeMount || action.Mountpoint == "" {
 			continue
 		}
-		if err := e.removeRuntime(action.Mountpoint); err != nil {
+		if err := e.removeRuntime(name, action); err != nil {
 			errs = append(errs, fmt.Errorf(
 				"session: %s: purge runtime of %s: %w",
 				name, action.Mountpoint, err))
@@ -340,23 +343,26 @@ func (e *Engine) purgeRemovable(name string, rec Record) error {
 	return errors.Join(errs...)
 }
 
-// removeRuntime purges the runtime directory of one mountpoint
-// through the injected seam, defaulting to the device-and-inode
-// derivation the mount engine, the residue sweep, and the reverse
-// lookup all share. A point with no derivable runtime directory —
-// off Linux, or a mountpoint that no longer exists — purges nothing.
-func (e *Engine) removeRuntime(mountpoint string) error {
+// removeRuntime purges the runtime directory of one mount action
+// through the injected seam, defaulting to sessions/<name>/runtime/
+// <RuntimeID>. A mount with no RuntimeID and no derivable seq purges
+// nothing.
+func (e *Engine) removeRuntime(name string, action Action) error {
 	if e.RemoveRuntime != nil {
-		return e.RemoveRuntime(mountpoint)
+		return e.RemoveRuntime(action.Mountpoint)
 	}
-	if e.RuntimeDir == "" || mountpoint == "" {
+	root := e.SessionsDir
+	if root == "" {
+		root = e.Dir
+	}
+	id := action.RuntimeID
+	if id == "" && action.Seq > 0 {
+		id = runtimeIDOf(action.Seq)
+	}
+	if root == "" || name == "" || id == "" {
 		return nil
 	}
-	dirName, ok := runtimeNameOf(mountpoint)
-	if !ok {
-		return nil
-	}
-	return os.RemoveAll(filepath.Join(e.RuntimeDir, dirName))
+	return os.RemoveAll(filepath.Join(root, name, "runtime", id))
 }
 
 // CloseImplicitFor closes the implicit auto-* session whose record

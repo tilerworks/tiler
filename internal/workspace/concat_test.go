@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 // withDummyConcatfs puts a do-nothing concatfs on PATH so the concat
@@ -57,8 +55,8 @@ func TestConcatReadOnlySingleMountsTransitFirst(t *testing.T) {
 	if transit != filepath.Join(w.runtimeDir, "concat") {
 		t.Errorf("transit = %q, want it under the runtime dir", transit)
 	}
-	if !strings.HasPrefix(w.runtimeDir, filepath.Join(dir, "runtime", "up-")) {
-		t.Errorf("runtime dir %s is not under runtime/up-<dev>-<ino>", w.runtimeDir)
+	if w.runtimeDir != req.RuntimeDir {
+		t.Errorf("runtime dir = %s, want the caller-supplied combination %s", w.runtimeDir, req.RuntimeDir)
 	}
 	if _, statErr := os.Stat(transit); statErr != nil {
 		t.Errorf("transit point was not created: %v", statErr)
@@ -186,14 +184,9 @@ func TestConcatCleansStaleTransitBeforeRemount(t *testing.T) {
 	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Plan the runtime directory exactly like the engine will and
-	// leave a live transit point there from an earlier interrupted
-	// mount.
-	dev, ino, err := devIno(req.MergedDir)
-	if err != nil {
-		t.Skipf("device and inode probing unavailable here: %v", err)
-	}
-	transit := filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino), "concat")
+	// Leave a live transit point under the combination directory
+	// from an earlier interrupted mount.
+	transit := filepath.Join(req.RuntimeDir, "concat")
 	if err := os.MkdirAll(transit, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -275,11 +268,8 @@ func TestUnmountPathSweepsConcatTransit(t *testing.T) {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dev, ino, err := devIno(target)
-	if err != nil {
-		t.Skipf("device and inode probing unavailable here: %v", err)
-	}
-	transit := filepath.Join(runtime, config.RuntimeDirName(dev, ino), "concat")
+	rt := filepath.Join(runtime, "m1")
+	transit := filepath.Join(rt, "concat")
 	if err := os.MkdirAll(transit, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +282,7 @@ func TestUnmountPathSweepsConcatTransit(t *testing.T) {
 			{Point: target, FSType: "fuse", Source: filepath.Join(dir, "image.sqsh")},
 			{Point: transit, FSType: "fuse.concatfs", Source: filepath.Join(dir, "blocks")},
 		},
-		RuntimeDir: runtime,
+		RuntimeDir: rt,
 	}
 	removed, err := unmountPath(req, k.run, k.seam())
 	if err != nil {

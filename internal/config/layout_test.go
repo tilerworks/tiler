@@ -52,20 +52,3 @@ func TestOutsideReserved(t *testing.T) {
 		})
 	}
 }
-
-func TestRuntimeDirNameStableForDeviceAndInode(t *testing.T) {
-	first := RuntimeDirName(1, 2)
-	again := RuntimeDirName(1, 2)
-	if first != "up-1-2" {
-		t.Fatalf("name = %q", first)
-	}
-	if first != again {
-		t.Fatal("same device and inode changed the directory name")
-	}
-	if first == RuntimeDirName(1, 3) {
-		t.Fatal("different inodes share a directory name")
-	}
-	if first == RuntimeDirName(4, 2) {
-		t.Fatal("same inode on different devices share a directory name")
-	}
-}

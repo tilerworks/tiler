@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -154,6 +155,11 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 				" it cannot target a session named by --session or " + sessionEnvVar +
 				"; create one with 'session new --rm <name>'")}
 	}
+	// A killed FUSE daemon can leave the target unlisted while its
+	// session-scoped squashfuse lowers remain. Tear that residue down
+	// before a fresh write-ahead mount so the new combination starts
+	// clean; a healthy live view is left alone for reuse.
+	preemptStaleView(cfg, dir)
 	engine := sessionEngine(cfg)
 	if implicit {
 		if name, err = newImplicitSession(engine, flags.rm); err != nil {
@@ -166,10 +172,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	// The write-ahead record is durable before the engine runs and
 	// carries the outcome afterwards, so a crash between the two
-	// leaves a replayable pending action.
+	// leaves a replayable pending action. The stored action carries
+	// RuntimeID (m<seq>), which names the combination directory.
 	result, err := engine.RunMount(name, action,
-		func(session.Action) (session.Result, error) {
-			return runMountEngine(cfg, target, dir, flags, cmd.ErrOrStderr())
+		func(stored session.Action) (session.Result, error) {
+			return runMountEngine(cfg, target, dir, flags,
+				sessionRuntimeDir(cfg, name, stored), cmd.ErrOrStderr())
 		})
 	if implicit && (err != nil || result.Reused) {
 		// An implicit record whose action failed or merely adopted an
@@ -262,27 +270,89 @@ func mountAction(ref string, target image.Target, dir string, flags mountFlags) 
 	return action, nil
 }
 
+// preemptStaleView tears down a dead or vanished view at dir before
+// a fresh mount. A healthy live view is left alone so reuse still
+// works; a listed-but-dead overlay and a vanished overlay that left
+// session-scoped lowers behind both take the full unmount path.
+func preemptStaleView(cfg config.Config, dir string) {
+	table, err := loadMountTable()
+	if err != nil || len(table) == 0 {
+		return
+	}
+	entries := toEntries(table)
+	listed := false
+	for _, entry := range entries {
+		if entry.Point == dir {
+			listed = true
+			break
+		}
+	}
+	if listed && viewServing(dir) {
+		return
+	}
+	runtime := resolveCombinationRuntime(cfg, dir, entries)
+	if runtime == "" {
+		return
+	}
+	_, _ = unmountEngine(workspace.UnmountRequest{
+		Dir:        dir,
+		Table:      entries,
+		RuntimeDir: runtime,
+		Owned:      ownedLibrarySource(cfg.ImagesDir),
+		Reload:     reloadEntries,
+		Run:        mountRun,
+	})
+	_, _ = sessionEngine(cfg).CloseImplicitFor(dir, sessionUmount(cfg))
+}
+
+// viewServing reports whether dir still answers reads. A dead FUSE
+// connection refuses with ENOTCONN; a healthy mount or plain
+// directory opens successfully.
+func viewServing(dir string) bool {
+	file, err := os.Open(dir)
+	if err == nil {
+		_ = file.Close()
+		return true
+	}
+	return false
+}
+
+// sessionRuntimeDir is the combination directory of one recorded
+// mount action: sessions/<name>/runtime/m<seq>.
+func sessionRuntimeDir(cfg config.Config, name string, action session.Action) string {
+	id := action.RuntimeID
+	if id == "" && action.Seq > 0 {
+		id = "m" + strconv.Itoa(action.Seq)
+	}
+	if name == "" || id == "" {
+		return ""
+	}
+	return filepath.Join(cfg.SessionsDir, name, "runtime", id)
+}
+
 // runMountEngine assembles the engine request and runs the mount,
 // the execution half of one write-ahead record. Both the mount
 // command and the session replay run through it. The target's split
 // form selects the engine: the single-file cascade keeps the plain
 // stack mount, a blocks payload picks its materialization route,
 // and a members payload mounts the subpath forest. stderr carries
-// the degrade guidance of the concat route.
+// the degrade guidance of the concat route. runtimeDir is the
+// session-scoped combination directory for this action.
 func runMountEngine(
 	cfg config.Config,
 	target image.Target,
 	dir string,
 	flags mountFlags,
+	runtimeDir string,
 	stderr io.Writer,
 ) (session.Result, error) {
 	switch target.Form {
 	case image.PayloadBlocks:
-		return runBlocksEngine(cfg, target, dir, flags, stderr)
+		return runBlocksEngine(cfg, target, dir, flags, runtimeDir, stderr)
 	case image.PayloadMembers:
 		return runForestEngine(cfg, target, dir)
 	default:
-		return runStackEngine(cfg, target, dir, flags)
+		return runStackEngine(cfg, target, dir, flags, runtimeDir)
 	}
 }
 
@@ -309,9 +379,10 @@ func runBlocksEngine(
 	target image.Target,
 	dir string,
 	flags mountFlags,
+	runtimeDir string,
 	stderr io.Writer,
 ) (session.Result, error) {
-	req, err := blocksRequest(cfg, target, dir, flags, stderr)
+	req, err := blocksRequest(cfg, target, dir, flags, runtimeDir, stderr)
 	if err != nil {
 		return session.Result{}, err
 	}
@@ -325,6 +396,7 @@ func blocksRequest(
 	target image.Target,
 	dir string,
 	flags mountFlags,
+	runtimeDir string,
 	stderr io.Writer,
 ) (workspace.Request, error) {
 	repo, err := image.OpenRepo(cfg.ImagesDir, target.Name)
@@ -348,7 +420,7 @@ func blocksRequest(
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,
 		FuseOptions:     cfg.FuseOptions,
-		RuntimeDir:      cfg.RuntimeDir,
+		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
 	}
@@ -416,8 +488,9 @@ func runStackEngine(
 	target image.Target,
 	dir string,
 	flags mountFlags,
+	runtimeDir string,
 ) (session.Result, error) {
-	req, err := mountRequest(cfg, target, dir, flags)
+	req, err := mountRequest(cfg, target, dir, flags, runtimeDir)
 	if err != nil {
 		return session.Result{}, err
 	}
@@ -517,6 +590,7 @@ func mountRequest(
 	target image.Target,
 	dir string,
 	flags mountFlags,
+	runtimeDir string,
 ) (workspace.Request, error) {
 	mounted := make([]string, 0, len(target.Members))
 	original := make([]string, 0, len(target.Members))
@@ -544,7 +618,7 @@ func mountRequest(
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,
 		FuseOptions:     cfg.FuseOptions,
-		RuntimeDir:      cfg.RuntimeDir,
+		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
 	}

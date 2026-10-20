@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 func TestUnmountPathNotMountedIsNoOp(t *testing.T) {
@@ -51,42 +49,23 @@ func TestUnmountPathNotMountedIsNoOp(t *testing.T) {
 }
 
 func TestUnmountPathRequiresFields(t *testing.T) {
-	dir := t.TempDir()
-	tests := []struct {
-		name string
-		req  UnmountRequest
-	}{
-		{
-			name: "missing dir",
-			req:  UnmountRequest{RuntimeDir: filepath.Join(dir, "runtime")},
-		},
-		{
-			name: "missing runtime dir",
-			req:  UnmountRequest{Dir: filepath.Join(dir, "view")},
-		},
+	k := newFakeKernel()
+	removed, err := unmountPath(UnmountRequest{}, k.run, k.seam())
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("err = %v, want a required-field refusal", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			k := newFakeKernel()
-			removed, err := unmountPath(tc.req, k.run, k.seam())
-			if err == nil || !strings.Contains(err.Error(), "required") {
-				t.Fatalf("err = %v, want a required-field refusal", err)
-			}
-			if removed != 0 {
-				t.Errorf("removed = %d, want 0", removed)
-			}
-			if len(k.calls) != 0 {
-				t.Errorf("tools ran despite the refusal: %v", k.calls)
-			}
-		})
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+	if len(k.calls) != 0 {
+		t.Errorf("tools ran despite the refusal: %v", k.calls)
 	}
 }
 
 func TestUnmountPathTearsDownMergedThenLowersInReverse(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "view")
-	runtime := filepath.Join(dir, "runtime")
-	rt := filepath.Join(runtime, "up-9-9")
+	rt := filepath.Join(dir, "runtime", "m1")
 	lowers := []string{
 		filepath.Join(rt, "lower-0"),
 		filepath.Join(rt, "lower-1"),
@@ -122,7 +101,7 @@ func TestUnmountPathTearsDownMergedThenLowersInReverse(t *testing.T) {
 			Point: target, FSType: "fuse.fuse-overlayfs", Source: "overlay",
 			Upper: upper, Lowers: lowers,
 		}},
-		RuntimeDir: runtime,
+		RuntimeDir: rt,
 	}
 	removed, err := unmountPath(req, k.run, k.seam())
 	if err != nil {
@@ -211,12 +190,7 @@ func TestUnmountPathSweepsVanishedOverlayLowers(t *testing.T) {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dev, ino, err := devIno(target)
-	if err != nil {
-		t.Skipf("device and inode probing unavailable here: %v", err)
-	}
-	runtime := filepath.Join(dir, "runtime")
-	rt := filepath.Join(runtime, config.RuntimeDirName(dev, ino))
+	rt := filepath.Join(dir, "runtime", "m1")
 	lowers := []string{
 		filepath.Join(rt, "lower-0"),
 		filepath.Join(rt, "lower-1"),
@@ -239,7 +213,7 @@ func TestUnmountPathSweepsVanishedOverlayLowers(t *testing.T) {
 		}, nil
 	}
 	req := UnmountRequest{
-		Dir: target, RuntimeDir: runtime, Reload: reload,
+		Dir: target, RuntimeDir: rt, Reload: reload,
 	}
 	removed, err := unmountPath(req, k.run, k.seam())
 	if err != nil {

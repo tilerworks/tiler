@@ -13,13 +13,13 @@ import (
 func TestOverviewReconcilesRecordsWithTable(t *testing.T) {
 	live, dead, orphanPoint := "/ws/live", "/ws/dead", "/ws/orphan"
 	table := []mountinfo.Mount{
-		overlayEntry(live, "/rt/up-1-1"),
-		overlayEntry(dead, "/rt/up-2-2"),
-		overlayEntry(orphanPoint, "/rt/up-3-3"),
+		overlayEntry(live, "/sessions/dev/runtime/m1"),
+		overlayEntry(dead, "/sessions/gone/runtime/m1"),
+		overlayEntry(orphanPoint, "/sessions/orphan/runtime/m1"),
 		{Point: "/foreign", FSType: "ext4", Source: "/dev/sda1"},
 	}
 	e, _ := lookupEngine(t, table, map[string]bool{live: true, orphanPoint: true})
-	e.RuntimeDir = "/rt"
+	e.SessionsDir = "/sessions"
 	seedMounted(t, e, "dev", live)
 	seedMounted(t, e, "gone", dead)
 	seedClosed(t, e, "old", testNow)
@@ -64,7 +64,7 @@ func TestOverviewReconcilesRecordsWithTable(t *testing.T) {
 	}
 	orphan := overview.Orphans[0]
 	if orphan.Point != orphanPoint || orphan.FSType != "fuse.fuse-overlayfs" ||
-		orphan.RuntimeDir != "/rt/up-3-3" {
+		orphan.RuntimeDir != "/sessions/orphan/runtime/m1" {
 		t.Fatalf("orphan = %+v", orphan)
 	}
 }
@@ -87,9 +87,9 @@ func TestOverviewCurrentMismatchIsNotAnError(t *testing.T) {
 
 func TestOverviewMarksLockedRecordsWithoutExpanding(t *testing.T) {
 	e, _ := lookupEngine(t, []mountinfo.Mount{
-		overlayEntry("/ws/live", "/rt/up-1-1"),
+		overlayEntry("/ws/live", "/sessions/busy/runtime/m1"),
 	}, map[string]bool{"/ws/live": true})
-	e.RuntimeDir = "/rt"
+	e.SessionsDir = "/sessions"
 	seedMounted(t, e, "busy", "/ws/live")
 	e.Lock = func(name string, _ time.Duration) (func(), error) {
 		if name == "busy" {
@@ -116,24 +116,24 @@ func TestOverviewMarksLockedRecordsWithoutExpanding(t *testing.T) {
 	}
 }
 
-func TestOverviewSkipsOrphansWithoutRuntimeDir(t *testing.T) {
-	table := []mountinfo.Mount{overlayEntry("/ws/orphan", "/rt/up-3-3")}
+func TestOverviewSkipsOrphansWithoutSessionsDir(t *testing.T) {
+	table := []mountinfo.Mount{overlayEntry("/ws/orphan", "/sessions/orphan/runtime/m1")}
 	e, _ := lookupEngine(t, table, map[string]bool{"/ws/orphan": true})
-	e.RuntimeDir = ""
+	e.SessionsDir = ""
 
 	overview, err := e.Overview("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if overview.Orphans != nil {
-		t.Fatalf("orphans = %+v, want none without a runtime tree", overview.Orphans)
+		t.Fatalf("orphans = %+v, want none without a sessions root", overview.Orphans)
 	}
 }
 
 func TestOverviewUnmountedActionsStayUnclaimedAndUnannotated(t *testing.T) {
-	table := []mountinfo.Mount{overlayEntry("/ws/torn", "/rt/up-9-9")}
+	table := []mountinfo.Mount{overlayEntry("/ws/torn", "/sessions/torn/runtime/m1")}
 	e, _ := lookupEngine(t, table, map[string]bool{"/ws/torn": true})
-	e.RuntimeDir = "/rt"
+	e.SessionsDir = "/sessions"
 	seedMounted(t, e, "torn", "/ws/torn")
 	if err := e.Writeback("torn", 1, StatusUnmounted, ""); err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestOverviewUnmountedActionsStayUnclaimedAndUnannotated(t *testing.T) {
 
 func TestOverviewEmptyStore(t *testing.T) {
 	e, _ := lookupEngine(t, nil, nil)
-	e.RuntimeDir = "/rt"
+	e.SessionsDir = "/sessions"
 
 	overview, err := e.Overview("dev")
 	if err != nil {
