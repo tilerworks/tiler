@@ -30,7 +30,7 @@
 #
 # Scope guard: this case asserts the named-session lifecycle and its
 # error branches only. It does not cover crash recovery (t0007), the
-# implicit auto-* sessions (t0008), git-backed images, split storage,
+# generated sessions (t0008), git-backed images, split storage,
 # or cache/subdir mount variants.
 
 test_description='tiler session new/list/show/close/remove drive a named lifecycle'
@@ -189,18 +189,15 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session remove refuses an active recor
 	grep -Eq "^dev active mounts=3$" list5.out
 '
 
-# A manual umount of one view does NOT auto-close a named session. Only
-# `session close` and the implicit auto-* last-view rule write a record
-# back, so the explicit `dev` record stays active and its mounts= count
-# is unchanged at 3: the write-ahead record diverges from the now-stale
-# s2 view by design (verified against bin/tiler -- an older tiler-e2e s06
-# asserted a decrementing count, which no longer holds). The live s1 view
-# still serves its lower-layer content.
+# A manual umount of one view does NOT close a named session. It does
+# write that action back to unmounted, so mounts= drops from 3 to 2 and
+# the record stays active. The live s1 view still serves its lower-layer
+# content.
 test_expect_success TILER,FUSE_TOOLCHAIN 'umount of one view keeps a named session active' '
 	"$tiler_bin" umount "$s2_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
 	"$tiler_bin" session list >list6.out 2>list6.err &&
-	grep -Eq "^dev active mounts=3$" list6.out &&
+	grep -Eq "^dev active mounts=2$" list6.out &&
 	test -e "$s1_dir/README.txt"
 '
 

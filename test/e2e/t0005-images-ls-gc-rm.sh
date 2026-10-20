@@ -170,20 +170,22 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'rm deprecates then removes an unrefere
 	! grep -q "tmp/rmtest" lsall2.out
 '
 
-# Mounting without --session creates an implicit auto-* session that pins
-# the image. While that view is live, rm must be refused with a non-zero
-# exit naming the pinning session (demo S19). Umounting closes the session
-# and drops the pin, after which the two-phase rm succeeds.
+# Mounting without --session creates a generated session that pins the
+# image. While that view is live, rm must be refused with a non-zero
+# exit naming the pinning session. Umounting releases the pin, after
+# which the two-phase rm succeeds.
 test_expect_success TILER,FUSE_TOOLCHAIN 'rm is refused while an active session references it' '
 	"$tiler_bin" build --image life/app "$src_dir" >build5.out 2>build5.err &&
 	grep -Eq "^full life/app [0-9a-f]+" build5.out &&
 	mkdir -p "$work2_dir" &&
 	"$tiler_bin" mount life/app "$work2_dir" >mount5.out 2>mount5.err &&
 	grep -Eq "^mounted " mount5.out &&
+	pin=$(sed -n "s/^new session created: //p" mount5.out) &&
+	test -n "$pin" &&
 	status=0 &&
 	{ "$tiler_bin" images rm life/app >rmref.out 2>rmref.err || status=$?; } &&
 	test "$status" -ne 0 &&
-	grep -q "still referenced by session auto-" rmref.err &&
+	grep -q "still referenced by session $pin" rmref.err &&
 	"$tiler_bin" umount "$work2_dir" &&
 	"$tiler_bin" images rm life/app >rm3.out 2>rm3.err &&
 	grep -Eq "^deprecated life/app$" rm3.out &&

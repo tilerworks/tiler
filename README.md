@@ -143,12 +143,16 @@ Available now:
   mount is recorded write-ahead in a session before the engine
   runs: `--session <name>` attaches a session created with
   `session new`, the `TILER_SESSION_ID` environment variable binds
-  one, and without either an implicit `auto-<timestamp>-<short
-  random>` session is created. `--rm` marks that implicit session
-  for removal: once its last view unmounts the record is deleted
-  and its runtime directory purged, upper data included. It cannot
-  combine with `--session` or `TILER_SESSION_ID` — use `session new
-  --rm <name>` for a named session. A failed mount keeps its
+  one, and without either a generated `adjective-animal` session
+  (for example `happy-fox`) is created. That mount prints
+  `new session created: <name>` before the `mounted` line so a later
+  `--session <name>` can record more views on it. `--rm` marks the
+  just-created session for removal: once its last view unmounts the
+  record is deleted and its runtime directory purged, upper data
+  included. It cannot combine with `--session` or `TILER_SESSION_ID`
+  — use `session new --rm [name]` for a session created ahead of
+  time. A non-`--rm` session stays active after its last view
+  unmounts until `session close`. A failed mount keeps its
   recorded action failed, so a later `session open` retries it.
 - `tiler umount <dir>` tears a view down by path: the merged point
   first, then the runtime transit points in reverse order. Each
@@ -159,8 +163,10 @@ Available now:
   succeeds silently. Upper and work data is never deleted, so a
   later mount of the same directory reuses the earlier changes.
 - `tiler session` manages the mount sessions that crash recovery
-  replays. `session new <name>` creates an empty record under
-  `~/.tiler/sessions/` and refuses a duplicate name; `--rm` marks
+  replays. `session new [name]` creates an empty record under
+  `~/.tiler/sessions/` and refuses a duplicate name; omitting the
+  name generates an `adjective-animal` name and prints
+  `created <name>`. `--rm` marks
   it so `session close` deletes the record and purges the runtime
   of every view instead of keeping it for audit. `session open
   <name>` walks the record in mount order: a healthy view is
@@ -177,8 +183,9 @@ Available now:
   deletes a closed record and refuses an active one. `session
   list [--json]` prints one line per record and `session show
   <name> [--json]` its full action log; the `--json` form of show
-  is the record object itself. Implicit `auto-*` sessions accept
-  the same commands as explicit ones.
+  is the record object itself. A generated name and an explicit
+  name accept the same commands; only `--rm` changes close into a
+  delete.
 - `tiler status [<path>] [--json]` reconciles the session records
   with the real mount state. Without a path it prints one block
   per record — every live mount action marked `healthy` or

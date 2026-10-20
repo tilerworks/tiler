@@ -81,7 +81,7 @@ equipped host, so a genuine regression is never masked by a skip.
   `--json`), `images gc` promoting an unreferenced hold into an
   archive, `images gc --keep-versions` expiring the older of two
   archives, the two-phase `images rm` (deprecate then remove), and
-  `images rm` refused while an implicit `auto-*` session still
+  `images rm` refused while a generated session still
   references the image. Needs the FUSE toolchain; skips cleanly
   without it.
 - `e2e/t0006-session-lifecycle.sh` — drives the `session` command over
@@ -103,11 +103,11 @@ equipped host, so a genuine regression is never masked by a skip.
   a pure no-op, and a closed session revives through `open`. Needs the
   FUSE toolchain and `pgrep`; skips cleanly without them.
 - `e2e/t0008-session-implicit.sh` — exercises the `session` command's
-  view of the implicit `auto-*` records a plain `mount` creates:
-  `list` renders the auto-named record, `show` (text and `--json`)
-  matches the named shape, umounting the last view auto-closes the
-  session, and an implicit session can still be `close`d and `remove`d
-  by name. Needs the FUSE toolchain; skips cleanly without it.
+  view of the adjective-animal records a plain `mount` creates:
+  stdout prints `new session created:`, `list`/`show` match the named
+  shape, umounting the last view leaves a non-`--rm` session active,
+  and the session can still be `close`d and `remove`d by name. Needs
+  the FUSE toolchain; skips cleanly without it.
 - `e2e/t0009-status.sh` — drives the `status` command over real mounts
   in both forms. The no-path overview reports an empty store, a healthy
   session marked `current` via `TILER_SESSION_ID` (and a marker that
@@ -122,17 +122,17 @@ equipped host, so a genuine regression is never masked by a skip.
   session and purges its runtime on close. A named `session new --rm`
   shows the `rm` marker and its `close` prints `removed`, deletes the
   record, and force-removes the `sessions/<name>/` directory including
-  `runtime/m<seq>/` upper data; `mount --rm` marks the implicit
-  `auto-*` session so umounting its last view deletes the record and
+  `runtime/m<seq>/` upper data; `mount --rm` marks the generated
+  session so umounting its last view deletes the record and
   purges the runtime; `mount --rm` refuses a session named by
   `--session` or `TILER_SESSION_ID` (exit 2) pointing at `session new
   --rm`; and a plain (non-`--rm`) close keeps the closed record and its
   runtime upper data as the contrast. Needs the FUSE toolchain; skips
   cleanly without it.
 - `e2e/t0011-session-remount-different-image.sh` — mounts `alice/one` at
-  a workdir, writes `marker.txt`, umounts (closing the first `auto-*`
-  session), then mounts `alice/two` at the same workdir. Asserts two
-  distinct `auto-*` sessions, that the second view has no `marker.txt`
+  a workdir, writes `marker.txt`, umounts (leaving the first generated
+  session active), then mounts `alice/two` at the same workdir. Asserts
+  two distinct generated sessions, that the second view has no `marker.txt`
   (session-scoped upper isolation), and that each session owns its own
   `sessions/<name>/runtime/m1/` tree. Needs the FUSE toolchain; skips
   cleanly without it.

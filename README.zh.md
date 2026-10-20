@@ -114,12 +114,15 @@ tiler session close feature                # 逆序卸载，记录保留
   且位于运行时树与全部保留目录之外。每次挂载都在引擎执行前
   先写进 session 记录（write-ahead）：`--session <name>` 挂进
   用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
-  绑定一个，两者都没有时自动创建隐式的
-  `auto-<时间戳>-<短随机>` session。`--rm` 把这个隐式 session
+  绑定一个，两者都没有时自动创建 `形容词-动物` 形式的
+  session（例如 `happy-fox`），并先打印
+  `new session created: <name>`，再用 `--session <name>` 继续往
+  同一 session 记录更多挂载点。`--rm` 把这次新建的 session
   标记为待删：最后一个视图卸载后，记录被删除、runtime 目录被
   清理，upper 数据一并抹除。它不能与 `--session` 或
-  `TILER_SESSION_ID` 同用——命名 session 请用 `session new --rm
-  <name>`。挂载失败时动作以 failed 状态留在记录里，之后
+  `TILER_SESSION_ID` 同用——事先创建请用 `session new --rm
+  [name]`。非 `--rm` 的 session 在最后一个视图卸载后仍保持
+  active，直到 `session close`。挂载失败时动作以 failed 状态留在记录里，之后
   `session open` 会重试。
 - `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
   运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
@@ -128,7 +131,8 @@ tiler session close feature                # 逆序卸载，记录保留
   成功。upper 与 work 数据从不删除，同一目录之后再次挂载时
   复用先前的改动。
 - `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
-  new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
+  new [name]` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
+  省略名字时生成 `形容词-动物` 名字并打印 `created <name>`。
   `--rm` 标记的记录在 `session close` 时删除记录并清理每个视图
   的 runtime，而不再保留供审计。
   `session open <name>` 按挂载顺序遍历记录：健康视图跳过，失活
@@ -142,7 +146,8 @@ tiler session close feature                # 逆序卸载，记录保留
   记录，active 拒绝。
   `session list [--json]` 每条记录打印一行，`session show <name>
   [--json]` 展示完整动作流水，show 的 `--json` 形态就是记录对象
-  本身。隐式 `auto-*` session 与显式 session 接受同一套命令。
+  本身。生成的名字与显式名字接受同一套命令；只有 `--rm`
+  会把 close 变成删除。
 - `tiler status [<path>] [--json]` 把 session 记录与真实挂载状态
   对账。不带路径时每条记录输出一块——每个未卸载的挂载动作标注
   `healthy` 或 `stale`——`TILER_SESSION_ID` 命名的 session 标记
