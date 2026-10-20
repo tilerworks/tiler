@@ -135,8 +135,8 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if flags.rm && !implicit {
 		return usageError{errors.New(
-			"mount: --rm applies to the session mount creates when no" +
-				" --session or " + sessionEnvVar + " is set;" +
+			"mount: --rm only applies when this mount creates a new" +
+				" session (no --session or " + sessionEnvVar + ");" +
 				" it cannot target a named session;" +
 				" create one with 'session new --rm [name]'")}
 	}
@@ -150,12 +150,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		if name, err = allocateGeneratedSession(engine, flags.rm, "mount"); err != nil {
 			return err
 		}
-		if _, err = fmt.Fprintf(cmd.OutOrStdout(), "new session created: %s\n", name); err != nil {
-			return err
-		}
 	}
 	action, err := mountAction(args[0], target, dir, flags)
 	if err != nil {
+		if implicit {
+			discardGeneratedSession(engine, name, false)
+		}
 		return err
 	}
 	// The write-ahead record is durable before the engine runs and
@@ -175,6 +175,14 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if err != nil {
 		return err
+	}
+	// Announce a kept generated session only after the mount
+	// succeeds; discarded draws must not print a reusable name.
+	if implicit && !result.Reused {
+		if _, err = fmt.Fprintf(cmd.OutOrStdout(),
+			"new session created: %s\n", name); err != nil {
+			return err
+		}
 	}
 	verb := "mounted"
 	if result.Reused {

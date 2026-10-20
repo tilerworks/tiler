@@ -279,10 +279,8 @@ func TestMountReusePrintsAlreadyMounted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	name, rest, ok := parseNewSessionCreated(stdout)
-	if !ok || !generatedSessionName.MatchString(name) ||
-		rest != "already mounted "+view+"\n" {
-		t.Fatalf("stdout = %q", stdout)
+	if stdout != "already mounted "+view+"\n" {
+		t.Fatalf("stdout = %q, want already mounted without a create line", stdout)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
@@ -318,6 +316,9 @@ func TestMountDifferentImageConflictsAndExitsNonZero(t *testing.T) {
 	}
 	if strings.Contains(stdout, "already mounted") {
 		t.Errorf("a conflict printed the reuse verb: %q", stdout)
+	}
+	if strings.Contains(stdout, "new session created:") {
+		t.Errorf("a conflict announced a discarded session: %q", stdout)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Errorf("engine calls = %d, want 1", len(f.mountReqs))

@@ -465,9 +465,11 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 		t.Errorf("lower image digest changed: %s -> %s", before, after)
 	}
 
-	// A repeated mount is an idempotent reuse of the same view.
-	requireCreatedMount(t, mountCmd(t, lib, "alice/app", view),
-		"already mounted "+view+"\n")
+	// A repeated mount is an idempotent reuse of the same view and
+	// does not announce a discarded generated session.
+	if out := mountCmd(t, lib, "alice/app", view); out != "already mounted "+view+"\n" {
+		t.Fatalf("remount output = %q, want already mounted without a create line", out)
+	}
 	assertBytesFile(t, filepath.Join(view, "extra.txt"), "extra\n")
 
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {

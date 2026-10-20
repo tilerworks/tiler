@@ -398,10 +398,10 @@ func TestMountImplicitSessionDiscardsFailedAndReusedRecords(t *testing.T) {
 		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
 
-	// A remount that merely adopts the healthy view still prints the
-	// create line for the discarded draw, then leaves no second record.
+	// A remount that merely adopts the healthy view discards the
+	// fresh draw without announcing a create line.
 	f.reused = true
-	mountCreatedOK(t, lib, "already mounted "+view+"\n", "mount", img, view)
+	mountOK(t, lib, "already mounted "+view+"\n", "mount", img, view)
 	if names := listSessionNames(t, sessions); len(names) != 1 || names[0] != generated {
 		t.Fatalf("sessions after reuse = %v, want the original record only", names)
 	}

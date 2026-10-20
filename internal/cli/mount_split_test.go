@@ -428,17 +428,16 @@ func TestMountMembersForestWiring(t *testing.T) {
 		t.Errorf("action = %+v", action)
 	}
 
-	// A reused forest prints the reuse verb.
+	// A reused forest prints the reuse verb without announcing a
+	// discarded generated session.
 	f.forestReused = true
 	stdout, stderr, _, err = runCmd(t,
 		append(lib, "mount", "--read-only", "alice/forest", dir)...)
 	if err != nil {
 		t.Fatalf("remount: %v\n%s", err, stderr)
 	}
-	name, rest, ok = parseNewSessionCreated(stdout)
-	if !ok || !generatedSessionName.MatchString(name) ||
-		rest != "already mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q, want create line plus the reuse verb", stdout)
+	if stdout != "already mounted "+dir+"\n" {
+		t.Fatalf("stdout = %q, want already mounted without a create line", stdout)
 	}
 }
 
