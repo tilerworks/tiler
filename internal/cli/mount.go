@@ -63,7 +63,7 @@ func newMountCmd() *cobra.Command {
 			"subdirectory as the mount root, and --verify re-hashes every\n" +
 			"recorded digest instead of the default quick check.\n" +
 			"\n" +
-			"Every mount is recorded write-ahead in a session: --session\n" +
+			"Every mount is recorded write-ahead in a session: -s, --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +
 			"binds one, and without either a generated adjective-animal\n" +
 			"session is created. 'session open' later replays the record.\n" +
@@ -81,7 +81,7 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flags.readOnly, "read-only", false, "mount without a writable upper")
 	cmd.Flags().StringVar(&flags.subdir, "subdir", "", "image subdirectory exposed as the mount root")
 	cmd.Flags().BoolVar(&flags.verify, "verify", false, "re-verify every recorded digest with sha256")
-	cmd.Flags().StringVar(&flags.session, "session", "", "session that records this mount")
+	cmd.Flags().StringVarP(&flags.session, "session", "s", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
 		"remove the just-created session and purge its runtime when its last view unmounts")
 	return cmd

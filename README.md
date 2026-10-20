@@ -144,7 +144,7 @@ Available now:
   target must be an empty directory owned by the current user,
   outside the runtime tree and every reserved directory. Every
   mount is recorded write-ahead in a session before the engine
-  runs: `--session <name>` attaches a session created with
+  runs: `-s, --session <name>` attaches a session created with
   `session new`, the `TILER_SESSION_ID` environment variable binds
   one, and without either a generated `adjective-animal` session
   (for example `happy-fox`) is created. That mount prints

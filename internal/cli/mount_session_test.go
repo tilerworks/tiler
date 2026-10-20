@@ -145,6 +145,28 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	}
 }
 
+func TestMountSessionShortFlag(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	img := filepath.Join(work, "x.sqsh")
+	writeTestFile(t, img, "bytes")
+	mustSessionNew(t, lib, "dev")
+	view := filepath.Join(work, "view")
+	mountOK(t, lib, "mounted "+view+"\n", "mount", "-s", "dev", img, view)
+	rec := loadSessionRecord(t, sessionsDir(home), "dev")
+	if len(rec.Actions) != 1 || rec.Actions[0].Mountpoint != view {
+		t.Fatalf("short session flag actions = %+v", rec.Actions)
+	}
+	stdout, stderr, _, err := runCmd(t, "mount", "--help")
+	if err != nil {
+		t.Fatalf("mount --help: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "-s, --session") {
+		t.Fatalf("mount help missing -s, --session:\n%s", stdout+stderr)
+	}
+}
+
 func TestMountSessionResolutionPriority(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)

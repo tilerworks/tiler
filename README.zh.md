@@ -115,7 +115,7 @@ tiler session close feature                # 逆序卸载，记录保留
   整体校验通过才挂载，NAS 上的镜像因此从本地副本挂载，而挂
   载表身份仍指向原始库路径。目标必须是当前用户拥有的空目录，
   且位于运行时树与全部保留目录之外。每次挂载都在引擎执行前
-  先写进 session 记录（write-ahead）：`--session <name>` 挂进
+  先写进 session 记录（write-ahead）：`-s, --session <name>` 挂进
   用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
   绑定一个，两者都没有时自动创建 `形容词-动物` 形式的
   session（例如 `happy-fox`），并先打印
