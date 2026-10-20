@@ -210,9 +210,16 @@ contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
 tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释、钉住
 内置默认值的模板创建 `$HOME/.tiler.yaml`——这个文件是供你编辑的
 起点，而非必需项：HOME 只读时会被容忍，tiler 回退到内置默认；
-已存在的文件绝不改写。
+兼容的已有文件绝不改写。
+
+用户文件带有顶层整数 `version`（当前为 `1`）。当 `$HOME/.tiler.yaml`
+缺少 `version`、`version < 1`，或仍含已移除键（如 `runtime_dir`）时，
+下次命令会先备份为 `.tiler.yaml.bak`，再原子重写为当前 schema
+（重写时注释可能丢失）。自动升级只作用于用户级文件；项目级
+`.tiler.yaml` 只读不改，不兼容时直接报错。
 
 ```yaml
+version: 1
 images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # 合并根：记录 + 每会话 runtime
 cache_dir: ~/.tiler/cache

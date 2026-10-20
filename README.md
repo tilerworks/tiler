@@ -259,9 +259,18 @@ tiler reads a layered YAML configuration. On first run it creates
 `$HOME/.tiler.yaml` from a commented template that pins the built-in
 defaults, so the file is a starting point to edit, never a
 requirement — a read-only HOME is tolerated and tiler falls back to
-the defaults, and an existing file is never rewritten.
+the defaults. A compatible existing file is never rewritten.
+
+The user file carries a top-level integer `version` (currently `1`).
+When `$HOME/.tiler.yaml` is missing `version`, has `version < 1`, or
+still lists a removed key such as `runtime_dir`, the next command
+backups the original to `.tiler.yaml.bak` and rewrites the file to the
+current schema (comments may be lost on rewrite). Only the user-level
+file is upgraded; a project-level `.tiler.yaml` stays read-only and
+fails loudly when incompatible.
 
 ```yaml
+version: 1
 images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache

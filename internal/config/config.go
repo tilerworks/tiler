@@ -13,6 +13,11 @@ import (
 )
 
 const (
+	// CurrentConfigVersion is the schema version written into
+	// .tiler.yaml. Missing or older versions trigger an automatic
+	// user-file upgrade before Load's strict Decode.
+	CurrentConfigVersion = 1
+
 	// DefaultLogLevel is used when no document sets log_level.
 	DefaultLogLevel = "info"
 	// DefaultSessionMaxAge is thirty days. Callers must keep an
@@ -34,6 +39,9 @@ const (
 
 // Config is the resolved settings after defaults and overlays.
 type Config struct {
+	// Version is the .tiler.yaml schema version. Defaults to
+	// CurrentConfigVersion when no document sets it.
+	Version int
 	// ImagesDir stores read-only squashfs images.
 	ImagesDir string
 	// SessionsDir is the merged root for session records and
@@ -85,6 +93,7 @@ type Config struct {
 
 // Patch records fields present in one document. Nil means omitted.
 type Patch struct {
+	Version               *int
 	ImagesDir             *string
 	SessionsDir           *string
 	CacheDir              *string
@@ -106,6 +115,7 @@ type Patch struct {
 func Defaults(home string) Config {
 	root := filepath.Join(home, ".tiler")
 	return Config{
+		Version:       CurrentConfigVersion,
 		ImagesDir:     filepath.Join(root, "images"),
 		SessionsDir:   filepath.Join(root, "sessions"),
 		CacheDir:      filepath.Join(root, "cache"),
@@ -126,6 +136,7 @@ func (c Config) UserFile() string {
 // Apply copies each present patch field onto base. Omitted fields stay
 // as they are on base.
 func (p Patch) Apply(base Config) Config {
+	base.Version = overlay(base.Version, p.Version)
 	base.ImagesDir = overlay(base.ImagesDir, p.ImagesDir)
 	base.SessionsDir = overlay(base.SessionsDir, p.SessionsDir)
 	base.CacheDir = overlay(base.CacheDir, p.CacheDir)
@@ -152,6 +163,9 @@ func overlay[T any](base T, value *T) T {
 
 // Validate checks a resolved configuration. The error names the field.
 func Validate(cfg Config) error {
+	if cfg.Version < 0 {
+		return errors.New("version: must not be negative")
+	}
 	if err := validateLogLevel(cfg.LogLevel); err != nil {
 		return err
 	}

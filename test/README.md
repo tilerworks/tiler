@@ -56,8 +56,10 @@ equipped host, so a genuine regression is never masked by a skip.
 - `e2e/t0000-doctor.sh` — `tiler doctor` exits 0 on an equipped host.
   Proves the vendored framework runs inside the repository.
 - `e2e/t0001-config-bootstrap.sh` — tiler creates `$HOME/.tiler.yaml`
-  from a template on first run, never rewrites an edited one, and
-  `doctor` reports the config location and core dirs (text and `--json`).
+  from a template on first run (with `version: 1`), leaves a
+  current-schema edit untouched, upgrades a legacy file that still
+  lists `runtime_dir` (writing `.tiler.yaml.bak`), and `doctor`
+  reports the config location and core dirs (text and `--json`).
 - `e2e/t0002-config-ceiling.sh` — `TILER_CEILING_DIR` bounds the upward
   project-config walk so it stays inside the sandbox.
 - `e2e/t0003-image-mount.sh` — builds a full image from a source tree,

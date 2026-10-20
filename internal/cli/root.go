@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -94,6 +95,12 @@ func loadConfig(patch config.Patch) (config.Config, error) {
 	// read-only home) must not stop tiler, because Load resolves the same
 	// defaults without the file.
 	_ = config.EnsureUserFile(home)
+	// Upgrade an incompatible user file (missing version or removed
+	// keys such as runtime_dir) before Load's strict Decode. Must run
+	// here so a leftover runtime_dir never surfaces as "unknown field".
+	// When the upgrade itself cannot complete and Load then fails, the
+	// upgrade error is reported instead of the opaque parse failure.
+	upgradeErr := config.UpgradeUserFile(home)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return config.Config{}, fmt.Errorf("working directory: %w", err)
@@ -102,7 +109,13 @@ func loadConfig(patch config.Patch) (config.Config, error) {
 	// stays inside a sandbox (for example an e2e test workspace) and never
 	// picks up a stray .tiler.yaml higher in the tree.
 	ceiling := os.Getenv("TILER_CEILING_DIR")
-	return config.Load(cwd, home, filesystemRoot, ceiling, patch)
+	cfg, err := config.Load(cwd, home, filesystemRoot, ceiling, patch)
+	if err != nil && upgradeErr != nil {
+		return config.Config{}, fmt.Errorf(
+			"upgrade user config %s: %w",
+			filepath.Join(home, ".tiler.yaml"), upgradeErr)
+	}
+	return cfg, err
 }
 
 func remember(cmd *cobra.Command, cfg config.Config) {

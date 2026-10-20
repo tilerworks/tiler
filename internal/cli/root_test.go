@@ -200,6 +200,7 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 		t.Fatalf("user config not created: %v", err)
 	}
 	for _, want := range []string{
+		"version: 1",
 		"images_dir: ~/.tiler/images",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
@@ -215,7 +216,8 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 
 func TestRunKeepsExistingUserConfig(t *testing.T) {
 	home, _ := withWorkspace(t)
-	writeProjectConfig(t, home, "log_level: debug\n")
+	// A current-schema file must not be rewritten on later runs.
+	writeProjectConfig(t, home, "version: 1\nlog_level: debug\n")
 	if _, _, _, err := runCmd(t, "version"); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +225,69 @@ func TestRunKeepsExistingUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "log_level: debug\n" {
+	if string(data) != "version: 1\nlog_level: debug\n" {
 		t.Fatalf("existing user config was rewritten:\n%s", data)
+	}
+}
+
+func TestRunUpgradesLegacyUserConfig(t *testing.T) {
+	home, _ := withWorkspace(t)
+	path := filepath.Join(home, ".tiler.yaml")
+	legacy := "runtime_dir: ~/.tiler/runtime\nlog_level: debug\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := runCmd(t, "version"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "version: 1") {
+		t.Fatalf("legacy config was not upgraded:\n%s", got)
+	}
+	if strings.Contains(got, "runtime_dir") {
+		t.Fatalf("upgraded config still has runtime_dir:\n%s", got)
+	}
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	if string(backup) != legacy {
+		t.Fatalf("backup = %q, want the original bytes", backup)
+	}
+}
+
+func TestRunUpgradeFailurePrefersUpgradeError(t *testing.T) {
+	home, _ := withWorkspace(t)
+	path := filepath.Join(home, ".tiler.yaml")
+	legacy := "runtime_dir: ~/.tiler/runtime\nlog_level: debug\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Read-only home blocks the backup/rewrite temp files, so upgrade
+	// fails while Load would only report an opaque unknown-field error.
+	if err := os.Chmod(home, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o755) })
+
+	_, stderr, _, err := runCmd(t, "version")
+	if ExitCode(err) == 0 {
+		t.Fatal("expected failure when upgrade cannot rewrite a legacy file")
+	}
+	combined := stderr
+	if err != nil {
+		combined += "\n" + err.Error()
+	}
+	if !strings.Contains(strings.ToLower(combined), "upgrade") {
+		t.Fatalf("error = %q, want an upgrade mention", combined)
+	}
+	// Must not surface solely as the strict Decode unknown-field path.
+	if strings.Contains(combined, "field") && !strings.Contains(strings.ToLower(combined), "upgrade") {
+		t.Fatalf("surfaced as unknown field without upgrade: %q", combined)
 	}
 }
 

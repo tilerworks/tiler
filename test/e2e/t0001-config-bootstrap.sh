@@ -1,20 +1,22 @@
 #!/bin/sh
 #
-# tiler end-to-end test: config bootstrap and the doctor config report.
+# tiler end-to-end test: config bootstrap, auto-upgrade, and doctor.
 #
-# Companion to t0000-doctor.sh. It covers two behaviors that need no
-# FUSE toolchain, so they run wherever a tiler binary exists:
+# Companion to t0000-doctor.sh. It covers behaviors that need no FUSE
+# toolchain, so they run wherever a tiler binary exists:
 #
-#   1. tiler creates $HOME/.tiler.yaml from a template on first run and
-#      never rewrites an existing one.
-#   2. `tiler doctor` reports the config file location and the core
-#      runtime directories, in both the text and the --json form.
+#   1. tiler creates $HOME/.tiler.yaml from a template on first run
+#      (with version: 1) and leaves a current-schema edit untouched.
+#   2. An incompatible legacy user file (no version, with runtime_dir)
+#      is upgraded to version: 1 with a .tiler.yaml.bak backup.
+#   3. `tiler doctor` reports the config file location and the core
+#      directories, in both the text and the --json form.
 #
 # The framework repoints HOME at a fresh per-run trash directory and
 # exports it, so the auto-created file lands inside the sandbox and the
 # real user home is never touched.
 
-test_description='tiler config bootstrap and doctor config report'
+test_description='tiler config bootstrap, upgrade, and doctor config report'
 
 # Resolve paths against this script's location BEFORE sourcing the
 # framework: test-lib.sh moves the working directory into a per-run
@@ -46,6 +48,7 @@ test_expect_success TILER 'no user config exists before the first run' '
 test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
 	"$tiler_bin" version &&
 	test -f "$HOME/.tiler.yaml" &&
+	grep -q "^version: 1$" "$HOME/.tiler.yaml" &&
 	grep -q "^images_dir: ~/.tiler/images$" "$HOME/.tiler.yaml" &&
 	grep -q "^sessions_dir: ~/.tiler/sessions" "$HOME/.tiler.yaml" &&
 	grep -q "^cache_dir: ~/.tiler/cache$" "$HOME/.tiler.yaml" &&
@@ -57,6 +60,23 @@ test_expect_success TILER 'a later run leaves an edited config untouched' '
 	echo "# user edit" >>"$HOME/.tiler.yaml" &&
 	"$tiler_bin" version &&
 	grep -q "^# user edit$" "$HOME/.tiler.yaml"
+'
+
+# Reset the sandboxed home config so the upgrade path starts from a
+# deliberate legacy document rather than the template written above.
+test_expect_success TILER 'legacy user config without version is upgraded' '
+	printf "%s\n" \
+		"images_dir: ~/.tiler/images" \
+		"runtime_dir: ~/.tiler/runtime" \
+		"sessions_dir: ~/.tiler/sessions" \
+		"cache_dir: ~/.tiler/cache" \
+		"log_level: info" >"$HOME/.tiler.yaml" &&
+	rm -f "$HOME/.tiler.yaml.bak" &&
+	"$tiler_bin" version &&
+	grep -q "^version: 1$" "$HOME/.tiler.yaml" &&
+	! grep -q "runtime_dir" "$HOME/.tiler.yaml" &&
+	test -f "$HOME/.tiler.yaml.bak" &&
+	grep -q "runtime_dir: ~/.tiler/runtime" "$HOME/.tiler.yaml.bak"
 '
 
 # `tiler doctor` exits 1 when a FUSE probe fails on an unequipped host,

@@ -221,6 +221,7 @@ const commandLineSource = "command line"
 // valueOrigin records the last layer that set each validated field.
 // A lower invalid value replaced by a higher layer is not an error.
 type valueOrigin struct {
+	version       string
 	logLevel      string
 	keepVersions  string
 	maxAge        string
@@ -231,6 +232,9 @@ type valueOrigin struct {
 }
 
 func (o *valueOrigin) note(p Patch, where string) {
+	if p.Version != nil {
+		o.version = where
+	}
 	if p.LogLevel != nil {
 		o.logLevel = where
 	}
@@ -257,6 +261,8 @@ func (o *valueOrigin) note(p Patch, where string) {
 func (o valueOrigin) wrap(err error) error {
 	where := ""
 	switch {
+	case strings.HasPrefix(err.Error(), "version:"):
+		where = o.version
 	case strings.HasPrefix(err.Error(), "log_level:"):
 		where = o.logLevel
 	case strings.HasPrefix(err.Error(), "keep_versions:"):

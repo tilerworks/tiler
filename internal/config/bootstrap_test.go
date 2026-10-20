@@ -21,6 +21,7 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"version: 1",
 		"images_dir: ~/.tiler/images",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
