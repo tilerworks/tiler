@@ -139,9 +139,11 @@ equipped host, so a genuine regression is never masked by a skip.
 - `e2e/t0012-build-split-size.sh` — builds a full image with a small
   `--split` into multiple blocks, mounts it, writes the upper, builds
   an incr with the same `--split` into `blocks/<incr-id>/`, remounts
-  to verify the upper file, and confirms that omitting `--split` or
-  setting project `split_size: 0` stays a single `image.sqsh`. Needs
-  the FUSE toolchain; skips cleanly without it.
+  to verify the upper file, then publishes a second full of the same
+  name while that view is still mounted so the old full and incr retire
+  into a session-pinned `hold/<id>/blocks/` (not archives). Omitting
+  `--split` or setting project `split_size: 0` stays a single
+  `image.sqsh`. Needs the FUSE toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 

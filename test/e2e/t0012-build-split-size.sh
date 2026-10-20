@@ -12,7 +12,10 @@
 #   2. mounting that image, writing the upper, and building --incr
 #      with the same --split publishes blocks/<incr-id>/ (not
 #      incr/<id>.sqsh); a fresh remount shows the upper file,
-#   3. a build with no --split, and a build under a project
+#   3. a second full --split of the same name, while the first image
+#      is still mounted, retires the old full and its incr into a
+#      session-pinned hold/<old-id>/blocks/ (not archives),
+#   4. a build with no --split, and a build under a project
 #      split_size: 0, each stay a single image.sqsh.
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
@@ -64,6 +67,7 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 # reuses that point's upper, so only a brand-new point starts empty
 # and proves the extra file came from the incr layer.
 src_dir=$HOME/src/split
+repl_src=$HOME/src/replace
 work_dir=$HOME/work/split
 verify_dir=$HOME/work/verify
 img_dir=$HOME/.tiler/images/alice/split
@@ -146,6 +150,41 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the split full 
 	grep -q from-incr "$verify_dir/extra.txt" &&
 	"$tiler_bin" umount "$verify_dir" >umount2.out 2>umount2.err &&
 	grep -Eq "^unmounted " umount2.out
+'
+
+# verify_dir stays mounted across this case so its session pins the
+# retired full id. An unpinned replace would archive the chain instead
+# of leaving it in hold/.
+test_expect_success TILER,FUSE_TOOLCHAIN 'a new full retires the split chain into a pinned hold' '
+	id1=$(cat full.id) &&
+	layer=$(cat layer.id) &&
+	"$tiler_bin" mount alice/split "$verify_dir" >pin.out 2>pin.err &&
+	grep -Eq "^mounted " pin.out &&
+	mkdir -p "$repl_src" &&
+	echo replaced >"$repl_src/README.txt" &&
+	dd if=/dev/urandom of="$repl_src/bulk.bin" bs=1024 count=300 status=none &&
+	"$tiler_bin" build --split 64k --image alice/split "$repl_src" >repl.out 2>repl.err &&
+	grep -Eq "^full alice/split [0-9a-f]+" repl.out &&
+	id2=$(cut -d" " -f3 repl.out) &&
+	test -n "$id2" &&
+	test "$id2" != "$id1" &&
+	test "$id2" != "$layer" &&
+	grep -Eq "^id: \"?$id2\"?$" "$meta_file" &&
+	! grep -q "^chain:" "$meta_file" &&
+	test -d "$img_dir/blocks/$id2" &&
+	test -f "$img_dir/blocks/$id2/blk.000" &&
+	test ! -e "$img_dir/blocks/$id1" &&
+	test ! -e "$img_dir/blocks/$layer" &&
+	test -f "$img_dir/hold/$id1/meta.yaml" &&
+	test -f "$img_dir/hold/$id1/blocks/$id1/blk.000" &&
+	test -f "$img_dir/hold/$id1/blocks/$layer/blk.000" &&
+	test ! -d "$img_dir/archives" &&
+	"$tiler_bin" images ls alice/split >ls-new.out 2>ls-new.err &&
+	grep -Eq " chain=0 form=blocks$" ls-new.out &&
+	"$tiler_bin" images ls alice/split --archives >ls-hold.out 2>ls-hold.err &&
+	grep -Eq "^  hold $id1$" ls-hold.out &&
+	"$tiler_bin" umount "$verify_dir" >unpin.out 2>unpin.err &&
+	grep -Eq "^unmounted " unpin.out
 '
 
 test_expect_success TILER,FUSE_TOOLCHAIN 'a build with no --split stays a single file' '
