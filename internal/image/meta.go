@@ -1,9 +1,7 @@
 package image
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"time"
 )
 
@@ -30,9 +28,6 @@ const (
 	// lives in blocks/<full-id>/; each incremental layer with a
 	// Blocks manifest lives in blocks/<incr-id>/.
 	PayloadBlocks = "blocks"
-	// PayloadMembers is a directory-member split payload stored in
-	// the members/ directory.
-	PayloadMembers = "members"
 )
 
 // Format is the container recorded on an image.
@@ -74,11 +69,8 @@ type BlockEntry struct {
 	MtimeUnix int64  `yaml:"mtime_unix"`
 }
 
-// MemberEntry is one top-level directory partition of a members
-// payload, packed as its own squashfs file at members/<name>.sqsh.
-// These split members are side-by-side directory partitions and are
-// distinct from the cascade stack layers that Target and mount
-// requests also call members.
+// MemberEntry is retained only so historical members-form metadata
+// still unmarshals; Validate rejects any non-empty Members list.
 type MemberEntry struct {
 	Name      string `yaml:"name"`
 	Image     string `yaml:"image"`
@@ -105,10 +97,11 @@ type Meta struct {
 	Deprecated bool         `yaml:"deprecated"`
 	Chain      []ChainEntry `yaml:"chain,omitempty"`
 	// Blocks is the byte-block manifest of a split payload. It stays
-	// empty for the single-file and members forms.
+	// empty for the single-file form.
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
-	// Members is the directory-partition manifest of a split
-	// payload. It stays empty for the single-file and blocks forms.
+	// Members is the historical directory-partition manifest. Any
+	// non-empty list is refused by Validate so old libraries fail
+	// closed; the members form is no longer supported.
 	Members []MemberEntry `yaml:"members,omitempty"`
 }
 
@@ -118,30 +111,12 @@ func ID(sum [32]byte) string {
 }
 
 // PayloadKind reports the storage form of the active payload. Load,
-// publish, and resolve paths dispatch on it. The split forms are
-// mutually exclusive once Validate passes, so any dispatch order is
-// unambiguous.
+// publish, and resolve paths dispatch on it. Members-form metadata
+// never reaches here after Validate; an empty Blocks list is the
+// single-file form.
 func PayloadKind(m Meta) string {
-	switch {
-	case len(m.Blocks) > 0:
+	if len(m.Blocks) > 0 {
 		return PayloadBlocks
-	case len(m.Members) > 0:
-		return PayloadMembers
-	default:
-		return PayloadSingle
 	}
-}
-
-// membersDigest derives the logical whole-image digest of a members
-// payload: sha256 over one "name size sha256" line per member, in
-// manifest order. A members payload has no single overall file, so
-// Meta.SHA256 records this digest and Meta.Size the sum of member
-// sizes.
-func membersDigest(members []MemberEntry) string {
-	var text []byte
-	for _, entry := range members {
-		text = append(text, fmt.Sprintf("%s %d %s\n",
-			entry.Name, entry.Size, entry.SHA256)...)
-	}
-	return hexDigest(sha256.Sum256(text))
+	return PayloadSingle
 }

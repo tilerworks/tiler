@@ -21,10 +21,10 @@ type UnmountRequest struct {
 	RuntimeDir string
 	// Owned reports whether a mount source resolves inside the
 	// image library. When Dir itself is not a listed mount, the
-	// forest branch tears down only the direct child mounts whose
-	// source passes it, so a members-form combination comes down
-	// through its parent directory while foreign child mounts stay
-	// untouched. Nil disables the forest branch.
+	// owned-children branch tears down only the direct child mounts
+	// whose source passes it, so leftover subpath combinations come
+	// down through their parent directory while foreign child
+	// mounts stay untouched. Nil disables that branch.
 	Owned func(source string) bool
 	// Reload re-reads the mount table for the residue sweep. Nil
 	// keeps the injected snapshot.
@@ -38,10 +38,10 @@ type UnmountRequest struct {
 // mounted. The target point comes down first, then the overlay
 // lowers it lists under the combination directory in reverse
 // lowerdir order; a target that is not itself a listed mount takes
-// the forest branch instead, tearing down the owned direct child
-// mounts in reverse order. Then a residue sweep of the combination
-// directory catches lowers the table no longer connects to the
-// target. An unmounted or already-vanished target succeeds
+// the owned-children branch instead, tearing down the owned direct
+// child mounts in reverse order. Then a residue sweep of the
+// combination directory catches lowers the table no longer connects
+// to the target. An unmounted or already-vanished target succeeds
 // silently, and runtime upper and work data is never deleted so a
 // remount of the same session action reuses it.
 func UnmountPath(req UnmountRequest) (int, error) {
@@ -78,13 +78,13 @@ func unmountPath(req UnmountRequest, run runFunc, seam hooks) (int, error) {
 	return removed + n, nil
 }
 
-// teardownOwnedChildren is the forest branch: the parent directory
-// itself is not a listed mount, so the combination lives in its
-// direct children. Every child entry whose top-most source passes
-// the Owned predicate comes down in reverse table order — the
-// reverse of the mount order — and a child that already reads as a
-// plain directory removes nothing. Foreign child mounts are never
-// touched, and without a predicate there is nothing to own.
+// teardownOwnedChildren is the owned-children branch: the parent
+// directory itself is not a listed mount, so the combination lives
+// in its direct children. Every child entry whose top-most source
+// passes the Owned predicate comes down in reverse table order —
+// the reverse of the mount order — and a child that already reads
+// as a plain directory removes nothing. Foreign child mounts are
+// never touched, and without a predicate there is nothing to own.
 func teardownOwnedChildren(req UnmountRequest, run runFunc, seam hooks) (int, error) {
 	if req.Owned == nil {
 		return 0, nil

@@ -292,15 +292,7 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 			return err
 		}
 	}
-	switch image.PayloadKind(meta) {
-	case image.PayloadMembers:
-		if err := writeDetailField(w, "members", strconv.Itoa(len(meta.Members))); err != nil {
-			return err
-		}
-		if err := writeMemberLines(w, meta.Members); err != nil {
-			return err
-		}
-	case image.PayloadBlocks:
+	if image.PayloadKind(meta) == image.PayloadBlocks {
 		if err := writeDetailField(w, "blocks", strconv.Itoa(len(meta.Blocks))); err != nil {
 			return err
 		}
@@ -327,21 +319,6 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 func writeDetailField(w io.Writer, key, value string) error {
 	_, err := fmt.Fprintf(w, "  %-*s  %s\n", detailKeyWidth, key, value)
 	return err
-}
-
-func writeMemberLines(w io.Writer, members []image.MemberEntry) error {
-	width := 0
-	for _, member := range members {
-		if len(member.Name) > width {
-			width = len(member.Name)
-		}
-	}
-	for _, member := range members {
-		if _, err := fmt.Fprintf(w, "    %-*s  %s\n", width, member.Name, formatSize(member.Size)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func detailSource(src image.Source) string {
@@ -411,20 +388,18 @@ type imageJSON struct {
 
 // metaJSON is the active image of one repository. image.Meta stays
 // yaml-only; this view is the JSON contract. Times are RFC3339. The
-// split form fields are additive: form names a split active and
-// stays absent for the single-file default, members lists the
-// partition manifest of a members form.
+// form field is additive: it names a blocks active and stays absent
+// for the single-file default.
 type metaJSON struct {
-	ID         string       `json:"id"`
-	Version    string       `json:"version"`
-	Kind       string       `json:"kind"`
-	Form       string       `json:"form,omitempty"`
-	Size       int64        `json:"size"`
-	SHA256     string       `json:"sha256"`
-	CreatedAt  string       `json:"created_at"`
-	Deprecated bool         `json:"deprecated"`
-	Chain      []chainJSON  `json:"chain"`
-	Members    []memberJSON `json:"members,omitempty"`
+	ID         string      `json:"id"`
+	Version    string      `json:"version"`
+	Kind       string      `json:"kind"`
+	Form       string      `json:"form,omitempty"`
+	Size       int64       `json:"size"`
+	SHA256     string      `json:"sha256"`
+	CreatedAt  string      `json:"created_at"`
+	Deprecated bool        `json:"deprecated"`
+	Chain      []chainJSON `json:"chain"`
 }
 
 // chainJSON is one incremental layer of the active image.
@@ -434,14 +409,6 @@ type chainJSON struct {
 	Size      int64  `json:"size"`
 	SHA256    string `json:"sha256"`
 	CreatedAt string `json:"created_at"`
-}
-
-// memberJSON is one partition of a members-form split payload.
-type memberJSON struct {
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
 }
 
 func writeImagesJSON(w io.Writer, states []namedState, archives bool) error {
@@ -493,14 +460,6 @@ func newMetaJSON(meta image.Meta) metaJSON {
 			Size:      entry.Size,
 			SHA256:    entry.SHA256,
 			CreatedAt: entry.CreatedAt.Format(time.RFC3339),
-		})
-	}
-	for _, entry := range meta.Members {
-		view.Members = append(view.Members, memberJSON{
-			Name:   entry.Name,
-			Image:  entry.Image,
-			Size:   entry.Size,
-			SHA256: entry.SHA256,
 		})
 	}
 	return view

@@ -1,10 +1,7 @@
 package image
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,9 +25,11 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 			mutate: func(*Meta) {},
 		},
 		{
-			name:   "both manifests are mutually exclusive",
-			mutate: func(m *Meta) { m.Members = validMembers() },
-			wants:  []string{"blocks and members: mutually exclusive"},
+			name: "members form is refused",
+			mutate: func(m *Meta) {
+				m.Members = []MemberEntry{{Name: "alpha"}}
+			},
+			wants: []string{"members: the members split form is no longer supported"},
 		},
 		{
 			name:   "incremental kind is refused",
@@ -106,111 +105,15 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 	}
 }
 
-func TestValidateMembersManifestRules(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*Meta)
-		wants  []string
-	}{
-		{
-			name:   "valid members manifest",
-			mutate: func(*Meta) {},
-		},
-		{
-			name:   "both manifests are mutually exclusive",
-			mutate: func(m *Meta) { m.Blocks = validBlocksMeta().Blocks },
-			wants:  []string{"blocks and members: mutually exclusive"},
-		},
-		{
-			name:   "incremental kind is refused",
-			mutate: func(m *Meta) { m.Kind = KindIncremental },
-			wants:  []string{"kind: must be full for split payloads"},
-		},
-		{
-			name: "chain must stay empty",
-			mutate: func(m *Meta) {
-				m.Chain = []ChainEntry{validEntry(m.ID, "fedcba9876543210")}
-			},
-			wants: []string{"chain: must be empty for members payloads"},
-		},
-		{
-			name:   "empty name segment",
-			mutate: func(m *Meta) { m.Members[0].Name = "" },
-			wants:  []string{"members[0].name: invalid segment"},
-		},
-		{
-			name:   "slash in name segment",
-			mutate: func(m *Meta) { m.Members[0].Name = "a/b" },
-			wants:  []string{"members[0].name: invalid segment"},
-		},
-		{
-			name:   "dot dot name segment",
-			mutate: func(m *Meta) { m.Members[0].Name = ".." },
-			wants:  []string{"members[0].name: invalid segment"},
-		},
-		{
-			name:   "space in name segment",
-			mutate: func(m *Meta) { m.Members[0].Name = "a b" },
-			wants:  []string{"members[0].name: invalid segment"},
-		},
-		{
-			name: "duplicate name",
-			mutate: func(m *Meta) {
-				m.Members[1].Name = "alpha"
-				m.Members[1].Image = "members/alpha.sqsh"
-			},
-			wants: []string{"members[1].name: duplicate"},
-		},
-		{
-			name: "unsorted names",
-			mutate: func(m *Meta) {
-				m.Members[0], m.Members[1] = m.Members[1], m.Members[0]
-			},
-			wants: []string{"members[1].name: must be sorted by name"},
-		},
-		{
-			name:   "image path does not follow the name",
-			mutate: func(m *Meta) { m.Members[0].Image = "alpha.sqsh" },
-			wants:  []string{"members[0].image: must be members/alpha.sqsh"},
-		},
-		{
-			name:   "zero member size",
-			mutate: func(m *Meta) { m.Members[0].Size = 0 },
-			wants:  []string{"members[0].size: must be greater than 0"},
-		},
-		{
-			name:   "uppercase member digest",
-			mutate: func(m *Meta) { m.Members[0].SHA256 = strings.Repeat("0A", 32) },
-			wants:  []string{"members[0].sha256: must be 64 lowercase hex digits"},
-		},
-		{
-			name:   "negative member mtime",
-			mutate: func(m *Meta) { m.Members[0].MtimeUnix = -1 },
-			wants:  []string{"members[0].mtime_unix: must not be negative"},
-		},
-		{
-			name: "whole digest is not the derived manifest digest",
-			mutate: func(m *Meta) {
-				m.SHA256 = strings.Repeat("ef", 32)
-				m.ID = m.SHA256[:idHexLen]
-			},
-			wants: []string{
-				"sha256: must equal the derived members manifest digest",
-			},
-		},
-		{
-			name:   "whole size is not the member sum",
-			mutate: func(m *Meta) { m.Size++ },
-			wants:  []string{"size: must equal the sum of member sizes"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := validMembersMeta()
-			tc.mutate(&meta)
-			assertIssues(t, meta, tc.wants)
-		})
-	}
+func TestValidateMembersFormIsRefused(t *testing.T) {
+	meta := validMeta()
+	meta.Members = []MemberEntry{{
+		Name: "alpha", Image: "members/alpha.sqsh", Size: 1,
+		SHA256: strings.Repeat("0a", 32),
+	}}
+	assertIssues(t, meta, []string{
+		"members: the members split form is no longer supported",
+	})
 }
 
 func TestPayloadKindDispatch(t *testing.T) {
@@ -220,7 +123,6 @@ func TestPayloadKindDispatch(t *testing.T) {
 	}{
 		{validMeta(), PayloadSingle},
 		{validBlocksMeta(), PayloadBlocks},
-		{validMembersMeta(), PayloadMembers},
 	}
 	for _, tc := range cases {
 		if got := PayloadKind(tc.meta); got != tc.want {
@@ -229,48 +131,21 @@ func TestPayloadKindDispatch(t *testing.T) {
 	}
 }
 
-func TestMembersDigestIsCanonicalManifestSHA(t *testing.T) {
-	members := validMembers()
-	var text string
-	for _, entry := range members {
-		text += entry.Name + " " +
-			strconv.FormatInt(entry.Size, 10) + " " +
-			entry.SHA256 + "\n"
-	}
-	sum := sha256.Sum256([]byte(text))
-	want := hex.EncodeToString(sum[:])
-	if got := membersDigest(members); got != want {
-		t.Fatalf("digest = %s, want %s", got, want)
-	}
-	swapped := []MemberEntry{members[1], members[0]}
-	if got := membersDigest(swapped); got == want {
-		t.Fatal("member order does not change the digest")
-	}
-}
-
 func TestTempPayloadDirNamesFollowTempPattern(t *testing.T) {
-	cases := []struct {
-		next   func() (string, error)
-		prefix string
-	}{
-		{tempBlocksDirName, ".blocks.tmp."},
-		{tempMembersDirName, ".members.tmp."},
+	first, err := tempBlocksDirName()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		first, err := tc.next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(first, tc.prefix) {
-			t.Fatalf("name = %s, want prefix %s", first, tc.prefix)
-		}
-		second, err := tc.next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if first == second {
-			t.Fatalf("temp names collide: %s", first)
-		}
+	const prefix = ".blocks.tmp."
+	if !strings.HasPrefix(first, prefix) {
+		t.Fatalf("name = %s, want prefix %s", first, prefix)
+	}
+	second, err := tempBlocksDirName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("temp names collide: %s", first)
 	}
 }
 
@@ -313,36 +188,4 @@ func blocksSeq(n int) []BlockEntry {
 		}
 	}
 	return entries
-}
-
-func validMembers() []MemberEntry {
-	return []MemberEntry{
-		{
-			Name:      "alpha",
-			Image:     "members/alpha.sqsh",
-			Size:      3,
-			SHA256:    strings.Repeat("0a", 32),
-			MtimeUnix: 1710000000,
-		},
-		{
-			Name:      "beta",
-			Image:     "members/beta.sqsh",
-			Size:      5,
-			SHA256:    strings.Repeat("0b", 32),
-			MtimeUnix: 1710000001,
-		},
-	}
-}
-
-func validMembersMeta() Meta {
-	meta := validMeta()
-	meta.Members = validMembers()
-	meta.SHA256 = membersDigest(meta.Members)
-	meta.ID = meta.SHA256[:idHexLen]
-	var total int64
-	for _, entry := range meta.Members {
-		total += entry.Size
-	}
-	meta.Size = total
-	return meta
 }

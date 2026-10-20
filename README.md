@@ -89,17 +89,15 @@ Available now:
   blocks layers; single active only appends single layers.
 - `tiler images list [--archives] [--json]` lists every active image
   as one aligned row: name, id, creation date, size, chain length,
-  payload form (`single`, `blocks`, or `members`), and the archive
-  and hold counts. A deprecated image, and a recorded ref or short
-  commit, trail that row. `--archives` adds those parked chain ids
-  under each row. `--json` renders one machine-readable document
-  instead, with the additive `form` and `members` fields for split
-  actives.
+  payload form (`single` or `blocks`), and the archive and hold
+  counts. A deprecated image, and a recorded ref or short commit,
+  trail that row. `--archives` adds those parked chain ids under
+  each row. `--json` renders one machine-readable document instead,
+  with the additive `form` field for blocks actives.
 - `tiler images show <owner/repo> [--json]` prints a multi-line
   record for one active image: identity, each chain layer, the
-  split payload (block count, or one line per member), and the
-  parked archive and hold ids. `--json` renders the same repository
-  as one object.
+  blocks payload count when present, and the parked archive and
+  hold ids. `--json` renders the same repository as one object.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass

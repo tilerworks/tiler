@@ -257,7 +257,6 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 			return loadMountTable()
 		},
 		SessionsDir: cfg.SessionsDir,
-		ImagesDir:   cfg.ImagesDir,
 	}
 }
 
@@ -278,11 +277,11 @@ func sessionMount(cfg config.Config, name string) session.MountFunc {
 }
 
 // sessionUmount tears one recorded point down through the same
-// engine the umount command uses. The cascade inside one view, the
-// forest combination under a recorded parent, and the idempotent
-// already-unmounted answer come from the engine. The combination
-// directory is recovered from the mount table entry or, when the
-// overlay is already gone, from the covering session record.
+// engine the umount command uses. The cascade inside one view and
+// the idempotent already-unmounted answer come from the engine. The
+// combination directory is recovered from the mount table entry or,
+// when the overlay is already gone, from the covering session
+// record.
 func sessionUmount(cfg config.Config) session.UmountFunc {
 	return func(mountpoint string) error {
 		table, err := loadMountTable()

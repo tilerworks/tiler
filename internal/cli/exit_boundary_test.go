@@ -50,13 +50,6 @@ func TestExitCodeBoundaries(t *testing.T) {
 			args: []string{"session", "show", "ghost"}, want: 1},
 		{name: "reserved tree working directory is runtime",
 			seed: seedReservedCwd, args: []string{"version"}, want: 1},
-		{name: "members rw mount is usage",
-			seed: seedSplitMembers,
-			args: []string{"mount", "alice/forest", "/ws/forest"}, want: 2},
-		{name: "members subdir mount is usage",
-			seed: seedSplitMembers,
-			args: []string{"mount", "--read-only", "--subdir", "docs",
-				"alice/forest", "/ws/forest"}, want: 2},
 		{name: "corrupt block manifest mount is runtime",
 			seed: seedCorruptBlocks,
 			args: []string{"mount", "alice/data", "/ws/view"}, want: 1},
@@ -110,17 +103,6 @@ func seedReservedCwd(t *testing.T, home string) {
 // which run without the library flags.
 func defaultImagesDir(home string) string {
 	return filepath.Join(home, ".tiler", "images")
-}
-
-// seedSplitMembers installs the mount seams and a members-form
-// library fixture in the default location.
-func seedSplitMembers(t *testing.T, home string) {
-	t.Helper()
-	withMountSeams(t, nil)
-	writeMembersFixture(t, defaultImagesDir(home), "alice/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-		{name: "src", body: "src-bytes"},
-	})
 }
 
 // seedCorruptBlocks installs the mount seams and a blocks-form

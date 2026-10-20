@@ -489,13 +489,9 @@ func TestImagesListSplitForms(t *testing.T) {
 	withBuildSeams(t, nil)
 	blocksID := writeBlocksFixture(t, imagesDir, "alice/data",
 		[]string{"block-one", "b2"}, true)
-	membersID := writeMembersFixture(t, imagesDir, "bob/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-		{name: "src", body: "src-bytes-longer"},
-	})
 
 	out := mustList(t, lib)
-	for _, want := range []string{blocksID, membersID, "blocks", "members"} {
+	for _, want := range []string{blocksID, "blocks"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}
@@ -504,12 +500,6 @@ func TestImagesListSplitForms(t *testing.T) {
 	for _, want := range []string{"  form        blocks", "  blocks      2"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("show blocks missing %q:\n%s", want, out)
-		}
-	}
-	out = mustShow(t, lib, "bob/forest")
-	for _, want := range []string{"  form        members", "  members     2", "    docs  ", "    src   "} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("show members missing %q:\n%s", want, out)
 		}
 	}
 }

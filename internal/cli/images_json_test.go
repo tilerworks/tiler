@@ -245,27 +245,15 @@ func TestImagesListSplitJSONGolden(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	writeBlocksFixture(t, imagesDir, "alice/data", []string{"block-one", "b2"}, true)
-	writeMembersFixture(t, imagesDir, "bob/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-		{name: "src", body: "src-bytes-longer"},
-	})
 
 	stdout := mustListJSON(t, lib, "--json")
 	assertGolden(t, "images_ls_split", []byte(stdout))
 	doc := parseImagesDocument(t, stdout)
-	if len(doc.Images) != 2 {
-		t.Fatalf("images = %+v, want the two split repositories", doc.Images)
+	if len(doc.Images) != 1 {
+		t.Fatalf("images = %+v, want one blocks repository", doc.Images)
 	}
-	blocks, members := doc.Images[0].Active, doc.Images[1].Active
-	if blocks.Form != "blocks" || len(blocks.Members) != 0 {
+	blocks := doc.Images[0].Active
+	if blocks.Form != "blocks" {
 		t.Errorf("blocks active = %+v", blocks)
-	}
-	if members.Form != "members" || len(members.Members) != 2 {
-		t.Fatalf("members active = %+v", members)
-	}
-	first := members.Members[0]
-	if first.Name != "docs" || first.Image != "members/docs.sqsh" ||
-		first.Size != int64(len("docs-bytes")) || len(first.SHA256) != 64 {
-		t.Errorf("member entry = %+v", first)
 	}
 }

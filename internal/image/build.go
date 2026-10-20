@@ -75,8 +75,7 @@ type FullResult struct {
 // is unset, selects the blocks pipeline with that chunk size. Zero
 // SplitSize and BlockSize packs one image file. Production builds
 // leave BlockSize zero and rely on SplitSize from configuration or
-// `tiler build --split`. BuildMembers packs the members form;
-// configuration does not select it. The source must exist and stay
+// `tiler build --split`. The source must exist and stay
 // outside every reserved tree. When the source is a git repository,
 // it is sanitized first and any git failure aborts the build before
 // packing. mksquashfs writes a synced temporary file inside the

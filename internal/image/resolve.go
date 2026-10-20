@@ -32,16 +32,12 @@ type Target struct {
 	ID string
 	// Members lists the squashfs files to stack-mount: the full
 	// image first, then chain layers in stored oldest-first order.
-	// These stack members are cascade layers and are unrelated to
-	// the split partitions in Partitions, even though both are
-	// called members in different contexts.
 	Members []Member
 	// Form names the split payload shape: empty for the single-file
-	// cascade, or blocks / members for the two split forms.
+	// cascade, or blocks for the byte-block form.
 	Form string
-	// Size and SHA256 are the logical whole-image facts of a split
-	// payload: the reassembled byte digest for blocks, the derived
-	// manifest digest for members.
+	// Size and SHA256 are the logical whole-image facts of a blocks
+	// payload: the reassembled byte digest and size.
 	Size   int64
 	SHA256 string
 	// BlocksDir is the directory holding the byte blocks and the
@@ -55,10 +51,6 @@ type Target struct {
 	// Blocks lists the byte-block files of a blocks target in
 	// manifest order.
 	Blocks []BlockFile
-	// Partitions lists the member files of a members target in
-	// manifest order. Split members are top-level directory
-	// partitions mounted side by side, not cascade stack layers.
-	Partitions []Partition
 }
 
 // BlockFile is one manifest byte block paired with its absolute
@@ -70,21 +62,6 @@ type BlockFile struct {
 	// Name is the manifest block name blk.NNN.
 	Name string
 	// Size is the recorded block size in bytes.
-	Size int64
-	// MtimeUnix is the recorded modification time.
-	MtimeUnix int64
-	// SHA256 is the recorded content digest.
-	SHA256 string
-}
-
-// Partition is one split member file with its recorded facts, ready
-// for the subpath forest mount and its verification.
-type Partition struct {
-	// Name is the member name, the top-level source directory.
-	Name string
-	// Path is the absolute member file members/<name>.sqsh.
-	Path string
-	// Size is the recorded member size in bytes.
 	Size int64
 	// MtimeUnix is the recorded modification time.
 	MtimeUnix int64
@@ -112,7 +89,7 @@ type Member struct {
 	// SHA256 is the recorded content digest.
 	SHA256 string
 	// Blocks is the byte-block manifest of one blocks-form layer.
-	// Empty for the single-file cascade and for members partitions.
+	// Empty for the single-file cascade.
 	Blocks []BlockFile
 }
 
@@ -132,8 +109,7 @@ func ResolveMount(cfg config.Config, arg string) (Target, error) {
 }
 
 // resolveLibrary expands the active metadata of one repository by
-// payload kind: a single-file stack, a byte-block manifest, or a
-// directory-member manifest.
+// payload kind: a single-file stack or a byte-block manifest.
 func resolveLibrary(cfg config.Config, name string) (Target, error) {
 	repo, err := OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
@@ -146,14 +122,10 @@ func resolveLibrary(cfg config.Config, name string) (Target, error) {
 	if !exists {
 		return Target{}, fmt.Errorf("mount: %w %s", ErrUnknownImage, name)
 	}
-	switch PayloadKind(meta) {
-	case PayloadBlocks:
+	if PayloadKind(meta) == PayloadBlocks {
 		return resolveBlocks(repo, name, meta)
-	case PayloadMembers:
-		return resolveMembers(repo, name, meta)
-	default:
-		return resolveStack(repo, name, meta)
 	}
+	return resolveStack(repo, name, meta)
 }
 
 // resolveStack expands the full image plus its chain layers in
@@ -251,38 +223,6 @@ func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile
 		})
 	}
 	return blocks, blocksDir, nil
-}
-
-// resolveMembers checks that every member file rests in members/ and
-// returns the partition facts with the derived whole-image identity.
-// A missing member names the entry.
-func resolveMembers(repo Repo, name string, meta Meta) (Target, error) {
-	partitions := make([]Partition, 0, len(meta.Members))
-	for _, entry := range meta.Members {
-		path, err := repo.MemberPath(entry.Name)
-		if err != nil {
-			return Target{}, fmt.Errorf("mount: member %s: %w", entry.Name, err)
-		}
-		if _, err := os.Stat(path); err != nil {
-			return Target{}, fmt.Errorf("mount: member %s: %w", entry.Name, err)
-		}
-		partitions = append(partitions, Partition{
-			Name:      entry.Name,
-			Path:      path,
-			Size:      entry.Size,
-			MtimeUnix: entry.MtimeUnix,
-			SHA256:    entry.SHA256,
-		})
-	}
-	return Target{
-		Library:    true,
-		Name:       name,
-		ID:         meta.ID,
-		Form:       PayloadMembers,
-		Size:       meta.Size,
-		SHA256:     meta.SHA256,
-		Partitions: partitions,
-	}, nil
 }
 
 // stackMembers pairs every file of the active stack with its

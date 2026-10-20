@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
@@ -264,12 +263,11 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 }
 
 // LibraryName maps a library file path to its image identity. Only
-// <images_dir>/<owner>/<repo>/image.sqsh,
-// <images_dir>/<owner>/<repo>/incr/<id>.sqsh, and the members-form
-// partition file <images_dir>/<owner>/<repo>/members/<name>.sqsh
-// count; archives, holds, blocks, and metadata never carry an
-// identity. Blocks-form mounts publish the canonical three-segment
-// image.sqsh path, so they resolve without a blocks shape here.
+// <images_dir>/<owner>/<repo>/image.sqsh and
+// <images_dir>/<owner>/<repo>/incr/<id>.sqsh count; archives, holds,
+// blocks, and metadata never carry an identity. Blocks-form mounts
+// publish the canonical three-segment image.sqsh path, so they
+// resolve without a blocks shape here.
 func LibraryName(imagesDir, path string) (Name, bool) {
 	if imagesDir == "" || !strings.HasPrefix(path, imagesDir+"/") {
 		return Name{}, false
@@ -281,10 +279,7 @@ func LibraryName(imagesDir, path string) (Name, bool) {
 			return Name{}, false
 		}
 	case 4:
-		switch {
-		case parts[2] == image.IncrDir && isLayerFile(parts[3]):
-		case parts[2] == image.MembersDir && isMemberFile(parts[3]):
-		default:
+		if parts[2] != image.IncrDir || !isLayerFile(parts[3]) {
 			return Name{}, false
 		}
 	default:
@@ -295,22 +290,6 @@ func LibraryName(imagesDir, path string) (Name, bool) {
 		return Name{}, false
 	}
 	return Name{Owner: owner, Repo: repo}, true
-}
-
-// isMemberFile reports a members-form <name>.sqsh file name whose
-// stem is one valid path segment, mirroring the member name rules
-// the image library validates at build time.
-func isMemberFile(name string) bool {
-	stem, ok := strings.CutSuffix(name, image.SquashExt)
-	if !ok || stem == "" || stem == "." || stem == ".." {
-		return false
-	}
-	for _, r := range stem {
-		if unicode.IsControl(r) || unicode.IsSpace(r) {
-			return false
-		}
-	}
-	return true
 }
 
 // isLayerFile reports a <id>.sqsh name with a 16 lowercase hex id.

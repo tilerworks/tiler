@@ -197,25 +197,21 @@ func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
 }
 
 func TestSplitManifestRoundTrip(t *testing.T) {
-	for _, meta := range []Meta{validBlocksMeta(), validMembersMeta()} {
-		encoded, err := Encode(meta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := Decode(encoded)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got.Blocks, meta.Blocks) {
-			t.Errorf("blocks = %+v, want %+v", got.Blocks, meta.Blocks)
-		}
-		if !reflect.DeepEqual(got.Members, meta.Members) {
-			t.Errorf("members = %+v, want %+v", got.Members, meta.Members)
-		}
-		if got.ID != meta.ID || got.SHA256 != meta.SHA256 ||
-			got.Size != meta.Size {
-			t.Errorf("identity changed on round trip: %+v", got)
-		}
+	meta := validBlocksMeta()
+	encoded, err := Encode(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Blocks, meta.Blocks) {
+		t.Errorf("blocks = %+v, want %+v", got.Blocks, meta.Blocks)
+	}
+	if got.ID != meta.ID || got.SHA256 != meta.SHA256 ||
+		got.Size != meta.Size {
+		t.Errorf("identity changed on round trip: %+v", got)
 	}
 }
 

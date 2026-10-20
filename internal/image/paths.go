@@ -14,9 +14,6 @@ const (
 	ImageFile = "image.sqsh"
 	// IncrDir is the subdirectory holding incremental layer files.
 	IncrDir = "incr"
-	// MembersDir is the subdirectory holding the member partition
-	// files of a members-form split payload.
-	MembersDir = "members"
 	// SquashExt is the file extension of every packed image file.
 	SquashExt = ".sqsh"
 )
@@ -32,8 +29,10 @@ const (
 	dirArchives    = "archives"
 	dirHold        = "hold"
 	dirBlocks      = "blocks"
-	dirMembers     = MembersDir
-	squashExt      = SquashExt
+	// dirMembers names the historical members-form payload directory.
+	// Repair and hold restore still recognize leftovers under it.
+	dirMembers = "members"
+	squashExt  = SquashExt
 
 	// blockNamePrefix and blockNameFmt name the byte blocks of one
 	// split payload; the three-digit format bounds the manifest.
@@ -45,10 +44,9 @@ const (
 	// publish renames into place; repair sweeps leftovers by the
 	// same prefix.
 	tempPayloadSuffix = ".tmp"
-	// blocksTempFinal and membersTempFinal are the final names the
-	// tempName pattern consumes for scratch payload directories.
-	blocksTempFinal  = dirBlocks + tempPayloadSuffix
-	membersTempFinal = dirMembers + tempPayloadSuffix
+	// blocksTempFinal is the final name the tempName pattern consumes
+	// for scratch blocks payload directories.
+	blocksTempFinal = dirBlocks + tempPayloadSuffix
 )
 
 // ErrInvalidPath is a library-relative path that is absolute or
@@ -113,12 +111,6 @@ func (repo Repo) BlocksDirPath(id string) (string, error) {
 	return repo.idSubdir(dirBlocks, id)
 }
 
-// MembersDirPath is the members/ directory holding the directory
-// partitions of one split payload.
-func (repo Repo) MembersDirPath() string {
-	return filepath.Join(repo.Dir, dirMembers)
-}
-
 // BlockPath is blocks/<full-id>/<name> for one manifest block. The
 // name must be the blk.NNN form, which also rules out path escapes.
 func (repo Repo) BlockPath(id, name string) (string, error) {
@@ -132,31 +124,11 @@ func (repo Repo) BlockPath(id, name string) (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
-// MemberPath is members/<name>.sqsh for one manifest member.
-func (repo Repo) MemberPath(name string) (string, error) {
-	if err := checkSegment(name); err != nil {
-		return "", invalidPath(name)
-	}
-	return filepath.Join(repo.Dir, memberImageName(name)), nil
-}
-
 // tempBlocksDirName is a scratch payload directory name for the
 // blocks form. It follows the tempName pattern, so repair recognizes
 // and sweeps a leftover after a crashed publish.
 func tempBlocksDirName() (string, error) {
 	return tempName(blocksTempFinal)
-}
-
-// tempMembersDirName is a scratch payload directory name for the
-// members form, following the same tempName pattern.
-func tempMembersDirName() (string, error) {
-	return tempName(membersTempFinal)
-}
-
-// memberImageName is the library-relative image path recorded for one
-// manifest member.
-func memberImageName(name string) string {
-	return dirMembers + "/" + name + squashExt
 }
 
 // isBlockName reports whether name is blk.NNN with exactly three

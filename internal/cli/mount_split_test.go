@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/image"
-	"github.com/jiangxin/tiler/internal/session"
-	"github.com/jiangxin/tiler/internal/workspace"
 )
 
 // splitMtime is the fixed modification time every split fixture file
@@ -151,43 +149,6 @@ func writeBlocksChainFixture(
 	return meta.SHA256, layerSum
 }
 
-// fixtureMember is one members-form partition with its file bytes.
-type fixtureMember struct {
-	name string
-	body string
-}
-
-// writeMembersFixture seeds one members-form repository: a real
-// squashfs file per partition and a valid metadata document whose
-// whole identity is the derived manifest digest. It returns the id.
-func writeMembersFixture(t *testing.T, imagesDir, name string, members []fixtureMember) string {
-	t.Helper()
-	owner, repo, ok := strings.Cut(name, "/")
-	if !ok {
-		t.Fatalf("fixture name %q is not owner/repo", name)
-	}
-	meta := fixtureMeta(owner, repo)
-	membersDir := filepath.Join(imagesDir, owner, repo, "members")
-	var digestText []byte
-	for _, m := range members {
-		writeSplitFile(t, filepath.Join(membersDir, m.name+image.SquashExt), m.body)
-		entry := image.MemberEntry{
-			Name: m.name, Image: image.MembersDir + "/" + m.name + image.SquashExt,
-			Size: int64(len(m.body)), SHA256: sumOf([]byte(m.body)),
-			MtimeUnix: splitMtime.Unix(),
-		}
-		meta.Members = append(meta.Members, entry)
-		meta.Size += entry.Size
-		digestText = append(digestText,
-			fmt.Sprintf("%s %d %s\n", entry.Name, entry.Size, entry.SHA256)...)
-	}
-	digest := sha256.Sum256(digestText)
-	meta.SHA256 = hex.EncodeToString(digest[:])
-	meta.ID = image.ID(digest)
-	storeFixtureMeta(t, filepath.Join(imagesDir, owner, repo), meta)
-	return meta.ID
-}
-
 func TestMountBlocksReassembleRoute(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -207,8 +168,8 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if f.assembleN != 1 {
 		t.Fatalf("assemble calls = %d, want one materialization", f.assembleN)
 	}
-	if len(f.mountReqs) != 1 || len(f.forestReqs) != 0 {
-		t.Fatalf("engine calls = %d mounts, %d forests", len(f.mountReqs), len(f.forestReqs))
+	if len(f.mountReqs) != 1 {
+		t.Fatalf("engine calls = %d mounts", len(f.mountReqs))
 	}
 	req := f.mountReqs[0]
 	canonical := filepath.Join(imagesDir, "alice", "app", image.ImageFile)
@@ -361,135 +322,6 @@ func TestMountBlocksVerifyRehashesEveryBlock(t *testing.T) {
 	}
 }
 
-func TestMountMembersForestWiring(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	f := withMountSeams(t, nil)
-	writeMembersFixture(t, imagesDir, "alice/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-		{name: "src", body: "src-bytes-longer"},
-	})
-	dir := filepath.Join(work, "forest")
-
-	stdout, stderr, _, err := runCmd(t,
-		append(lib, "mount", "--read-only", "alice/forest", dir)...)
-	if err != nil {
-		t.Fatalf("mount: %v\n%s", err, stderr)
-	}
-	name, rest, ok := parseNewSessionCreated(stdout)
-	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q", stdout)
-	}
-	if len(f.forestReqs) != 1 {
-		t.Fatalf("forest calls = %d", len(f.forestReqs))
-	}
-	if len(f.mountReqs) != 0 || f.assembleN != 0 {
-		t.Errorf("the forest route used the stack engine: %v %v", f.mountReqs, f.assembleCalls)
-	}
-	req := f.forestReqs[0]
-	if req.ParentDir != dir {
-		t.Errorf("ParentDir = %q, want %q", req.ParentDir, dir)
-	}
-	want := []workspace.ForestMember{
-		{Name: "docs", Path: filepath.Join(imagesDir, "alice", "forest", "members", "docs.sqsh")},
-		{Name: "src", Path: filepath.Join(imagesDir, "alice", "forest", "members", "src.sqsh")},
-	}
-	if len(req.Partitions) != 2 {
-		t.Fatalf("partitions = %+v", req.Partitions)
-	}
-	for i, m := range req.Partitions {
-		if m != want[i] {
-			t.Errorf("partition %d = %+v, want %+v", i, m, want[i])
-		}
-	}
-	if req.Owned == nil {
-		t.Fatal("the forest request carries no ownership predicate")
-	}
-	if !req.Owned(want[0].Path) || req.Owned("/mnt/usb/tools") {
-		t.Error("the ownership predicate does not resolve library sources")
-	}
-	if req.Run == nil || req.Table == nil {
-		t.Error("the runner or table seam is not wired")
-	}
-
-	// The recorded action keeps the combination shape: one action
-	// at the parent directory, read-only, with the library identity.
-	records, err := (session.Store{Dir: sessionsDir(home)}).List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 || len(records[0].Actions) != 1 {
-		t.Fatalf("records = %+v, want one implicit session with one action", records)
-	}
-	action := records[0].Actions[0]
-	if action.Mode != session.ModeRO || action.Mountpoint != dir ||
-		action.Owner != "alice" || action.Repo != "forest" ||
-		action.Status != session.StatusMounted {
-		t.Errorf("action = %+v", action)
-	}
-
-	// A reused forest prints the reuse verb without announcing a
-	// discarded generated session.
-	f.forestReused = true
-	stdout, stderr, _, err = runCmd(t,
-		append(lib, "mount", "--read-only", "alice/forest", dir)...)
-	if err != nil {
-		t.Fatalf("remount: %v\n%s", err, stderr)
-	}
-	if stdout != "already mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q, want already mounted without a create line", stdout)
-	}
-}
-
-func TestMountMembersUsageRefusals(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	f := withMountSeams(t, nil)
-	writeMembersFixture(t, imagesDir, "alice/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-	})
-	dir := filepath.Join(work, "forest")
-
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{
-			name: "writable forest",
-			args: []string{"mount", "alice/forest", dir},
-			want: "--read-only",
-		},
-		{
-			name: "forest with a subdir",
-			args: []string{"mount", "--read-only", "--subdir", "docs", "alice/forest", dir},
-			want: "--subdir",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, stderr, _, err := runCmd(t, append(lib, tt.args...)...)
-			if ExitCode(err) != 2 {
-				t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
-			}
-			if !strings.Contains(stderr, tt.want) {
-				t.Fatalf("stderr = %q, want guidance naming %s", stderr, tt.want)
-			}
-		})
-	}
-	if len(f.forestReqs) != 0 {
-		t.Errorf("a refusal reached the engine: %+v", f.forestReqs)
-	}
-	// A usage refusal records nothing.
-	records, err := (session.Store{Dir: sessionsDir(home)}).List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 0 {
-		t.Errorf("the refusals created session records: %+v", records)
-	}
-}
-
 func TestMountBlocksSubdirUsesReassemble(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -508,32 +340,6 @@ func TestMountBlocksSubdirUsesReassemble(t *testing.T) {
 	}
 	if len(f.mountReqs) != 1 || f.mountReqs[0].Subdir != "src" {
 		t.Errorf("subdir request = %+v", f.mountReqs)
-	}
-}
-
-func TestMountMembersCorruptMemberFails(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	f := withMountSeams(t, nil)
-	writeMembersFixture(t, imagesDir, "alice/forest", []fixtureMember{
-		{name: "docs", body: "docs-bytes"},
-		{name: "src", body: "src-bytes"},
-	})
-	writeSplitFile(t,
-		filepath.Join(imagesDir, "alice", "forest", "members", "src.sqsh"),
-		"src-bytes-grew")
-	dir := filepath.Join(work, "forest")
-
-	_, stderr, _, err := runCmd(t,
-		append(lib, "mount", "--read-only", "alice/forest", dir)...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
-	}
-	if !strings.Contains(stderr, "src") {
-		t.Fatalf("stderr = %q, want it to name the bad member", stderr)
-	}
-	if len(f.forestReqs) != 0 {
-		t.Errorf("the corrupt member reached the engine: %+v", f.forestReqs)
 	}
 }
 
@@ -576,7 +382,6 @@ func assertOwnedPredicate(t *testing.T, imagesDir string, owned func(string) boo
 	}
 	for _, source := range []string{
 		filepath.Join(imagesDir, "alice", "app", image.ImageFile),
-		filepath.Join(imagesDir, "alice", "app", "members", "src.sqsh"),
 		filepath.Join(imagesDir, "alice", "app", "incr", "0123456789abcdef.sqsh"),
 	} {
 		if !owned(source) {
@@ -586,25 +391,10 @@ func assertOwnedPredicate(t *testing.T, imagesDir string, owned func(string) boo
 	for _, source := range []string{
 		"/mnt/usb/tools",
 		filepath.Join(imagesDir, "alice", "app", "blocks", "0123456789abcdef", "blk.000"),
+		filepath.Join(imagesDir, "alice", "app", "members", "src.sqsh"),
 	} {
 		if owned(source) {
 			t.Errorf("foreign source %s was owned", source)
 		}
-	}
-}
-
-func TestSessionEngineCarriesImagesDir(t *testing.T) {
-	home, _ := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	var engine *session.Engine
-	withSessionSeams(t, func(e *session.Engine) { engine = e })
-	if _, stderr, _, err := runCmd(t, append(lib, "session", "list")...); err != nil {
-		t.Fatalf("session list: %v\n%s", err, stderr)
-	}
-	if engine == nil {
-		t.Fatal("the engine seam was not used")
-	}
-	if engine.ImagesDir != imagesDir {
-		t.Errorf("ImagesDir = %q, want %q", engine.ImagesDir, imagesDir)
 	}
 }

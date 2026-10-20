@@ -31,8 +31,6 @@ var (
 	assembleBlocks = image.AssembleBlocks
 	// mountEngine builds the workspace mount.
 	mountEngine = workspace.Mount
-	// forestEngine builds the members-form forest mount.
-	forestEngine = workspace.MountForest
 	// unmountEngine tears a view down by path.
 	unmountEngine = workspace.UnmountPath
 )
@@ -124,19 +122,6 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if err := verifyTarget(target, flags.verify); err != nil {
 		return err
-	}
-	// The members form is a read-only subpath forest: a writable
-	// view or a subdir root has no meaning over side-by-side
-	// partitions, so both are usage problems with guidance.
-	if target.Form == image.PayloadMembers {
-		if !flags.readOnly {
-			return usageError{errors.New(
-				"mount: the members split form is a read-only partition forest; pass --read-only")}
-		}
-		if flags.subdir != "" {
-			return usageError{errors.New(
-				"mount: the members split form takes no --subdir; every partition mounts at its own subpath")}
-		}
 	}
 	name, implicit, err := resolveMountSession(flags.session)
 	if err != nil {
@@ -363,9 +348,9 @@ func sessionRuntimeDir(cfg config.Config, name string, action session.Action) st
 // the execution half of one write-ahead record. Both the mount
 // command and the session replay run through it. The target's split
 // form selects the engine: the single-file cascade keeps the plain
-// stack mount, a blocks payload reassembles into the cache, and a
-// members payload mounts the subpath forest. runtimeDir is the
-// session-scoped combination directory for this action.
+// stack mount, and a blocks payload reassembles into the cache.
+// runtimeDir is the session-scoped combination directory for this
+// action.
 func runMountEngine(
 	cfg config.Config,
 	target image.Target,
@@ -373,14 +358,10 @@ func runMountEngine(
 	flags mountFlags,
 	runtimeDir string,
 ) (session.Result, error) {
-	switch target.Form {
-	case image.PayloadBlocks:
+	if target.Form == image.PayloadBlocks {
 		return runBlocksEngine(cfg, target, dir, flags, runtimeDir)
-	case image.PayloadMembers:
-		return runForestEngine(cfg, target, dir)
-	default:
-		return runStackEngine(cfg, target, dir, flags, runtimeDir)
 	}
+	return runStackEngine(cfg, target, dir, flags, runtimeDir)
 }
 
 // runBlocksEngine mounts a blocks payload by reassembling every
@@ -455,33 +436,6 @@ func blocksRequest(
 	}, nil
 }
 
-// runForestEngine mounts a members payload as the subpath forest
-// combination: every partition read-only at its own subpath under
-// the target directory, owned child mounts recognized through the
-// library identity for reuse and teardown.
-func runForestEngine(cfg config.Config, target image.Target, dir string) (session.Result, error) {
-	table, err := loadMountTable()
-	if err != nil {
-		return session.Result{}, fmt.Errorf("mount: %w", err)
-	}
-	partitions := make([]workspace.ForestMember, 0, len(target.Partitions))
-	for _, p := range target.Partitions {
-		partitions = append(partitions, workspace.ForestMember{Name: p.Name, Path: p.Path})
-	}
-	ws, err := forestEngine(workspace.ForestRequest{
-		Partitions:      partitions,
-		ParentDir:       dir,
-		SquashfsOptions: cfg.SquashfsOptions,
-		Table:           toEntries(table),
-		Owned:           ownedLibrarySource(cfg.ImagesDir),
-		Run:             mountRun,
-	})
-	if err != nil {
-		return session.Result{}, engineUnavailable(err)
-	}
-	return session.Result{Mountpoint: ws.MergedDir, Reused: ws.Reused}, nil
-}
-
 // runStackEngine runs the plain stack mount over an assembled
 // request.
 func runStackEngine(
@@ -521,10 +475,10 @@ func engineUnavailable(err error) error {
 	return err
 }
 
-// ownedLibrarySource builds the ownership predicate the forest
-// mount and the path unmount share: a mount source is owned when it
-// resolves to an identity inside the image library. The closure keeps
-// the workspace engine free of a mountinfo dependency.
+// ownedLibrarySource builds the ownership predicate path unmount
+// shares: a mount source is owned when it resolves to an identity
+// inside the image library. The closure keeps the workspace engine
+// free of a mountinfo dependency.
 func ownedLibrarySource(imagesDir string) func(string) bool {
 	return func(source string) bool {
 		_, ok := mountinfo.LibraryName(imagesDir, source)
@@ -544,23 +498,20 @@ func isResolveUsage(err error) bool {
 
 // verifyTarget runs the pre-mount integrity check of the resolved
 // target: the cheap size and mtime probe by default, the full sha256
-// re-hash with --verify. A split payload checks every manifest block
-// or partition entry; the single-file cascade checks its stack
-// members. A file-path target records no facts and skips
-// verification.
+// re-hash with --verify. A blocks payload checks every manifest
+// block; the single-file cascade checks its stack members. A
+// file-path target records no facts and skips verification.
 func verifyTarget(target image.Target, verify bool) error {
 	if !target.Library {
 		return nil
 	}
-	switch target.Form {
-	case image.PayloadBlocks, image.PayloadMembers:
+	if target.Form == image.PayloadBlocks {
 		if verify {
 			return image.VerifyTarget(target)
 		}
 		return image.QuickCheckTarget(target)
-	default:
-		return verifyMembers(target, verify)
 	}
+	return verifyMembers(target, verify)
 }
 
 // verifyMembers checks every stack member of a single-file cascade

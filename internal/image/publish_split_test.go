@@ -29,17 +29,6 @@ func TestPublishStagedBlocksPayloadFresh(t *testing.T) {
 	assertNoTemps(t, repo.Dir)
 }
 
-func TestPublishStagedMembersPayloadFresh(t *testing.T) {
-	repo := testRepo(t)
-	fx := membersFixture([]string{"alpha", "beta"},
-		[][]byte{[]byte("member-a"), []byte("member-b")})
-	if err := publishSplit(t, repo, fx, nil, hooks{}); err != nil {
-		t.Fatal(err)
-	}
-	assertActivePayload(t, repo, fx)
-	assertNoTemps(t, repo.Dir)
-}
-
 func TestPublishStagedPayloadArchivesUnreferencedPrevious(t *testing.T) {
 	repo := testRepo(t)
 	old := blocksFixture([][]byte{[]byte("old-a"), []byte("old-b")})
@@ -68,11 +57,9 @@ func TestPublishStagedPayloadArchivesUnreferencedPrevious(t *testing.T) {
 
 func TestPublishStagedPayloadHoldsReferencedPrevious(t *testing.T) {
 	repo := testRepo(t)
-	old := membersFixture([]string{"alpha", "beta"},
-		[][]byte{[]byte("held-a"), []byte("held-b")})
+	old := blocksFixture([][]byte{[]byte("held-a"), []byte("held-b")})
 	seedSplitActive(t, repo, old)
-	next := membersFixture([]string{"alpha", "beta"},
-		[][]byte{[]byte("fresh-a"), []byte("fresh-b")})
+	next := blocksFixture([][]byte{[]byte("fresh-a"), []byte("fresh-b")})
 	refs := holdSet{ids: map[string]bool{old.meta.ID: true}}
 	if err := publishSplit(t, repo, next, refs, hooks{}); err != nil {
 		t.Fatal(err)
@@ -82,7 +69,7 @@ func TestPublishStagedPayloadHoldsReferencedPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertBytes(t, filepath.Join(holdPayloadPath(hold, old.meta), "alpha"+squashExt),
+	assertBytes(t, filepath.Join(holdPayloadPath(hold, old.meta), "blk.000"),
 		[]byte("held-a"))
 	if _, err := Load(filepath.Join(hold, fileMeta)); err != nil {
 		t.Fatal(err)
@@ -109,7 +96,7 @@ func TestPublishStagedPayloadReplacesSingleForm(t *testing.T) {
 
 func TestPublishStagedPayloadNoOp(t *testing.T) {
 	repo := testRepo(t)
-	fx := membersFixture([]string{"alpha"}, [][]byte{[]byte("same-a")})
+	fx := blocksFixture([][]byte{[]byte("same-a")})
 	if err := publishSplit(t, repo, fx, nil, hooks{}); err != nil {
 		t.Fatal(err)
 	}
@@ -180,9 +167,9 @@ func TestPublishStagedPayloadMetaRenameFailureRestoresPrevious(t *testing.T) {
 
 func TestPublishStagedPayloadRenameFailureRestoresPrevious(t *testing.T) {
 	repo := testRepo(t)
-	old := membersFixture([]string{"alpha"}, [][]byte{[]byte("old-a")})
+	old := blocksFixture([][]byte{[]byte("old-a")})
 	seedSplitActive(t, repo, old)
-	next := membersFixture([]string{"alpha"}, [][]byte{[]byte("new-a")})
+	next := blocksFixture([][]byte{[]byte("new-a")})
 	final := finalPayloadDir(t, repo, next.meta)
 	seam := hooks{before: func(_, newpath string) error {
 		if newpath == final {
@@ -201,39 +188,27 @@ func TestPublishStagedPayloadRenameFailureRestoresPrevious(t *testing.T) {
 }
 
 func TestHoldRestoreSymmetryForSplitPayloads(t *testing.T) {
-	cases := []struct {
-		name string
-		fx   splitFixture
-	}{
-		{"blocks", blocksFixture([][]byte{[]byte("sym-a"), []byte("sym-b")})},
-		{"members", membersFixture([]string{"alpha", "beta"},
-			[][]byte{[]byte("sym-a"), []byte("sym-b")})},
+	fx := blocksFixture([][]byte{[]byte("sym-a"), []byte("sym-b")})
+	repo := testRepo(t)
+	seedSplitActive(t, repo, fx)
+	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := testRepo(t)
-			seedSplitActive(t, repo, tc.fx)
-			if err := moveActiveToHold(repo, tc.fx.meta, hooks{}); err != nil {
-				t.Fatal(err)
-			}
-			assertGone(t, finalPayloadDir(t, repo, tc.fx.meta))
-			assertGone(t, repo.MetaPath())
-			hold, err := repo.HoldPath(tc.fx.meta.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertPayloadAt(t, holdPayloadPath(hold, tc.fx.meta), tc.fx)
-			if _, err := Load(filepath.Join(hold, fileMeta)); err != nil {
-				t.Fatal(err)
-			}
-			if err := restoreHold(repo, tc.fx.meta.ID, hooks{}); err != nil {
-				t.Fatal(err)
-			}
-			assertActivePayload(t, repo, tc.fx)
-			assertGone(t, hold)
-			assertNoTemps(t, repo.Dir)
-		})
+	assertGone(t, finalPayloadDir(t, repo, fx.meta))
+	assertGone(t, repo.MetaPath())
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	assertPayloadAt(t, holdPayloadPath(hold, fx.meta), fx)
+	if _, err := Load(filepath.Join(hold, fileMeta)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreHold(repo, fx.meta.ID, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertActivePayload(t, repo, fx)
+	assertGone(t, hold)
 }
 
 func TestPublishHoldRestoreChainBlockDirs(t *testing.T) {
@@ -449,8 +424,6 @@ func TestRepairPayloadWithoutMeta(t *testing.T) {
 		fx   splitFixture
 	}{
 		{"blocks", blocksFixture([][]byte{[]byte("torn-a"), []byte("torn-b")})},
-		{"members", membersFixture([]string{"alpha", "beta"},
-			[][]byte{[]byte("torn-a"), []byte("torn-b")})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/dropped", func(t *testing.T) {
@@ -495,7 +468,6 @@ func TestRepairMetaWithoutPayload(t *testing.T) {
 		fx   splitFixture
 	}{
 		{"blocks", blocksFixture([][]byte{[]byte("lost-a")})},
-		{"members", membersFixture([]string{"alpha"}, [][]byte{[]byte("lost-a")})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/restored-from-hold", func(t *testing.T) {
@@ -599,8 +571,7 @@ func TestRepairMismatchWithoutMatchingHoldFails(t *testing.T) {
 	}
 }
 
-// splitKindCases builds the same payload bodies in both split forms
-// so the repair tests cover every payload kind.
+// splitKindCases builds blocks-form fixtures for the repair tests.
 func splitKindCases() []struct {
 	name  string
 	build func([][]byte) splitFixture
@@ -610,9 +581,6 @@ func splitKindCases() []struct {
 		build func([][]byte) splitFixture
 	}{
 		{"blocks", blocksFixture},
-		{"members", func(bodies [][]byte) splitFixture {
-			return membersFixture([]string{"alpha", "beta"}, bodies)
-		}},
 	}
 }
 
@@ -621,7 +589,7 @@ func TestRepairSweepsStrayPayloadTemps(t *testing.T) {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	strays := []string{".blocks.tmp.111.aa", ".members.tmp.222.bb"}
+	strays := []string{".blocks.tmp.111.aa"}
 	for _, name := range strays {
 		dir := filepath.Join(repo.Dir, name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -675,21 +643,6 @@ func TestLoadActiveSplitPayloads(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
-	t.Run("members", func(t *testing.T) {
-		repo := testRepo(t)
-		fx := membersFixture([]string{"alpha"}, [][]byte{[]byte("load-a")})
-		seedSplitActive(t, repo, fx)
-		if _, exists, err := loadActive(repo); err != nil || !exists {
-			t.Fatalf("loadActive = %v %v", exists, err)
-		}
-		if err := os.RemoveAll(repo.MembersDirPath()); err != nil {
-			t.Fatal(err)
-		}
-		_, _, err := loadActive(repo)
-		if err == nil || !strings.Contains(err.Error(), "active payload missing") {
-			t.Fatalf("err = %v", err)
-		}
-	})
 	t.Run("payload without meta", func(t *testing.T) {
 		repo := testRepo(t)
 		fx := blocksFixture([][]byte{[]byte("orphan-a")})
@@ -723,44 +676,12 @@ func blocksFixture(bodies [][]byte) splitFixture {
 	return splitFixture{meta: meta, bodies: bodies}
 }
 
-// membersFixture derives a valid members meta whose whole digest is
-// the derived manifest digest. Names must arrive sorted.
-func membersFixture(names []string, bodies [][]byte) splitFixture {
-	meta := validMeta()
-	meta.Members = nil
-	for i, name := range names {
-		sum := sha256.Sum256(bodies[i])
-		meta.Members = append(meta.Members, MemberEntry{
-			Name:      name,
-			Image:     memberImageName(name),
-			Size:      int64(len(bodies[i])),
-			SHA256:    hex.EncodeToString(sum[:]),
-			MtimeUnix: int64(1710000000 + int64(i)),
-		})
-	}
-	meta.SHA256 = membersDigest(meta.Members)
-	meta.ID = meta.SHA256[:idHexLen]
-	var total int64
-	for _, entry := range meta.Members {
-		total += entry.Size
-	}
-	meta.Size = total
-	return splitFixture{meta: meta, bodies: bodies}
-}
-
 // manifestNames lists the payload file names of a fixture in the
 // order its bodies are stored.
 func manifestNames(meta Meta) []string {
-	if PayloadKind(meta) == PayloadBlocks {
-		names := make([]string, len(meta.Blocks))
-		for i, entry := range meta.Blocks {
-			names[i] = entry.Name
-		}
-		return names
-	}
-	names := make([]string, len(meta.Members))
-	for i, entry := range meta.Members {
-		names[i] = entry.Name + squashExt
+	names := make([]string, len(meta.Blocks))
+	for i, entry := range meta.Blocks {
+		names[i] = entry.Name
 	}
 	return names
 }
@@ -768,15 +689,8 @@ func manifestNames(meta Meta) []string {
 // manifestMtimes lists the recorded modification times in manifest
 // order, parallel to manifestNames.
 func manifestMtimes(meta Meta) []int64 {
-	if PayloadKind(meta) == PayloadBlocks {
-		out := make([]int64, len(meta.Blocks))
-		for i, entry := range meta.Blocks {
-			out[i] = entry.MtimeUnix
-		}
-		return out
-	}
-	out := make([]int64, len(meta.Members))
-	for i, entry := range meta.Members {
+	out := make([]int64, len(meta.Blocks))
+	for i, entry := range meta.Blocks {
 		out[i] = entry.MtimeUnix
 	}
 	return out
@@ -844,14 +758,11 @@ func seedSplitActive(t *testing.T, repo Repo, fx splitFixture) {
 
 func finalPayloadDir(t *testing.T, repo Repo, meta Meta) string {
 	t.Helper()
-	if PayloadKind(meta) == PayloadBlocks {
-		dir, err := repo.BlocksDirPath(meta.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return dir
+	dir, err := repo.BlocksDirPath(meta.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return repo.MembersDirPath()
+	return dir
 }
 
 // stageSplitPayload mimics a split build ready to publish: a scratch
@@ -862,9 +773,6 @@ func stageSplitPayload(t *testing.T, repo Repo, fx splitFixture) (string, string
 		t.Fatal(err)
 	}
 	name, err := tempBlocksDirName()
-	if PayloadKind(fx.meta) == PayloadMembers {
-		name, err = tempMembersDirName()
-	}
 	if err != nil {
 		t.Fatal(err)
 	}

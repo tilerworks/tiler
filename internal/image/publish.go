@@ -149,12 +149,9 @@ func publishStagedPayload(
 
 // stagedPayloadMatches checks a scratch payload directory against the
 // manifest that publishes with it. The scratch layout matches the
-// final one: block files and member files rest directly inside.
+// final one: block files rest directly inside.
 func stagedPayloadMatches(payloadTmp string, meta Meta) (bool, error) {
-	if PayloadKind(meta) == PayloadBlocks {
-		return dirMatchesBlocks(payloadTmp, meta.Blocks)
-	}
-	return dirMatchesMembers(payloadTmp, meta.Members)
+	return dirMatchesBlocks(payloadTmp, meta.Blocks)
 }
 
 // preparePublish repairs the leftovers of earlier crashes and
@@ -281,14 +278,10 @@ func anyPayloadExists(dir string) (bool, error) {
 // activePayloadPath is where the payload of the kind of meta rests
 // in the active slot.
 func activePayloadPath(repo Repo, meta Meta) (string, error) {
-	switch PayloadKind(meta) {
-	case PayloadBlocks:
+	if PayloadKind(meta) == PayloadBlocks {
 		return repo.BlocksDirPath(meta.ID)
-	case PayloadMembers:
-		return repo.MembersDirPath(), nil
-	default:
-		return repo.ImagePath(), nil
 	}
+	return repo.ImagePath(), nil
 }
 
 // payloadRoot is the outermost file or directory that carries the
@@ -297,14 +290,10 @@ func activePayloadPath(repo Repo, meta Meta) (string, error) {
 // identical on both sides: the blocks wrapper travels with its
 // nested id directory.
 func payloadRoot(dir string, meta Meta) string {
-	switch PayloadKind(meta) {
-	case PayloadBlocks:
+	if PayloadKind(meta) == PayloadBlocks {
 		return filepath.Join(dir, dirBlocks)
-	case PayloadMembers:
-		return filepath.Join(dir, dirMembers)
-	default:
-		return filepath.Join(dir, fileImage)
 	}
+	return filepath.Join(dir, fileImage)
 }
 
 func activePayloadExists(repo Repo, meta Meta) (bool, error) {
@@ -318,14 +307,10 @@ func activePayloadExists(repo Repo, meta Meta) (bool, error) {
 // holdPayloadPath is where the payload of the kind of meta rests
 // inside a hold directory; holds preserve the active layout.
 func holdPayloadPath(hold string, meta Meta) string {
-	switch PayloadKind(meta) {
-	case PayloadBlocks:
+	if PayloadKind(meta) == PayloadBlocks {
 		return filepath.Join(hold, dirBlocks, meta.ID)
-	case PayloadMembers:
-		return filepath.Join(hold, dirMembers)
-	default:
-		return filepath.Join(hold, fileImage)
 	}
+	return filepath.Join(hold, fileImage)
 }
 
 func stage(dir string, data []byte, meta Meta, seam hooks) (string, string, error) {
@@ -379,15 +364,10 @@ func tempPrefix(final string) string {
 	return "." + final + "."
 }
 
-// isPayloadTempName reports whether name marks a scratch payload
-// directory of either split form.
+// isPayloadTempName reports whether name marks a scratch blocks
+// payload directory.
 func isPayloadTempName(name string) bool {
-	for _, final := range []string{blocksTempFinal, membersTempFinal} {
-		if strings.HasPrefix(name, tempPrefix(final)) {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(name, tempPrefix(blocksTempFinal))
 }
 
 func writeSynced(tmp string, data []byte) error {
@@ -1374,31 +1354,22 @@ func pathExists(path string) (bool, error) {
 
 // payloadMatchesMeta reports whether the payload resting in the
 // active slot matches meta: the whole-file digest for the single
-// form, per-block digests for blocks, and per-member digests plus
-// the derived whole digest for members. A payload that is absent or
+// form, or per-block digests for blocks. A payload that is absent or
 // incomplete is a mismatch rather than an error, so repair keeps
 // going; only genuine IO failures propagate.
 func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
-	switch PayloadKind(meta) {
-	case PayloadBlocks:
+	if PayloadKind(meta) == PayloadBlocks {
 		dir, err := repo.BlocksDirPath(meta.ID)
 		if err != nil {
 			return false, err
 		}
 		return dirMatchesBlocks(dir, meta.Blocks)
-	case PayloadMembers:
-		ok, err := dirMatchesMembers(repo.MembersDirPath(), meta.Members)
-		if err != nil || !ok {
-			return false, err
-		}
-		return membersDigest(meta.Members) == meta.SHA256, nil
-	default:
-		there, err := pathExists(repo.ImagePath())
-		if err != nil || !there {
-			return false, err
-		}
-		return fileMatchesMeta(repo.ImagePath(), meta)
 	}
+	there, err := pathExists(repo.ImagePath())
+	if err != nil || !there {
+		return false, err
+	}
+	return fileMatchesMeta(repo.ImagePath(), meta)
 }
 
 // dirMatchesBlocks re-hashes every manifest block under dir. The
@@ -1414,26 +1385,6 @@ func dirMatchesBlocks(dir string, blocks []BlockEntry) (bool, error) {
 			return false, nil
 		}
 		ok, err := fileMatches(filepath.Join(dir, entry.Name), entry.Size, entry.SHA256)
-		if err != nil || !ok {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-// dirMatchesMembers re-hashes every member file under dir. The
-// staged payload of a build and the published members directory
-// share the same flat layout.
-func dirMatchesMembers(dir string, members []MemberEntry) (bool, error) {
-	there, err := pathExists(dir)
-	if err != nil || !there {
-		return false, err
-	}
-	for _, entry := range members {
-		if checkSegment(entry.Name) != nil {
-			return false, nil
-		}
-		ok, err := fileMatches(filepath.Join(dir, entry.Name+squashExt), entry.Size, entry.SHA256)
 		if err != nil || !ok {
 			return false, err
 		}
@@ -1489,7 +1440,7 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 		return err
 	}
 	for _, pair := range [][2]string{
-		{filepath.Join(hold, dirMembers), repo.MembersDirPath()},
+		{filepath.Join(hold, dirMembers), filepath.Join(repo.Dir, dirMembers)},
 		{filepath.Join(hold, dirIncr), filepath.Join(repo.Dir, dirIncr)},
 	} {
 		if moves, err = appendPresentDirMove(moves, pair[0], pair[1]); err != nil {

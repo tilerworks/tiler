@@ -194,57 +194,6 @@ func mustBlocksDir(t *testing.T, repo Repo, id string) string {
 	return dir
 }
 
-func TestResolveMountMembersForm(t *testing.T) {
-	cfg := buildConfig(t)
-	fx := membersFixture([]string{"alpha", "beta"},
-		[][]byte{[]byte("part-a"), []byte("part-bb")})
-	repo := mustRepo(t, cfg)
-	seedSplitActive(t, repo, fx)
-	got, err := ResolveMount(cfg, "alice/app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Library || got.ID != fx.meta.ID || got.Form != PayloadMembers {
-		t.Fatalf("target = %+v", got)
-	}
-	if got.Size != fx.meta.Size || got.SHA256 != fx.meta.SHA256 {
-		t.Fatalf("whole facts = %d %s", got.Size, got.SHA256)
-	}
-	if len(got.Members) != 0 || len(got.Blocks) != 0 {
-		t.Fatalf("foreign manifests set: %+v %+v", got.Members, got.Blocks)
-	}
-	if len(got.Partitions) != len(fx.meta.Members) {
-		t.Fatalf("partitions = %+v", got.Partitions)
-	}
-	for i, entry := range fx.meta.Members {
-		want, err := repo.MemberPath(entry.Name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		part := got.Partitions[i]
-		if part.Path != want || part.Name != entry.Name ||
-			part.Size != entry.Size || part.MtimeUnix != entry.MtimeUnix ||
-			part.SHA256 != entry.SHA256 {
-			t.Fatalf("partitions[%d] = %+v", i, part)
-		}
-	}
-}
-
-func TestResolveMountMembersMissingFileNamesEntry(t *testing.T) {
-	cfg := buildConfig(t)
-	fx := membersFixture([]string{"alpha", "beta"},
-		[][]byte{[]byte("part-a"), []byte("part-bb")})
-	repo := mustRepo(t, cfg)
-	seedSplitActive(t, repo, fx)
-	if err := os.Remove(filepath.Join(repo.MembersDirPath(), "beta"+squashExt)); err != nil {
-		t.Fatal(err)
-	}
-	_, err := ResolveMount(cfg, "alice/app")
-	if err == nil || !strings.Contains(err.Error(), "member beta") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 func TestResolveMountSplitArchivesNeverParticipate(t *testing.T) {
 	cfg := buildConfig(t)
 	fx := blocksFixture([][]byte{[]byte("archived-a")})
@@ -315,38 +264,6 @@ func TestQuickCheckAndVerifySplitTargets(t *testing.T) {
 		}
 		err = VerifyTarget(target)
 		if err == nil || !strings.Contains(err.Error(), "blk.000") {
-			t.Fatalf("verify err = %v", err)
-		}
-	})
-	t.Run("members", func(t *testing.T) {
-		cfg := buildConfig(t)
-		fx := membersFixture([]string{"alpha", "beta"},
-			[][]byte{[]byte("verify-a"), []byte("verify-bb")})
-		repo := mustRepo(t, cfg)
-		seedSplitActive(t, repo, fx)
-		target, err := ResolveMount(cfg, "alice/app")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := QuickCheckTarget(target); err != nil {
-			t.Fatal(err)
-		}
-		if err := VerifyTarget(target); err != nil {
-			t.Fatal(err)
-		}
-		old := time.Unix(1000000000, 0)
-		if err := os.Chtimes(target.Partitions[1].Path, old, old); err != nil {
-			t.Fatal(err)
-		}
-		err = QuickCheckTarget(target)
-		if err == nil || !strings.Contains(err.Error(), "member beta") {
-			t.Fatalf("quick check err = %v", err)
-		}
-		if err := os.WriteFile(target.Partitions[0].Path, []byte("corrupted"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		err = VerifyTarget(target)
-		if err == nil || !strings.Contains(err.Error(), "member alpha") {
 			t.Fatalf("verify err = %v", err)
 		}
 	})

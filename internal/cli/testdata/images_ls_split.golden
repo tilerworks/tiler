@@ -15,36 +15,6 @@
       },
       "archives": [],
       "holds": []
-    },
-    {
-      "name": "bob/forest",
-      "active": {
-        "id": "49a4a68053cdacd6",
-        "version": "v1",
-        "kind": "full",
-        "form": "members",
-        "size": 26,
-        "sha256": "49a4a68053cdacd6f6c86a040c84cec736d6f363c482d8d8eb03816afb5f8b24",
-        "created_at": "2026-03-04T05:06:07Z",
-        "deprecated": false,
-        "chain": [],
-        "members": [
-          {
-            "name": "docs",
-            "image": "members/docs.sqsh",
-            "size": 10,
-            "sha256": "baefdbdda895603453fe055367677e6f682b36b024befe17eaf9d17e5bd11262"
-          },
-          {
-            "name": "src",
-            "image": "members/src.sqsh",
-            "size": 16,
-            "sha256": "ba87e8d8cf74521fb70e321778789f6fb4f2c79ef13d80074c1f4c515b4aaf7f"
-          }
-        ]
-      },
-      "archives": [],
-      "holds": []
     }
   ]
 }

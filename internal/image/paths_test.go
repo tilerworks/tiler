@@ -115,22 +115,12 @@ func TestSplitPayloadLayout(t *testing.T) {
 	if blocksDir != filepath.Join(root, "blocks", id) {
 		t.Fatalf("blocks dir = %s", blocksDir)
 	}
-	if got := repo.MembersDirPath(); got != filepath.Join(root, "members") {
-		t.Fatalf("members dir = %s", got)
-	}
 	block, err := repo.BlockPath(id, "blk.007")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if block != filepath.Join(root, "blocks", id, "blk.007") {
 		t.Fatalf("block = %s", block)
-	}
-	member, err := repo.MemberPath("web")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if member != filepath.Join(root, "members", "web.sqsh") {
-		t.Fatalf("member = %s", member)
 	}
 	if fileConcatView != "image.sqsh-concat-view" {
 		t.Fatalf("concat view = %s", fileConcatView)
@@ -156,20 +146,9 @@ func TestSplitPayloadPathsRejectEscape(t *testing.T) {
 			t.Errorf("block accepted %q", name)
 		}
 	}
-	memberNames := []string{
-		"", ".", "..", "a/b", "/tmp/x", "a b", "a\tb", "a\nb", "a/../b",
-	}
-	for _, name := range memberNames {
-		if _, err := repo.MemberPath(name); err == nil {
-			t.Errorf("member accepted %q", name)
-		}
-	}
 	for _, name := range []string{"blk.000", "blk.999"} {
 		if _, err := repo.BlockPath(id, name); err != nil {
 			t.Errorf("block rejected %q: %v", name, err)
 		}
-	}
-	if _, err := repo.MemberPath("web-1.2"); err != nil {
-		t.Errorf("member rejected a legal segment: %v", err)
 	}
 }
