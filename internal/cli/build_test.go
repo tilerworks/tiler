@@ -174,8 +174,12 @@ func TestBuildHelpShowsSplit(t *testing.T) {
 		t.Fatalf("build --help: %v\n%s", err, stderr)
 	}
 	help := stdout + stderr
-	if !strings.Contains(help, "--split") {
-		t.Fatalf("build help missing --split:\n%s", help)
+	for _, want := range []string{
+		"-s, --split", "-f, --full", "-i, --incremental", "-I, --image",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("build help missing %s:\n%s", want, help)
+		}
 	}
 }
 
@@ -255,10 +259,11 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "both mode flags", args: []string{"build", "--full", "--incr", "--image", "alice/app", src}},
+		{name: "both mode flags", args: []string{"build", "--full", "--incremental", "--image", "alice/app", src}},
 		{name: "missing image name", args: []string{"build", src}},
 		{name: "bad image name", args: []string{"build", "--image", "nope", src}},
-		{name: "incr outside a view", args: []string{"build", "--incr", "--image", "alice/app", src}},
+		{name: "incr outside a view", args: []string{"build", "--incremental", "--image", "alice/app", src}},
+		{name: "short incr outside a view", args: []string{"build", "-i", "-I", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
 		{name: "bad split size", args: []string{"build", "--split", "1.5G", "--image", "alice/app", src}},
 	}

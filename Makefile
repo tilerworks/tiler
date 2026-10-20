@@ -16,11 +16,8 @@ test: ## go test ./... -race -cover
 cover: ## write coverage.out and open the HTML report
 	go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out
 
-e2e: ## run shell e2e cases under test/e2e/ (skips cleanly without the toolchain)
+e2e: build ## run shell e2e cases under test/e2e/ (skips cleanly without the toolchain)
 	@set -e; \
-	if test ! -x bin/tiler && ! command -v tiler >/dev/null 2>&1; then \
-		echo "e2e: no tiler binary found (run 'make build'); cases needing it will skip"; \
-	fi; \
 	cd test/e2e; \
 	ran=0; \
 	for t in t[0-9][0-9][0-9][0-9]-*.sh; do \

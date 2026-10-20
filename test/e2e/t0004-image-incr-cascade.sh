@@ -115,7 +115,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build a base full image' '
 	! grep -q "^chain:" "$meta_file"
 '
 
-# build --incr packs the live view upper as-is and leaves it in place, so
+# build --incremental packs the live view upper as-is and leaves it in place, so
 # the two increments differ: layerA holds {a.txt} and layerB holds
 # {a.txt,b.txt}. Different content means a different digest, so the two
 # layer ids must differ (cf. TestBuildIncrAppendsLayerToChain).
@@ -125,11 +125,11 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount and append two distinct incremen
 	grep -Eq "^mounted " mount.out &&
 	grep -q "hello tiler" "$work_dir/README.txt" &&
 	echo a >"$work_dir/a.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incr ) >incrA.out 2>incrA.err &&
+	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incrA.out 2>incrA.err &&
 	grep -Eq "^incr alice/app [0-9a-f]+" incrA.out &&
 	layerA=$(cut -d" " -f3 incrA.out) &&
 	echo b >"$work_dir/b.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incr ) >incrB.out 2>incrB.err &&
+	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incrB.out 2>incrB.err &&
 	grep -Eq "^incr alice/app [0-9a-f]+" incrB.out &&
 	layerB=$(cut -d" " -f3 incrB.out) &&
 	test -n "$layerA" && test -n "$layerB" &&

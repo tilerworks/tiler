@@ -40,7 +40,7 @@ type Prefixes struct {
 type Explicit struct {
 	// Full is the --full flag.
 	Full bool
-	// Incr is the --incr flag.
+	// Incr is the --incremental flag.
 	Incr bool
 	// Image is the --image owner/repo value, empty when omitted.
 	Image string
@@ -83,7 +83,7 @@ type IdentitySource interface {
 // are all refused.
 func Decide(cwd string, table []Mount, prefixes Prefixes, explicit Explicit) (Decision, error) {
 	if explicit.Full && explicit.Incr {
-		return Decision{}, errors.New("build mode: --full and --incr are mutually exclusive")
+		return Decision{}, errors.New("build mode: --full and --incremental are mutually exclusive")
 	}
 	cwd = filepath.Clean(cwd)
 	if underPrefix(cwd, prefixes.RuntimeDir) {
@@ -103,7 +103,7 @@ func Decide(cwd string, table []Mount, prefixes Prefixes, explicit Explicit) (De
 func decidePlain(cwd string, prefixes Prefixes, explicit Explicit) (Decision, error) {
 	if explicit.Incr {
 		return Decision{}, fmt.Errorf(
-			"build mode: --incr needs a merged view; %s is a plain directory", cwd)
+			"build mode: --incremental needs a merged view; %s is a plain directory", cwd)
 	}
 	name, err := resolveName("", nil, prefixes, explicit)
 	if err != nil {

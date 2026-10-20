@@ -9,7 +9,7 @@
 #   1. a small --split (64k) full build of an incompressible tree
 #      publishes blocks/<id>/ with more than one blk.NNN and no
 #      image.sqsh,
-#   2. mounting that image, writing the upper, and building --incr
+#   2. mounting that image, writing the upper, and building --incremental
 #      with the same --split publishes blocks/<incr-id>/ (not
 #      incr/<id>.sqsh); a fresh remount shows the upper file,
 #   3. a second full --split of the same name, while the first image
@@ -122,7 +122,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with t
 	test -f "$work_dir/docs/guide.md" &&
 	test -f "$work_dir/bulk.bin" &&
 	echo from-incr >"$work_dir/extra.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incr --split 64k ) >incr.out 2>incr.err &&
+	( cd "$work_dir" && "$tiler_bin" build -i -s 64k ) >incr.out 2>incr.err &&
 	grep -Eq "^incr alice/split [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&

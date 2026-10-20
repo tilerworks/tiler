@@ -108,7 +108,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'images ls lists the active image, its 
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
 	echo edit >"$work_dir/NEW.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incr ) >incr.out 2>incr.err &&
+	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
 	grep -Eq "^incr alice/app [0-9a-f]+" incr.out &&
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	grep -q "alice/app" lsall.out &&

@@ -42,17 +42,17 @@ func newBuildCmd() *cobra.Command {
 			"incremental build that appends the writable upper as one layer.\n" +
 			"When the recorded incremental layers plus that upper already\n" +
 			"exceed half the base image, the default switches to a full\n" +
-			"rebuild and a warning is printed; --incr keeps the layer.\n" +
+			"rebuild and a warning is printed; --incremental keeps the layer.\n" +
 			"--full always packs the whole view.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBuild(cmd, args, full, incr, imageName, split)
 		},
 	}
-	cmd.Flags().BoolVar(&full, "full", false, "force a full build")
-	cmd.Flags().BoolVar(&incr, "incr", false, "force an incremental build")
-	cmd.Flags().StringVar(&imageName, "image", "", "explicit owner/repo image name")
-	cmd.Flags().StringVar(&split, "split", "",
+	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
+	cmd.Flags().BoolVarP(&incr, "incremental", "i", false, "force an incremental build")
+	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit owner/repo image name")
+	cmd.Flags().StringVarP(&split, "split", "s", "",
 		"block size for split builds (e.g. 512M, 2G); 0 disables for this build")
 	return cmd
 }
@@ -104,7 +104,7 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 		// was invoked: flags, name, or the chosen directory.
 		return usageError{err}
 	}
-	// --incr is an explicit choice and is never rewritten. The size
+	// --incremental is an explicit choice and is never rewritten. The size
 	// check only changes the default inside a writable view.
 	if decision.Mode == mountinfo.ModeIncr && !incr {
 		promoted, err := promoteOversizedIncr(cmd.ErrOrStderr(), cfg, &decision)
@@ -168,7 +168,7 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 		return false, nil
 	}
 	_, err = fmt.Fprintf(stderr,
-		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incr to append a layer anyway)\n",
+		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
 		layers+upper, meta.Size)
 	return err == nil, err
 }

@@ -72,14 +72,14 @@ Available now:
   looked up, with build guidance when missing — tiler never
   installs them automatically. Any failed probe exits 1; warn and
   info results never affect the exit code.
-- `tiler build [--full|--incr] [--image owner/repo] [dir]` packs a
+- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--split|-s size] [dir]` packs a
   prepared directory into a full image, or, inside a writable merged
   view, appends the upper layer as one increment. A plain directory
   defaults to a full build and needs the explicit `owner/repo` name;
   a writable merged view defaults to an incremental build and infers
   the name from the mounted image. If the recorded incremental layers
   plus the live upper already exceed half the base image, that default
-  becomes a full rebuild and a warning names `--incr` to keep appending.
+  becomes a full rebuild and a warning names `--incremental` to keep appending.
   Success prints one line:
   `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`. With
   `split_size` (or `tiler build --split <size>`) greater than zero,

@@ -62,12 +62,12 @@ tiler session close feature                # 逆序卸载，记录保留
   SLA；可选的 contrib 辅助工具 `concatfs` 与 `slowfs` 一并探测，
   缺失时输出构建指引，tiler 从不自动安装。存在 fail 探测项即
   退出码 1；warn 与 info 不影响退出码。
-- `tiler build [--full|--incr] [--image owner/repo] [dir]` 把准备好
+- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--split|-s size] [dir]` 把准备好
   的目录打成全量镜像；位于可写合并视图内时，默认把 upper 追加为
   一个增量层。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的
   增量层加上当前 upper 已超过 base image 的一半，默认改为全量重建，
-  并警告可用 `--incr` 继续追加增量。构建
+  并警告可用 `--incremental`（或 `-i`）继续追加增量。构建
   成功打印一行：`full <owner>/<repo> <id>` 或
   `incr <owner>/<repo> <id>`。当 `split_size`（或
   `tiler build --split <size>`）大于零时，全量与增量构建都按该块
