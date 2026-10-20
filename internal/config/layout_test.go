@@ -9,12 +9,10 @@ func TestOutsideReserved(t *testing.T) {
 	home := t.TempDir()
 	data := t.TempDir()
 	images := filepath.Join(data, "images")
-	runtime := filepath.Join(data, "runtime")
 	sessions := filepath.Join(data, "sessions")
 	cache := filepath.Join(data, "cache")
 	cfg, err := Load(home, home, home, "", Patch{
 		ImagesDir:   &images,
-		RuntimeDir:  &runtime,
 		SessionsDir: &sessions,
 		CacheDir:    &cache,
 	})
@@ -32,7 +30,7 @@ func TestOutsideReserved(t *testing.T) {
 		{name: "home layout descendant", path: filepath.Join(layout, "nested", "ws"), reject: true},
 		{name: "images dir", path: images, reject: true},
 		{name: "images descendant", path: filepath.Join(images, "child"), reject: true},
-		{name: "runtime descendant", path: filepath.Join(runtime, "up"), reject: true},
+		{name: "session runtime descendant", path: filepath.Join(sessions, "dev", "runtime", "m1"), reject: true},
 		{name: "sessions dir", path: sessions, reject: true},
 		{name: "cache descendant", path: filepath.Join(cache, "blob"), reject: true},
 		{name: "workspace outside", path: filepath.Join(data, "work"), reject: false},

@@ -23,7 +23,6 @@ func libFlags(home string) (imagesDir string, args []string) {
 	imagesDir = filepath.Join(home, "lib", "images")
 	args = []string{
 		"--images-dir", imagesDir,
-		"--runtime-dir", filepath.Join(home, "lib", "runtime"),
 		"--sessions-dir", filepath.Join(home, "lib", "sessions"),
 	}
 	return imagesDir, args
@@ -221,9 +220,9 @@ func TestBuildPackerFailureExitsOne(t *testing.T) {
 func TestBuildIncrementalInsideView(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	runtimeDir := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
 	merged := filepath.Join(work, "merged")
-	upper := filepath.Join(runtimeDir, "up-1-2", "upper")
+	upper := filepath.Join(runtimeDir, "upper")
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
@@ -258,7 +257,7 @@ func TestBuildIncrementalRejectsSourceArgument(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	merged := filepath.Join(work, "merged")
-	upper := filepath.Join(home, "lib", "runtime", "up-1-2", "upper")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)

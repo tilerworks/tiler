@@ -87,30 +87,30 @@ tiler session close feature                # 逆序卸载，记录保留
 - `tiler images rm <owner/repo[/archives/<id>]>` 第一次调用标记
   废弃，第二次物理删除。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
-  写：每个 squashfs 成员先只读挂到 `~/.tiler/runtime/` 下的转
-  接点，再由 `fuse-overlayfs` 叠加在按挂载点（设备号,
-  inode）命名的 upper 之上；同一目录重复挂载是幂等的，并复用
-  先前的改动。分块载荷形态经同一引用解析，按各自的路线挂载
-  （见下文「分块存储」）。同一视图的健康挂载提示 `already
-  mounted`；身份
-  不一致报冲突错误，绝不静默重挂。`--read-only` 把单镜像直接
-  挂在 `<dir>`，带增量链时仅以 lowerdir 合并。`<image>` 是单
-  个 squashfs 文件路径，或 `owner/repo` 库引用：库引用经活跃
-  位 meta 解析为全量镜像加增量链，一个栈至多八个成员；参数同
-  时是合法名字与真实文件时，库引用优先。库成员默认先做 size
-  加 mtime 快速校验；`--verify` 改为对每个记录在案的 sha256
-  摘要整体重验（文件路径形态没有记录摘要）。`--subdir <path>`
-  把镜像内一个子目录暴露为挂载根：缺少该子目录的成员不进栈，
-  全部缺失时挂载失败且不创建任何东西。子树内没有 `.git` 时，
-  工作区 git 命令会向上寻到挂载点之外，因此 subdir 形态面向
-  独立子仓库或非 git 内容。配置 `cache_enabled`（默认关；
-  `--cache` 对单次调用开启）后，每个成员先按内容摘要拷入
-  `cache_dir` 并整体校验通过才挂载，NAS 上的镜像因此从本地
-  副本挂载，而挂载表身份仍指向原始库路径。目标必须是当前用
-  户拥有的空目录，且位于运行时树与全部保留目录之外。每次挂载
-  都在引擎执行前先写进 session 记录（write-ahead）：`--session
-  <name>` 挂进用 `session new` 创建的 session，环境变量
-  `TILER_SESSION_ID` 绑定一个，两者都没有时自动创建隐式的
+  写：每个 squashfs 成员先只读挂到该 session 的
+  `runtime/m<seq>/` 树下转接点，再由 `fuse-overlayfs` 叠加在
+  同树内的 upper 之上；同一目录重复挂载是幂等的，并复用先前
+  的改动。分块载荷形态经同一引用解析，按各自的路线挂载（见
+  下文「分块存储」）。同一视图的健康挂载提示 `already
+  mounted`；身份不一致报冲突错误，绝不静默重挂。
+  `--read-only` 把单镜像直接挂在 `<dir>`，带增量链时仅以
+  lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或
+  `owner/repo` 库引用：库引用经活跃位 meta 解析为全量镜像加
+  增量链，一个栈至多八个成员；参数同时是合法名字与真实文件
+  时，库引用优先。库成员默认先做 size 加 mtime 快速校验；
+  `--verify` 改为对每个记录在案的 sha256 摘要整体重验（文件
+  路径形态没有记录摘要）。`--subdir <path>` 把镜像内一个子
+  目录暴露为挂载根：缺少该子目录的成员不进栈，全部缺失时挂载
+  失败且不创建任何东西。子树内没有 `.git` 时，工作区 git
+  命令会向上寻到挂载点之外，因此 subdir 形态面向独立子仓库
+  或非 git 内容。配置 `cache_enabled`（默认关；`--cache` 对
+  单次调用开启）后，每个成员先按内容摘要拷入 `cache_dir` 并
+  整体校验通过才挂载，NAS 上的镜像因此从本地副本挂载，而挂
+  载表身份仍指向原始库路径。目标必须是当前用户拥有的空目录，
+  且位于运行时树与全部保留目录之外。每次挂载都在引擎执行前
+  先写进 session 记录（write-ahead）：`--session <name>` 挂进
+  用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
+  绑定一个，两者都没有时自动创建隐式的
   `auto-<时间戳>-<短随机>` session。`--rm` 把这个隐式 session
   标记为待删：最后一个视图卸载后，记录被删除、runtime 目录被
   清理，upper 数据一并抹除。它不能与 `--session` 或
@@ -119,10 +119,10 @@ tiler session close feature                # 逆序卸载，记录保留
   `session open` 会重试。
 - `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
   运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
-  兜底，随后按挂载点（设备号, inode）对应的运行时目录扫表，
-  清理表内已不再关联目标的 lower 残留。命令幂等：未挂载的
-  `<dir>` 静默成功。upper 与 work 数据从不删除，同一目录之后
-  再次挂载时复用先前的改动。
+  兜底，随后对该视图的 `runtime/m<seq>/` 树扫表，清理表内已
+  不再关联目标的 lower 残留。命令幂等：未挂载的 `<dir>` 静默
+  成功。upper 与 work 数据从不删除，同一目录之后再次挂载时
+  复用先前的改动。
 - `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
   new <name>` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
   `--rm` 标记的记录在 `session close` 时删除记录并清理每个视图
@@ -214,11 +214,14 @@ tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释�
 
 ```yaml
 images_dir: ~/.tiler/images
-runtime_dir: ~/.tiler/runtime
-sessions_dir: ~/.tiler/sessions
+sessions_dir: ~/.tiler/sessions      # 合并根：记录 + 每会话 runtime
 cache_dir: ~/.tiler/cache
 log_level: info
 ```
+
+`sessions_dir` 是唯一的 session 根。其下每个 session 是自包含目录
+（`session.json`、`session.lock`，以及 `runtime/m<seq>/` 组合树）。
+不再有全局 `runtime_dir`。
 
 取值按层解析，后者覆盖前者：内置默认、用户文件
 `$HOME/.tiler.yaml`、从工作目录向上遍历发现的项目级 `.tiler.yaml`，
@@ -237,13 +240,12 @@ log_level: info
 ```text
 config	path	/home/alice/.tiler.yaml
 config	images_dir	/home/alice/.tiler/images
-config	runtime_dir	/home/alice/.tiler/runtime
+config	sessions_dir	/home/alice/.tiler/sessions
 ```
 
 `--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
-`images_dir`、`runtime_dir`、`sessions_dir`、`cache_dir`、
-`log_level`）与 `results` 并列输出。config 段落不影响 doctor 的
-判定结果。
+`images_dir`、`sessions_dir`、`cache_dir`、`log_level`）与
+`results` 并列输出。config 段落不影响 doctor 的判定结果。
 
 ## 用户故事
 

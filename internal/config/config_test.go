@@ -15,9 +15,6 @@ func TestDefaults(t *testing.T) {
 	if cfg.ImagesDir != filepath.Join(root, "images") {
 		t.Fatalf("images dir = %q", cfg.ImagesDir)
 	}
-	if cfg.RuntimeDir != filepath.Join(root, "runtime") {
-		t.Fatalf("runtime dir = %q", cfg.RuntimeDir)
-	}
 	if cfg.SessionsDir != filepath.Join(root, "sessions") {
 		t.Fatalf("sessions dir = %q", cfg.SessionsDir)
 	}
@@ -179,6 +176,16 @@ func TestDecodeUnknownKey(t *testing.T) {
 		t.Fatal("unknown key was accepted")
 	}
 	if !strings.Contains(err.Error(), "image_dir") {
+		t.Fatalf("error = %v, want the field name", err)
+	}
+}
+
+func TestDecodeRejectsRemovedRuntimeDir(t *testing.T) {
+	_, err := Decode([]byte("runtime_dir: ~/.tiler/runtime\n"))
+	if err == nil {
+		t.Fatal("removed runtime_dir key was accepted")
+	}
+	if !strings.Contains(err.Error(), "runtime_dir") {
 		t.Fatalf("error = %v, want the field name", err)
 	}
 }

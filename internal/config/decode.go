@@ -15,7 +15,6 @@ import (
 // A present zero or false is non-nil so it can overlay a lower value.
 type rawPatch struct {
 	ImagesDir             *string            `yaml:"images_dir"`
-	RuntimeDir            *string            `yaml:"runtime_dir"`
 	SessionsDir           *string            `yaml:"sessions_dir"`
 	CacheDir              *string            `yaml:"cache_dir"`
 	KeepVersions          *keepVersionsValue `yaml:"keep_versions"`
@@ -107,7 +106,6 @@ func (raw rawPatch) patch() (Patch, error) {
 	}
 	return Patch{
 		ImagesDir:             raw.ImagesDir,
-		RuntimeDir:            raw.RuntimeDir,
 		SessionsDir:           raw.SessionsDir,
 		CacheDir:              raw.CacheDir,
 		KeepVersions:          keepVersionsPtr(raw.KeepVersions),

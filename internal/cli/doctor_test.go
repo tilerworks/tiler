@@ -215,7 +215,6 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 	for _, want := range []string{
 		"config\tpath\t" + filepath.Join(home, ".tiler.yaml") + "\n",
 		"config\timages_dir\t" + filepath.Join(home, ".tiler", "images") + "\n",
-		"config\truntime_dir\t" + filepath.Join(home, ".tiler", "runtime") + "\n",
 		"config\tsessions_dir\t" + filepath.Join(home, ".tiler", "sessions") + "\n",
 		"config\tcache_dir\t" + filepath.Join(home, ".tiler", "cache") + "\n",
 		"config\tlog_level\tinfo\n",
@@ -223,6 +222,9 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "config\truntime_dir\t") {
+		t.Fatalf("doctor config section still reports runtime_dir\n%s", stdout)
 	}
 	// The config section precedes the probe table.
 	if strings.Index(stdout, "config\tpath\t") > strings.Index(stdout, "git\tpass") {

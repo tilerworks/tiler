@@ -15,7 +15,6 @@ import (
 func statusJSONLib(home string) []string {
 	return []string{
 		"--images-dir", filepath.Join(home, "lib", "images"),
-		"--runtime-dir", "/rt",
 		"--sessions-dir", sessionsDir(home),
 	}
 }

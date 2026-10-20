@@ -22,10 +22,11 @@ any platform. Integration tests that need root or mounts call `t.Skip`
 when that permission is missing.
 
 The default runtime layout is under the user home directory:
-`$HOME/.tiler/images`, `$HOME/.tiler/runtime`, `$HOME/.tiler/sessions`,
-and `$HOME/.tiler/cache`. tiler does not gain a registry, a pull
-command, or certificate signing. Integrity checks, when added later,
-use sha256 only.
+`$HOME/.tiler/images`, `$HOME/.tiler/sessions`, and
+`$HOME/.tiler/cache`. Session records and combination trees share
+`sessions_dir` (`sessions/<name>/` with `runtime/m<seq>/` under it).
+tiler does not gain a registry, a pull command, or certificate
+signing. Integrity checks, when added later, use sha256 only.
 
 ## Dependencies
 

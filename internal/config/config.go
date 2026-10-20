@@ -36,12 +36,11 @@ const (
 type Config struct {
 	// ImagesDir stores read-only squashfs images.
 	ImagesDir string
-	// RuntimeDir holds per-mount runtime directories.
-	RuntimeDir string
-	// SessionsDir holds session records.
+	// SessionsDir is the merged root for session records and
+	// per-session runtime combinations.
 	SessionsDir string
 	// CacheDir is the directory a later step copies images into when
-	// NAS cache is enabled.
+	// NAS cache is enabled. Blocks builds also stage pack scratch here.
 	CacheDir string
 	// KeepVersions is how many image versions to retain. Zero means
 	// the count is unlimited.
@@ -87,7 +86,6 @@ type Config struct {
 // Patch records fields present in one document. Nil means omitted.
 type Patch struct {
 	ImagesDir             *string
-	RuntimeDir            *string
 	SessionsDir           *string
 	CacheDir              *string
 	KeepVersions          *int
@@ -109,7 +107,6 @@ func Defaults(home string) Config {
 	root := filepath.Join(home, ".tiler")
 	return Config{
 		ImagesDir:     filepath.Join(root, "images"),
-		RuntimeDir:    filepath.Join(root, "runtime"),
 		SessionsDir:   filepath.Join(root, "sessions"),
 		CacheDir:      filepath.Join(root, "cache"),
 		SessionMaxAge: DefaultSessionMaxAge,
@@ -130,7 +127,6 @@ func (c Config) UserFile() string {
 // as they are on base.
 func (p Patch) Apply(base Config) Config {
 	base.ImagesDir = overlay(base.ImagesDir, p.ImagesDir)
-	base.RuntimeDir = overlay(base.RuntimeDir, p.RuntimeDir)
 	base.SessionsDir = overlay(base.SessionsDir, p.SessionsDir)
 	base.CacheDir = overlay(base.CacheDir, p.CacheDir)
 	base.KeepVersions = overlay(base.KeepVersions, p.KeepVersions)

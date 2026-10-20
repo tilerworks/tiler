@@ -201,13 +201,15 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 	}
 	for _, want := range []string{
 		"images_dir: ~/.tiler/images",
-		"runtime_dir: ~/.tiler/runtime",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("created config missing %q\n%s", want, data)
 		}
+	}
+	if strings.Contains(string(data), "runtime_dir") {
+		t.Fatalf("created config still mentions runtime_dir:\n%s", data)
 	}
 }
 
@@ -235,21 +237,21 @@ func TestCeilingDirBoundsProjectWalk(t *testing.T) {
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeProjectConfig(t, zone, "runtime_dir: marker-runtime\n")
+	writeProjectConfig(t, zone, "cache_dir: marker-cache\n")
 	t.Chdir(deep)
 
 	// Without a ceiling the walk reaches zone and applies the marker.
 	cfg := mustRun(t, "version")
-	if cfg.RuntimeDir != filepath.Join(zone, "marker-runtime") {
-		t.Fatalf("control runtime_dir = %q, want the zone marker", cfg.RuntimeDir)
+	if cfg.CacheDir != filepath.Join(zone, "marker-cache") {
+		t.Fatalf("control cache_dir = %q, want the zone marker", cfg.CacheDir)
 	}
 
 	// With the ceiling at sandbox, zone sits above it and is excluded, so
-	// the default runtime dir stands.
+	// the default cache dir stands.
 	t.Setenv("TILER_CEILING_DIR", sandbox)
 	cfg = mustRun(t, "version")
-	if cfg.RuntimeDir != filepath.Join(home, ".tiler", "runtime") {
-		t.Fatalf("ceiling runtime_dir = %q, want the default", cfg.RuntimeDir)
+	if cfg.CacheDir != filepath.Join(home, ".tiler", "cache") {
+		t.Fatalf("ceiling cache_dir = %q, want the default", cfg.CacheDir)
 	}
 }
 

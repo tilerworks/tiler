@@ -47,10 +47,10 @@ test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
 	"$tiler_bin" version &&
 	test -f "$HOME/.tiler.yaml" &&
 	grep -q "^images_dir: ~/.tiler/images$" "$HOME/.tiler.yaml" &&
-	grep -q "^runtime_dir: ~/.tiler/runtime$" "$HOME/.tiler.yaml" &&
-	grep -q "^sessions_dir: ~/.tiler/sessions$" "$HOME/.tiler.yaml" &&
+	grep -q "^sessions_dir: ~/.tiler/sessions" "$HOME/.tiler.yaml" &&
 	grep -q "^cache_dir: ~/.tiler/cache$" "$HOME/.tiler.yaml" &&
-	grep -q "^log_level: info$" "$HOME/.tiler.yaml"
+	grep -q "^log_level: info$" "$HOME/.tiler.yaml" &&
+	! grep -q "runtime_dir" "$HOME/.tiler.yaml"
 '
 
 test_expect_success TILER 'a later run leaves an edited config untouched' '
@@ -77,8 +77,9 @@ test_expect_success TILER 'doctor --json reports the config location and dirs' '
 	{ test "$status" -eq 0 || test "$status" -eq 1; } &&
 	grep -qF "\"path\": \"$HOME/.tiler.yaml\"" doctor.json &&
 	grep -qF "\"images_dir\": \"$HOME/.tiler/images\"" doctor.json &&
-	grep -qF "\"runtime_dir\": \"$HOME/.tiler/runtime\"" doctor.json &&
-	grep -qF "\"log_level\": \"info\"" doctor.json
+	grep -qF "\"sessions_dir\": \"$HOME/.tiler/sessions\"" doctor.json &&
+	grep -qF "\"log_level\": \"info\"" doctor.json &&
+	! grep -qF "\"runtime_dir\"" doctor.json
 '
 
 test_done

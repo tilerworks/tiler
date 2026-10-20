@@ -36,7 +36,6 @@ var repoRootDir = func() string {
 func splitConfig(home, mode string) config.Config {
 	cfg := config.Defaults(home)
 	cfg.ImagesDir = filepath.Join(home, "lib", "images")
-	cfg.RuntimeDir = filepath.Join(home, "lib", "runtime")
 	cfg.SessionsDir = filepath.Join(home, "lib", "sessions")
 	cfg.CacheDir = filepath.Join(home, "lib", "cache")
 	cfg.SplitEnabled = true

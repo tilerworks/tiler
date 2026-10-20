@@ -161,7 +161,8 @@ func mountWorkspace(t *testing.T, cfg config.Config, full string, layers []strin
 	t.Helper()
 	ws, err := workspace.Mount(workspace.Request{
 		Full: full, Layers: layers,
-		RuntimeDir: cfg.RuntimeDir, MergedDir: merged,
+		RuntimeDir: filepath.Join(cfg.SessionsDir, "test", "runtime", "m1"),
+		MergedDir:  merged,
 	})
 	if errors.Is(err, workspace.ErrUnavailable) {
 		t.Skipf("mounting unavailable: %v", err)
