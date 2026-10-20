@@ -10,6 +10,70 @@ import (
 	"github.com/jiangxin/tiler/internal/config"
 )
 
+func TestListAndRemoveAbbreviations(t *testing.T) {
+	withWorkspace(t)
+	helps := [][]string{
+		{"images", "--help"},
+		{"images", "list", "--help"},
+		{"images", "remove", "--help"},
+		{"session", "--help"},
+		{"session", "list", "--help"},
+		{"session", "remove", "--help"},
+	}
+	for _, args := range helps {
+		stdout, stderr, _, err := runCmd(t, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, stderr)
+		}
+		help := stdout + stderr
+		if strings.Contains(help, "Aliases:") || strings.Contains(help, "\n  ls") || strings.Contains(help, "\n  rm") {
+			t.Fatalf("%v help shows an abbreviation:\n%s", args, help)
+		}
+	}
+	imagesHelp := mustHelp(t, "images", "--help")
+	for _, want := range []string{"\n  list ", "\n  remove ", "\n  gc "} {
+		if !strings.Contains(imagesHelp, want) {
+			t.Fatalf("images help missing %q:\n%s", want, imagesHelp)
+		}
+	}
+	sessionHelp := mustHelp(t, "session", "--help")
+	for _, want := range []string{"\n  list ", "\n  remove "} {
+		if !strings.Contains(sessionHelp, want) {
+			t.Fatalf("session help missing %q:\n%s", want, sessionHelp)
+		}
+	}
+	for _, args := range [][]string{
+		{"images", "list"},
+		{"images", "ls"},
+		{"session", "list"},
+		{"session", "ls"},
+	} {
+		if _, stderr, _, err := runCmd(t, args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, stderr)
+		}
+	}
+	for _, args := range [][]string{
+		{"images", "remove"},
+		{"images", "rm"},
+		{"session", "remove"},
+		{"session", "rm"},
+	} {
+		_, _, _, err := runCmd(t, args...)
+		if ExitCode(err) != 2 {
+			t.Fatalf("%v ExitCode(%v) = %d, want 2 (missing argument)", args, err, ExitCode(err))
+		}
+	}
+}
+
+func mustHelp(t *testing.T, args ...string) string {
+	t.Helper()
+	stdout, stderr, _, err := runCmd(t, args...)
+	if err != nil {
+		t.Fatalf("%v: %v\n%s", args, err, stderr)
+	}
+	return stdout + stderr
+}
+
 func TestVersionLineUsesDefaultAndOverride(t *testing.T) {
 	withWorkspace(t)
 	original := Version

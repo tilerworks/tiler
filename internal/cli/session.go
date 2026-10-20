@@ -146,8 +146,9 @@ func newSessionCloseCmd() *cobra.Command {
 
 func newSessionRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove <name>",
-		Short: "Delete a closed session record",
+		Use:     "remove <name>",
+		Aliases: []string{"rm"},
+		Short:   "Delete a closed session record",
 		Long: "Remove deletes the record of a closed session. An active\n" +
 			"session is refused: close it first, so a session that still\n" +
 			"holds mounts is never orphaned.",
@@ -169,9 +170,10 @@ func newSessionRemoveCmd() *cobra.Command {
 func newSessionListCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List every session record",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List every session record",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {

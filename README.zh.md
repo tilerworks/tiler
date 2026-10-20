@@ -74,7 +74,7 @@ tiler session close feature                # 逆序卸载，记录保留
   大小切成字节块入库，而不再是单个 `image.sqsh` /
   `incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
   blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
-- `tiler images ls [owner/repo] [--archives] [--json]` 列出每个
+- `tiler images list [owner/repo] [--archives] [--json]` 列出每个
   活跃镜像与链长。给出名字则列出每个链 id，`--archives` 追加
   归档与 hold 中的链 id。分块活跃位追加 `form=blocks` 或
   `form=members` 标记；单名列表随之输出 `blocks <n>` 行或逐分区
@@ -88,7 +88,7 @@ tiler session close feature                # 逆序卸载，记录保留
   载且超龄的 active 记录自动转 closed，进入之后的删除范围。
   唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
   都会被拆除视图、清理 runtime 并删除记录。
-- `tiler images rm <owner/repo[/archives/<id>]>` 第一次调用标记
+- `tiler images remove <owner/repo[/archives/<id>]>` 第一次调用标记
   废弃，第二次物理删除。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
   写：每个 squashfs 成员先只读挂到该 session 的
@@ -189,7 +189,7 @@ doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会�
 schema 稳定、字段只增不改，由 golden 文件测试钉住：
 
 ```bash
-tiler images ls --json | jq -e '.images | length > 0'    # CI 门禁
+tiler images list --json | jq -e '.images | length > 0'  # CI 门禁
 tiler status --json | jq -r '.sessions[].name'           # Agent 盘点
 tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
 ```
@@ -287,7 +287,7 @@ lower 时，每个 upper 的稳态大约 6.5 MB。
 overlay。同一个镜像库、同一套命令面，块大小只是配置（或单次
 构建旗标）选择。
 
-机器读同一套命令面。`images ls`、`session list`、`session show`、
+机器读同一套命令面。`images list`、`session list`、`session show`、
 `status` 与 `doctor` 都带 `--json` 形态，schema 稳定、字段只增不
 改并由 golden 文件钉住：CI 门禁可以直接断言镜像齐全、没有 stale
 挂载，Agent 可以从 doctor 的性能数字决定要不要开启缓存，无需

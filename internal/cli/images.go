@@ -30,8 +30,9 @@ func newImagesListCmd() *cobra.Command {
 	var archives bool
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "ls [owner/repo]",
-		Short: "List active images",
+		Use:     "list [owner/repo]",
+		Aliases: []string{"ls"},
+		Short:   "List active images",
 		Long: "Without a name, list every active image in the library. With a\n" +
 			"name, also list each incremental chain id. --archives adds the\n" +
 			"archive and held chain ids. --json renders one machine-readable\n" +
@@ -40,7 +41,7 @@ func newImagesListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
-				return errors.New("images ls: configuration is not loaded")
+				return errors.New("images list: configuration is not loaded")
 			}
 			out := cmd.OutOrStdout()
 			if len(args) == 1 {
@@ -64,7 +65,7 @@ type namedState struct {
 func listAllImages(w io.Writer, cfg config.Config, archives, asJSON bool) error {
 	repos, err := image.ListRepos(cfg.ImagesDir)
 	if err != nil {
-		return fmt.Errorf("images ls: %w", err)
+		return fmt.Errorf("images list: %w", err)
 	}
 	states, err := activeStates(repos)
 	if err != nil {
@@ -93,7 +94,7 @@ func activeStates(repos []image.Repo) ([]namedState, error) {
 	for _, repo := range repos {
 		state, err := image.Inspect(repo)
 		if err != nil {
-			return nil, fmt.Errorf("images ls: %s/%s: %w", repo.Owner, repo.Repo, err)
+			return nil, fmt.Errorf("images list: %s/%s: %w", repo.Owner, repo.Repo, err)
 		}
 		if !state.HasActive {
 			continue
@@ -110,10 +111,10 @@ func listOneImage(w io.Writer, cfg config.Config, name string, archives, asJSON 
 	}
 	state, err := image.Inspect(repo)
 	if err != nil {
-		return fmt.Errorf("images ls: %w", err)
+		return fmt.Errorf("images list: %w", err)
 	}
 	if !state.HasActive {
-		return fmt.Errorf("images ls: %s has no active image", name)
+		return fmt.Errorf("images list: %s has no active image", name)
 	}
 	if asJSON {
 		named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
@@ -176,7 +177,7 @@ func writeSideChains(w io.Writer, state image.State) error {
 	return nil
 }
 
-// imagesDocument is the images ls --json envelope: one object
+// imagesDocument is the images list --json envelope: one object
 // holding every listed repository.
 type imagesDocument struct {
 	Images []imageJSON `json:"images"`
@@ -335,8 +336,9 @@ func newImagesGCCmd() *cobra.Command {
 
 func newImagesRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm <owner/repo | owner/repo/archives/full-id>",
-		Short: "Deprecate and then remove an image target",
+		Use:     "remove <owner/repo | owner/repo/archives/full-id>",
+		Aliases: []string{"rm"},
+		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
 			"physically removes it. Both calls refuse while a session still\n" +
 			"references the target.",
@@ -344,7 +346,7 @@ func newImagesRemoveCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
-				return errors.New("images rm: configuration is not loaded")
+				return errors.New("images remove: configuration is not loaded")
 			}
 			target := args[0]
 			outcome, err := image.RemoveTarget(cfg, target,

@@ -87,7 +87,7 @@ Available now:
   one `image.sqsh` / `incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images ls [owner/repo] [--archives] [--json]` lists every
+- `tiler images list [owner/repo] [--archives] [--json]` lists every
   active image with its chain length. A name lists each chain id, and
   `--archives` adds the archived and held chain ids. A split active
   appends a `form=blocks` or `form=members` marker, and the
@@ -106,7 +106,7 @@ Available now:
   eligible for a later removal. The one exception is a `--rm`
   active record whose views are all dead: it is torn down, its
   runtime purged, and its record removed whatever its age.
-- `tiler images rm <owner/repo[/archives/<id>]>` deprecates the
+- `tiler images remove <owner/repo[/archives/<id>]>` deprecates the
   target on the first call and removes it on the second. Both calls
   refuse while a reference pins the target.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
@@ -237,7 +237,7 @@ gates and agent consumers. The schemas are stable and add-only,
 pinned by golden-file tests:
 
 ```bash
-tiler images ls --json | jq -e '.images | length > 0'    # a CI gate
+tiler images list --json | jq -e '.images | length > 0'  # a CI gate
 tiler status --json | jq -r '.sessions[].name'           # agent inventory
 tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
 ```
@@ -356,7 +356,7 @@ and overlays them. One library, one command surface — the block
 size is a configuration (or per-build flag) choice.
 
 Machines read the same command surface. Every list and view
-command — `images ls`, `session list`, `session show`, `status`,
+command — `images list`, `session list`, `session show`, `status`,
 and `doctor` — carries a `--json` form with a stable, add-only
 schema pinned by golden files: a CI gate fails on a missing image
 or a stale mount, and an agent picks the cache setting from the

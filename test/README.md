@@ -71,17 +71,17 @@ equipped host, so a genuine regression is never masked by a skip.
   skips cleanly without it.
 - `e2e/t0004-image-incr-cascade.sh` — builds a base full image, mounts
   it, and appends two distinct incremental layers, then confirms the
-  chain cascades in `images ls` and in `meta.yaml`. A fresh remount
+  chain cascades in `images list` and in `meta.yaml`. A fresh remount
   serves the full plus both increments, `build --full` merges the live
   view into a new full (replacing `meta.yaml` and clearing the chain),
   and the old full + chain retire into a session-pinned `hold/`. Needs
   the FUSE toolchain; skips cleanly without it.
 - `e2e/t0005-images-ls-gc-rm.sh` — exercises the library subcommands
-  over a mounted image: `images ls` (all images, per-name chain,
+  over a mounted image: `images list` (all images, per-name chain,
   `--json`), `images gc` promoting an unreferenced hold into an
   archive, `images gc --keep-versions` expiring the older of two
-  archives, the two-phase `images rm` (deprecate then remove), and
-  `images rm` refused while a generated session still
+  archives, the two-phase `images remove` (deprecate then remove), and
+  `images remove` refused while a generated session still
   references the image. Needs the FUSE toolchain; skips cleanly
   without it.
 - `e2e/t0006-session-lifecycle.sh` — drives the `session` command over
