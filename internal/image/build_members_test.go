@@ -14,10 +14,7 @@ import (
 
 func membersConfig(t *testing.T) config.Config {
 	t.Helper()
-	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeMembers
-	return cfg
+	return buildConfig(t)
 }
 
 func membersRequest(cfg config.Config, src string, run ToolRunner) FullRequest {
@@ -87,7 +84,7 @@ func TestBuildMembersPublishesSplitPayload(t *testing.T) {
 	cfg := membersConfig(t)
 	src := memberTree(t, map[string]string{"web": "web-content", "api": "api-content"})
 	runner := &memberRunner{}
-	res, err := BuildFull(membersRequest(cfg, src, runner.run))
+	res, err := BuildMembers(membersRequest(cfg, src, runner.run))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +165,7 @@ func TestBuildMembersSortedPartitioning(t *testing.T) {
 		"zebra": "z", "alpha": "a", "middle": "m",
 	})
 	runner := &memberRunner{}
-	if _, err := BuildFull(membersRequest(cfg, src, runner.run)); err != nil {
+	if _, err := BuildMembers(membersRequest(cfg, src, runner.run)); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
@@ -219,7 +216,7 @@ func TestBuildMembersDerivedDigestDeterminism(t *testing.T) {
 func buildMembersID(t *testing.T, dirs map[string]string) string {
 	t.Helper()
 	cfg := membersConfig(t)
-	res, err := BuildFull(membersRequest(cfg, memberTree(t, dirs),
+	res, err := BuildMembers(membersRequest(cfg, memberTree(t, dirs),
 		(&memberRunner{}).run))
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +231,7 @@ func TestBuildMembersRefusesTopLevelFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &memberRunner{}
-	_, err := BuildFull(membersRequest(cfg, src, runner.run))
+	_, err := BuildMembers(membersRequest(cfg, src, runner.run))
 	if err == nil {
 		t.Fatal("expected refusal")
 	}
@@ -254,7 +251,7 @@ func TestBuildMembersRefusesTopLevelFile(t *testing.T) {
 func TestBuildMembersRefusesEmptySource(t *testing.T) {
 	cfg := membersConfig(t)
 	runner := &memberRunner{}
-	_, err := BuildFull(membersRequest(cfg, t.TempDir(), runner.run))
+	_, err := BuildMembers(membersRequest(cfg, t.TempDir(), runner.run))
 	if err == nil || !strings.Contains(err.Error(), "no top-level directories") {
 		t.Fatalf("err = %v", err)
 	}
@@ -267,11 +264,11 @@ func TestBuildMembersRefusesEmptySource(t *testing.T) {
 func TestBuildMembersNoOpOnIdenticalRebuild(t *testing.T) {
 	cfg := membersConfig(t)
 	src := memberTree(t, map[string]string{"alpha": "a", "beta": "b"})
-	first, err := BuildFull(membersRequest(cfg, src, (&memberRunner{}).run))
+	first, err := BuildMembers(membersRequest(cfg, src, (&memberRunner{}).run))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := BuildFull(membersRequest(cfg, src, (&memberRunner{}).run))
+	second, err := BuildMembers(membersRequest(cfg, src, (&memberRunner{}).run))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +296,7 @@ func TestBuildMembersCleansUpOnPackFailure(t *testing.T) {
 		}
 		return errors.New("mksquashfs: exit status 1: boom")
 	}
-	_, err := BuildFull(membersRequest(cfg, src, packer))
+	_, err := BuildMembers(membersRequest(cfg, src, packer))
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
@@ -321,7 +318,7 @@ func TestBuildMembersGuidesOnToolSizeLimit(t *testing.T) {
 	src := memberTree(t, map[string]string{"alpha": "a"})
 	runner := &memberRunner{err: errors.New(
 		"mksquashfs: exit status 1: FATAL ERROR: File too large for filesystem")}
-	_, err := BuildFull(membersRequest(cfg, src, runner.run))
+	_, err := BuildMembers(membersRequest(cfg, src, runner.run))
 	if err == nil {
 		t.Fatal("expected failure")
 	}
@@ -355,7 +352,7 @@ func TestBuildMembersCleansUpOnPublishFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := memberTree(t, map[string]string{"alpha": "a"})
-	_, err = BuildFull(membersRequest(cfg, src, (&memberRunner{}).run))
+	_, err = BuildMembers(membersRequest(cfg, src, (&memberRunner{}).run))
 	if err == nil {
 		t.Fatal("expected publish failure")
 	}

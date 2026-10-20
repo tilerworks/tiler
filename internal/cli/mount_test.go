@@ -46,9 +46,6 @@ type mountFake struct {
 	assembleN     int
 	assembleOut   string
 	assembleErr   error
-
-	lookCalls   []string
-	lookMissing map[string]bool
 }
 
 func (f *mountFake) cache(cacheDir, src, want string) (string, string, error) {
@@ -106,29 +103,19 @@ func (f *mountFake) assemble(
 	return out, nil
 }
 
-// lookPath reports every optional tool as present unless the test
-// marks it missing.
-func (f *mountFake) lookPath(name string) (string, error) {
-	f.lookCalls = append(f.lookCalls, name)
-	if f.lookMissing[name] {
-		return "", fmt.Errorf("exec: %s: executable file not found in $PATH", name)
-	}
-	return filepath.Join("/usr/bin", name), nil
-}
-
 // withMountSeams installs the fake engines, tool runner, cache, and
 // mount table for the command tests.
 func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	t.Helper()
 	withSessionLockSeam(t)
-	f := &mountFake{table: table, lookMissing: map[string]bool{}}
+	f := &mountFake{table: table}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
 	origMount, origUmount := mountEngine, unmountEngine
-	origForest, origAssemble, origLook := forestEngine, assembleBlocks, toolLookPath
+	origForest, origAssemble := forestEngine, assembleBlocks
 	t.Cleanup(func() {
 		mountRun, ensureCache, loadMountTable = origRun, origCache, origTable
 		mountEngine, unmountEngine = origMount, origUmount
-		forestEngine, assembleBlocks, toolLookPath = origForest, origAssemble, origLook
+		forestEngine, assembleBlocks = origForest, origAssemble
 	})
 	mountRun = f.runTool
 	ensureCache = f.cache
@@ -137,7 +124,6 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	unmountEngine = f.umount
 	forestEngine = f.forest
 	assembleBlocks = f.assemble
-	toolLookPath = f.lookPath
 	return f
 }
 

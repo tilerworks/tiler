@@ -10,8 +10,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 func upperDir(t *testing.T) string {
@@ -524,19 +522,20 @@ func TestBuildIncrMountSmokeGate(t *testing.T) {
 	}
 }
 
-func TestBuildIncrRefusesSplitStorage(t *testing.T) {
+func TestBuildIncrZeroSplitSizeDoesNotRefuse(t *testing.T) {
 	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeMembers
+	if cfg.SplitSize != 0 {
+		t.Fatalf("split size = %d, want split off", cfg.SplitSize)
+	}
 	runner := &fakeRunner{body: []byte("never-packed")}
 	_, err := BuildIncr(IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upperDir(t), Run: runner.run,
 	})
-	if err == nil || !strings.Contains(err.Error(), "split") {
-		t.Fatalf("err = %v", err)
+	if err == nil || strings.Contains(err.Error(), "split") {
+		t.Fatalf("err = %v, want a non-split failure", err)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("packer ran despite split storage: %v", runner.calls)
+		t.Fatalf("packer ran: %v", runner.calls)
 	}
 }
 

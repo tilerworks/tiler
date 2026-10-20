@@ -307,14 +307,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "negative keep versions", doc: "keep_versions: -1\n", want: "keep_versions"},
 		{name: "negative max age", doc: "max_age: -1s\n", want: "max_age"},
 		{name: "negative session max age", doc: "session_max_age: -1h\n", want: "session_max_age"},
-		{name: "split enabled without mode", doc: "split_enabled: true\n", want: "split_enabled"},
-		{name: "mode set while split is off", doc: "split_mode: blocks\n", want: "split_mode"},
-		{name: "route set while split is off", doc: "split_route: concat\n", want: "split_route"},
-		{
-			name: "unknown route",
-			doc:  "split_enabled: true\nsplit_mode: blocks\nsplit_route: splice\n",
-			want: "split_route",
-		},
+		{name: "negative split size", doc: "split_size: -1\n", want: "split_size"},
+		{name: "fractional split size", doc: "split_size: 2.5G\n", want: "split_size"},
+		{name: "removed split_enabled", doc: "split_enabled: true\n", want: "split_enabled"},
+		{name: "removed split_mode", doc: "split_mode: blocks\n", want: "split_mode"},
+		{name: "removed split_route", doc: "split_route: concat\n", want: "split_route"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -475,6 +472,47 @@ func TestLoadCeilingIgnoredWhenNotAncestor(t *testing.T) {
 	}
 	if got.CacheDir != filepath.Join(zone, "marker-cache") {
 		t.Fatalf("cache = %q, want the zone marker", got.CacheDir)
+	}
+}
+
+func TestLoadSplitSizeLayers(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	proj := filepath.Join(home, "proj")
+	mustMkdir(t, proj)
+	writeConfig(t, home, "split_size: 2G\n")
+	got, err := Load(proj, home, base, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitSize != 2<<30 {
+		t.Fatalf("split size = %d, want 2G", got.SplitSize)
+	}
+
+	writeConfig(t, proj, "split_size: 0\n")
+	got, err = Load(proj, home, base, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitSize != 0 {
+		t.Fatalf("project zero = %d, want it to override 2G", got.SplitSize)
+	}
+
+	zero := int64(0)
+	got, err = Load(proj, home, base, "", Patch{SplitSize: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitSize != 0 {
+		t.Fatalf("command zero = %d", got.SplitSize)
+	}
+	fourK := int64(4096)
+	got, err = Load(home, home, base, "", Patch{SplitSize: &fourK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SplitSize != 4096 {
+		t.Fatalf("command override = %d, want 4096", got.SplitSize)
 	}
 }
 

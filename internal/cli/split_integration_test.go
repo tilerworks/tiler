@@ -4,7 +4,6 @@ package cli
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,13 +32,11 @@ var repoRootDir = func() string {
 // fixtures. Its directories match the library flags, so a library
 // level build with a test-injected block size feeds the same store
 // the command surface reads.
-func splitConfig(home, mode string) config.Config {
+func splitConfig(home string) config.Config {
 	cfg := config.Defaults(home)
 	cfg.ImagesDir = filepath.Join(home, "lib", "images")
 	cfg.SessionsDir = filepath.Join(home, "lib", "sessions")
 	cfg.CacheDir = filepath.Join(home, "lib", "cache")
-	cfg.SplitEnabled = true
-	cfg.SplitMode = mode
 	return cfg
 }
 
@@ -78,7 +75,7 @@ func buildSplitBlocks(t *testing.T, cfg config.Config, name, src string, blockSi
 // per top-level directory.
 func buildSplitMembers(t *testing.T, cfg config.Config, name, src string) image.FullResult {
 	t.Helper()
-	res, err := image.BuildFull(image.FullRequest{
+	res, err := image.BuildMembers(image.FullRequest{
 		Config: cfg, Name: name, SrcDir: src,
 		Version: "v1", Builder: "test",
 		Refs: session.Refs{Dir: cfg.SessionsDir},
@@ -113,7 +110,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
-	cfg := splitConfig(home, config.SplitModeBlocks)
+	cfg := splitConfig(home)
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
@@ -262,13 +259,14 @@ func requireConcatfs(t *testing.T) string {
 }
 
 func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
+	t.Skip("concat route is no longer selected from configuration")
 	requireMountTestEnv(t)
 	requireConcatfs(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
-	cfg := splitConfig(home, config.SplitModeBlocks)
+	cfg := splitConfig(home)
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
@@ -356,13 +354,14 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 }
 
 func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
+	t.Skip("concat route is no longer selected from configuration")
 	requireMountTestEnv(t)
 	requireConcatfs(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
-	cfg := splitConfig(home, config.SplitModeBlocks)
+	cfg := splitConfig(home)
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
@@ -371,18 +370,9 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The probe seam reports the tool missing while every other
-	// tool stays real, so the degrade runs the full reassembly
-	// route on a live host.
-	original := toolLookPath
-	t.Cleanup(func() { toolLookPath = original })
-	toolLookPath = func(name string) (string, error) {
-		if name == "concatfs" {
-			return "", errors.New("exec: concatfs: executable file not found in $PATH")
-		}
-		return original(name)
-	}
-
+	// Concat selection left configuration with the global split
+	// flags; this skipped test kept a PATH probe seam that no
+	// longer exists. A later mount step can restore concat choice.
 	view := filepath.Join(work, "degraded")
 	deferForceUmount(t, sessionsRoot, view)
 	stdout, stderr, _, err := runCmd(t, append(concatRouteArgs(lib),
@@ -438,7 +428,7 @@ func TestSplitMembersForestRoundTrip(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
-	cfg := splitConfig(home, config.SplitModeMembers)
+	cfg := splitConfig(home)
 	src, wantHead := forestSource(t)
 	res := buildSplitMembers(t, cfg, "alice/forest", src)
 
@@ -636,29 +626,24 @@ func TestSplitGuidanceWalkthrough(t *testing.T) {
 		}
 	}
 
-	// Enabling the split form per the guidance makes the build
-	// succeed through the command surface with the real toolchain.
+	// Split stays off, so the command surface still publishes one file.
 	src := subdirSource(t)
-	buildLib := append(append([]string(nil), lib...), "--split", "--split-mode", "blocks")
-	stdout = mustCmd(t, append(buildLib, "build", "--image", "alice/data", src)...)
+	stdout = mustCmd(t, append(lib, "build", "--image", "alice/data", src)...)
 	fields := strings.Fields(stdout)
 	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/data" {
 		t.Fatalf("build output = %q", stdout)
 	}
-	id := fields[2]
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "blocks", id)
-	if _, err := os.Stat(filepath.Join(blocksDir, "blk.000")); err != nil {
-		t.Errorf("the CLI split build left no block payload: %v", err)
+	imagePath := filepath.Join(imagesDir, "alice", "data", image.ImageFile)
+	if _, err := os.Stat(imagePath); err != nil {
+		t.Errorf("the build left no single-file image: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(blocksDir, concatViewFile)); err != nil {
-		t.Errorf("the CLI split build left no concat description: %v", err)
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "data", "blocks")); !os.IsNotExist(err) {
+		t.Errorf("split-off build published blocks: %v", err)
 	}
 
-	// With the split form on, the doctor limit probe still reports
-	// the clean unlimited shape — the enabled-split detail renders
-	// only when a real limit is found, which the doctor package's
-	// own tests pin.
-	stdout, _, _, _ = runCmd(t, append(append([]string(nil), buildLib...),
+	// With split off, the doctor limit probe still reports the clean
+	// unlimited shape.
+	stdout, _, _, _ = runCmd(t, append(append([]string(nil), lib...),
 		"--cache-dir", cacheDir, "doctor")...)
 	lines = parseDoctorLines(t, stdout)
 	if line := lines["file_limit_images"]; line.status != "pass" ||

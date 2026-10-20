@@ -17,10 +17,7 @@ import (
 
 func blocksConfig(t *testing.T) config.Config {
 	t.Helper()
-	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeBlocks
-	return cfg
+	return buildConfig(t)
 }
 
 func blocksRequest(cfg config.Config, src string, run ToolRunner, blockSize int64) FullRequest {
@@ -287,7 +284,7 @@ func TestBuildFullPlainToolFailureKeepsMeaning(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected failure for %q", out)
 		}
-		if strings.Contains(err.Error(), "split_enabled") {
+		if strings.Contains(err.Error(), "split_size") {
 			t.Fatalf("%q gained split guidance: %v", out, err)
 		}
 	}
@@ -323,14 +320,14 @@ func TestSizeLimitWriteClassification(t *testing.T) {
 		t.Fatal("plain error classified as size limit")
 	}
 	err := failWrite("/store/alice/app/blk.000", syscall.ENOSPC)
-	if strings.Contains(err.Error(), "split_enabled") {
+	if strings.Contains(err.Error(), "split_size") {
 		t.Fatalf("ENOSPC gained split guidance: %v", err)
 	}
 	if !strings.Contains(err.Error(), "/store/alice/app/blk.000") {
 		t.Fatalf("write not named: %v", err)
 	}
 	err = failWrite("/store/alice/app/blk.000", syscall.EINVAL)
-	if strings.Contains(err.Error(), "split_enabled") {
+	if strings.Contains(err.Error(), "split_size") {
 		t.Fatalf("EINVAL gained split guidance: %v", err)
 	}
 	if runtime.GOOS != "linux" {
@@ -339,7 +336,7 @@ func TestSizeLimitWriteClassification(t *testing.T) {
 	err = failWrite("/store/alice/app/blk.000",
 		fmt.Errorf("write block: %w", syscall.EFBIG))
 	for _, want := range []string{
-		"split_enabled", "split_mode", "doctor", "/store/alice/app/blk.000",
+		"split_size", "--split", "doctor", "/store/alice/app/blk.000",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in %v", want, err)
@@ -352,17 +349,20 @@ func assertSplitGuidance(t *testing.T, err error) {
 	text := err.Error()
 	for _, want := range []string{
 		"refused a file this large",
-		"split_enabled",
-		"split_mode",
+		"split_size",
+		"--split",
 		"doctor",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %s", want, text)
 		}
 	}
-	for _, banned := range []string{"chapter", "page ", "R6"} {
+	for _, banned := range []string{
+		"chapter", "page ", "R6",
+		"split_enabled", "split_mode", "split_route",
+	} {
 		if strings.Contains(text, banned) {
-			t.Errorf("guidance cites external numbering (%q): %s", banned, text)
+			t.Errorf("guidance cites removed or external text (%q): %s", banned, text)
 		}
 	}
 }

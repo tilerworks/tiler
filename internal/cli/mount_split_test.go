@@ -142,12 +142,12 @@ func writeMembersFixture(t *testing.T, imagesDir, name string, members []fixture
 	return meta.ID
 }
 
-// concatRouteArgs extend the library flags with the configuration
-// the explicit concat route needs: a route is only admitted for an
-// enabled blocks split.
+// concatRouteArgs used to append the removed global split-route
+// flags. The concat selection path is gone; skipped concat tests
+// keep this helper as a plain library-flag copy until a later mount
+// step redefines how concat is chosen.
 func concatRouteArgs(lib []string) []string {
-	return append(append([]string(nil), lib...),
-		"--split", "--split-mode", "blocks", "--split-route", "concat")
+	return append([]string(nil), lib...)
 }
 
 func TestMountBlocksReassembleRoute(t *testing.T) {
@@ -164,13 +164,9 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if stdout != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	// The default route materializes without probing the optional
-	// concat tool.
+	// Blocks mounts materialize through reassembly.
 	if f.assembleN != 1 {
 		t.Fatalf("assemble calls = %d, want one materialization", f.assembleN)
-	}
-	if len(f.lookCalls) != 0 {
-		t.Errorf("the default route probed tools: %v", f.lookCalls)
 	}
 	if len(f.mountReqs) != 1 || len(f.forestReqs) != 0 {
 		t.Fatalf("engine calls = %d mounts, %d forests", len(f.mountReqs), len(f.forestReqs))
@@ -221,6 +217,7 @@ func TestMountBlocksCacheEnabledSkipsSecondCopy(t *testing.T) {
 }
 
 func TestMountBlocksConcatRoute(t *testing.T) {
+	t.Skip("concat route is no longer selected from configuration")
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
@@ -234,9 +231,6 @@ func TestMountBlocksConcatRoute(t *testing.T) {
 	}
 	if stdout != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
-	}
-	if len(f.lookCalls) != 1 || f.lookCalls[0] != "concatfs" {
-		t.Fatalf("look calls = %v, want the concatfs probe", f.lookCalls)
 	}
 	if f.assembleN != 0 {
 		t.Errorf("the concat route materialized: %v", f.assembleCalls)
@@ -262,10 +256,10 @@ func TestMountBlocksConcatRoute(t *testing.T) {
 }
 
 func TestMountBlocksConcatDegradesWithoutTool(t *testing.T) {
+	t.Skip("concat route is no longer selected from configuration")
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
-	f.lookMissing["concatfs"] = true
 	writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, true)
 	dir := filepath.Join(work, "view")
 
@@ -293,6 +287,7 @@ func TestMountBlocksConcatDegradesWithoutTool(t *testing.T) {
 }
 
 func TestMountBlocksConcatMissingDescriptionFails(t *testing.T) {
+	t.Skip("concat route is no longer selected from configuration")
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
@@ -496,29 +491,13 @@ func TestMountMembersUsageRefusals(t *testing.T) {
 	}
 }
 
-func TestMountBlocksConcatSubdirIsUsage(t *testing.T) {
+func TestMountBlocksSubdirUsesReassemble(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, true)
 	dir := filepath.Join(work, "view")
 
-	_, stderr, _, err := runCmd(t, append(concatRouteArgs(lib),
-		"mount", "--subdir", "src", "alice/app", dir)...)
-	if ExitCode(err) != 2 {
-		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
-	}
-	for _, want := range []string{"--subdir", "concat", "reassemble"} {
-		if !strings.Contains(stderr, want) {
-			t.Fatalf("stderr = %q, want guidance naming %q", stderr, want)
-		}
-	}
-	if len(f.mountReqs) != 0 || f.assembleN != 0 || len(f.lookCalls) != 0 {
-		t.Errorf("the refusal reached an engine: %v %v %v",
-			f.mountReqs, f.assembleCalls, f.lookCalls)
-	}
-
-	// The reassemble route keeps the subdir view working.
 	stdout, stderr, _, err := runCmd(t,
 		append(lib, "mount", "--subdir", "src", "alice/app", dir)...)
 	if err != nil {

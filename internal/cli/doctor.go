@@ -24,14 +24,12 @@ var runDoctor = func(ctx context.Context, cfg config.Config) ([]doctor.Result, e
 }
 
 // doctorOptions maps the loaded configuration onto the probe
-// options: the storage directories to inspect and the split-storage
-// settings that shape probe advice.
+// options: the storage directories to inspect. Split advice stays
+// off; configuration no longer carries a split mode.
 func doctorOptions(cfg config.Config) doctor.Options {
 	return doctor.Options{
-		ImagesDir:    cfg.ImagesDir,
-		CacheDir:     cfg.CacheDir,
-		SplitEnabled: cfg.SplitEnabled,
-		SplitMode:    cfg.SplitMode,
+		ImagesDir: cfg.ImagesDir,
+		CacheDir:  cfg.CacheDir,
 	}
 }
 

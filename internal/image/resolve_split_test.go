@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 func TestResolveMountBlocksForm(t *testing.T) {
@@ -136,10 +134,8 @@ func TestResolveMountSplitArchivesNeverParticipate(t *testing.T) {
 	}
 }
 
-func TestResolveMountSplitEnabledKeepsSingleForm(t *testing.T) {
+func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 	cfg := buildConfig(t)
-	cfg.SplitEnabled = true
-	cfg.SplitMode = config.SplitModeBlocks
 	repo := mustRepo(t, cfg)
 	meta := seedChain(t, repo, 0)
 	got, err := ResolveMount(cfg, "alice/app")

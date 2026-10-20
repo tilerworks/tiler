@@ -24,9 +24,7 @@ type rawPatch struct {
 	SessionAutocloseStale *bool              `yaml:"session_autoclose_stale"`
 	SquashfsOptions       *string            `yaml:"squashfs_options"`
 	FuseOptions           *string            `yaml:"fuse_options"`
-	SplitEnabled          *bool              `yaml:"split_enabled"`
-	SplitMode             *string            `yaml:"split_mode"`
-	SplitRoute            *string            `yaml:"split_route"`
+	SplitSize             *splitSizeText     `yaml:"split_size"`
 	CacheEnabled          *bool              `yaml:"cache_enabled"`
 	LogLevel              *string            `yaml:"log_level"`
 }
@@ -53,6 +51,24 @@ func (v *versionValue) UnmarshalYAML(value *yaml.Node) error {
 // instead of truncated, and zero stays present.
 type keepVersionsValue struct {
 	n int
+}
+
+// splitSizeText stores scalar text so 0 and 2G both count as present.
+// The value is an integer byte count or a ParseByteSize string.
+type splitSizeText struct {
+	n int64
+}
+
+func (s *splitSizeText) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return errors.New("split_size: invalid size")
+	}
+	n, err := ParseByteSize(value.Value)
+	if err != nil {
+		return fmt.Errorf("split_size: %w", err)
+	}
+	s.n = n
+	return nil
 }
 
 func (k *keepVersionsValue) UnmarshalYAML(value *yaml.Node) error {
@@ -134,15 +150,21 @@ func (raw rawPatch) patch() (Patch, error) {
 		SessionAutocloseStale: raw.SessionAutocloseStale,
 		SquashfsOptions:       raw.SquashfsOptions,
 		FuseOptions:           raw.FuseOptions,
-		SplitEnabled:          raw.SplitEnabled,
-		SplitMode:             raw.SplitMode,
-		SplitRoute:            raw.SplitRoute,
+		SplitSize:             splitSizePtr(raw.SplitSize),
 		CacheEnabled:          raw.CacheEnabled,
 		LogLevel:              raw.LogLevel,
 	}, nil
 }
 
 func versionPtr(v *versionValue) *int {
+	if v == nil {
+		return nil
+	}
+	n := v.n
+	return &n
+}
+
+func splitSizePtr(v *splitSizeText) *int64 {
 	if v == nil {
 		return nil
 	}

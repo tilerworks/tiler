@@ -96,8 +96,9 @@ func loadConfig(patch config.Patch) (config.Config, error) {
 	// defaults without the file.
 	_ = config.EnsureUserFile(home)
 	// Upgrade an incompatible user file (missing version or removed
-	// keys such as runtime_dir) before Load's strict Decode. Must run
-	// here so a leftover runtime_dir never surfaces as "unknown field".
+	// keys such as runtime_dir and the old split keys) before Load's
+	// strict Decode. Must run here so a leftover key never surfaces
+	// as "unknown field".
 	// When the upgrade itself cannot complete and Load then fails, the
 	// upgrade error is reported instead of the opaque parse failure.
 	upgradeErr := config.UpgradeUserFile(home)

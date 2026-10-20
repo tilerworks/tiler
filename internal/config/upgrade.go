@@ -18,8 +18,18 @@ const (
 	removedRuntimeDir = "runtime_dir"
 )
 
+// removedUserKeys are stripped from $HOME/.tiler.yaml. A project file
+// is never rewritten; those keys fail Load as unknown fields.
+var removedUserKeys = []string{
+	removedRuntimeDir,
+	"split_enabled",
+	"split_mode",
+	"split_route",
+}
+
 // UpgradeUserFile rewrites $HOME/.tiler.yaml when it lacks a current
-// schema version or still carries removed keys such as runtime_dir.
+// schema version or still carries a removed key (runtime_dir,
+// split_enabled, split_mode, or split_route).
 // A missing file is a no-op — EnsureUserFile owns first-create with a
 // current template. Compatible files are left untouched.
 //
@@ -48,12 +58,11 @@ func UpgradeUserFile(home string) error {
 	if err != nil {
 		return fmt.Errorf("upgrade %s: %w", path, err)
 	}
-	_, hasRemoved := raw[removedRuntimeDir]
-	if version >= CurrentConfigVersion && !hasRemoved {
+	if version >= CurrentConfigVersion && !hasRemovedUserKey(raw) {
 		return nil
 	}
 
-	delete(raw, removedRuntimeDir)
+	deleteRemovedUserKeys(raw)
 	raw["version"] = CurrentConfigVersion
 
 	upgraded, err := yaml.Marshal(raw)
@@ -80,6 +89,21 @@ func decodeLooseUserFile(data []byte) (map[string]any, error) {
 		raw = map[string]any{}
 	}
 	return raw, nil
+}
+
+func hasRemovedUserKey(raw map[string]any) bool {
+	for _, key := range removedUserKeys {
+		if _, ok := raw[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func deleteRemovedUserKeys(raw map[string]any) {
+	for _, key := range removedUserKeys {
+		delete(raw, key)
+	}
 }
 
 func looseVersion(raw map[string]any) (int, error) {

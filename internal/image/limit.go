@@ -29,12 +29,11 @@ func toolOutputHitsSizeLimit(out string) bool {
 }
 
 // sizeLimitError names the failed write, explains that the target
-// storage refused a file this large, and guides to the split
-// configuration or the doctor probe. It never cites external
-// documents.
+// storage refused a file this large, and guides to the split_size
+// surface or the doctor probe. It never cites external documents.
 func sizeLimitError(what string, err error) error {
 	return fmt.Errorf("build: %s: %w: the target storage refused a file this large; "+
-		"enable split_enabled with split_mode blocks or members and retry, "+
+		"set split_size (or build --split <size>) to store as byte blocks and retry, "+
 		"or check the doctor single-file size limit probe", what, err)
 }
 

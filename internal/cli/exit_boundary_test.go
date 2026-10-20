@@ -58,10 +58,8 @@ func TestExitCodeBoundaries(t *testing.T) {
 		{name: "corrupt block manifest mount is runtime",
 			seed: seedCorruptBlocks,
 			args: []string{"mount", "alice/data", "/ws/view"}, want: 1},
-		{name: "missing concat description mount is runtime",
-			seed: seedConcatWithoutView,
-			args: []string{"--split", "--split-mode", "blocks", "--split-route", "concat",
-				"mount", "alice/data", "/ws/view"}, want: 1},
+		{name: "removed split flag is usage",
+			args: []string{"--split", "version"}, want: 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -133,12 +131,4 @@ func seedCorruptBlocks(t *testing.T, home string) {
 	writeSplitFile(t,
 		filepath.Join(imagesDir, "alice", "data", "blocks", id, "blk.000"),
 		"corrupted-and-longer")
-}
-
-// seedConcatWithoutView installs the mount seams and a blocks-form
-// library without the concat description file.
-func seedConcatWithoutView(t *testing.T, home string) {
-	t.Helper()
-	withMountSeams(t, nil)
-	writeBlocksFixture(t, defaultImagesDir(home), "alice/data", []string{"one", "two"}, false)
 }
