@@ -17,6 +17,17 @@ import (
 // authoritative store, with the given actions renumbered in order.
 func writeSessionRecord(t *testing.T, dir, name string, actions ...session.Action) {
 	t.Helper()
+	writeSessionRecordMarked(t, dir, name, false, actions...)
+}
+
+// writeRemovableSessionRecord seeds one active --rm session record.
+func writeRemovableSessionRecord(t *testing.T, dir, name string, actions ...session.Action) {
+	t.Helper()
+	writeSessionRecordMarked(t, dir, name, true, actions...)
+}
+
+func writeSessionRecordMarked(t *testing.T, dir, name string, removable bool, actions ...session.Action) {
+	t.Helper()
 	now := time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
 	for i := range actions {
 		actions[i].Seq = i + 1
@@ -29,10 +40,11 @@ func writeSessionRecord(t *testing.T, dir, name string, actions ...session.Actio
 	}
 	store := session.Store{Dir: dir}
 	rec := session.Record{
-		Name:      name,
-		State:     session.StateActive,
-		Actions:   actions,
-		CreatedAt: now,
+		Name:          name,
+		State:         session.StateActive,
+		Actions:       actions,
+		CreatedAt:     now,
+		RemoveOnClose: removable,
 	}
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)

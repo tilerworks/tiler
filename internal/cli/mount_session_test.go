@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
+
+// generatedSessionName matches adjective-animal names from GenerateName,
+// optionally with a trailing collision digit.
+var generatedSessionName = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]?$`)
 
 // listSessionNames lists the recorded session names in a directory.
 // Each session owns one subdirectory of the sessions root.
@@ -138,7 +143,7 @@ func TestMountSessionResolutionPriority(t *testing.T) {
 		t.Errorf("env session actions = %+v", rec.Actions)
 	}
 
-	// Without any context an implicit auto-* session is created.
+	// Without any context a generated adjective-animal session is created.
 	t.Setenv(sessionEnvVar, "")
 	view = filepath.Join(work, "view3")
 	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
@@ -146,18 +151,21 @@ func TestMountSessionResolutionPriority(t *testing.T) {
 	if len(names) != 3 {
 		t.Fatalf("sessions = %v", names)
 	}
-	var auto string
+	var generated string
 	for _, name := range names {
-		if strings.HasPrefix(name, "auto-") {
-			auto = name
+		if name != "flag-sess" && name != "env-sess" {
+			generated = name
 		}
 	}
-	if auto == "" {
-		t.Fatalf("no implicit session in %v", names)
+	if generated == "" {
+		t.Fatalf("no generated session in %v", names)
 	}
-	if rec := loadSessionRecord(t, sessions, auto); len(rec.Actions) != 1 ||
+	if !generatedSessionName.MatchString(generated) {
+		t.Fatalf("generated session name %q has unexpected shape", generated)
+	}
+	if rec := loadSessionRecord(t, sessions, generated); len(rec.Actions) != 1 ||
 		rec.Actions[0].Mountpoint != view {
-		t.Errorf("implicit session actions = %+v", rec.Actions)
+		t.Errorf("generated session actions = %+v", rec.Actions)
 	}
 }
 
@@ -171,38 +179,38 @@ func TestMountImplicitSessionIsIsomorphic(t *testing.T) {
 	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 
 	names := listSessionNames(t, sessionsDir(home))
-	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
-		t.Fatalf("sessions = %v, want one auto-* record", names)
+	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
+		t.Fatalf("sessions = %v, want one generated record", names)
 	}
-	auto := names[0]
+	generated := names[0]
 
-	// The same command surface operates on the implicit session.
-	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", auto)...)
+	// The same command surface operates on the generated session.
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", generated)...)
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, auto+" active") || !strings.Contains(stdout, "mount ") {
+	if !strings.Contains(stdout, generated+" active") || !strings.Contains(stdout, "mount ") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
-	stdout, stderr, _, err = runCmd(t, append(lib, "session", "close", auto)...)
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "close", generated)...)
 	if err != nil {
 		t.Fatalf("session close: %v\n%s", err, stderr)
 	}
-	if stdout != "closed "+auto+"\n" {
+	if stdout != "closed "+generated+"\n" {
 		t.Fatalf("close stdout = %q", stdout)
 	}
 	stdout, stderr, _, err = runCmd(t, append(lib, "session", "list")...)
 	if err != nil {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
-	if stdout != auto+" closed mounts=0\n" {
+	if stdout != generated+" closed mounts=0\n" {
 		t.Fatalf("list stdout = %q", stdout)
 	}
-	stdout, stderr, _, err = runCmd(t, append(lib, "session", "remove", auto)...)
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "remove", generated)...)
 	if err != nil {
 		t.Fatalf("session remove: %v\n%s", err, stderr)
 	}
-	if stdout != "removed "+auto+"\n" {
+	if stdout != "removed "+generated+"\n" {
 		t.Fatalf("remove stdout = %q", stdout)
 	}
 	if names := listSessionNames(t, sessionsDir(home)); len(names) != 0 {
@@ -364,12 +372,12 @@ func TestMountImplicitSessionDiscardsFailedAndReusedRecords(t *testing.T) {
 		t.Fatalf("sessions after failure = %v, want none", names)
 	}
 
-	// A successful implicit mount keeps its record.
+	// A successful generated mount keeps its record.
 	f.mountErr = nil
 	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 	names := listSessionNames(t, sessions)
-	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
-		t.Fatalf("sessions = %v, want one auto-* record", names)
+	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
+		t.Fatalf("sessions = %v, want one generated record", names)
 	}
 
 	// An implicit remount that merely adopts the healthy view leaves
@@ -411,16 +419,17 @@ func TestMountRemovableMarksImplicitSession(t *testing.T) {
 	view := filepath.Join(work, "view")
 	sessions := sessionsDir(home)
 
-	// --rm on an implicit mount marks the auto-* record it creates.
+	// --rm on a mount without session context marks the generated
+	// record it creates.
 	mountOK(t, lib, "mounted "+view+"\n", "mount", "--rm", img, view)
 	names := listSessionNames(t, sessions)
-	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
-		t.Fatalf("sessions = %v, want one auto-* record", names)
+	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
+		t.Fatalf("sessions = %v, want one generated record", names)
 	}
 	if rec := loadSessionRecord(t, sessions, names[0]); !rec.RemoveOnClose {
-		t.Fatalf("implicit --rm record not marked: %+v", rec)
+		t.Fatalf("generated --rm record not marked: %+v", rec)
 	}
-	// show flags the implicit --rm session with the rm marker.
+	// show flags the --rm session with the rm marker.
 	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", names[0])...)
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)

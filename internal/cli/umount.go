@@ -60,19 +60,24 @@ func runUmount(cmd *cobra.Command, args []string) error {
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "unmounted %s\n", dir); err != nil {
 		return err
 	}
-	closeImplicitSession(cmd, cfg, dir)
+	closeRemovableSession(cmd, cfg, dir)
 	return nil
 }
 
-// closeImplicitSession closes the implicit auto-* session behind
-// the removed view once it was the session's last live view. The
-// view is already down, so a failing lookup or close warns instead
-// of failing the umount.
-func closeImplicitSession(cmd *cobra.Command, cfg config.Config, dir string) {
+// closeRemovableSession writebacks StatusUnmounted for the covering
+// session, then closes a --rm session once the removed view was its
+// last live one. Non--rm sessions stay active. The view is already
+// down, so a failing release or close warns instead of failing the
+// umount.
+func closeRemovableSession(cmd *cobra.Command, cfg config.Config, dir string) {
 	engine := sessionEngine(cfg)
-	if _, err := engine.CloseImplicitFor(dir, sessionUmount(cfg)); err != nil {
+	if err := engine.ReleaseMount(dir); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-			"umount: warning: implicit session close: %v\n", err)
+			"umount: warning: release mount: %v\n", err)
+	}
+	if _, err := engine.CloseRemovableFor(dir, sessionUmount(cfg)); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+			"umount: warning: removable session close: %v\n", err)
 	}
 }
 
@@ -111,7 +116,7 @@ func resolveCombinationRuntime(
 	if runtime := runtimeFromSessionLookup(cfg, dir); runtime != "" {
 		return runtime
 	}
-	return runtimeFromStore(cfg, dir)
+	return runtimeFromStore(cfg, dir, table)
 }
 
 // runtimeFromSessionLookup asks SessionForPath for the covering
@@ -139,8 +144,11 @@ func runtimeFromSessionLookup(cfg config.Config, dir string) string {
 // runtimeFromStore reads session records without the advisory lock
 // and returns sessions/<name>/runtime/m<seq> for an active mount at
 // dir. Close holds that lock while tearing views down, so the locked
-// SessionForPath scan cannot see the record under close.
-func runtimeFromStore(cfg config.Config, dir string) string {
+// SessionForPath scan cannot see the record under close. When more
+// than one active record still claims dir, prefer a runtime that
+// still has a mount listed under it in the table so a remount into
+// a new session does not sweep the wrong combination.
+func runtimeFromStore(cfg config.Config, dir string, table []workspace.Entry) string {
 	if cfg.SessionsDir == "" || dir == "" {
 		return ""
 	}
@@ -148,6 +156,7 @@ func runtimeFromStore(cfg config.Config, dir string) string {
 	if err != nil {
 		return ""
 	}
+	fallback := ""
 	for _, rec := range records {
 		if rec.State != session.StateActive {
 			continue
@@ -158,10 +167,41 @@ func runtimeFromStore(cfg config.Config, dir string) string {
 				action.Mountpoint != dir {
 				continue
 			}
-			if runtime := sessionRuntimeDir(cfg, rec.Name, action); runtime != "" {
+			runtime := sessionRuntimeDir(cfg, rec.Name, action)
+			if runtime == "" {
+				continue
+			}
+			if runtimeListed(table, runtime) {
 				return runtime
+			}
+			if fallback == "" {
+				fallback = runtime
 			}
 		}
 	}
-	return ""
+	return fallback
+}
+
+// runtimeListed reports whether the mount table still lists any
+// point at or under the combination directory.
+func runtimeListed(table []workspace.Entry, runtime string) bool {
+	runtime = filepath.Clean(runtime)
+	for _, entry := range table {
+		point := filepath.Clean(entry.Point)
+		if point == runtime || workspaceUnderPrefix(point, runtime) {
+			return true
+		}
+	}
+	return false
+}
+
+// workspaceUnderPrefix reports whether path is a proper child of
+// root. Mirrors workspace.underPrefix without exporting it.
+func workspaceUnderPrefix(path, root string) bool {
+	path, root = filepath.Clean(path), filepath.Clean(root)
+	if root == "" || root == "." || root == string(filepath.Separator) {
+		return false
+	}
+	prefix := root + string(filepath.Separator)
+	return len(path) > len(prefix) && path[:len(prefix)] == prefix
 }

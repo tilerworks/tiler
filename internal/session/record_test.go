@@ -209,25 +209,35 @@ func TestValidateNameMatrix(t *testing.T) {
 	}
 }
 
-func TestImplicitNameShape(t *testing.T) {
-	now := time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
-	pattern := regexp.MustCompile(`^auto-20261017T031500Z-[0-9a-f]{8}$`)
+func TestGenerateNameShape(t *testing.T) {
+	pattern := regexp.MustCompile(`^[a-z]+-[a-z]+$`)
+	digitPattern := regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]$`)
 	seen := make(map[string]bool)
-	for i := 0; i < 16; i++ {
-		name, err := ImplicitName(now)
+	for i := 0; i < 32; i++ {
+		name, err := GenerateName()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !pattern.MatchString(name) {
-			t.Fatalf("implicit name %q does not match %s", name, pattern)
+			t.Fatalf("generated name %q does not match %s", name, pattern)
 		}
 		if err := ValidateName(name); err != nil {
-			t.Fatalf("implicit name rejected: %v", err)
-		}
-		if seen[name] {
-			t.Fatalf("implicit name %q repeated", name)
+			t.Fatalf("generated name rejected: %v", err)
 		}
 		seen[name] = true
+		withDigit, err := WithCollisionDigit(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !digitPattern.MatchString(withDigit) {
+			t.Fatalf("name with digit %q does not match %s", withDigit, digitPattern)
+		}
+		if err := ValidateName(withDigit); err != nil {
+			t.Fatalf("name with digit rejected: %v", err)
+		}
+	}
+	if len(seen) < 2 {
+		t.Fatalf("GenerateName produced too little variety: %v", seen)
 	}
 }
 

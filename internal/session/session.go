@@ -96,8 +96,7 @@ type Engine struct {
 }
 
 // New creates one fresh active record under the session's exclusive
-// lock. A name already recorded — an explicit session or an implicit
-// auto-* one — is refused.
+// lock. A name already recorded is refused.
 func (e *Engine) New(name string) error {
 	return e.newRecord(name, false)
 }
@@ -122,7 +121,7 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 	_, err = e.Load(name)
 	switch {
 	case err == nil:
-		return fmt.Errorf("session: %s already exists", name)
+		return fmt.Errorf("session: %s: %w", name, ErrExists)
 	case !errors.Is(err, ErrNotFound):
 		return err
 	}
@@ -365,45 +364,100 @@ func (e *Engine) removeRuntime(name string, action Action) error {
 	return os.RemoveAll(filepath.Join(root, name, "runtime", id))
 }
 
-// CloseImplicitFor closes the implicit auto-* session whose record
-// carries a mount at dir once no live view remains on it — the
-// lifecycle tail of an umount that removed the session's last view.
-// Explicitly named sessions never auto-close. The candidate is
-// picked under the non-blocking scan lock and the rule is re-checked
-// under the non-blocking exclusive lock that mutates, so a
-// concurrent mount that revived the session keeps it open; a busy
-// or unavailable lock skips the close, the conservative side that
-// leaves the record to the garbage collection fallback. The view at
-// dir is already down, so the idempotent umount seam makes the
-// reverse-order teardown a no-op and the record stays for audit in
-// the closed state. The return is the closed session name, empty
-// when nothing closed.
-func (e *Engine) CloseImplicitFor(dir string, umount UmountFunc) (string, error) {
+// CloseRemovableFor closes the --rm session whose record carries a
+// mount at dir once no live view remains on it — the lifecycle tail
+// of an umount that removed the session's last view. Only records
+// marked RemoveOnClose auto-close; other sessions stay active until
+// an explicit close. The candidate is picked under the non-blocking
+// scan lock and the rule is re-checked under the non-blocking
+// exclusive lock that mutates, so a concurrent mount that revived
+// the session keeps it open; a busy or unavailable lock skips the
+// close, the conservative side that leaves the record to the
+// garbage collection fallback. The view at dir is already down, so
+// the idempotent umount seam makes the reverse-order teardown a
+// no-op and closeLocked purges the --rm record. The return is the
+// closed session name, empty when nothing closed.
+func (e *Engine) CloseRemovableFor(dir string, umount UmountFunc) (string, error) {
 	health, err := e.healthFunc()
 	if err != nil {
 		return "", err
 	}
-	name, err := e.implicitCandidate(dir, health)
+	name, err := e.removableCandidate(dir, health)
 	if err != nil || name == "" {
 		return "", err
 	}
-	return e.closeImplicit(name, dir, health, umount)
+	return e.closeRemovable(name, dir, health, umount)
 }
 
-// Discard deletes one implicit record that never came to serve a
-// live view of its own. A mount that failed, or one that merely
-// adopted a view another session already serves, leaves such a
-// record behind; keeping it would pin the image and leak an active
-// name that no view answers to. A record with a mounted action that
-// was not an adoption describes a view this session serves, so it
-// stays. An explicit name is refused: named sessions answer to
-// close and remove alone. The return reports whether the record was
-// deleted.
-func (e *Engine) Discard(name string, reused bool) (bool, error) {
-	if !implicitName(name) {
-		return false, fmt.Errorf(
-			"session: %s is not an implicit session; close and remove it", name)
+// ReleaseMount marks every active mount action at dir as unmounted
+// without closing the session. Umount and preempt use this after
+// tearing a view down so a non--rm record stays active but no longer
+// claims StatusMounted, and a remount that mints a new name does not
+// compete with a dead claim when resolving the runtime path.
+func (e *Engine) ReleaseMount(dir string) error {
+	var names []string
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if action.Type == TypeMount &&
+				action.Status != StatusUnmounted &&
+				action.Mountpoint == dir {
+				names = append(names, rec.Name)
+				return false
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return err
 	}
+	for _, name := range names {
+		if err := e.releaseMountActions(name, dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releaseMountActions writebacks StatusUnmounted for every live
+// mount action at dir under one session.
+func (e *Engine) releaseMountActions(name, dir string) error {
+	release, err := e.lockExclusive(name)
+	if err != nil {
+		return err
+	}
+	defer release()
+	rec, err := e.Load(name)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, action := range rec.Actions {
+		if action.Type != TypeMount ||
+			action.Status == StatusUnmounted ||
+			action.Mountpoint != dir {
+			continue
+		}
+		if err := e.Writeback(name, action.Seq, StatusUnmounted, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Discard deletes one record that never came to serve a live view
+// of its own. A mount that failed, or one that merely adopted a
+// view another session already serves, leaves such a record behind;
+// keeping it would pin the image and leak an active name that no
+// view answers to. A record with a mounted action that was not an
+// adoption describes a view this session serves, so it stays. Name
+// shape does not gate discard. The return reports whether the
+// record was deleted.
+func (e *Engine) Discard(name string, reused bool) (bool, error) {
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return false, err
@@ -424,13 +478,13 @@ func (e *Engine) Discard(name string, reused bool) (bool, error) {
 	return true, e.deleteRecordFiles(name)
 }
 
-// implicitCandidate scans for the active implicit record covering
-// dir with no live view left. A record whose scan lock is busy is
+// removableCandidate scans for the active --rm record covering dir
+// with no live view left. A record whose scan lock is busy is
 // skipped this round.
-func (e *Engine) implicitCandidate(dir string, health HealthFunc) (string, error) {
+func (e *Engine) removableCandidate(dir string, health HealthFunc) (string, error) {
 	name := ""
 	err := e.eachRecord(func(rec Record) bool {
-		if implicitIdle(rec, dir, health) {
+		if removableIdle(rec, dir, health) {
 			name = rec.Name
 			return true
 		}
@@ -439,10 +493,10 @@ func (e *Engine) implicitCandidate(dir string, health HealthFunc) (string, error
 	return name, err
 }
 
-// closeImplicit flips one scanned candidate under the non-blocking
+// closeRemovable flips one scanned candidate under the non-blocking
 // exclusive lock, re-checking the rule under it so a mount that
 // landed between the scan and the lock keeps the session open.
-func (e *Engine) closeImplicit(
+func (e *Engine) closeRemovable(
 	name, dir string,
 	health HealthFunc,
 	umount UmountFunc,
@@ -463,18 +517,19 @@ func (e *Engine) closeImplicit(
 	if err != nil {
 		return "", err
 	}
-	if !implicitIdle(rec, dir, health) {
+	if !removableIdle(rec, dir, health) {
 		return "", nil
 	}
 	_, err = e.closeLocked(name, umount)
 	return name, err
 }
 
-// implicitIdle reports whether one record is an active implicit
-// session covering dir with no live view left — the auto-close rule,
-// evaluated once by the scan and again under the mutating lock.
-func implicitIdle(rec Record, dir string, health HealthFunc) bool {
-	return rec.State == StateActive && implicitName(rec.Name) &&
+// removableIdle reports whether one record is an active --rm
+// session covering dir with no live view left — the auto-close
+// rule, evaluated once by the scan and again under the mutating
+// lock.
+func removableIdle(rec Record, dir string, health HealthFunc) bool {
+	return rec.State == StateActive && rec.RemoveOnClose &&
 		recordsMountpoint(rec, dir) && !hasHealthyMount(rec, health)
 }
 

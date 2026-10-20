@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
@@ -66,11 +65,11 @@ func newMountCmd() *cobra.Command {
 			"\n" +
 			"Every mount is recorded write-ahead in a session: --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +
-			"binds one, and without either an implicit auto-* session is\n" +
-			"created. 'session open' later replays the record.\n" +
+			"binds one, and without either a generated adjective-animal\n" +
+			"session is created. 'session open' later replays the record.\n" +
 			"\n" +
-			"--rm marks the implicit auto-* session for removal: once its\n" +
-			"last view is unmounted the record is deleted and its runtime\n" +
+			"--rm marks that generated session for removal: once its last\n" +
+			"view is unmounted the record is deleted and its runtime\n" +
 			"purged, upper data included. --rm cannot target a session\n" +
 			"named by --session or " + sessionEnvVar + "; use 'session new\n" +
 			"--rm <name>' for a named session.",
@@ -84,7 +83,7 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flags.verify, "verify", false, "re-verify every recorded digest with sha256")
 	cmd.Flags().StringVar(&flags.session, "session", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
-		"remove the implicit session and purge its runtime when its last view unmounts")
+		"remove the generated session and purge its runtime when its last view unmounts")
 	return cmd
 }
 
@@ -201,25 +200,45 @@ func resolveMountSession(flag string) (string, bool, error) {
 	return "", true, nil
 }
 
+// nameAllocAttempts is how many GenerateName draws a mount may take
+// before giving up on a free session name.
+const nameAllocAttempts = 16
+
+// nameDigitAfter is the attempt index at which WithCollisionDigit
+// starts appending a trailing 0-9 to diversify after collisions.
+const nameDigitAfter = 8
+
 // newImplicitSession creates the single-action session a mount
-// without context records into. Implicit sessions are isomorphic
-// with explicit ones and answer to the same session commands. With
-// removeOnClose the record is marked --rm, so it deletes itself and
-// purges its runtime once its last view unmounts.
+// without context records into. Generated sessions are isomorphic
+// with explicitly named ones and answer to the same session
+// commands. With removeOnClose the record is marked --rm, so it
+// deletes itself and purges its runtime once its last view
+// unmounts.
 func newImplicitSession(engine *session.Engine, removeOnClose bool) (string, error) {
-	name, err := session.ImplicitName(time.Now().UTC())
-	if err != nil {
-		return "", fmt.Errorf("mount: %w", err)
+	for attempt := 0; attempt < nameAllocAttempts; attempt++ {
+		name, err := session.GenerateName()
+		if err != nil {
+			return "", fmt.Errorf("mount: %w", err)
+		}
+		if attempt >= nameDigitAfter {
+			name, err = session.WithCollisionDigit(name)
+			if err != nil {
+				return "", fmt.Errorf("mount: %w", err)
+			}
+		}
+		if removeOnClose {
+			err = engine.NewRemovable(name)
+		} else {
+			err = engine.New(name)
+		}
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, session.ErrExists) {
+			return "", err
+		}
 	}
-	if removeOnClose {
-		err = engine.NewRemovable(name)
-	} else {
-		err = engine.New(name)
-	}
-	if err != nil {
-		return "", err
-	}
-	return name, nil
+	return "", fmt.Errorf("mount: could not allocate a unique session name")
 }
 
 // discardImplicitSession drops one implicit record that never came
@@ -287,7 +306,12 @@ func preemptStaleView(cfg config.Config, dir string) {
 		Reload:     reloadEntries,
 		Run:        mountRun,
 	})
-	_, _ = sessionEngine(cfg).CloseImplicitFor(dir, sessionUmount(cfg))
+	engine := sessionEngine(cfg)
+	// Clear StatusMounted on the torn-down view without closing a
+	// non--rm session, so a remount that mints a new name does not
+	// compete with a dead claim when resolving the runtime path.
+	_ = engine.ReleaseMount(dir)
+	_, _ = engine.CloseRemovableFor(dir, sessionUmount(cfg))
 }
 
 // viewServing reports whether dir still answers reads. A dead FUSE

@@ -9,8 +9,6 @@
 package session
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -147,30 +145,6 @@ func badNameRune(name string) bool {
 // unique within the session that owns the runtime subtree.
 func runtimeIDOf(seq int) string {
 	return "m" + strconv.Itoa(seq)
-}
-
-// implicitPrefix starts every implicitly created session name.
-const implicitPrefix = "auto-"
-
-// implicitRandomBytes is the entropy of the short random suffix.
-const implicitRandomBytes = 4
-
-// ImplicitName returns the implicit session name for one moment:
-// auto-<compact UTC timestamp>-<short random hex>. Implicit sessions
-// are isomorphic with explicit ones and share the same operations.
-func ImplicitName(now time.Time) (string, error) {
-	buf := make([]byte, implicitRandomBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("session: implicit name: %w", err)
-	}
-	stamp := now.UTC().Format("20060102T150405Z")
-	return implicitPrefix + stamp + "-" + hex.EncodeToString(buf), nil
-}
-
-// implicitName reports whether a session name was generated for an
-// implicit session. Only those auto-close with their last view.
-func implicitName(name string) bool {
-	return strings.HasPrefix(name, implicitPrefix)
 }
 
 // recordsMountpoint reports whether the record carries a mount
