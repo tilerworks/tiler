@@ -80,7 +80,7 @@ func seedRetired(t *testing.T, repo Repo, kind, id string) {
 
 func assertTarget(t *testing.T, got, want Target) {
 	t.Helper()
-	if got.Library != want.Library || got.Name != want.Name {
+	if got.Library != want.Library || got.Name != want.Name || got.Format != want.Format {
 		t.Fatalf("target = %+v, want %+v", got, want)
 	}
 	if len(got.Members) != len(want.Members) {
@@ -247,6 +247,7 @@ func TestResolveMountLibraryFullOnly(t *testing.T) {
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
+		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
 			Size:      meta.Size,
@@ -283,7 +284,9 @@ func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertTarget(t, got, Target{Library: true, Name: "alice/app", Members: members})
+	assertTarget(t, got, Target{
+		Library: true, Name: "alice/app", Format: FormatSquashfs, Members: members,
+	})
 }
 
 func TestResolveMountAcceptsStackAtDepthLimit(t *testing.T) {
@@ -316,6 +319,7 @@ func TestResolveMountIgnoresArchivesAndHolds(t *testing.T) {
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
+		Format:  FormatSquashfs,
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
@@ -479,6 +483,7 @@ func TestResolveMountPrefersLibraryOverExistingFile(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
+		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
 			Size:      meta.Size,

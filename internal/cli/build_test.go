@@ -78,9 +78,25 @@ func fakePacker(t *testing.T) image.ToolRunner {
 		if err != nil {
 			return err
 		}
-		body := "fake-squashfs " + hex.EncodeToString(sum.Sum(nil))
+		body := "hsqs-fake " + hex.EncodeToString(sum.Sum(nil))
 		return os.WriteFile(args[1], []byte(body), 0o644)
 	}
+}
+
+// writeSquashFile writes a regular file whose leading bytes are the
+// squashfs magic, so a file-path mount detects squashfs.
+func writeSquashFile(t *testing.T, path string) {
+	t.Helper()
+	writeTestFile(t, path, "hsqs-fake")
+}
+
+// writeErofsFile writes a regular file with the erofs superblock
+// magic at offset 1024, so a file-path mount detects erofs.
+func writeErofsFile(t *testing.T, path string) {
+	t.Helper()
+	body := make([]byte, 1028)
+	copy(body[1024:], []byte{0xE2, 0xE1, 0xF5, 0xE0})
+	writeTestFile(t, path, string(body))
 }
 
 func writeTestFile(t *testing.T, path, body string) {

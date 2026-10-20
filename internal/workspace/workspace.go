@@ -1,7 +1,8 @@
-// Package workspace mounts squashfs images and their incremental
-// chains as read-only or writable merged views. It serves both the
-// incremental build quality gate and the formal mount flow: no cobra
-// command is registered here, and no session record is written.
+// Package workspace mounts read-only container images and their
+// incremental chains as read-only or writable merged views. It
+// serves both the incremental build quality gate and the formal
+// mount flow: no cobra command is registered here, and no session
+// record is written.
 package workspace
 
 import (
@@ -15,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 // ErrUnavailable means mounting cannot work here: the OS is not
@@ -69,6 +72,11 @@ type Request struct {
 	// LayerFSNames overrides layer identities, indexed like Layers.
 	// An empty entry keeps that layer's path as the identity.
 	LayerFSNames []string
+	// Format is the container type of every stack layer, for example
+	// "squashfs" or "erofs". Library mounts copy it from metadata
+	// after the file magic agrees. File-path mounts take it from
+	// detection. Empty is refused.
+	Format string
 	// ReadOnly mounts without an upper: a single member goes
 	// straight onto MergedDir, and a chain merges lowerdir-only.
 	ReadOnly bool
@@ -78,8 +86,9 @@ type Request struct {
 	// Table is an injected mount table snapshot. Nil skips the
 	// table-driven checks.
 	Table []Entry
-	// SquashfsOptions is appended to the squashfuse_ll options
-	// after the built-in ones.
+	// SquashfsOptions is the format-specific option string passed to
+	// MountArgv. Squashfs appends it after the built-in options.
+	// Erofs ignores it in this version.
 	SquashfsOptions string
 	// FuseOptions is appended to the fuse-overlayfs options after
 	// the built-in ones.
@@ -143,16 +152,17 @@ type hooks struct {
 	sleep func(d time.Duration)
 }
 
-// member is one squashfs of the stack: the bytes to mount and the
-// identity published in the mount table.
+// member is one layer of the stack: the bytes to mount, the identity
+// published in the mount table, and the container type.
 type member struct {
 	path   string
 	fsname string
+	format string
 }
 
 // Mount mounts the requested view.
 //
-// Each squashfs member is mounted read-only with squashfuse_ll,
+// Each layer is mounted read-only through its container's MountArgv,
 // newest increment first and the full image last, passing the
 // original image path as the FUSE source name so the mount table can
 // identify the image even when the mounted bytes are a cache copy.
@@ -161,7 +171,7 @@ type member struct {
 // directory (sessions/<name>/runtime/m<seq>/); a read-only chain
 // merges lowerdir-only, and a read-only single image mounts straight
 // onto the target with no runtime state. When Subdir is set, every
-// member is pre-checked with unsquashfs first and the members missing
+// layer is pre-checked with HasSubdir first and the layers missing
 // the subdirectory are dropped before any mount.
 //
 // With Concat set, concatfs mounts the block directory at a
@@ -640,13 +650,13 @@ func hasDotSegment(subdir string) bool {
 	return false
 }
 
-// pruneBySubdir pre-checks every member for the requested subdir and
-// drops the members that do not contain it: a layer that never
+// pruneBySubdir pre-checks every layer for the requested subdir and
+// drops the layers that do not contain it: a layer that never
 // touched the subtree contributes nothing to the subtree view, and
-// every surviving member mounts with the same subdir option so the
+// every surviving layer mounts with the same subdir option so the
 // stack paths align. A missing subdir inside an image fails with an
 // obscure tool error once mounted, so the check runs before any
-// mount command; when no member has the subdir nothing was created
+// mount command; when no layer has the subdir nothing was created
 // and the error names the subdir and every image.
 func pruneBySubdir(members []member, req Request, run runFunc) ([]member, error) {
 	if req.Subdir == "" {
@@ -654,11 +664,11 @@ func pruneBySubdir(members []member, req Request, run runFunc) ([]member, error)
 	}
 	var kept []member
 	for _, m := range members {
-		// The exit status is the answer; the listing is discarded.
-		// -match aborts when the path resolves to nothing and keeps
-		// names literal; plain -ls lists the closest existing
-		// prefix and exits zero even when the subdir is absent.
-		if run("unsquashfs", "-ls", "-match", m.path, req.Subdir) == nil {
+		ok, err := memberHasSubdir(m, req.Subdir, run)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			kept = append(kept, m)
 		}
 	}
@@ -668,6 +678,28 @@ func pruneBySubdir(members []member, req Request, run runFunc) ([]member, error)
 			req.Subdir, strings.Join(memberNames(members), ", "))
 	}
 	return kept, nil
+}
+
+// memberHasSubdir asks the layer's container whether subdir exists.
+// A probe error is a mount failure. Absence drops the layer.
+func memberHasSubdir(m member, subdir string, run runFunc) (bool, error) {
+	format, err := container.Lookup(m.format)
+	if err != nil {
+		return false, fmt.Errorf("workspace: %w", err)
+	}
+	ok, err := format.HasSubdir(toolRunner(run), m.path, subdir)
+	if err != nil {
+		return false, fmt.Errorf("workspace: subdir %s: %w", subdir, err)
+	}
+	return ok, nil
+}
+
+// toolRunner adapts the mount runner to a container ToolRunner.
+// Subdir probes pass a nil environment, which this adapter drops.
+func toolRunner(run runFunc) container.ToolRunner {
+	return func(name string, _ []string, args ...string) error {
+		return run(name, args...)
+	}
 }
 
 // memberNames lists the fsname each stack member publishes, in
@@ -689,17 +721,58 @@ func preflight(req Request) error {
 	if err := available(); err != nil {
 		return err
 	}
-	tools := []string{"squashfuse_ll", "fusermount3"}
+	tools, err := requiredTools(req)
+	if err != nil {
+		return err
+	}
+	return lookTools(tools...)
+}
+
+// requiredTools names the binaries this request will exec. The FUSE
+// client comes from the container. A squashfs subdir probe also
+// needs unsquashfs; erofs probes with the client already listed.
+// The writable upper stays on the shared fuse-overlayfs.
+func requiredTools(req Request) ([]string, error) {
+	if req.Format == "" {
+		return nil, errors.New("workspace: container format is required")
+	}
+	format, err := container.Lookup(req.Format)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: %w", err)
+	}
+	client, err := fuseClient(format)
+	if err != nil {
+		return nil, err
+	}
+	tools := []string{client, "fusermount3"}
 	if !req.ReadOnly || len(req.Layers) > 0 {
 		tools = append(tools, "fuse-overlayfs")
 	}
-	if req.Subdir != "" {
-		tools = append(tools, "unsquashfs")
+	if probe := subdirProbe(format, req.Subdir); probe != "" {
+		tools = append(tools, probe)
 	}
 	if req.Concat != nil {
 		tools = append(tools, "concatfs")
 	}
-	return lookTools(tools...)
+	return tools, nil
+}
+
+// fuseClient is the program MountArgv will exec for one lower.
+func fuseClient(format container.Format) (string, error) {
+	argv := format.MountArgv("", "", "", "", "")
+	if len(argv) == 0 || argv[0] == "" {
+		return "", fmt.Errorf("workspace: %s has no mount command", format.Type())
+	}
+	return argv[0], nil
+}
+
+// subdirProbe is the extra binary a subdir check execs before the
+// mount. Squashfs asks unsquashfs. Erofs reuses its FUSE client.
+func subdirProbe(format container.Format, subdir string) string {
+	if subdir == "" || format.Type() != "squashfs" {
+		return ""
+	}
+	return "unsquashfs"
 }
 
 // lookTools names the first missing tool as unavailable.
@@ -725,13 +798,14 @@ func stack(req Request) ([]member, error) {
 		members = append(members, member{
 			path:   req.Layers[i],
 			fsname: layerFSName(req, i),
+			format: req.Format,
 		})
 	}
 	fsname := req.FullFSName
 	if fsname == "" {
 		fsname = req.Full
 	}
-	return append(members, member{path: req.Full, fsname: fsname}), nil
+	return append(members, member{path: req.Full, fsname: fsname, format: req.Format}), nil
 }
 
 // layerFSName is the identity one layer publishes: its override when
@@ -794,12 +868,15 @@ func (w *Workspace) prepareRuntime(readOnly bool) error {
 	return w.mkdirNew(filepath.Join(w.runtimeDir, "work"))
 }
 
-// mountPoint runs squashfuse_ll for one member and waits for the
-// point to become a live mount. The point joins the teardown list as
-// soon as the exec succeeds, so a mount that never comes up is still
+// mountPoint runs the layer's FUSE client and waits for the point
+// to become a live mount. The point joins the teardown list as soon
+// as the exec succeeds, so a mount that never comes up is still
 // unmounted best effort.
 func (w *Workspace) mountPoint(m member, req Request, point string, seam hooks) error {
-	argv := squashfsArgv(m.fsname, req.Subdir, req.SquashfsOptions, m.path, point)
+	argv, err := layerArgv(m, req, point)
+	if err != nil {
+		return w.fail(err)
+	}
 	if err := w.run(argv[0], argv[1:]...); err != nil {
 		return w.fail(fmt.Errorf("workspace: %w", err))
 	}
@@ -832,19 +909,19 @@ func (w *Workspace) mountMerged(req Request, lowers []string, seam hooks) error 
 	return nil
 }
 
-// squashfsArgv builds the squashfuse_ll command line for one member.
-// fsname keeps the original image path in the mount table even when
-// the mounted bytes are a cache copy; subdir and the configured
-// options are appended after the built-in ones.
-func squashfsArgv(fsname, subdir, options, path, point string) []string {
-	opts := "fsname=" + fsname
-	if subdir != "" {
-		opts += ",subdir=" + subdir
+// layerArgv is the FUSE command for one layer. fsname keeps the
+// original image path in the mount table even when the mounted
+// bytes are a cache copy.
+func layerArgv(m member, req Request, point string) ([]string, error) {
+	format, err := container.Lookup(m.format)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: %w", err)
 	}
-	if options != "" {
-		opts += "," + options
+	argv := format.MountArgv(m.fsname, req.Subdir, req.SquashfsOptions, m.path, point)
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("workspace: %s has no mount command", m.format)
 	}
-	return []string{"squashfuse_ll", "-o", opts, path, point}
+	return argv, nil
 }
 
 // overlayArgv builds the fuse-overlayfs command line. An empty upper

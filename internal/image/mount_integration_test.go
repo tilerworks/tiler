@@ -160,7 +160,7 @@ func TestIncrementalWorkspaceRoundTrip(t *testing.T) {
 func mountWorkspace(t *testing.T, cfg config.Config, full string, layers []string, merged string) (*workspace.Workspace, error) {
 	t.Helper()
 	ws, err := workspace.Mount(workspace.Request{
-		Full: full, Layers: layers,
+		Full: full, Layers: layers, Format: FormatSquashfs,
 		RuntimeDir: filepath.Join(cfg.SessionsDir, "test", "runtime", "m1"),
 		MergedDir:  merged,
 	})
