@@ -94,6 +94,9 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if !ok {
 		return errors.New("mount: configuration is not loaded")
 	}
+	if err := gateAnyStack("mount"); err != nil {
+		return err
+	}
 	dir, err := filepath.Abs(args[1])
 	if err != nil {
 		return fmt.Errorf("mount: target: %w", err)
@@ -130,6 +133,13 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	// later views in the same record.
 	blockPaths, err := guardMountFormat(cfg, target)
 	if err != nil {
+		return err
+	}
+	format, err := formatForGate(target, blockPaths)
+	if err != nil {
+		return err
+	}
+	if err := gateFormatTools("mount", format); err != nil {
 		return err
 	}
 	name, implicit, err := resolveMountSession(flags.session)
@@ -370,6 +380,16 @@ func runMountEngine(
 	runtimeDir string,
 	blockPaths []string,
 ) (session.Result, error) {
+	format, err := formatForGate(target, blockPaths)
+	if err != nil {
+		return session.Result{}, err
+	}
+	if err := gateAnyStack("mount"); err != nil {
+		return session.Result{}, err
+	}
+	if err := gateFormatTools("mount", format); err != nil {
+		return session.Result{}, err
+	}
 	if target.Form == image.PayloadBlocks {
 		return runBlocksEngine(cfg, target, dir, flags, runtimeDir, blockPaths)
 	}
@@ -651,6 +671,20 @@ func materializeBlockLayers(cfg config.Config, target image.Target) ([]string, e
 		mounted = append(mounted, materialized)
 	}
 	return mounted, nil
+}
+
+// formatForGate is the container type the toolchain gate checks.
+// Library metadata already names it. A file path is detected, which
+// guardMountFormat has already refused when the magic is unknown.
+func formatForGate(target image.Target, blockPaths []string) (string, error) {
+	if target.Format != "" {
+		return target.Format, nil
+	}
+	paths := memberPaths(target)
+	if len(blockPaths) > 0 {
+		paths = blockPaths
+	}
+	return resolveRequestFormat(target, paths)
 }
 
 // resolveRequestFormat chooses the container type for one mount.

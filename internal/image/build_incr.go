@@ -168,6 +168,12 @@ func validateIncr(req IncrRequest) (Repo, Meta, error) {
 // usage error.
 var ErrFormatConflict = errors.New("format does not match the active image")
 
+// FormatConflict reports when typ or compression disagrees with the
+// active image. Empty fields inherit and are not a conflict.
+func FormatConflict(active Format, typ, compression string) error {
+	return formatConflict(active, typ, compression)
+}
+
 // formatConflict refuses a requested type or compression that would
 // diverge from the active image. Empty fields inherit.
 func formatConflict(active Format, typ, compression string) error {

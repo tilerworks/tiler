@@ -8,15 +8,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 const (
 	nameFuseDevice     = "fuse_device"
-	nameSquashfuseLL   = "squashfuse_ll"
 	nameFuseOverlayfs  = "fuse_overlayfs"
 	nameFusermount3    = "fusermount3"
-	nameMksquashfs     = "mksquashfs"
 	nameGit            = "git"
+	nameImageToolchain = "image_toolchain"
 	nameSquashfuseSub  = "squashfuse_subdir"
 	statusPass         = "pass"
 	statusFail         = "fail"
@@ -90,22 +92,33 @@ type parsedTool struct {
 	ok      bool
 }
 
-// toolSpecs is the external-tool probe list. squashfuse_subdir is
-// not a binary; it reuses the squashfuse_ll version parsed here.
+// toolSpecs is the shared external-tool probe list. Image container
+// binaries are not listed here; probeImageToolchain aggregates each
+// Format.Tools stack. squashfuse_subdir is a version baseline, not a
+// binary of its own.
 var toolSpecs = []toolSpec{
-	{name: nameSquashfuseLL, binary: "squashfuse_ll", hints: []string{"squashfuse_ll", "squashfuse"}},
 	{name: nameFuseOverlayfs, binary: "fuse-overlayfs", hints: []string{"fuse-overlayfs", "fuse_overlayfs"}},
 	{name: nameFusermount3, binary: "fusermount3", hints: []string{"fusermount3", "fusermount"}},
-	{name: nameMksquashfs, binary: "mksquashfs", hints: []string{"mksquashfs"}},
 	{name: nameGit, binary: "git", hints: []string{"git"}},
 }
 
-// Probe runs every environment probe. A missing tool, an unparsable
-// banner, or an unavailable FUSE device becomes a fail result; the
-// storage probes degrade to warn or info instead. The options carry
-// the configured storage directories and split settings. An error is
-// returned only when the set cannot be built, including a cancelled
-// context or seams that were not supplied.
+// probeCount is the number of results Probe returns: the FUSE
+// device, each shared tool, the image toolchain aggregate, the
+// squashfuse subdir baseline, two file-limit probes, three storage
+// performance probes, and two contrib probes.
+func probeCount() int {
+	return 1 + len(toolSpecs) + 1 + 1 + 2 + 3 + 2
+}
+
+// Probe runs every environment probe. A missing shared tool, an
+// unparsable banner, or an unavailable FUSE device becomes a fail
+// result. Image container tools are one aggregate: at least one
+// complete stack passes, a missing stack warns, and no complete
+// stack fails image_toolchain. The storage probes degrade to warn
+// or info. The options carry the configured storage directories and
+// split settings. An error is returned only when the set cannot be
+// built, including a cancelled context or seams that were not
+// supplied.
 func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err := contextErr(ctx, nil); err != nil {
 		return nil, err
@@ -117,7 +130,15 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tools, squash, err := probeTools(ctx, seams)
+	tools, err := probeTools(ctx, seams)
+	if err != nil {
+		return nil, err
+	}
+	toolchain, err := probeImageToolchain(ctx, seams)
+	if err != nil {
+		return nil, err
+	}
+	subdir, err := probeSquashfuseSubdir(ctx, seams)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +151,7 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 		return nil, err
 	}
 	results := append([]Result{device}, tools...)
-	results = append(results, squashfuseSubdir(squash))
+	results = append(results, toolchain, subdir)
 	results = append(results, limits...)
 	results = append(results, perf...)
 	return append(results, probeContrib(seams)...), nil
@@ -168,20 +189,45 @@ func probeDevice(ctx context.Context, seams Seams) (Result, error) {
 	return pass(nameFuseDevice, fuseDevicePath), nil
 }
 
-func probeTools(ctx context.Context, seams Seams) ([]Result, parsedTool, error) {
+func probeTools(ctx context.Context, seams Seams) ([]Result, error) {
 	results := make([]Result, 0, len(toolSpecs))
-	var squash parsedTool
 	for _, spec := range toolSpecs {
 		item, err := probeTool(ctx, seams, spec)
 		if err != nil {
-			return nil, parsedTool{}, err
+			return nil, err
 		}
 		results = append(results, item.result)
-		if spec.name == nameSquashfuseLL {
-			squash = item
+	}
+	return results, nil
+}
+
+// probeImageToolchain aggregates Format.Tools. One complete stack is
+// enough to avoid a failure. A missing stack is a warning. No
+// complete stack fails the probe.
+func probeImageToolchain(ctx context.Context, seams Seams) (Result, error) {
+	if err := contextErr(ctx, nil); err != nil {
+		return Result{}, err
+	}
+	stacks := container.Stacks(seams.LookPath)
+	var ready []string
+	for _, stack := range stacks {
+		if stack.Complete() {
+			ready = append(ready, stack.Format.Type())
 		}
 	}
-	return results, squash, nil
+	gaps := container.IncompleteDetail(stacks)
+	switch {
+	case len(ready) == 0:
+		detail := "no complete image stack"
+		if gaps != "" {
+			detail += ": " + gaps
+		}
+		return fail(nameImageToolchain, detail), nil
+	case gaps == "":
+		return pass(nameImageToolchain, strings.Join(ready, ", ")), nil
+	default:
+		return warn(nameImageToolchain, strings.Join(ready, ", ")+" ready; "+gaps), nil
+	}
 }
 
 func probeTool(ctx context.Context, seams Seams, spec toolSpec) (parsedTool, error) {
@@ -202,14 +248,28 @@ func probeTool(ctx context.Context, seams Seams, spec toolSpec) (parsedTool, err
 	return parsedTool{result: pass(spec.name, ver.raw), version: ver, ok: true}, nil
 }
 
-func squashfuseSubdir(tool parsedTool) Result {
-	if !tool.ok {
-		return fail(nameSquashfuseSub, "squashfuse_ll: "+tool.result.Detail)
+// probeSquashfuseSubdir checks the squashfuse subdir baseline. A
+// missing binary warns, so an erofs-only host is not failed for a
+// squashfs feature. An installed binary below 0.5.0 still fails.
+func probeSquashfuseSubdir(ctx context.Context, seams Seams) (Result, error) {
+	if err := contextErr(ctx, nil); err != nil {
+		return Result{}, err
 	}
-	if tool.version.below(0, 5, 0) {
-		return fail(nameSquashfuseSub, tool.version.raw+" is below "+subdirBaselineText)
+	path, err := seams.LookPath("squashfuse_ll")
+	if err != nil {
+		return warn(nameSquashfuseSub, "squashfuse_ll is not installed"), nil
 	}
-	return pass(nameSquashfuseSub, tool.version.raw)
+	ver, detail, err := readVersion(ctx, seams, path, []string{"squashfuse_ll", "squashfuse"})
+	if err != nil {
+		return Result{}, err
+	}
+	if detail != "" {
+		return fail(nameSquashfuseSub, detail), nil
+	}
+	if ver.below(0, 5, 0) {
+		return fail(nameSquashfuseSub, ver.raw+" is below "+subdirBaselineText), nil
+	}
+	return pass(nameSquashfuseSub, ver.raw), nil
 }
 
 func pass(name, detail string) Result {

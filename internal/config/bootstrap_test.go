@@ -27,6 +27,8 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		"cache_dir: ~/.tiler/cache",
 		"log_level: info",
 		"merged root",
+		"# image_format: squashfs",
+		"# image_compression: zstd",
 		"# split_size: 2G",
 	} {
 		if !strings.Contains(string(data), want) {
@@ -59,6 +61,10 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if cfg.SplitSize != 0 {
 		t.Fatalf("split size = %d, want the commented example to stay off", cfg.SplitSize)
+	}
+	if cfg.ImageFormat != "" || cfg.ImageCompression != "" {
+		t.Fatalf("commented container keys were applied: %s/%s",
+			cfg.ImageFormat, cfg.ImageCompression)
 	}
 	if cfg.UserFile() != path {
 		t.Fatalf("UserFile() = %q, want %q", cfg.UserFile(), path)

@@ -2,8 +2,9 @@
 
 [English](README.md)
 
-tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写工作区。
-工具不检查内容类型。Git 仓库加速是旁边脚本完成的一种使用场景。
+tiler 把目录快照打成只读容器镜像，再用 overlay 提供可写工作区。
+第一版容器是 squashfs 与 erofs。工具不检查内容类型。Git 仓库加速
+是旁边脚本完成的一种使用场景。
 
 以 [MIT](LICENSE) 许可发布。
 
@@ -13,12 +14,16 @@ tiler 把目录快照打成只读 squashfs 镜像，再用 overlay 提供可写�
 
 `go install` 尚在规划中。发布二进制下载尚在规划中。
 
-`tiler doctor` 检查这些运行时工具：
+`tiler doctor` 检查共用运行时工具和每一套镜像栈：
 
-- `squashfuse_ll`
-- `fuse-overlayfs`
-- `fusermount3`
-- `mksquashfs`
+- squashfs 栈：`mksquashfs`、`squashfuse_ll`
+- erofs 栈：`mkfs.erofs`、`erofsfuse`
+- 共用：`fuse-overlayfs`、`fusermount3`，以及 `/dev/fuse`
+
+一套栈只有在其中每个二进制都装好时才算完整。至少一套完整栈时，
+`image_toolchain` 探测通过。缺另一套是警告。两套都不完整则该探测
+失败。共用检查仍然单独导致失败。双栈都齐全且没有格式设置时，
+构建仍是 squashfs 加 zstd。
 
 `git` 可选。doctor 总会列出它，缺少该二进制是一次失败的探测，而不是静默跳过。git 探测失败不会阻断其他检查。
 
@@ -54,17 +59,23 @@ tiler session close feature                # 逆序卸载，记录保留
 当前可用：
 
 - `tiler version` 打印一行版本。
-- `tiler doctor [--json]` 探测 `/dev/fuse`、外部工具与 squashfuse
-  subdir 基线，并进一步体检存储：稀疏阶梯探测镜像库与缓存目录
+- `tiler doctor [--json]` 探测 `/dev/fuse`、共用外部工具、镜像
+  工具链（squashfs 或 erofs 至少一套完整即可，缺另一套为警告）
+  与 squashfuse subdir 基线，并进一步体检存储：稀疏阶梯探测镜像库与缓存目录
   所在文件系统的单文件大小限制，发现限制且未启用分块时建议开启
   分块存储；有界性能探测对比两个目录的冷读顺序/随机延迟与吞吐，
   并据此给出缓存建议——建议中的延迟基线只是趋势参考，不是
   SLA；可选的 contrib 辅助工具 `concatfs` 与 `slowfs` 一并探测，
   缺失时输出构建指引，tiler 从不自动安装。存在 fail 探测项即
   退出码 1；warn 与 info 不影响退出码。
-- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--split|-s size] [dir]` 把准备好
+- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` 把准备好
   的目录打成全量镜像；位于可写合并视图内时，默认把 upper 追加为
-  一个增量层。普通目录默认全量构建，必须显式给出 `owner/repo`
+  一个增量层。`--format` 优先于 `image_format`，再优先于工具链
+  推断：双栈齐全选 squashfs，仅 erofs 选 erofs，仅 squashfs 选
+  squashfs。`--compression` 优先于 `image_compression`，否则用该
+  格式的默认压缩（zstd）。双栈主机上不带这些 flag、也不写配置时，
+  镜像仍是 squashfs 加 zstd。增量构建继承 base 的格式与压缩；与
+  base 冲突的 flag 是用法错误。erofs 不接受 xz。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的
   增量层加上当前 upper 已超过 base image 的一半，默认改为全量重建，
   并警告可用 `--incremental`（或 `-i`）继续追加增量。构建
@@ -82,8 +93,9 @@ tiler session close feature                # 逆序卸载，记录保留
   渲染一份机器可读文档，blocks 活跃位新增 `form` 字段
   （契约只增不改）。
 - `tiler images show <owner/repo> [--json]` 输出一个活跃镜像的
-  多行记录：身份、每一层增量、blocks 载荷块数（若有），以及
-  停放的归档和 hold id。`--json` 把同一仓库渲染成一个对象。
+  多行记录：身份、一行 `format`（例如 `squashfs/zstd`）、每一层
+  增量、blocks 载荷块数（若有），以及停放的归档和 hold id。
+  `--json` 把同一仓库渲染成一个对象，其中包含 `format`。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
@@ -243,7 +255,13 @@ images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # 合并根：记录 + 每会话 runtime
 cache_dir: ~/.tiler/cache
 log_level: info
+# image_format: squashfs        # squashfs 或 erofs；省略则按工具推断
+# image_compression: zstd       # 省略则用该格式的默认压缩
 ```
+
+`image_format` 与 `image_compression` 可选。两者都省略时，按已安装
+工具推断容器；squashfs 与 erofs 两套都完整时优先 squashfs。
+`squashfs_options` 只由 squashfs 实现消费。没有 `erofs_options` 键。
 
 `sessions_dir` 是唯一的 session 根。其下每个 session 是自包含目录
 （`session.json`、`session.lock`，以及 `runtime/m<seq>/` 组合树）。

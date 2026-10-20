@@ -260,6 +260,10 @@ func TestInvalidConfig(t *testing.T) {
 		{name: "removed split_enabled", doc: "split_enabled: true\n", field: "split_enabled"},
 		{name: "removed split_mode", doc: "split_mode: blocks\n", field: "split_mode"},
 		{name: "removed split_route", doc: "split_route: concat\n", field: "split_route"},
+		{name: "unknown image format", doc: "image_format: tar\n", field: "image_format"},
+		{name: "erofs rejects xz", doc: "image_format: erofs\nimage_compression: xz\n", field: "image_compression"},
+		{name: "unknown compression", doc: "image_compression: bzip2\n", field: "image_compression"},
+		{name: "erofs options are not a key", doc: "erofs_options: foo\n", field: "erofs_options"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -307,6 +311,34 @@ func TestSplitSizeYAML(t *testing.T) {
 	}
 	if got.SplitSize != 0 {
 		t.Fatalf("explicit zero did not clear the base: %+v", got)
+	}
+}
+
+func TestImageContainerOverlay(t *testing.T) {
+	got, err := applyDoc("image_format: erofs\nimage_compression: lz4\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFormat != "erofs" || got.ImageCompression != "lz4" {
+		t.Fatalf("container = %s/%s", got.ImageFormat, got.ImageCompression)
+	}
+	base := got
+	patch, err := Decode([]byte("image_format: squashfs\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.ImageCompression != nil {
+		t.Fatal("omitted image_compression was marked present")
+	}
+	got = patch.Apply(base)
+	if err := Validate(got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFormat != "squashfs" || got.ImageCompression != "lz4" {
+		t.Fatalf("overlay = %s/%s, want squashfs/lz4", got.ImageFormat, got.ImageCompression)
+	}
+	if Defaults(testHome).ImageFormat != "" || Defaults(testHome).ImageCompression != "" {
+		t.Fatal("defaults set a container")
 	}
 }
 

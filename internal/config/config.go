@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 const (
@@ -30,7 +32,7 @@ type Config struct {
 	// Version is the .tiler.yaml schema version. Defaults to
 	// CurrentConfigVersion when no document sets it.
 	Version int
-	// ImagesDir stores read-only squashfs images.
+	// ImagesDir stores read-only container images.
 	ImagesDir string
 	// SessionsDir is the merged root for session records and
 	// per-session runtime combinations.
@@ -52,8 +54,15 @@ type Config struct {
 	// age cleanup. Off by default: active records are never closed
 	// automatically unless this is set.
 	SessionAutocloseStale bool
-	// SquashfsOptions is an opaque option string for a later mount.
+	// SquashfsOptions is an opaque option string consumed only by the
+	// squashfs mount implementation. Erofs has no separate options key.
 	SquashfsOptions string
+	// ImageFormat is the container type used when a build omits
+	// --format. Empty leaves the choice to the installed toolchains.
+	ImageFormat string
+	// ImageCompression is the compression used when a build omits
+	// --compression. Empty selects the format default.
+	ImageCompression string
 	// FuseOptions is an opaque FUSE option string for a later mount.
 	FuseOptions string
 	// SplitSize is the block size in bytes. Zero disables splitting.
@@ -86,6 +95,8 @@ type Patch struct {
 	SessionAutocloseStale *bool
 	SquashfsOptions       *string
 	FuseOptions           *string
+	ImageFormat           *string
+	ImageCompression      *string
 	SplitSize             *int64
 	CacheEnabled          *bool
 	LogLevel              *string
@@ -127,6 +138,8 @@ func (p Patch) Apply(base Config) Config {
 	base.SessionAutocloseStale = overlay(base.SessionAutocloseStale, p.SessionAutocloseStale)
 	base.SquashfsOptions = overlay(base.SquashfsOptions, p.SquashfsOptions)
 	base.FuseOptions = overlay(base.FuseOptions, p.FuseOptions)
+	base.ImageFormat = overlay(base.ImageFormat, p.ImageFormat)
+	base.ImageCompression = overlay(base.ImageCompression, p.ImageCompression)
 	base.SplitSize = overlay(base.SplitSize, p.SplitSize)
 	base.CacheEnabled = overlay(base.CacheEnabled, p.CacheEnabled)
 	base.LogLevel = overlay(base.LogLevel, p.LogLevel)
@@ -160,7 +173,41 @@ func Validate(cfg Config) error {
 	if cfg.SplitSize < 0 {
 		return errors.New("split_size: must not be negative")
 	}
-	return nil
+	return validateImageSettings(cfg)
+}
+
+// validateImageSettings checks an explicit container type and
+// compression. An empty format is inferred later from the toolchain.
+// A compression without a format must be legal for some registered
+// format; paired with a format, it must be legal for that format.
+func validateImageSettings(cfg Config) error {
+	if cfg.ImageFormat == "" && cfg.ImageCompression == "" {
+		return nil
+	}
+	if cfg.ImageFormat != "" {
+		format, err := container.Lookup(cfg.ImageFormat)
+		if err != nil {
+			return fmt.Errorf("image_format: %w", err)
+		}
+		if cfg.ImageCompression != "" && !format.AllowsCompression(cfg.ImageCompression) {
+			return fmt.Errorf("image_compression: %q is not allowed for %s",
+				cfg.ImageCompression, format.Type())
+		}
+		return nil
+	}
+	if compressionAllowed(cfg.ImageCompression) {
+		return nil
+	}
+	return fmt.Errorf("image_compression: %q is not allowed", cfg.ImageCompression)
+}
+
+func compressionAllowed(compression string) bool {
+	for _, format := range container.All() {
+		if format.AllowsCompression(compression) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateLogLevel(level string) error {

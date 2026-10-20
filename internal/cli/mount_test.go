@@ -122,6 +122,7 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	mountEngine = f.mount
 	unmountEngine = f.umount
 	assembleBlocks = f.assemble
+	installFoundTools(t)
 	return f
 }
 
@@ -777,5 +778,37 @@ func writeLibraryContainer(t *testing.T, imagesDir, format string, body []byte) 
 	}
 	if err := image.Store(filepath.Join(repo, "meta.yaml"), meta); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMountRefusesWhenNoStack(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	toolLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	view := filepath.Join(work, "view")
+	_, _, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "no complete image toolchain") ||
+		!strings.Contains(err.Error(), "tiler doctor") {
+		t.Fatalf("ExitCode(%v) = %d", err, ExitCode(err))
+	}
+}
+
+func TestMountRefusesIncompleteFormatTools(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	writeLibraryContainer(t, imagesDir, image.FormatSquashfs, []byte("hsqs-fake-image"))
+	toolLookPath = lookOnly("mkfs.erofs", "erofsfuse")
+	view := filepath.Join(work, "view")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "squashfs toolchain is incomplete") {
+		t.Fatalf("ExitCode(%v) = %d", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("engine calls = %d, want none", len(f.mountReqs))
 	}
 }

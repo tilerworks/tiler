@@ -2,10 +2,11 @@
 
 [中文](README.zh.md)
 
-tiler packs a directory snapshot into a read-only squashfs image and
-provides a writable workspace with an overlay. The tool does not
-inspect content types. Git repository acceleration is one scenario,
-handled by scripts beside the tool.
+tiler packs a directory snapshot into a read-only container image and
+provides a writable workspace with an overlay. The first containers
+are squashfs and erofs. The tool does not inspect content types. Git
+repository acceleration is one scenario, handled by scripts beside
+the tool.
 
 Licensed under [MIT](LICENSE).
 
@@ -16,12 +17,17 @@ to `bin/tiler`.
 
 `go install` is planned. Release binary downloads are planned.
 
-`tiler doctor` checks these runtime tools:
+`tiler doctor` checks the shared runtime tools and each image stack:
 
-- `squashfuse_ll`
-- `fuse-overlayfs`
-- `fusermount3`
-- `mksquashfs`
+- squashfs stack: `mksquashfs`, `squashfuse_ll`
+- erofs stack: `mkfs.erofs`, `erofsfuse`
+- shared: `fuse-overlayfs`, `fusermount3`, and `/dev/fuse`
+
+A stack is complete only when every binary in it is installed. At
+least one complete stack passes the `image_toolchain` probe. A
+missing stack is a warning. No complete stack fails that probe.
+The shared checks still fail the run on their own. On a host with
+both stacks and no format setting, builds stay squashfs with zstd.
 
 `git` is optional. Doctor always lists it, and a missing binary is a failed probe rather than a silent skip. A failed git probe does not block the other checks.
 
@@ -60,8 +66,10 @@ tiler session close feature                # reverse unmount, record kept
 Available now:
 
 - `tiler version` prints one version line.
-- `tiler doctor [--json]` probes `/dev/fuse`, the external tools,
-  and the squashfuse subdir baseline, then inspects the storage: a
+- `tiler doctor [--json]` probes `/dev/fuse`, the shared external
+  tools, the image toolchain (one complete squashfs or erofs stack
+  is enough; a missing stack warns), and the squashfuse subdir
+  baseline, then inspects the storage: a
   sparse ladder detects a single-file size limit on the filesystems
   behind the image library and the cache directory and advises
   enabling split storage when one is found; a bounded performance
@@ -72,9 +80,17 @@ Available now:
   looked up, with build guidance when missing — tiler never
   installs them automatically. Any failed probe exits 1; warn and
   info results never affect the exit code.
-- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--split|-s size] [dir]` packs a
+- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` packs a
   prepared directory into a full image, or, inside a writable merged
-  view, appends the upper layer as one increment. A plain directory
+  view, appends the upper layer as one increment. `--format` wins
+  over `image_format`, which wins over toolchain inference: both
+  stacks select squashfs, erofs alone selects erofs, and squashfs
+  alone selects squashfs. `--compression` wins over
+  `image_compression`, which otherwise uses the format default
+  (zstd). With neither flag nor config on a dual-stack host the
+  image stays squashfs with zstd. An incremental build inherits the
+  base format and compression; a flag that disagrees is a usage
+  error. erofs does not accept xz. A plain directory
   defaults to a full build and needs the explicit `owner/repo` name;
   a writable merged view defaults to an incremental build and infers
   the name from the mounted image. If the recorded incremental layers
@@ -95,9 +111,10 @@ Available now:
   each row. `--json` renders one machine-readable document instead,
   with the additive `form` field for blocks actives.
 - `tiler images show <owner/repo> [--json]` prints a multi-line
-  record for one active image: identity, each chain layer, the
-  blocks payload count when present, and the parked archive and
-  hold ids. `--json` renders the same repository as one object.
+  record for one active image: identity, a `format` line such as
+  `squashfs/zstd`, each chain layer, the blocks payload count when
+  present, and the parked archive and hold ids. `--json` renders
+  the same repository as one object, including `format`.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass
@@ -296,7 +313,15 @@ images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache
 log_level: info
+# image_format: squashfs        # squashfs or erofs; omit to infer
+# image_compression: zstd       # omit to use the format default
 ```
+
+`image_format` and `image_compression` are optional. Leave them
+unset to infer the container from the installed tools, with
+squashfs preferred when both the squashfs and erofs stacks are
+complete. `squashfs_options` is consumed only by the squashfs
+implementation. There is no `erofs_options` key.
 
 `sessions_dir` is the only session root. Each session is a self-contained
 directory under it (`session.json`, `session.lock`, and

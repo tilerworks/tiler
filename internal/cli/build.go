@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -29,10 +30,12 @@ var (
 
 func newBuildCmd() *cobra.Command {
 	var (
-		full      bool
-		incr      bool
-		imageName string
-		split     string
+		full        bool
+		incr        bool
+		imageName   string
+		split       string
+		format      string
+		compression string
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
@@ -43,24 +46,36 @@ func newBuildCmd() *cobra.Command {
 			"When the recorded incremental layers plus that upper already\n" +
 			"exceed half the base image, the default switches to a full\n" +
 			"rebuild and a warning is printed; --incremental keeps the layer.\n" +
-			"--full always packs the whole view.",
+			"--full always packs the whole view.\n" +
+			"\n" +
+			"--format and --compression select the container. An omitted\n" +
+			"format uses image_format, then the installed tools: both stacks\n" +
+			"select squashfs, erofs alone selects erofs, and squashfs alone\n" +
+			"selects squashfs. An omitted compression uses image_compression\n" +
+			"or that format's default. An incremental build inherits the\n" +
+			"base image; a flag that disagrees is a usage error.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(cmd, args, full, incr, imageName, split)
+			return runBuild(cmd, args, full, incr, imageName, split, format, compression)
 		},
 	}
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
 	cmd.Flags().BoolVarP(&incr, "incremental", "i", false, "force an incremental build")
 	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit owner/repo image name")
+	cmd.Flags().StringVar(&format, "format", "", "container format: squashfs or erofs")
+	cmd.Flags().StringVar(&compression, "compression", "", "container compression; default is the format default")
 	cmd.Flags().StringVarP(&split, "split", "s", "",
 		"block size for split builds (e.g. 512M, 2G); 0 disables for this build")
 	return cmd
 }
 
-func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split string) error {
+func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split, format, compression string) error {
 	cfg, ok := loadedConfig(cmd)
 	if !ok {
 		return errors.New("build: configuration is not loaded")
+	}
+	if err := gateAnyStack("build"); err != nil {
+		return err
 	}
 	if cmd.Flags().Changed("split") {
 		size, err := config.ParseByteSize(split)
@@ -118,12 +133,88 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 	}
 	switch decision.Mode {
 	case mountinfo.ModeFull:
-		return runFullBuild(cmd, cfg, decision)
+		typ, comp, err := resolveFullContainer(cmd, cfg, format, compression)
+		if err != nil {
+			return err
+		}
+		if err := gateFormatTools("build", typ); err != nil {
+			return err
+		}
+		return runFullBuild(cmd, cfg, decision, typ, comp)
 	case mountinfo.ModeIncr:
-		return runIncrBuild(cmd, cfg, decision)
+		return runIncrBuild(cmd, cfg, decision, format, compression)
 	default:
 		return fmt.Errorf("build: unknown mode %q", decision.Mode)
 	}
+}
+
+// resolveFullContainer applies flag, then config, then toolchain
+// inference. An illegal pair, including erofs with xz, is a usage error.
+func resolveFullContainer(cmd *cobra.Command, cfg config.Config, format, compression string) (string, string, error) {
+	typ, err := chooseFormat(cmd, cfg, format)
+	if err != nil {
+		return "", "", err
+	}
+	parsed, err := container.Lookup(typ)
+	if err != nil {
+		return "", "", usageError{fmt.Errorf("build: %w", err)}
+	}
+	comp, err := chooseCompression(cmd, cfg, parsed, compression)
+	if err != nil {
+		return "", "", err
+	}
+	return parsed.Type(), comp, nil
+}
+
+func chooseFormat(cmd *cobra.Command, cfg config.Config, flag string) (string, error) {
+	if cmd.Flags().Changed("format") {
+		if flag == "" {
+			return "", usageError{errors.New("build: --format is empty")}
+		}
+		return flag, nil
+	}
+	if cfg.ImageFormat != "" {
+		return cfg.ImageFormat, nil
+	}
+	typ, err := container.InferType(toolLookPath)
+	if err != nil {
+		return "", fmt.Errorf("build: %w; check the environment with tiler doctor", err)
+	}
+	return typ, nil
+}
+
+func chooseCompression(cmd *cobra.Command, cfg config.Config, format container.Format, flag string) (string, error) {
+	comp := format.DefaultCompression()
+	switch {
+	case cmd.Flags().Changed("compression"):
+		if flag == "" {
+			return "", usageError{errors.New("build: --compression is empty")}
+		}
+		comp = flag
+	case cfg.ImageCompression != "":
+		comp = cfg.ImageCompression
+	}
+	if !format.AllowsCompression(comp) {
+		return "", usageError{fmt.Errorf("build: %s compression %q is not allowed", format.Type(), comp)}
+	}
+	return comp, nil
+}
+
+func explicitContainer(cmd *cobra.Command, format, compression string) (string, string, error) {
+	var typ, comp string
+	if cmd.Flags().Changed("format") {
+		if format == "" {
+			return "", "", usageError{errors.New("build: --format is empty")}
+		}
+		typ = format
+	}
+	if cmd.Flags().Changed("compression") {
+		if compression == "" {
+			return "", "", usageError{errors.New("build: --compression is empty")}
+		}
+		comp = compression
+	}
+	return typ, comp, nil
 }
 
 // buildTarget is the cleaned absolute path the decision runs on: the
@@ -212,14 +303,16 @@ func treeBytes(root string) (int64, error) {
 	return n, err
 }
 
-func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision) error {
+func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, format, compression string) error {
 	res, err := image.BuildFull(image.FullRequest{
-		Config:  cfg,
-		Name:    decision.Name.String(),
-		SrcDir:  decision.SrcDir,
-		Builder: Version,
-		Refs:    session.Refs{Dir: cfg.SessionsDir},
-		Run:     packTool,
+		Config:      cfg,
+		Name:        decision.Name.String(),
+		SrcDir:      decision.SrcDir,
+		Builder:     Version,
+		Format:      format,
+		Compression: compression,
+		Refs:        session.Refs{Dir: cfg.SessionsDir},
+		Run:         packTool,
 	})
 	if err != nil {
 		return err
@@ -228,18 +321,49 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	return err
 }
 
-func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision) error {
+func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, format, compression string) error {
+	typ, comp, err := explicitContainer(cmd, format, compression)
+	if err != nil {
+		return err
+	}
+	if active, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
+		if err := image.FormatConflict(active, typ, comp); err != nil {
+			return usageError{err}
+		}
+		if err := gateFormatTools("build", active.Type); err != nil {
+			return err
+		}
+	}
 	res, err := image.BuildIncr(image.IncrRequest{
-		Config:     cfg,
-		Name:       decision.Name.String(),
-		Upper:      decision.Upper,
-		Refs:       session.Refs{Dir: cfg.SessionsDir},
-		Run:        packTool,
-		MountSmoke: incrSmoke,
+		Config:      cfg,
+		Name:        decision.Name.String(),
+		Format:      typ,
+		Compression: comp,
+		Upper:       decision.Upper,
+		Refs:        session.Refs{Dir: cfg.SessionsDir},
+		Run:         packTool,
+		MountSmoke:  incrSmoke,
 	})
+	if errors.Is(err, image.ErrFormatConflict) {
+		return usageError{err}
+	}
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
+}
+
+// readActiveFormat loads the container recorded on the active image.
+// A missing image is left for BuildIncr to report.
+func readActiveFormat(cfg config.Config, name string) (image.Format, error) {
+	repo, err := image.OpenRepo(cfg.ImagesDir, name)
+	if err != nil {
+		return image.Format{}, err
+	}
+	meta, err := image.Load(repo.MetaPath())
+	if err != nil {
+		return image.Format{}, err
+	}
+	return meta.Format, nil
 }

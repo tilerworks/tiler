@@ -90,8 +90,8 @@ func TestProbeAppendsContribResultsLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != len(toolSpecs)+9 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+9)
+	if len(results) != probeCount() {
+		t.Fatalf("probe count = %d, want %d", len(results), probeCount())
 	}
 	concatfs := results[len(results)-2]
 	slowfs := results[len(results)-1]
