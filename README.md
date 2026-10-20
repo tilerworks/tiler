@@ -106,15 +106,15 @@ Available now:
   refuse while a reference pins the target.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
-  under `~/.tiler/runtime/`, and `fuse-overlayfs` merges them over
-  an upper layer named after the target's device and inode, so
-  remounting the same directory is idempotent and reuses the
-  earlier changes. Split payload forms resolve through the same
-  reference and mount through their own routes (see Split storage
-  below). A healthy mount of the same view reports
-  `already mounted`; a different identity is a conflict error,
-  never a silent restack. `--read-only` mounts a single image
-  straight onto `<dir>`, or merges a chain lowerdir-only.
+  under the session's `runtime/m<seq>/` tree, and `fuse-overlayfs`
+  merges them over an upper layer there, so remounting the same
+  directory is idempotent and reuses the earlier changes. Split
+  payload forms resolve through the same reference and mount
+  through their own routes (see Split storage below). A healthy
+  mount of the same view reports `already mounted`; a different
+  identity is a conflict error, never a silent restack.
+  `--read-only` mounts a single image straight onto `<dir>`, or
+  merges a chain lowerdir-only.
   `<image>` is the path of one squashfs file, or an `owner/repo`
   library reference that resolves through the active metadata into
   the full image plus its incremental chain, at most eight members
@@ -148,12 +148,11 @@ Available now:
 - `tiler umount <dir>` tears a view down by path: the merged point
   first, then the runtime transit points in reverse order. Each
   point falls back from `fusermount3 -u` to the lazy `-uz` when it
-  is busy or stale, and a residue sweep of the runtime directory
-  named by the target's device and inode catches lowers the table
-  no longer connects to the target. It is idempotent: an unmounted
-  `<dir>` succeeds silently. Upper and work data is never deleted,
-  so a later mount of the same directory reuses the earlier
-  changes.
+  is busy or stale, and a residue sweep of that view's
+  `runtime/m<seq>/` tree catches lowers the table no longer
+  connects to the target. It is idempotent: an unmounted `<dir>`
+  succeeds silently. Upper and work data is never deleted, so a
+  later mount of the same directory reuses the earlier changes.
 - `tiler session` manages the mount sessions that crash recovery
   replays. `session new <name>` creates an empty record under
   `~/.tiler/sessions/` and refuses a duplicate name; `--rm` marks
@@ -260,15 +259,28 @@ tiler reads a layered YAML configuration. On first run it creates
 `$HOME/.tiler.yaml` from a commented template that pins the built-in
 defaults, so the file is a starting point to edit, never a
 requirement — a read-only HOME is tolerated and tiler falls back to
-the defaults, and an existing file is never rewritten.
+the defaults. A compatible existing file is never rewritten.
+
+The user file carries a top-level integer `version` (currently `1`).
+When `$HOME/.tiler.yaml` is missing `version`, has `version < 1`, or
+still lists a removed key such as `runtime_dir`, the next command
+backups the original to `.tiler.yaml.bak` and rewrites the file to the
+current schema (comments may be lost on rewrite). Only the user-level
+file is upgraded; a project-level `.tiler.yaml` stays read-only and
+fails loudly when incompatible.
 
 ```yaml
+version: 1
 images_dir: ~/.tiler/images
-runtime_dir: ~/.tiler/runtime
-sessions_dir: ~/.tiler/sessions
+sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache
 log_level: info
 ```
+
+`sessions_dir` is the only session root. Each session is a self-contained
+directory under it (`session.json`, `session.lock`, and
+`runtime/m<seq>/` combination trees). There is no separate global
+`runtime_dir`.
 
 Values resolve in layers, each overriding the last: the built-in
 defaults, the user file `$HOME/.tiler.yaml`, the project-level
@@ -292,13 +304,13 @@ tab-separated `config` line each:
 ```text
 config	path	/home/alice/.tiler.yaml
 config	images_dir	/home/alice/.tiler/images
-config	runtime_dir	/home/alice/.tiler/runtime
+config	sessions_dir	/home/alice/.tiler/sessions
 ```
 
 The `--json` form carries the same data as a top-level `config`
-object (`path`, `images_dir`, `runtime_dir`, `sessions_dir`,
-`cache_dir`, `log_level`) alongside `results`. The config section
-never affects the doctor verdict.
+object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,
+`log_level`) alongside `results`. The config section never affects
+the doctor verdict.
 
 ## User story
 

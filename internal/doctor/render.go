@@ -25,7 +25,6 @@ func Write(w io.Writer, results []Result) error {
 type ConfigSummary struct {
 	Path        string `json:"path"`
 	ImagesDir   string `json:"images_dir"`
-	RuntimeDir  string `json:"runtime_dir"`
 	SessionsDir string `json:"sessions_dir"`
 	CacheDir    string `json:"cache_dir"`
 	LogLevel    string `json:"log_level"`
@@ -40,7 +39,6 @@ func WriteConfig(w io.Writer, s ConfigSummary) error {
 	rows := []struct{ key, value string }{
 		{"path", s.Path},
 		{"images_dir", s.ImagesDir},
-		{"runtime_dir", s.RuntimeDir},
 		{"sessions_dir", s.SessionsDir},
 		{"cache_dir", s.CacheDir},
 		{"log_level", s.LogLevel},

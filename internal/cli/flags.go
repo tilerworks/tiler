@@ -13,7 +13,6 @@ import (
 // the value loaded from a file.
 type flagSet struct {
 	imagesDir             string
-	runtimeDir            string
 	sessionsDir           string
 	cacheDir              string
 	keepVersions          int
@@ -32,8 +31,7 @@ type flagSet struct {
 func bindFlags(cmd *cobra.Command, flags *flagSet) {
 	set := cmd.PersistentFlags()
 	set.StringVar(&flags.imagesDir, "images-dir", "", "directory for read-only images")
-	set.StringVar(&flags.runtimeDir, "runtime-dir", "", "directory for per-mount runtime state")
-	set.StringVar(&flags.sessionsDir, "sessions-dir", "", "directory for session records")
+	set.StringVar(&flags.sessionsDir, "sessions-dir", "", "directory for session records and per-session runtime")
 	set.StringVar(&flags.cacheDir, "cache-dir", "", "directory for a later image cache copy")
 	set.IntVar(&flags.keepVersions, "keep-versions", 0, "image versions to retain; zero means unlimited")
 	set.StringVar(&flags.maxAge, "max-age", "", "maximum image age; zero means unlimited")
@@ -59,7 +57,6 @@ func commandPatch(cmd *cobra.Command, flags *flagSet) (config.Patch, error) {
 	}
 	return config.Patch{
 		ImagesDir:             changedString(cmd, "images-dir", &flags.imagesDir),
-		RuntimeDir:            changedString(cmd, "runtime-dir", &flags.runtimeDir),
 		SessionsDir:           changedString(cmd, "sessions-dir", &flags.sessionsDir),
 		CacheDir:              changedString(cmd, "cache-dir", &flags.cacheDir),
 		KeepVersions:          changedInt(cmd, "keep-versions", flags.keepVersions),

@@ -5,6 +5,7 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -385,7 +386,7 @@ func TestMountReadOnlyCloneFromBareImage(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	bare := filepath.Join(t.TempDir(), "repo.git")
 	runGit(t, work, "clone", "--bare", gitWorkSource(t), bare)
 	buildFullImage(t, lib, "alice/app", bare)
@@ -393,7 +394,7 @@ func TestMountReadOnlyCloneFromBareImage(t *testing.T) {
 	before := fileSHA256Hex(t, imagePath)
 
 	view := filepath.Join(work, "view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	if out := mountCmd(t, lib, "--read-only", "alice/app", view); out != "mounted "+view+"\n" {
 		t.Fatalf("mount output = %q", out)
 	}
@@ -433,13 +434,13 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", gitWorkSource(t))
 	imagePath := filepath.Join(imagesDir, "alice", "app", "image.sqsh")
 	before := fileSHA256Hex(t, imagePath)
 
 	view := filepath.Join(work, "view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	if out := mountCmd(t, lib, "alice/app", view); out != "mounted "+view+"\n" {
 		t.Fatalf("mount output = %q", out)
 	}
@@ -469,13 +470,15 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 		t.Fatalf("an idempotent umount printed %q", out)
 	}
 
-	// A remount of the same directory reuses the upper, so the
-	// earlier writes reappear.
+	// A remount into a fresh implicit session gets an empty upper:
+	// writable layers are session-scoped, not mountpoint-scoped.
 	if out := mountCmd(t, lib, "alice/app", view); out != "mounted "+view+"\n" {
 		t.Fatalf("remount output = %q", out)
 	}
-	assertBytesFile(t, filepath.Join(view, "extra.txt"), "extra\n")
-	assertBytesFile(t, filepath.Join(view, "keep.txt"), "changed\n")
+	if _, err := os.Stat(filepath.Join(view, "extra.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh session upper leaked prior writes: %v", err)
+	}
+	assertBytesFile(t, filepath.Join(view, "keep.txt"), "keep\n")
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("final umount output = %q", out)
 	}
@@ -485,13 +488,13 @@ func TestMountCascadingChain(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", gitWorkSource(t))
 
 	view1 := filepath.Join(work, "view1")
 	view2 := filepath.Join(work, "view2")
 	view3 := filepath.Join(work, "view3")
-	deferForceUmount(t, runtimeDir, view1, view2, view3)
+	deferForceUmount(t, sessionsRoot, view1, view2, view3)
 
 	mountCmd(t, lib, "alice/app", view1)
 	writeTestFile(t, filepath.Join(view1, "new.txt"), "new\n")
@@ -549,7 +552,7 @@ func TestMountSubdirRouting(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 
 	view := filepath.Join(work, "sub-view")
@@ -557,7 +560,7 @@ func TestMountSubdirRouting(t *testing.T) {
 	viewA := filepath.Join(work, "chain-sub")
 	viewB := filepath.Join(work, "chain-full")
 	rwView := filepath.Join(work, "rw")
-	deferForceUmount(t, runtimeDir, view, viewA, viewB, rwView)
+	deferForceUmount(t, sessionsRoot, view, viewA, viewB, rwView)
 
 	if out := mountCmd(t, lib, "--read-only", "--subdir", "sub", "alice/app", view); out != "mounted "+view+"\n" {
 		t.Fatalf("mount output = %q", out)
@@ -635,7 +638,7 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 	imagePath := filepath.Join(imagesDir, "alice", "app", "image.sqsh")
 	digest := fileSHA256Hex(t, imagePath)
@@ -643,7 +646,7 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 
 	cached := filepath.Join(work, "cached-view")
 	plain := filepath.Join(work, "plain-view")
-	deferForceUmount(t, runtimeDir, cached, plain)
+	deferForceUmount(t, sessionsRoot, cached, plain)
 
 	out := mountCmd(t, lib, "--cache", "--cache-dir", cacheDir, "alice/app", cached)
 	if out != "mounted "+cached+"\n" {
@@ -695,12 +698,12 @@ func TestMountStaleTeardownAndRemount(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	src := subdirSource(t)
 	buildFullImage(t, lib, "alice/app", src)
 
 	view := filepath.Join(work, "view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	mountCmd(t, lib, "alice/app", view)
 	entry, ok := entryAt(realTable(t), view)
 	if !ok || len(entry.Lowers) == 0 {
@@ -715,7 +718,7 @@ func TestMountStaleTeardownAndRemount(t *testing.T) {
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("umount output = %q", out)
 	}
-	assertNoResidue(t, runtimeDir, view)
+	assertNoResidue(t, sessionsRoot, view)
 
 	// A fresh mount over the same target works again.
 	mountCmd(t, lib, "alice/app", view)
@@ -732,7 +735,7 @@ func TestMountStaleTeardownAndRemount(t *testing.T) {
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("final umount output = %q", out)
 	}
-	assertNoResidue(t, runtimeDir, view)
+	assertNoResidue(t, sessionsRoot, view)
 }
 
 // killDaemon sends SIGKILL and waits for the process to disappear.

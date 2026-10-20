@@ -99,7 +99,7 @@ func TestLockSessionTimeoutIsRuntimeErrorNotHang(t *testing.T) {
 	}
 }
 
-func TestLockCreatesLockFileBesideRecord(t *testing.T) {
+func TestLockCreatesLockFileInSessionDir(t *testing.T) {
 	dir := t.TempDir()
 	store := newRecord(t, dir, "dev")
 	release, err := store.lockSession("dev", time.Second)
@@ -107,7 +107,7 @@ func TestLockCreatesLockFileBesideRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	info, err := os.Stat(filepath.Join(dir, "dev.lock"))
+	info, err := os.Stat(filepath.Join(dir, "dev", "session.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}

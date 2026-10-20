@@ -9,12 +9,10 @@ func TestOutsideReserved(t *testing.T) {
 	home := t.TempDir()
 	data := t.TempDir()
 	images := filepath.Join(data, "images")
-	runtime := filepath.Join(data, "runtime")
 	sessions := filepath.Join(data, "sessions")
 	cache := filepath.Join(data, "cache")
 	cfg, err := Load(home, home, home, "", Patch{
 		ImagesDir:   &images,
-		RuntimeDir:  &runtime,
 		SessionsDir: &sessions,
 		CacheDir:    &cache,
 	})
@@ -32,7 +30,7 @@ func TestOutsideReserved(t *testing.T) {
 		{name: "home layout descendant", path: filepath.Join(layout, "nested", "ws"), reject: true},
 		{name: "images dir", path: images, reject: true},
 		{name: "images descendant", path: filepath.Join(images, "child"), reject: true},
-		{name: "runtime descendant", path: filepath.Join(runtime, "up"), reject: true},
+		{name: "session runtime descendant", path: filepath.Join(sessions, "dev", "runtime", "m1"), reject: true},
 		{name: "sessions dir", path: sessions, reject: true},
 		{name: "cache descendant", path: filepath.Join(cache, "blob"), reject: true},
 		{name: "workspace outside", path: filepath.Join(data, "work"), reject: false},
@@ -50,22 +48,5 @@ func TestOutsideReserved(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-func TestRuntimeDirNameStableForDeviceAndInode(t *testing.T) {
-	first := RuntimeDirName(1, 2)
-	again := RuntimeDirName(1, 2)
-	if first != "up-1-2" {
-		t.Fatalf("name = %q", first)
-	}
-	if first != again {
-		t.Fatal("same device and inode changed the directory name")
-	}
-	if first == RuntimeDirName(1, 3) {
-		t.Fatal("different inodes share a directory name")
-	}
-	if first == RuntimeDirName(4, 2) {
-		t.Fatal("same inode on different devices share a directory name")
 	}
 }

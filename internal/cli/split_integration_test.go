@@ -36,7 +36,6 @@ var repoRootDir = func() string {
 func splitConfig(home, mode string) config.Config {
 	cfg := config.Defaults(home)
 	cfg.ImagesDir = filepath.Join(home, "lib", "images")
-	cfg.RuntimeDir = filepath.Join(home, "lib", "runtime")
 	cfg.SessionsDir = filepath.Join(home, "lib", "sessions")
 	cfg.CacheDir = filepath.Join(home, "lib", "cache")
 	cfg.SplitEnabled = true
@@ -112,7 +111,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home, config.SplitModeBlocks)
 	src := splitSource(t)
@@ -162,7 +161,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 
 	// The default route mounts through a materialized cache copy.
 	view := filepath.Join(work, "view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "mounted "+view+"\n",
 		"mount", "--session", "dev", "alice/data", view)
@@ -210,7 +209,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("final umount output = %q", out)
 	}
-	assertNoResidue(t, runtimeDir, view)
+	assertNoResidue(t, sessionsRoot, view)
 }
 
 // sortedDigests flattens a digest map into sorted lines for compare.
@@ -267,7 +266,7 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 	requireConcatfs(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home, config.SplitModeBlocks)
 	src := splitSource(t)
@@ -281,7 +280,7 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 	blocksDir := filepath.Join(imagesDir, "alice", "data", "blocks", res.ID)
 
 	view := filepath.Join(work, "concat-view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	concatLib := concatRouteArgs(lib)
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, concatLib, "mounted "+view+"\n",
@@ -303,13 +302,13 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 		t.Fatalf("entry at %s = %+v, want fsname %s", view, entry, canonical)
 	}
 	transit := ""
-	for _, m := range entriesUnder(realTable(t), runtimeDir) {
+	for _, m := range entriesUnder(realTable(t), sessionsRoot) {
 		if filepath.Base(m.Point) == "concat" {
 			transit = m.Point
 		}
 	}
 	if transit == "" {
-		t.Fatalf("no concat transit point under %s", runtimeDir)
+		t.Fatalf("no concat transit point under %s", sessionsRoot)
 	}
 	// The virtual concatenated file hashes to the whole image
 	// digest without any materialization.
@@ -350,7 +349,7 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 	if out := umountCmd(t, concatLib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("umount output = %q", out)
 	}
-	assertNoResidue(t, runtimeDir, view)
+	assertNoResidue(t, sessionsRoot, view)
 	if out := umountCmd(t, concatLib, view); out != "" {
 		t.Fatalf("an idempotent umount printed %q", out)
 	}
@@ -361,7 +360,7 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	requireConcatfs(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home, config.SplitModeBlocks)
 	src := splitSource(t)
@@ -385,7 +384,7 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	}
 
 	view := filepath.Join(work, "degraded")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	stdout, stderr, _, err := runCmd(t, append(concatRouteArgs(lib),
 		"mount", "alice/data", view)...)
 	if err != nil {
@@ -413,7 +412,7 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("umount output = %q", out)
 	}
-	assertNoResidue(t, runtimeDir, view)
+	assertNoResidue(t, sessionsRoot, view)
 }
 
 // forestSource is a members-form source tree: plain directory
@@ -438,7 +437,7 @@ func TestSplitMembersForestRoundTrip(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	cfg := splitConfig(home, config.SplitModeMembers)
 	src, wantHead := forestSource(t)
 	res := buildSplitMembers(t, cfg, "alice/forest", src)
@@ -477,7 +476,7 @@ func TestSplitMembersForestRoundTrip(t *testing.T) {
 
 	// The forest mounts read-only under one parent directory.
 	parent := filepath.Join(work, "forest")
-	deferForceUmount(t, runtimeDir,
+	deferForceUmount(t, sessionsRoot,
 		filepath.Join(parent, "code"),
 		filepath.Join(parent, "docs"),
 		filepath.Join(parent, "worktree"))
@@ -572,10 +571,10 @@ func TestSplitMembersForestRoundTrip(t *testing.T) {
 		t.Fatalf("deep member status = %q", stdout)
 	}
 	engine := &session.Engine{
-		Store:      session.Store{Dir: sessionsDir(home)},
-		LoadTable:  mountinfo.Load,
-		RuntimeDir: runtimeDir,
-		ImagesDir:  imagesDir,
+		Store:       session.Store{Dir: sessionsDir(home)},
+		LoadTable:   mountinfo.Load,
+		SessionsDir: sessionsDir(home),
+		ImagesDir:   imagesDir,
 	}
 	hit, err := engine.SessionForPath(deep)
 	if err != nil {

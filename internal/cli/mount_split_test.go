@@ -187,8 +187,13 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if req.Concat != nil {
 		t.Errorf("the reassembly route set a concat source: %+v", req.Concat)
 	}
-	if req.MergedDir != dir || req.RuntimeDir != filepath.Join(home, "lib", "runtime") {
-		t.Errorf("request = %+v", req)
+	if req.MergedDir != dir {
+		t.Errorf("merged = %s, want %s", req.MergedDir, dir)
+	}
+	if !strings.HasSuffix(req.RuntimeDir, filepath.Join("runtime", "m1")) ||
+		!strings.HasPrefix(req.RuntimeDir, sessionsDir(home)+string(filepath.Separator)) {
+		t.Errorf("runtime = %s, want under %s/.../runtime/m1",
+			req.RuntimeDir, sessionsDir(home))
 	}
 	// A blocks payload is already materialized in the cache
 	// directory, so the cache_enabled copy never stacks on top.

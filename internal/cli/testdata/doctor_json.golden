@@ -2,7 +2,6 @@
   "config": {
     "path": "/tiler-doctor-golden-home/.tiler.yaml",
     "images_dir": "/tiler-doctor-golden-home/.tiler/images",
-    "runtime_dir": "/tiler-doctor-golden-home/.tiler/runtime",
     "sessions_dir": "/tiler-doctor-golden-home/.tiler/sessions",
     "cache_dir": "/tiler-doctor-golden-home/.tiler/cache",
     "log_level": "info"

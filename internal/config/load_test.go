@@ -38,7 +38,7 @@ func TestLoadFieldPriority(t *testing.T) {
 		"images_dir: far-images",
 		"log_level: debug",
 		"cache_dir: proj-cache",
-		"runtime_dir: far-runtime",
+		"sessions_dir: far-sessions",
 	}, "\n"))
 	writeConfig(t, app, "images_dir: near-images\n")
 
@@ -50,8 +50,8 @@ func TestLoadFieldPriority(t *testing.T) {
 	if got.ImagesDir != filepath.Join(app, "near-images") {
 		t.Fatalf("images = %q", got.ImagesDir)
 	}
-	if got.RuntimeDir != filepath.Join(proj, "far-runtime") {
-		t.Fatalf("runtime = %q", got.RuntimeDir)
+	if got.SessionsDir != filepath.Join(proj, "far-sessions") {
+		t.Fatalf("sessions = %q", got.SessionsDir)
 	}
 	if got.CacheDir != filepath.Join(proj, "proj-cache") {
 		t.Fatalf("cache = %q", got.CacheDir)
@@ -61,9 +61,6 @@ func TestLoadFieldPriority(t *testing.T) {
 	}
 	if got.KeepVersions != 2 {
 		t.Fatalf("keep versions = %d", got.KeepVersions)
-	}
-	if got.SessionsDir != filepath.Join(home, ".tiler", "sessions") {
-		t.Fatalf("sessions = %q", got.SessionsDir)
 	}
 	if got.CacheEnabled || got.SessionMaxAge != DefaultSessionMaxAge {
 		t.Fatalf("untouched fields changed: %+v", got)
@@ -157,7 +154,6 @@ func TestLoadRelativePaths(t *testing.T) {
 	mustMkdir(t, home, near, cwd)
 	writeConfig(t, far, "images_dir: ../sib\n")
 	writeConfig(t, near, strings.Join([]string{
-		"runtime_dir: ./rt",
 		"sessions_dir: ~/sessions",
 		"cache_dir: /var/tiler/foo/../cache",
 	}, "\n"))
@@ -171,9 +167,6 @@ func TestLoadRelativePaths(t *testing.T) {
 	if got.ImagesDir != wantImages || strings.HasPrefix(got.ImagesDir, far+string(filepath.Separator)) {
 		t.Fatalf("images = %q, want cleaned %q", got.ImagesDir, wantImages)
 	}
-	if got.RuntimeDir != filepath.Join(near, "rt") {
-		t.Fatalf("runtime = %q", got.RuntimeDir)
-	}
 	if got.SessionsDir != filepath.Join(home, "sessions") {
 		t.Fatalf("sessions = %q", got.SessionsDir)
 	}
@@ -182,13 +175,13 @@ func TestLoadRelativePaths(t *testing.T) {
 		t.Fatalf("cache = %q, want cleaned absolute %q", got.CacheDir, wantCache)
 	}
 
-	runtime := "cli-rt"
-	got, err = Load(near, home, base, "", Patch{RuntimeDir: &runtime})
+	sessions := "cli-sessions"
+	got, err = Load(near, home, base, "", Patch{SessionsDir: &sessions})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RuntimeDir != filepath.Join(cwd, "cli-rt") {
-		t.Fatalf("runtime = %q", got.RuntimeDir)
+	if got.SessionsDir != filepath.Join(cwd, "cli-sessions") {
+		t.Fatalf("sessions = %q", got.SessionsDir)
 	}
 	if got.CacheDir != wantCache {
 		t.Fatalf("command line rewrote absolute cache to %q", got.CacheDir)
@@ -228,7 +221,7 @@ func TestLoadWalkOutsideHomeStopsAtFilesystemRoot(t *testing.T) {
 	mustMkdir(t, home, proj)
 	writeConfig(t, base, "keep_versions: 7\n")
 	writeConfig(t, home, "log_level: warn\ncache_enabled: true\n")
-	writeConfig(t, fsRoot, "log_level: error\nruntime_dir: root-rt\n")
+	writeConfig(t, fsRoot, "log_level: error\ncache_dir: root-cache\n")
 	writeConfig(t, work, "images_dir: work-images\n")
 	writeConfig(t, proj, "images_dir: proj-images\n")
 
@@ -248,8 +241,8 @@ func TestLoadWalkOutsideHomeStopsAtFilesystemRoot(t *testing.T) {
 	if got.ImagesDir != filepath.Join(proj, "proj-images") {
 		t.Fatalf("images = %q", got.ImagesDir)
 	}
-	if got.RuntimeDir != filepath.Join(fsRoot, "root-rt") {
-		t.Fatalf("runtime = %q", got.RuntimeDir)
+	if got.CacheDir != filepath.Join(fsRoot, "root-cache") {
+		t.Fatalf("cache = %q", got.CacheDir)
 	}
 }
 
@@ -425,15 +418,15 @@ func TestLoadCeilingStopsUpwardWalk(t *testing.T) {
 	sandbox := filepath.Join(zone, "sandbox")
 	deep := filepath.Join(sandbox, "deep")
 	mustMkdir(t, deep)
-	writeConfig(t, zone, "runtime_dir: marker-runtime\n")
+	writeConfig(t, zone, "cache_dir: marker-cache\n")
 
 	// Without a ceiling the walk reaches zone and applies the marker.
 	got, err := Load(deep, home, base, "", Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RuntimeDir != filepath.Join(zone, "marker-runtime") {
-		t.Fatalf("control runtime = %q, want the zone marker", got.RuntimeDir)
+	if got.CacheDir != filepath.Join(zone, "marker-cache") {
+		t.Fatalf("control cache = %q, want the zone marker", got.CacheDir)
 	}
 
 	// With the ceiling at sandbox, zone sits above it and is excluded, so
@@ -442,8 +435,8 @@ func TestLoadCeilingStopsUpwardWalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RuntimeDir != filepath.Join(home, ".tiler", "runtime") {
-		t.Fatalf("ceiling runtime = %q, want the default", got.RuntimeDir)
+	if got.CacheDir != filepath.Join(home, ".tiler", "cache") {
+		t.Fatalf("ceiling cache = %q, want the default", got.CacheDir)
 	}
 }
 
@@ -453,14 +446,14 @@ func TestLoadCeilingIncludesOwnFile(t *testing.T) {
 	sandbox := filepath.Join(home, "sandbox")
 	deep := filepath.Join(sandbox, "deep")
 	mustMkdir(t, deep)
-	writeConfig(t, sandbox, "runtime_dir: sandbox-runtime\n")
+	writeConfig(t, sandbox, "cache_dir: sandbox-cache\n")
 
 	got, err := Load(deep, home, base, sandbox, Patch{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RuntimeDir != filepath.Join(sandbox, "sandbox-runtime") {
-		t.Fatalf("runtime = %q, want the ceiling dir's own value", got.RuntimeDir)
+	if got.CacheDir != filepath.Join(sandbox, "sandbox-cache") {
+		t.Fatalf("cache = %q, want the ceiling dir's own value", got.CacheDir)
 	}
 }
 
@@ -470,7 +463,7 @@ func TestLoadCeilingIgnoredWhenNotAncestor(t *testing.T) {
 	zone := filepath.Join(home, "zone")
 	deep := filepath.Join(zone, "deep")
 	mustMkdir(t, deep)
-	writeConfig(t, zone, "runtime_dir: marker-runtime\n")
+	writeConfig(t, zone, "cache_dir: marker-cache\n")
 
 	// A ceiling that is not an ancestor of start is ignored, so the walk
 	// still reaches zone and applies the marker.
@@ -480,8 +473,8 @@ func TestLoadCeilingIgnoredWhenNotAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RuntimeDir != filepath.Join(zone, "marker-runtime") {
-		t.Fatalf("runtime = %q, want the zone marker", got.RuntimeDir)
+	if got.CacheDir != filepath.Join(zone, "marker-cache") {
+		t.Fatalf("cache = %q, want the zone marker", got.CacheDir)
 	}
 }
 

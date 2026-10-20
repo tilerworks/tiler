@@ -610,8 +610,8 @@ func TestCloseRemovablePurgesRuntimeAndDeletesRecord(t *testing.T) {
 	if _, err := e.Load("dev"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Load after --rm close = %v, want ErrNotFound", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "dev.json")); !os.IsNotExist(statErr) {
-		t.Fatalf("dev.json survived: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(dir, "dev")); !os.IsNotExist(statErr) {
+		t.Fatalf("dev session dir survived: %v", statErr)
 	}
 }
 
@@ -697,8 +697,8 @@ func TestDiscardDeletesImplicitRecordWithoutLiveAction(t *testing.T) {
 	if _, err := e.Load(auto); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Load error = %v, want ErrNotFound", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, auto+".lock")); !os.IsNotExist(err) {
-		t.Errorf("lock file stat error = %v, want not-exist", err)
+	if _, err := os.Stat(filepath.Join(dir, auto)); !os.IsNotExist(err) {
+		t.Errorf("session dir stat error = %v, want not-exist", err)
 	}
 }
 
@@ -859,7 +859,7 @@ func TestRemoveRejectsActiveAndDeletesClosed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "close it before removing") {
 		t.Fatalf("Remove error = %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "dev.json")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(dir, "dev", "session.json")); statErr != nil {
 		t.Fatalf("refused remove deleted the record: %v", statErr)
 	}
 	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
@@ -871,8 +871,8 @@ func TestRemoveRejectsActiveAndDeletesClosed(t *testing.T) {
 	if _, err := e.Load("dev"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Load error = %v, want ErrNotFound", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "dev.lock")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock file survived: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "dev")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session dir survived: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

@@ -16,9 +16,9 @@ import (
 const userFileTemplate = `# tiler user configuration (auto-generated on first run).
 # Edit or comment out keys to override built-in defaults.
 # Relative paths resolve against this file's directory; ~/ expands to $HOME.
+version: 1
 images_dir: ~/.tiler/images
-runtime_dir: ~/.tiler/runtime
-sessions_dir: ~/.tiler/sessions
+sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache
 log_level: info
 `

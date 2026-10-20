@@ -110,11 +110,11 @@ func TestBuildBlocksPublishesSplitPayload(t *testing.T) {
 	}
 	staging := filepath.Dir(call[2])
 	if filepath.Base(call[2]) != fileImage ||
-		filepath.Dir(staging) != cfg.RuntimeDir ||
+		filepath.Dir(staging) != cfg.CacheDir ||
 		!strings.HasPrefix(filepath.Base(staging), "build-") {
-		t.Fatalf("staging output %s is outside the runtime staging dir", call[2])
+		t.Fatalf("staging output %s is outside the cache staging dir", call[2])
 	}
-	assertNoStaging(t, cfg.RuntimeDir)
+	assertNoStaging(t, cfg.CacheDir)
 	assertNoTemps(t, repo.Dir)
 }
 
@@ -163,7 +163,7 @@ func TestBuildBlocksBoundaryShapes(t *testing.T) {
 				t.Fatalf("whole = %s size = %d", res.ID, loaded.Size)
 			}
 			assertNoTemps(t, repo.Dir)
-			assertNoStaging(t, cfg.RuntimeDir)
+			assertNoStaging(t, cfg.CacheDir)
 		})
 	}
 }
@@ -188,7 +188,7 @@ func TestBuildBlocksRefusesCapacityExceeded(t *testing.T) {
 		t.Fatalf("blocks dir err = %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
-	assertNoStaging(t, cfg.RuntimeDir)
+	assertNoStaging(t, cfg.CacheDir)
 }
 
 func TestBuildBlocksCleansUpOnPackFailure(t *testing.T) {
@@ -198,7 +198,7 @@ func TestBuildBlocksCleansUpOnPackFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	assertNoStaging(t, cfg.RuntimeDir)
+	assertNoStaging(t, cfg.CacheDir)
 	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +245,7 @@ func TestBuildBlocksCleansUpOnPublishFailure(t *testing.T) {
 		t.Fatalf("blocks dir err = %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
-	assertNoStaging(t, cfg.RuntimeDir)
+	assertNoStaging(t, cfg.CacheDir)
 }
 
 func TestBuildBlocksGuidesOnToolSizeLimit(t *testing.T) {
@@ -257,7 +257,7 @@ func TestBuildBlocksGuidesOnToolSizeLimit(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	assertSplitGuidance(t, err)
-	assertNoStaging(t, cfg.RuntimeDir)
+	assertNoStaging(t, cfg.CacheDir)
 }
 
 func TestBuildFullSingleFormGuidesOnToolSizeLimit(t *testing.T) {

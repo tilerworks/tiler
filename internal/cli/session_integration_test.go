@@ -18,12 +18,12 @@ func TestSessionCrashRecoveryRestoresEveryMount(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 
 	view1 := filepath.Join(work, "view1")
 	view2 := filepath.Join(work, "view2")
-	deferForceUmount(t, runtimeDir, view1, view2)
+	deferForceUmount(t, sessionsRoot, view1, view2)
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "mounted "+view1+"\n",
 		"mount", "--session", "dev", "alice/app", view1)
@@ -97,27 +97,27 @@ func TestSessionCrashRecoveryRestoresEveryMount(t *testing.T) {
 	if stdout != "closed dev\n" {
 		t.Fatalf("close output = %q", stdout)
 	}
-	assertNoResidue(t, runtimeDir, view1)
-	assertNoResidue(t, runtimeDir, view2)
+	assertNoResidue(t, sessionsRoot, view1)
+	assertNoResidue(t, sessionsRoot, view2)
 }
 
 func TestSessionReverseLookupAndVanishedEntryRecovery(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 
 	view := filepath.Join(work, "view")
-	deferForceUmount(t, runtimeDir, view)
+	deferForceUmount(t, sessionsRoot, view)
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "mounted "+view+"\n", "mount", "--session", "dev", "alice/app", view)
 	writeTestFile(t, filepath.Join(view, "sub", "wip.txt"), "wip\n")
 
 	engine := &session.Engine{
-		Store:      session.Store{Dir: sessionsDir(home)},
-		LoadTable:  mountinfo.Load,
-		RuntimeDir: runtimeDir,
+		Store:       session.Store{Dir: sessionsDir(home)},
+		LoadTable:   mountinfo.Load,
+		SessionsDir: sessionsDir(home),
 	}
 
 	// A deep path, the merged root, and the runtime upper all
@@ -184,12 +184,12 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 
 	view := filepath.Join(work, "view")
 	proj := filepath.Join(work, "proj")
-	deferForceUmount(t, runtimeDir, view, proj)
+	deferForceUmount(t, sessionsRoot, view, proj)
 
 	// A plain mount creates one implicit auto-* session and records
 	// the mount in it.

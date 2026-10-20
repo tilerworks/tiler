@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 type recRunner struct {
@@ -51,7 +49,7 @@ func testRequest(t *testing.T) (Request, string) {
 	req := Request{
 		Full:       filepath.Join(dir, "image.sqsh"),
 		Layers:     []string{filepath.Join(dir, "inc1.sqsh"), filepath.Join(dir, "inc2.sqsh")},
-		RuntimeDir: filepath.Join(dir, "runtime"),
+		RuntimeDir: filepath.Join(dir, "runtime", "m1"),
 		MergedDir:  filepath.Join(dir, "merged"),
 	}
 	return req, dir
@@ -137,8 +135,9 @@ func TestMountOrdersLowersNewestFirst(t *testing.T) {
 	if overlay[0][3] != req.MergedDir {
 		t.Errorf("merged point = %q", overlay[0][3])
 	}
-	if !strings.HasPrefix(w.UpperDir, filepath.Join(dir, "runtime", "up-")) {
-		t.Errorf("upper dir %s is not under runtime/up-<dev>-<ino>", w.UpperDir)
+	if !strings.HasPrefix(w.UpperDir, req.RuntimeDir+string(filepath.Separator)) {
+		t.Errorf("upper dir %s is not under the combination directory %s",
+			w.UpperDir, req.RuntimeDir)
 	}
 	if info, err := os.Stat(req.MergedDir); err != nil || !info.IsDir() {
 		t.Errorf("merged dir was not created: %v", err)
@@ -729,7 +728,7 @@ func TestMountReusesLiveReadWriteView(t *testing.T) {
 	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+	runtime := req.RuntimeDir
 	req.Table = append([]Entry{{
 		Point:  req.MergedDir,
 		FSType: "fuse.fuse-overlayfs",
@@ -782,7 +781,7 @@ func TestMountReusesLiveReadOnlyChain(t *testing.T) {
 	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+	runtime := req.RuntimeDir
 	req.Table = append([]Entry{{
 		Point:  req.MergedDir,
 		FSType: "fuse.fuse-overlayfs",
@@ -822,7 +821,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 		{
 			name: "read-write with the wrong layer count",
 			entry: func(req Request) Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				return Entry{
 					Point: req.MergedDir, Source: "overlay",
 					Upper:  filepath.Join(runtime, "upper"),
@@ -842,7 +841,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 			readOnly: true,
 			layers:   true,
 			entry: func(req Request) Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				return Entry{
 					Point: req.MergedDir, Source: "overlay",
 					Upper:  filepath.Join(runtime, "upper"),
@@ -858,7 +857,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 			name:   "read-write over a live lower serving a different image",
 			layers: true,
 			entry: func(req Request) Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				return Entry{
 					Point: req.MergedDir, Source: "overlay",
 					Upper:  filepath.Join(runtime, "upper"),
@@ -866,7 +865,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 				}
 			},
 			lowers: func(t *testing.T, req Request) []Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				entries := stackLowerEntries(t, runtime, req)
 				entries[0].Source = "/elsewhere/foreign.sqsh"
 				return entries
@@ -880,7 +879,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 			name:   "read-write with a missing lower transit row",
 			layers: true,
 			entry: func(req Request) Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				return Entry{
 					Point: req.MergedDir, Source: "overlay",
 					Upper:  filepath.Join(runtime, "upper"),
@@ -888,7 +887,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 				}
 			},
 			lowers: func(t *testing.T, req Request) []Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				entries := stackLowerEntries(t, runtime, req)
 				return entries[:len(entries)-1]
 			},
@@ -902,7 +901,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 			name:   "read-write with every lower serving a different image",
 			layers: true,
 			entry: func(req Request) Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				return Entry{
 					Point: req.MergedDir, Source: "overlay",
 					Upper:  filepath.Join(runtime, "upper"),
@@ -910,7 +909,7 @@ func TestMountConflictsOnDifferentIdentity(t *testing.T) {
 				}
 			},
 			lowers: func(_ *testing.T, req Request) []Entry {
-				runtime := filepath.Join(req.RuntimeDir, "up-7-42")
+				runtime := req.RuntimeDir
 				lowers := plannedLowers(runtime, 3)
 				return []Entry{
 					{Point: lowers[0], FSType: "fuse", Source: "/other/inc2.sqsh"},
@@ -1052,18 +1051,67 @@ func TestMountTearsDownListedEntryWithDeadDaemon(t *testing.T) {
 	}
 }
 
-func TestMountCleansResidueOnPlannedLowerPoints(t *testing.T) {
+// A listed-but-dead overlay that still names upper/lowers under the
+// session-scoped combination directory must tear those squashfuse
+// lowers down; otherwise a remount into a different m<seq> leaves
+// orphan FUSE mounts behind.
+func TestMountTearsDownDeadEntryCombinationLowers(t *testing.T) {
 	req, _ := testRequest(t)
-	// Plan the runtime directory exactly like the engine will: from
-	// the device and inode of the existing target directory.
 	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dev, ino, err := devIno(req.MergedDir)
+	runtime := req.RuntimeDir
+	upper := filepath.Join(runtime, "upper")
+	lower0 := filepath.Join(runtime, "lower-0")
+	lower1 := filepath.Join(runtime, "lower-1")
+	for _, dir := range []string{upper, lower0, lower1} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req.Table = []Entry{{
+		Point:  req.MergedDir,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "overlay",
+		Upper:  upper,
+		Lowers: []string{lower0, lower1},
+	}}
+	k := newFakeKernel()
+	k.live[req.MergedDir] = true
+	k.live[lower0] = true
+	k.live[lower1] = true
+	seam := hooks{
+		live:    k.isLive,
+		serving: func(string) bool { return false },
+		sleep:   func(time.Duration) {},
+	}
+	w, err := mountTest(t, req, k.run, seam)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
+	if w.Reused {
+		t.Error("a dead combination entry must never be reused")
+	}
+	unmounts := k.find("fusermount3")
+	// Target first, then lowers newest-to-oldest under the
+	// combination directory; later mount commands may add more.
+	want := []string{req.MergedDir, lower1, lower0}
+	if len(unmounts) < len(want) {
+		t.Fatalf("teardown calls = %v, want at least -u of %v", unmounts, want)
+	}
+	for i, point := range want {
+		if unmounts[i][1] != "-u" || unmounts[i][2] != point {
+			t.Fatalf("teardown calls = %v, want -u of %v first", unmounts, want)
+		}
+	}
+}
+
+func TestMountCleansResidueOnPlannedLowerPoints(t *testing.T) {
+	req, _ := testRequest(t)
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runtime := req.RuntimeDir
 	residue := filepath.Join(runtime, "lower-1")
 	if err := os.MkdirAll(residue, 0o755); err != nil {
 		t.Fatal(err)

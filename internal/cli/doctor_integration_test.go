@@ -47,7 +47,6 @@ func TestDoctorRealEnvironmentFullProbe(t *testing.T) {
 	lib := []string{
 		"--images-dir", imagesDir,
 		"--cache-dir", cacheDir,
-		"--runtime-dir", filepath.Join(home, "lib", "runtime"),
 		"--sessions-dir", filepath.Join(home, "lib", "sessions"),
 	}
 

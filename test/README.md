@@ -41,7 +41,7 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0010` need `/dev/fuse` and the external
+  `t0003` through `t0011` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
   stale case in `t0009-status.sh` also need `pgrep` to find the daemon
@@ -56,8 +56,10 @@ equipped host, so a genuine regression is never masked by a skip.
 - `e2e/t0000-doctor.sh` — `tiler doctor` exits 0 on an equipped host.
   Proves the vendored framework runs inside the repository.
 - `e2e/t0001-config-bootstrap.sh` — tiler creates `$HOME/.tiler.yaml`
-  from a template on first run, never rewrites an edited one, and
-  `doctor` reports the config location and core dirs (text and `--json`).
+  from a template on first run (with `version: 1`), leaves a
+  current-schema edit untouched, upgrades a legacy file that still
+  lists `runtime_dir` (writing `.tiler.yaml.bak`), and `doctor`
+  reports the config location and core dirs (text and `--json`).
 - `e2e/t0002-config-ceiling.sh` — `TILER_CEILING_DIR` bounds the upward
   project-config walk so it stays inside the sandbox.
 - `e2e/t0003-image-mount.sh` — builds a full image from a source tree,
@@ -119,14 +121,21 @@ equipped host, so a genuine regression is never masked by a skip.
 - `e2e/t0010-session-rm.sh` — drives the `--rm` opt-in that deletes a
   session and purges its runtime on close. A named `session new --rm`
   shows the `rm` marker and its `close` prints `removed`, deletes the
-  record, and force-removes the view's `up-<dev>-<ino>` runtime
-  directory including the upper data written into it; `mount --rm`
-  marks the implicit `auto-*` session so umounting its last view
-  deletes the record and purges the runtime; `mount --rm` refuses a
-  session named by `--session` or `TILER_SESSION_ID` (exit 2) pointing
-  at `session new --rm`; and a plain (non-`--rm`) close keeps the
-  closed record and its runtime upper data as the contrast. Needs the
-  FUSE toolchain; skips cleanly without it.
+  record, and force-removes the `sessions/<name>/` directory including
+  `runtime/m<seq>/` upper data; `mount --rm` marks the implicit
+  `auto-*` session so umounting its last view deletes the record and
+  purges the runtime; `mount --rm` refuses a session named by
+  `--session` or `TILER_SESSION_ID` (exit 2) pointing at `session new
+  --rm`; and a plain (non-`--rm`) close keeps the closed record and its
+  runtime upper data as the contrast. Needs the FUSE toolchain; skips
+  cleanly without it.
+- `e2e/t0011-session-remount-different-image.sh` — mounts `alice/one` at
+  a workdir, writes `marker.txt`, umounts (closing the first `auto-*`
+  session), then mounts `alice/two` at the same workdir. Asserts two
+  distinct `auto-*` sessions, that the second view has no `marker.txt`
+  (session-scoped upper isolation), and that each session owns its own
+  `sessions/<name>/runtime/m1/` tree. Needs the FUSE toolchain; skips
+  cleanly without it.
 
 ## Adding cases in later phases
 

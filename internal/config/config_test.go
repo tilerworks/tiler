@@ -12,11 +12,11 @@ const testHome = "/injected/home"
 func TestDefaults(t *testing.T) {
 	cfg := Defaults(testHome)
 	root := filepath.Join(testHome, ".tiler")
+	if cfg.Version != CurrentConfigVersion {
+		t.Fatalf("version = %d, want %d", cfg.Version, CurrentConfigVersion)
+	}
 	if cfg.ImagesDir != filepath.Join(root, "images") {
 		t.Fatalf("images dir = %q", cfg.ImagesDir)
-	}
-	if cfg.RuntimeDir != filepath.Join(root, "runtime") {
-		t.Fatalf("runtime dir = %q", cfg.RuntimeDir)
 	}
 	if cfg.SessionsDir != filepath.Join(root, "sessions") {
 		t.Fatalf("sessions dir = %q", cfg.SessionsDir)
@@ -183,12 +183,66 @@ func TestDecodeUnknownKey(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsRemovedRuntimeDir(t *testing.T) {
+	_, err := Decode([]byte("runtime_dir: ~/.tiler/runtime\n"))
+	if err == nil {
+		t.Fatal("removed runtime_dir key was accepted")
+	}
+	if !strings.Contains(err.Error(), "runtime_dir") {
+		t.Fatalf("error = %v, want the field name", err)
+	}
+}
+
+func TestDecodeAcceptsVersion(t *testing.T) {
+	patch, err := Decode([]byte("version: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.Version == nil || *patch.Version != 1 {
+		t.Fatalf("version = %v, want 1", patch.Version)
+	}
+	got := patch.Apply(Defaults(testHome))
+	if got.Version != 1 {
+		t.Fatalf("Apply version = %d", got.Version)
+	}
+}
+
+func TestDecodeRejectsNonIntegerVersion(t *testing.T) {
+	for _, doc := range []string{
+		"version: 1.5\n",
+		"version: true\n",
+		"version:\n  - 1\n",
+	} {
+		_, err := Decode([]byte(doc))
+		if err == nil {
+			t.Fatalf("accepted %q", doc)
+		}
+		if !strings.Contains(err.Error(), "version") {
+			t.Fatalf("error = %v, want version", err)
+		}
+	}
+}
+
+func TestVersionOverlay(t *testing.T) {
+	base := Defaults(testHome)
+	two := 2
+	got := Patch{Version: &two}.Apply(base)
+	if got.Version != 2 {
+		t.Fatalf("Apply = %d, want 2", got.Version)
+	}
+	got = Patch{}.Apply(base)
+	if got.Version != CurrentConfigVersion {
+		t.Fatalf("omitted version changed to %d", got.Version)
+	}
+}
+
 func TestInvalidConfig(t *testing.T) {
 	cases := []struct {
 		name  string
 		doc   string
 		field string
 	}{
+		{name: "negative version", doc: "version: -1\n", field: "version"},
 		{name: "unknown log level", doc: "log_level: verbose\n", field: "log_level"},
 		{name: "negative keep versions", doc: "keep_versions: -1\n", field: "keep_versions"},
 		{name: "fractional keep versions", doc: "keep_versions: 0.9\n", field: "keep_versions"},

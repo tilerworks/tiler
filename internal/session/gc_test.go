@@ -42,7 +42,7 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	seedClosed(t, e, "aged", testNow.Add(-monthAge))
 	seedClosed(t, e, "fresh", testNow.Add(-time.Hour))
 	// The lock file of the aged record goes with it.
-	if err := os.WriteFile(filepath.Join(dir, "aged.lock"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "aged", "session.lock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,10 +53,8 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	if len(events) != 1 || events[0].Session != "aged" || events[0].Action != CleanupRemoved {
 		t.Fatalf("events = %+v", events)
 	}
-	for _, gone := range []string{"aged.json", "aged.lock"} {
-		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
-			t.Errorf("%s survived: %v", gone, err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "aged")); !os.IsNotExist(err) {
+		t.Errorf("aged session dir survived: %v", err)
 	}
 	assertRecordState(t, e, "fresh", StateClosed)
 }
@@ -299,8 +297,8 @@ func TestCleanupPurgesStaleRemovableRecord(t *testing.T) {
 		t.Fatalf("purged = %v", purged)
 	}
 	// The record is deleted, not flipped to closed.
-	if _, statErr := os.Stat(filepath.Join(dir, "rmdev.json")); !os.IsNotExist(statErr) {
-		t.Fatalf("rmdev.json survived: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(dir, "rmdev")); !os.IsNotExist(statErr) {
+		t.Fatalf("rmdev session dir survived: %v", statErr)
 	}
 }
 
@@ -401,7 +399,10 @@ func TestCleanupReportsCorruptRecords(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	seedClosed(t, e, "good", testNow.Add(-time.Hour))
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(":::"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken", "session.json"), []byte(":::"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := e.Cleanup(720*time.Hour, false, testNow, func(string) error { return nil })

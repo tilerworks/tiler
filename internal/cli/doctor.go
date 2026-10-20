@@ -49,7 +49,6 @@ func configSummary(cfg config.Config) doctor.ConfigSummary {
 	return doctor.ConfigSummary{
 		Path:        cfg.UserFile(),
 		ImagesDir:   cfg.ImagesDir,
-		RuntimeDir:  cfg.RuntimeDir,
 		SessionsDir: cfg.SessionsDir,
 		CacheDir:    cfg.CacheDir,
 		LogLevel:    cfg.LogLevel,

@@ -15,20 +15,22 @@ import (
 func statusJSONLib(home string) []string {
 	return []string{
 		"--images-dir", filepath.Join(home, "lib", "images"),
-		"--runtime-dir", "/rt",
 		"--sessions-dir", sessionsDir(home),
 	}
 }
 
 // withStatusJSONSeams installs a fixed fake mount table: the view
-// the dev record claims plus one unclaimed combination.
+// the dev record claims plus one unclaimed combination. SessionsDir
+// is pinned to /sessions so orphan runtime paths stay golden-stable
+// without writing into that absolute path.
 func withStatusJSONSeams(t *testing.T, healthy map[string]bool) {
 	t.Helper()
 	table := []mountinfo.Mount{
-		statusView("/ws/dev/app", "/rt/up-1-2"),
-		statusView("/ws/orphan", "/rt/up-3-3"),
+		statusView("/ws/dev/app", "/sessions/dev/runtime/m1"),
+		statusView("/ws/orphan", "/sessions/orphan/runtime/m1"),
 	}
 	withSessionSeams(t, func(engine *session.Engine) {
+		engine.SessionsDir = "/sessions"
 		engine.LoadTable = func() ([]mountinfo.Mount, error) { return table, nil }
 		engine.Health = func(point string) bool { return healthy[point] }
 	})
@@ -70,7 +72,7 @@ func TestStatusOverviewJSONMatchesGolden(t *testing.T) {
 	}
 	orphan := doc.OrphanViews[0]
 	if orphan.Point != "/ws/orphan" || orphan.FSType != "fuse.fuse-overlayfs" ||
-		orphan.RuntimeDir != "/rt/up-3-3" {
+		orphan.RuntimeDir != "/sessions/orphan/runtime/m1" {
 		t.Fatalf("orphan = %+v", orphan)
 	}
 }

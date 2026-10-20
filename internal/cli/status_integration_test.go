@@ -15,13 +15,13 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	runtimeDir := filepath.Join(home, "lib", "runtime")
+	sessionsRoot := sessionsDir(home)
 	buildFullImage(t, lib, "alice/app", subdirSource(t))
 	t.Setenv(sessionEnvVar, "dev")
 
 	view1 := filepath.Join(work, "view1")
 	view2 := filepath.Join(work, "view2")
-	deferForceUmount(t, runtimeDir, view1, view2)
+	deferForceUmount(t, sessionsRoot, view1, view2)
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "mounted "+view1+"\n",
 		"mount", "--session", "dev", "alice/app", view1)

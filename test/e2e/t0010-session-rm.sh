@@ -8,8 +8,8 @@
 # t0008-session-implicit.sh (a plain implicit auto-* session auto-closes
 # into the kept-for-audit closed state). This case drives the --rm
 # opt-in, which flips that behavior: a session marked --rm deletes its
-# record AND force-removes the runtime directory of every view -- the
-# <RuntimeDir>/up-<dev>-<ino> tree, upper data included -- when it
+# record AND force-removes the session directory of every view -- the
+# sessions/<name>/ tree including runtime/m<seq>/ upper data -- when it
 # closes. Three close paths share the teardown:
 #
 #   1. session new --rm <name>, then session close <name> deletes the
@@ -72,14 +72,11 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
-# needs no --*-dir flags. Mount targets must sit OUTSIDE the runtime tree
-# and the reserved directories, so keep them under $HOME/work. rt_root is
-# the runtime tree whose up-<dev>-<ino> directories --rm purges; each
-# scenario derives its own directory name from its mountpoint's device
-# and inode, the same derivation the mount engine uses, so the assertion
-# names the exact directory rather than guessing.
+# needs no --*-dir flags. Mount targets must sit OUTSIDE the reserved
+# directories, so keep them under $HOME/work. sessions_root is the merged
+# sessions tree whose <name>/ directory --rm removes wholesale.
 src_dir=$HOME/src/app
-rt_root=$HOME/.tiler/runtime
+sessions_root=$HOME/.tiler/sessions
 named_dir=$HOME/work/named
 impl_dir=$HOME/work/implicit
 usage_dir=$HOME/work/refused
@@ -123,15 +120,14 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the re
 	"$tiler_bin" session show dev >show1.out 2>show1.err &&
 	grep -Eq "^dev active rm created=" show1.out &&
 	mkdir -p "$named_dir" &&
-	named_rt="up-$(stat -c "%d-%i" "$named_dir")" &&
 	"$tiler_bin" mount --session dev tmp/auto "$named_dir" >m1.out 2>m1.err &&
 	grep -Eq "^mounted " m1.out &&
 	echo "precious" >"$named_dir/UPPER.txt" &&
-	test -d "$rt_root/$named_rt" &&
-	test -f "$rt_root/$named_rt/upper/UPPER.txt" &&
+	test -d "$sessions_root/dev/runtime/m1" &&
+	test -f "$sessions_root/dev/runtime/m1/upper/UPPER.txt" &&
 	"$tiler_bin" session close dev >close1.out 2>close1.err &&
 	grep -Eq "^removed dev$" close1.out &&
-	test ! -e "$rt_root/$named_rt" &&
+	test ! -e "$sessions_root/dev" &&
 	test ! -e "$named_dir/UPPER.txt" &&
 	status=0 &&
 	{ "$tiler_bin" session show dev >show1b.out 2>show1b.err || status=$?; } &&
@@ -146,20 +142,19 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the re
 # record deletion plus a runtime purge.
 test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm: umounting the last view deletes the record and purges the runtime' '
 	mkdir -p "$impl_dir" &&
-	impl_rt="up-$(stat -c "%d-%i" "$impl_dir")" &&
 	"$tiler_bin" mount --rm tmp/auto "$impl_dir" >m2.out 2>m2.err &&
 	grep -Eq "^mounted " m2.out &&
 	echo "scratch" >"$impl_dir/SCRATCH.txt" &&
-	test -d "$rt_root/$impl_rt" &&
-	test -f "$rt_root/$impl_rt/upper/SCRATCH.txt" &&
 	"$tiler_bin" session list >list2.out 2>list2.err &&
 	auto_rm=$(grep -E "^auto-[^ ]+ active mounts=1$" list2.out | head -1 | cut -d" " -f1) &&
 	test -n "$auto_rm" &&
+	test -d "$sessions_root/$auto_rm/runtime/m1" &&
+	test -f "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
 	"$tiler_bin" session show "$auto_rm" >show2.out 2>show2.err &&
 	grep -Eq "^auto-[^ ]+ active rm created=" show2.out &&
 	"$tiler_bin" umount "$impl_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
-	test ! -e "$rt_root/$impl_rt" &&
+	test ! -e "$sessions_root/$auto_rm" &&
 	"$tiler_bin" session list >list2b.out 2>list2b.err &&
 	! grep -q "$auto_rm" list2b.out
 '
@@ -191,11 +186,10 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm refuses a session named by 
 test_expect_success TILER,FUSE_TOOLCHAIN 'a plain session close keeps the record and its runtime upper data' '
 	"$tiler_bin" session new ctrl >new4.out 2>new4.err &&
 	mkdir -p "$ctrl_dir" &&
-	ctrl_rt="up-$(stat -c "%d-%i" "$ctrl_dir")" &&
 	"$tiler_bin" mount --session ctrl tmp/auto "$ctrl_dir" >m4.out 2>m4.err &&
 	grep -Eq "^mounted " m4.out &&
 	echo "keep me" >"$ctrl_dir/KEEP.txt" &&
-	test -f "$rt_root/$ctrl_rt/upper/KEEP.txt" &&
+	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt" &&
 	"$tiler_bin" session show ctrl >show4.out 2>show4.err &&
 	grep -Eq "^ctrl active created=" show4.out &&
 	! grep -Eq "^ctrl active rm" show4.out &&
@@ -203,8 +197,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a plain session close keeps the record
 	grep -Eq "^closed ctrl$" close4.out &&
 	"$tiler_bin" session list >list4.out 2>list4.err &&
 	grep -Eq "^ctrl closed mounts=0$" list4.out &&
-	test -d "$rt_root/$ctrl_rt" &&
-	test -f "$rt_root/$ctrl_rt/upper/KEEP.txt"
+	test -d "$sessions_root/ctrl/runtime/m1" &&
+	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt"
 '
 
 test_done

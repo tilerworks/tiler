@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -24,11 +23,13 @@ var (
 	ErrLockUnavailable = errors.New("session locking requires linux")
 )
 
-// recordExt is the file extension of every record.
-const recordExt = ".json"
+// recordFileName is the file name of the record inside each session
+// directory.
+const recordFileName = "session.json"
 
-// lockExt is the file extension of every advisory lock file.
-const lockExt = ".lock"
+// lockFileName is the file name of the advisory lock inside each
+// session directory.
+const lockFileName = "session.lock"
 
 // Store reads and writes session records under one directory. Dir
 // must point at the configured sessions directory.
@@ -39,34 +40,39 @@ const lockExt = ".lock"
 // by one process at a time. Scan readers take the non-blocking lock
 // and skip a held record instead of waiting.
 type Store struct {
-	// Dir holds the <name>.json records and their <name>.lock files.
+	// Dir is the sessions root; each session owns one subdirectory
+	// <name>/ holding its session.json record, session.lock, and
+	// runtime subtree.
 	Dir string
 }
 
-// recordPath validates the name and joins the record file under the
-// sessions directory.
+// sessionDir validates the name and returns the session's own
+// directory under the sessions root.
+func (s Store) sessionDir(name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", fmt.Errorf("session: %w", err)
+	}
+	return filepath.Join(s.Dir, name), nil
+}
+
+// recordPath validates the name and joins the record file inside the
+// session directory.
 func (s Store) recordPath(name string) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", fmt.Errorf("session: %w", err)
+	dir, err := s.sessionDir(name)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(s.Dir, name+recordExt), nil
+	return filepath.Join(dir, recordFileName), nil
 }
 
-// lockPath validates the name and joins the lock file under the
-// sessions directory, beside the record it protects.
+// lockPath validates the name and joins the lock file inside the
+// session directory, beside the record it protects.
 func (s Store) lockPath(name string) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", fmt.Errorf("session: %w", err)
+	dir, err := s.sessionDir(name)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(s.Dir, lockName(name)), nil
-}
-
-// lockName flattens a session name into its lock file name. Validated
-// names are already single segments; the flattening keeps the helper
-// safe for any name a scan reads back from disk.
-func lockName(name string) string {
-	flat := strings.NewReplacer("/", "_", `\`, "_").Replace(name)
-	return flat + lockExt
+	return filepath.Join(dir, lockFileName), nil
 }
 
 // Load reads and validates one record. A missing file reports
@@ -108,7 +114,7 @@ func (s Store) Save(rec Record) error {
 	if err != nil {
 		return err
 	}
-	if err := s.ensureDir(); err != nil {
+	if err := s.ensureDir(rec.Name); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
@@ -131,6 +137,9 @@ func (s Store) Append(name string, action Action) (Action, error) {
 	}
 	action.Seq = nextSeq(rec.Actions)
 	action.Status = StatusPending
+	if action.Type == TypeMount && action.RuntimeID == "" {
+		action.RuntimeID = runtimeIDOf(action.Seq)
+	}
 	if action.Timestamp.IsZero() {
 		action.Timestamp = time.Now().UTC()
 	}
@@ -201,11 +210,17 @@ func (s Store) List() ([]Record, error) {
 	}
 	var records []Record
 	for _, entry := range entries {
-		name, ok := strings.CutSuffix(entry.Name(), recordExt)
-		if entry.IsDir() || !ok {
+		if !entry.IsDir() {
 			continue
 		}
-		rec, err := s.Load(name)
+		rec, err := s.Load(entry.Name())
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidName) {
+			// A directory that is not a session, either missing its
+			// record or named no session ever owns, is skipped so a
+			// stray directory cannot break a listing. This matches
+			// the scan path, which tolerates the same names.
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -214,9 +229,14 @@ func (s Store) List() ([]Record, error) {
 	return records, nil
 }
 
-// ensureDir creates the sessions directory with owner-only access.
-func (s Store) ensureDir() error {
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+// ensureDir creates the session's own directory with owner-only
+// access, so its record and lock have a home.
+func (s Store) ensureDir(name string) error {
+	dir, err := s.sessionDir(name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
 	return nil

@@ -35,7 +35,7 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	if blockSize <= 0 {
 		blockSize = DefaultBlockSize
 	}
-	stageDir, err := makeStagingDir(req.Config.RuntimeDir)
+	stageDir, err := makeStagingDir(req.Config.CacheDir)
 	if err != nil {
 		return FullResult{}, err
 	}
@@ -93,22 +93,22 @@ func publishBlocks(
 	return FullResult{ID: meta.ID, Path: finalDir, SHA256: meta.SHA256}, nil
 }
 
-// makeStagingDir creates the scratch directory under runtimeDir that
+// makeStagingDir creates the scratch directory under cacheDir that
 // holds the whole packed image before it is split. The packer needs
-// a writable full-size output file, so staging rests on local
-// runtime storage even when the repository caps single-file sizes.
-func makeStagingDir(runtimeDir string) (string, error) {
-	if strings.TrimSpace(runtimeDir) == "" {
-		return "", errors.New("build: runtime_dir is required for blocks builds")
+// a writable full-size output file, so staging rests on local cache
+// storage even when the repository caps single-file sizes.
+func makeStagingDir(cacheDir string) (string, error) {
+	if strings.TrimSpace(cacheDir) == "" {
+		return "", errors.New("build: cache_dir is required for blocks builds")
 	}
-	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
-	dir := filepath.Join(runtimeDir,
+	dir := filepath.Join(cacheDir,
 		fmt.Sprintf("build-%d-%s", os.Getpid(), hex.EncodeToString(buf[:])))
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return "", fmt.Errorf("build: %w", err)

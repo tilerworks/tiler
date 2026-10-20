@@ -21,15 +21,19 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"version: 1",
 		"images_dir: ~/.tiler/images",
-		"runtime_dir: ~/.tiler/runtime",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
 		"log_level: info",
+		"merged root",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("template missing %q\n%s", want, data)
 		}
+	}
+	if strings.Contains(string(data), "runtime_dir") {
+		t.Fatalf("template still mentions runtime_dir:\n%s", data)
 	}
 	info, err := os.Stat(path)
 	if err != nil {

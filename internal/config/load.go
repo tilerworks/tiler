@@ -121,7 +121,7 @@ func commandBase(cli Patch) (string, error) {
 }
 
 func needsWorkingDir(cli Patch) bool {
-	for _, raw := range []*string{cli.ImagesDir, cli.RuntimeDir, cli.SessionsDir, cli.CacheDir} {
+	for _, raw := range []*string{cli.ImagesDir, cli.SessionsDir, cli.CacheDir} {
 		if raw == nil || isHomePath(*raw) || filepath.IsAbs(*raw) {
 			continue
 		}
@@ -180,7 +180,6 @@ func stopWalk(dir, home, fsRoot string, insideHome bool) bool {
 
 func resolvePatch(p Patch, baseDir, home string) Patch {
 	p.ImagesDir = resolvePathPtr(p.ImagesDir, baseDir, home)
-	p.RuntimeDir = resolvePathPtr(p.RuntimeDir, baseDir, home)
 	p.SessionsDir = resolvePathPtr(p.SessionsDir, baseDir, home)
 	p.CacheDir = resolvePathPtr(p.CacheDir, baseDir, home)
 	return p
@@ -222,6 +221,7 @@ const commandLineSource = "command line"
 // valueOrigin records the last layer that set each validated field.
 // A lower invalid value replaced by a higher layer is not an error.
 type valueOrigin struct {
+	version       string
 	logLevel      string
 	keepVersions  string
 	maxAge        string
@@ -232,6 +232,9 @@ type valueOrigin struct {
 }
 
 func (o *valueOrigin) note(p Patch, where string) {
+	if p.Version != nil {
+		o.version = where
+	}
 	if p.LogLevel != nil {
 		o.logLevel = where
 	}
@@ -258,6 +261,8 @@ func (o *valueOrigin) note(p Patch, where string) {
 func (o valueOrigin) wrap(err error) error {
 	where := ""
 	switch {
+	case strings.HasPrefix(err.Error(), "version:"):
+		where = o.version
 	case strings.HasPrefix(err.Error(), "log_level:"):
 		where = o.logLevel
 	case strings.HasPrefix(err.Error(), "keep_versions:"):

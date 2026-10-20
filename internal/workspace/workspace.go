@@ -15,8 +15,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/jiangxin/tiler/internal/config"
 )
 
 // ErrUnavailable means mounting cannot work here: the OS is not
@@ -86,8 +84,11 @@ type Request struct {
 	// FuseOptions is appended to the fuse-overlayfs options after
 	// the built-in ones.
 	FuseOptions string
-	// RuntimeDir is the configured runtime directory. Read-only
-	// points and the upper and work directories live under it.
+	// RuntimeDir is the session-scoped combination directory for
+	// this mount (sessions/<name>/runtime/m<seq>). Read-only transit
+	// points and the upper and work directories live directly under
+	// it. The caller assigns the path; the engine does not derive it
+	// from the mountpoint's device and inode.
 	RuntimeDir string
 	// MergedDir is where the merged view is mounted.
 	MergedDir string
@@ -156,11 +157,12 @@ type member struct {
 // original image path as the FUSE source name so the mount table can
 // identify the image even when the mounted bytes are a cache copy.
 // A read-write view merges the stack with fuse-overlayfs over an
-// upper and a work directory under runtime/up-<dev>-<ino>/; a
-// read-only chain merges lowerdir-only, and a read-only single image
-// mounts straight onto the target with no runtime state. When Subdir
-// is set, every member is pre-checked with unsquashfs first and the
-// members missing the subdirectory are dropped before any mount.
+// upper and a work directory under the caller-supplied combination
+// directory (sessions/<name>/runtime/m<seq>/); a read-only chain
+// merges lowerdir-only, and a read-only single image mounts straight
+// onto the target with no runtime state. When Subdir is set, every
+// member is pre-checked with unsquashfs first and the members missing
+// the subdirectory are dropped before any mount.
 //
 // With Concat set, concatfs mounts the block directory at a
 // runtime transit point first and the base layer mounts the virtual
@@ -280,7 +282,7 @@ func (w *Workspace) tablePhase(
 		return false, nil
 	}
 	if !servingOf(seam, req.MergedDir) {
-		return false, cleanPoint(req.MergedDir, run, seam)
+		return false, cleanDeadEntry(entry, run, seam)
 	}
 	if err := identity(req, members, entry); err != nil {
 		return false, err
@@ -290,6 +292,31 @@ func (w *Workspace) tablePhase(
 		w.runtimeDir = filepath.Dir(entry.Upper)
 	}
 	return true, nil
+}
+
+// cleanDeadEntry tears down a listed-but-dead target and the overlay
+// lowers it still names under its combination directory. A remount
+// into a different session would otherwise leave orphaned squashfuse
+// lowers behind, because the new combination directory is a different
+// path.
+func cleanDeadEntry(entry Entry, run runFunc, seam hooks) error {
+	if err := cleanPoint(entry.Point, run, seam); err != nil {
+		return err
+	}
+	runtime := CombinationRuntime(entry)
+	if runtime == "" {
+		return nil
+	}
+	for i := len(entry.Lowers) - 1; i >= 0; i-- {
+		lower := entry.Lowers[i]
+		if lower == runtime || !underPrefix(lower, runtime) {
+			continue
+		}
+		if err := cleanPoint(lower, run, seam); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // findEntry returns the last table row at the exact point; later
@@ -326,17 +353,16 @@ func identity(req Request, members []member, entry Entry) error {
 }
 
 // overlayIdentity accepts a live overlay whose lowers are exactly
-// the planned transit points under one runtime directory of the
-// configured runtime root, each transit point currently serving
-// the matching stack member's fsname, with an upper for a
-// read-write view and none for a read-only chain. The live view
-// masks the target's own device and inode, so the runtime directory
-// is read from the entry instead of a fresh stat. The image
-// identity check reads every planned transit point back from the
-// same injected table: a missing row, a non-squashfuse row, or a
-// source that differs from the requested member means the merged
-// view was built from a different image and must not be reused
-// silently.
+// the planned transit points under the request's session-scoped
+// combination directory, each transit point currently serving the
+// matching stack member's fsname, with an upper for a read-write
+// view and none for a read-only chain. The live view masks the
+// target's own device and inode, so the runtime directory is read
+// from the entry instead of a fresh stat. The image identity check
+// reads every planned transit point back from the same injected
+// table: a missing row, a non-squashfuse row, or a source that
+// differs from the requested member means the merged view was built
+// from a different image and must not be reused silently.
 func overlayIdentity(req Request, members []member, entry Entry, writable bool) error {
 	runtime := ""
 	switch {
@@ -345,10 +371,15 @@ func overlayIdentity(req Request, members []member, entry Entry, writable bool) 
 	case !writable && entry.Upper == "" && len(entry.Lowers) > 0:
 		runtime = filepath.Dir(entry.Lowers[0])
 	}
-	if runtime == "" || !strings.HasPrefix(filepath.Base(runtime), "up-") ||
-		!underPrefix(runtime, req.RuntimeDir) {
+	if runtime == "" {
 		return conflictErr(req.MergedDir, entry)
 	}
+	// A live view already serving this image is reusable even when
+	// the caller's combination directory differs — for example an
+	// implicit mount that discovers another session's healthy view
+	// and discards its own throwaway record. Image identity below
+	// is what decides reuse; the caller's RuntimeDir is only for a
+	// fresh stack.
 	lowers := plannedLowers(runtime, len(members))
 	if !slices.Equal(entry.Lowers, lowers) {
 		return conflictErr(req.MergedDir, entry)
@@ -397,12 +428,12 @@ func conflictErr(point string, entry Entry) error {
 		point, entry.Source, entry.Upper)
 }
 
-// plan guards the target, then derives the runtime directory of a
-// fresh stack and clears any residue on the planned transit points.
-// The guard runs first so every refusal leaves the system
-// untouched. A read-only single member mounts directly and needs no
-// runtime planning — unless a concat source is set, whose transit
-// point always lives under the runtime directory.
+// plan guards the target, then adopts the caller-supplied
+// combination directory and clears any residue on the planned
+// transit points. The guard runs first so every refusal leaves the
+// system untouched. A read-only single member mounts directly and
+// needs no runtime planning — unless a concat source is set, whose
+// transit point always lives under the runtime directory.
 func (w *Workspace) plan(
 	req Request,
 	members []member,
@@ -415,11 +446,7 @@ func (w *Workspace) plan(
 	if req.ReadOnly && len(members) == 1 && req.Concat == nil {
 		return nil
 	}
-	dev, ino, err := devIno(req.MergedDir)
-	if err != nil {
-		return w.fail(fmt.Errorf("workspace: %w", err))
-	}
-	w.runtimeDir = filepath.Join(req.RuntimeDir, config.RuntimeDirName(dev, ino))
+	w.runtimeDir = filepath.Clean(req.RuntimeDir)
 	if !req.ReadOnly {
 		w.UpperDir = filepath.Join(w.runtimeDir, "upper")
 	}

@@ -14,8 +14,8 @@ import (
 // rawPatch is the YAML shape. Pointers stay nil when the key is absent.
 // A present zero or false is non-nil so it can overlay a lower value.
 type rawPatch struct {
+	Version               *versionValue      `yaml:"version"`
 	ImagesDir             *string            `yaml:"images_dir"`
-	RuntimeDir            *string            `yaml:"runtime_dir"`
 	SessionsDir           *string            `yaml:"sessions_dir"`
 	CacheDir              *string            `yaml:"cache_dir"`
 	KeepVersions          *keepVersionsValue `yaml:"keep_versions"`
@@ -29,6 +29,24 @@ type rawPatch struct {
 	SplitRoute            *string            `yaml:"split_route"`
 	CacheEnabled          *bool              `yaml:"cache_enabled"`
 	LogLevel              *string            `yaml:"log_level"`
+}
+
+// versionValue stores a base-10 integer schema version. A float is
+// rejected instead of truncated, and zero stays present.
+type versionValue struct {
+	n int
+}
+
+func (v *versionValue) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return errors.New("version: invalid integer")
+	}
+	n, err := strconv.ParseInt(value.Value, 10, 0)
+	if err != nil {
+		return fmt.Errorf("version: %w", err)
+	}
+	v.n = int(n)
+	return nil
 }
 
 // keepVersionsValue stores a base-10 integer scalar. A float is rejected
@@ -106,8 +124,8 @@ func (raw rawPatch) patch() (Patch, error) {
 		return Patch{}, err
 	}
 	return Patch{
+		Version:               versionPtr(raw.Version),
 		ImagesDir:             raw.ImagesDir,
-		RuntimeDir:            raw.RuntimeDir,
 		SessionsDir:           raw.SessionsDir,
 		CacheDir:              raw.CacheDir,
 		KeepVersions:          keepVersionsPtr(raw.KeepVersions),
@@ -122,6 +140,14 @@ func (raw rawPatch) patch() (Patch, error) {
 		CacheEnabled:          raw.CacheEnabled,
 		LogLevel:              raw.LogLevel,
 	}, nil
+}
+
+func versionPtr(v *versionValue) *int {
+	if v == nil {
+		return nil
+	}
+	n := v.n
+	return &n
 }
 
 func keepVersionsPtr(v *keepVersionsValue) *int {

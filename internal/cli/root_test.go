@@ -200,8 +200,8 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 		t.Fatalf("user config not created: %v", err)
 	}
 	for _, want := range []string{
+		"version: 1",
 		"images_dir: ~/.tiler/images",
-		"runtime_dir: ~/.tiler/runtime",
 		"sessions_dir: ~/.tiler/sessions",
 		"cache_dir: ~/.tiler/cache",
 	} {
@@ -209,11 +209,15 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 			t.Fatalf("created config missing %q\n%s", want, data)
 		}
 	}
+	if strings.Contains(string(data), "runtime_dir") {
+		t.Fatalf("created config still mentions runtime_dir:\n%s", data)
+	}
 }
 
 func TestRunKeepsExistingUserConfig(t *testing.T) {
 	home, _ := withWorkspace(t)
-	writeProjectConfig(t, home, "log_level: debug\n")
+	// A current-schema file must not be rewritten on later runs.
+	writeProjectConfig(t, home, "version: 1\nlog_level: debug\n")
 	if _, _, _, err := runCmd(t, "version"); err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +225,69 @@ func TestRunKeepsExistingUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "log_level: debug\n" {
+	if string(data) != "version: 1\nlog_level: debug\n" {
 		t.Fatalf("existing user config was rewritten:\n%s", data)
+	}
+}
+
+func TestRunUpgradesLegacyUserConfig(t *testing.T) {
+	home, _ := withWorkspace(t)
+	path := filepath.Join(home, ".tiler.yaml")
+	legacy := "runtime_dir: ~/.tiler/runtime\nlog_level: debug\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := runCmd(t, "version"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "version: 1") {
+		t.Fatalf("legacy config was not upgraded:\n%s", got)
+	}
+	if strings.Contains(got, "runtime_dir") {
+		t.Fatalf("upgraded config still has runtime_dir:\n%s", got)
+	}
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	if string(backup) != legacy {
+		t.Fatalf("backup = %q, want the original bytes", backup)
+	}
+}
+
+func TestRunUpgradeFailurePrefersUpgradeError(t *testing.T) {
+	home, _ := withWorkspace(t)
+	path := filepath.Join(home, ".tiler.yaml")
+	legacy := "runtime_dir: ~/.tiler/runtime\nlog_level: debug\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Read-only home blocks the backup/rewrite temp files, so upgrade
+	// fails while Load would only report an opaque unknown-field error.
+	if err := os.Chmod(home, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o755) })
+
+	_, stderr, _, err := runCmd(t, "version")
+	if ExitCode(err) == 0 {
+		t.Fatal("expected failure when upgrade cannot rewrite a legacy file")
+	}
+	combined := stderr
+	if err != nil {
+		combined += "\n" + err.Error()
+	}
+	if !strings.Contains(strings.ToLower(combined), "upgrade") {
+		t.Fatalf("error = %q, want an upgrade mention", combined)
+	}
+	// Must not surface solely as the strict Decode unknown-field path.
+	if strings.Contains(combined, "field") && !strings.Contains(strings.ToLower(combined), "upgrade") {
+		t.Fatalf("surfaced as unknown field without upgrade: %q", combined)
 	}
 }
 
@@ -235,21 +300,21 @@ func TestCeilingDirBoundsProjectWalk(t *testing.T) {
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeProjectConfig(t, zone, "runtime_dir: marker-runtime\n")
+	writeProjectConfig(t, zone, "cache_dir: marker-cache\n")
 	t.Chdir(deep)
 
 	// Without a ceiling the walk reaches zone and applies the marker.
 	cfg := mustRun(t, "version")
-	if cfg.RuntimeDir != filepath.Join(zone, "marker-runtime") {
-		t.Fatalf("control runtime_dir = %q, want the zone marker", cfg.RuntimeDir)
+	if cfg.CacheDir != filepath.Join(zone, "marker-cache") {
+		t.Fatalf("control cache_dir = %q, want the zone marker", cfg.CacheDir)
 	}
 
 	// With the ceiling at sandbox, zone sits above it and is excluded, so
-	// the default runtime dir stands.
+	// the default cache dir stands.
 	t.Setenv("TILER_CEILING_DIR", sandbox)
 	cfg = mustRun(t, "version")
-	if cfg.RuntimeDir != filepath.Join(home, ".tiler", "runtime") {
-		t.Fatalf("ceiling runtime_dir = %q, want the default", cfg.RuntimeDir)
+	if cfg.CacheDir != filepath.Join(home, ".tiler", "cache") {
+		t.Fatalf("ceiling cache_dir = %q, want the default", cfg.CacheDir)
 	}
 }
 

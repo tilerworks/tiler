@@ -57,7 +57,8 @@ func (e *Engine) resolveNormalizedPath(original, normalized string) (PathSession
 		return PathSession{}, err
 	}
 	health := e.healthFor(table)
-	if e.RuntimeDir != "" && underPrefix(normalized, e.RuntimeDir) {
+	if e.SessionsDir != "" && underPrefix(normalized, e.SessionsDir) &&
+		hasRuntimeSegment(e.SessionsDir, normalized) {
 		return e.sessionForRuntimePath(normalized, table, health)
 	}
 	if view, ok := mountinfo.LongestView(table, normalized); ok {
@@ -203,67 +204,67 @@ func covers(action Action, path string) bool {
 		underPrefix(path, action.Mountpoint)
 }
 
-// sessionForRuntimePath resolves a path inside the runtime tree
-// back to the session owning the combination: the mount table links
-// a view to its runtime directory, and when that entry vanished the
-// recorded mountpoints are matched by their device and inode
-// derived runtime name.
+// sessionForRuntimePath resolves a path inside a session's runtime
+// subtree back to the owning session: the path itself names the
+// session (<SessionsDir>/<name>/runtime/...), the mount table links
+// a live view to its combination directory, and when that entry
+// vanished the recorded RuntimeID confirms the combination.
 func (e *Engine) sessionForRuntimePath(
 	path string,
 	table []mountinfo.Mount,
 	health HealthFunc,
 ) (PathSession, error) {
-	runtimeDir := runtimeSegment(e.RuntimeDir, path)
-	if runtimeDir != "" {
-		for _, mount := range table {
-			if viewRuntimeDir(mount) == runtimeDir {
-				return e.sessionForMountpoint(mount.Point, table, health)
-			}
-		}
-		return e.staleRuntimeSession(runtimeDir, health)
+	name, runtimeDir, ok := sessionRuntimeOf(e.SessionsDir, path)
+	if !ok {
+		return PathSession{}, fmt.Errorf("session: no session covers %s", path)
 	}
-	return PathSession{}, fmt.Errorf("session: no session covers %s", path)
+	for _, mount := range table {
+		if viewRuntimeDir(mount) == runtimeDir {
+			return e.sessionForMountpoint(mount.Point, table, health)
+		}
+	}
+	return e.staleRuntimeSession(name, runtimeDir, health)
 }
 
-// staleRuntimeSession matches a runtime directory against the
-// active records by deriving each recorded mountpoint's runtime
-// name from its device and inode.
-func (e *Engine) staleRuntimeSession(runtimeDir string, health HealthFunc) (PathSession, error) {
-	want := filepath.Base(runtimeDir)
-	var (
-		best  PathSession
-		found bool
-	)
-	err := e.eachRecord(func(rec Record) bool {
-		if rec.State != StateActive {
-			return false
-		}
-		for _, action := range rec.Actions {
-			if action.Type != TypeMount || action.Status == StatusUnmounted {
-				continue
-			}
-			name, ok := runtimeNameOf(action.Mountpoint)
-			if !ok || name != want {
-				continue
-			}
-			best = PathSession{
-				Record:     rec,
-				Mountpoint: action.Mountpoint,
-				Stale:      !health(action.Mountpoint),
-			}
-			found = true
-			return true
-		}
-		return false
-	})
-	if err != nil {
-		return PathSession{}, err
-	}
-	if !found {
+// staleRuntimeSession loads the session named by the runtime path
+// and confirms one of its mount actions owns the combination
+// directory (m<seq>).
+func (e *Engine) staleRuntimeSession(
+	name, runtimeDir string,
+	health HealthFunc,
+) (PathSession, error) {
+	rec, err := e.Load(name)
+	if errors.Is(err, ErrNotFound) {
 		return PathSession{}, fmt.Errorf(
 			"session: no session covers the runtime directory %s", runtimeDir)
 	}
-	return best, nil
+	if err != nil {
+		return PathSession{}, err
+	}
+	if rec.State != StateActive {
+		return PathSession{}, fmt.Errorf(
+			"session: no session covers the runtime directory %s", runtimeDir)
+	}
+	want := filepath.Base(runtimeDir)
+	for _, action := range rec.Actions {
+		if action.Type != TypeMount || action.Status == StatusUnmounted {
+			continue
+		}
+		id := action.RuntimeID
+		if id == "" && action.Seq > 0 {
+			id = runtimeIDOf(action.Seq)
+		}
+		if id == "" || id != want {
+			continue
+		}
+		return PathSession{
+			Record:     rec,
+			Mountpoint: action.Mountpoint,
+			Stale:      action.Mountpoint != "" && !health(action.Mountpoint),
+		}, nil
+	}
+	return PathSession{}, fmt.Errorf(
+		"session: no session covers the runtime directory %s", runtimeDir)
 }
 
 // viewRuntimeDir is the runtime directory a table entry's mount
@@ -280,19 +281,32 @@ func viewRuntimeDir(mount mountinfo.Mount) string {
 	return ""
 }
 
-// runtimeSegment is the <runtime_dir>/up-<dev>-<ino> directory a
-// path inside the runtime tree belongs to, empty for the runtime
-// root itself or a path that climbs out of it.
-func runtimeSegment(runtimeRoot, path string) string {
-	rel, err := filepath.Rel(runtimeRoot, path)
+// hasRuntimeSegment reports whether path falls under a
+// <SessionsDir>/<name>/runtime/... combination.
+func hasRuntimeSegment(sessionsRoot, path string) bool {
+	_, _, ok := sessionRuntimeOf(sessionsRoot, path)
+	return ok
+}
+
+// sessionRuntimeOf parses <SessionsDir>/<name>/runtime/<id>/... into
+// the session name and the combination directory. Empty results mean
+// the path is not a session-scoped runtime combination.
+func sessionRuntimeOf(sessionsRoot, path string) (name, runtimeDir string, ok bool) {
+	rel, err := filepath.Rel(sessionsRoot, path)
 	if err != nil {
-		return ""
+		return "", "", false
 	}
 	segments := strings.Split(rel, string(filepath.Separator))
-	if len(segments) < 1 || segments[0] == "." || segments[0] == ".." {
-		return ""
+	// <name>/runtime/<id> — at least three segments.
+	if len(segments) < 3 || segments[0] == "." || segments[0] == ".." {
+		return "", "", false
 	}
-	return filepath.Join(runtimeRoot, segments[0])
+	if segments[1] != "runtime" || segments[2] == "." || segments[2] == ".." {
+		return "", "", false
+	}
+	name = segments[0]
+	runtimeDir = filepath.Join(sessionsRoot, name, "runtime", segments[2])
+	return name, runtimeDir, true
 }
 
 // recordForMountpoint scans the active records for one exact
@@ -388,7 +402,8 @@ func underPrefix(path, prefix string) bool {
 }
 
 // names lists the recorded session names in the store directory,
-// ordered by file name. A missing directory lists nothing.
+// ordered by directory name. Each session owns one subdirectory; a
+// missing sessions root lists nothing.
 func (s Store) names() ([]string, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
@@ -399,11 +414,10 @@ func (s Store) names() ([]string, error) {
 	}
 	var names []string
 	for _, entry := range entries {
-		name, ok := strings.CutSuffix(entry.Name(), recordExt)
-		if entry.IsDir() || !ok {
+		if !entry.IsDir() {
 			continue
 		}
-		names = append(names, name)
+		names = append(names, entry.Name())
 	}
 	return names, nil
 }

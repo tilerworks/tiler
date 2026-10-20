@@ -66,7 +66,7 @@ func (s Store) openLock(name string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureDir(); err != nil {
+	if err := s.ensureDir(name); err != nil {
 		return nil, err
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)

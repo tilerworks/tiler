@@ -23,6 +23,7 @@ func sampleAction(seq int) Action {
 		Mountpoint: "/tmp/view",
 		Mode:       ModeRW,
 		Subdir:     "src",
+		RuntimeID:  runtimeIDOf(seq),
 		Status:     StatusMounted,
 		Timestamp:  time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC),
 	}
@@ -84,7 +85,7 @@ func TestRecordJSONContractKeys(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "dev.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "dev", "session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,8 @@ func TestRecordJSONContractKeys(t *testing.T) {
 	}
 	for _, key := range []string{
 		"seq", "type", "image", "owner", "repo", "full_id",
-		"mountpoint", "mode", "subdir", "status", "timestamp",
+		"mountpoint", "mode", "subdir", "runtime_id", "status",
+		"timestamp",
 	} {
 		if _, ok := action[key]; !ok {
 			t.Errorf("action key %q missing", key)
@@ -136,7 +138,7 @@ func TestRecordRemoveOnCloseJSON(t *testing.T) {
 	if !loaded.RemoveOnClose {
 		t.Fatalf("--rm marker did not round-trip: %+v", loaded)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "rm.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "rm", "session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +158,7 @@ func TestRecordRemoveOnCloseJSON(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	data, err = os.ReadFile(filepath.Join(dir, "plain.json"))
+	data, err = os.ReadFile(filepath.Join(dir, "plain", "session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
