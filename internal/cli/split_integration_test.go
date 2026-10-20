@@ -247,7 +247,7 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 	}
 
 	// A fresh mount reassembles full + incr and shows incr bytes.
-	mountOK(t, lib, "mounted "+view2+"\n",
+	mountCreatedOK(t, lib, "mounted "+view2+"\n",
 		"mount", "--read-only", "alice/data", view2)
 	assertBytesFile(t, filepath.Join(view2, "incr-only.txt"), "from-incr\n")
 	assertBytesFile(t, filepath.Join(view2, "docs", "guide.md"), "# guide\n")
@@ -446,7 +446,8 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+view+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	for _, want := range []string{

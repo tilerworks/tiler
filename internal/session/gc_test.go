@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,23 +60,30 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	assertRecordState(t, e, "fresh", StateClosed)
 }
 
-func TestCleanupRemovesImplicitRecordClosedByLastUmount(t *testing.T) {
+func TestCleanupSeesRemovableAlreadyPurgedByLastUmount(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	e.Health = func(string) bool { return false }
-	const auto = "auto-20261017T031500Z-01020304"
-	seedMounted(t, e, auto, "/ws/one")
-	if _, err := e.CloseImplicitFor("/ws/one", func(string) error { return nil }); err != nil {
+	const name = "happy-fox"
+	seedRemovableMounted(t, e, name, "/ws/one")
+	closed, err := e.CloseRemovableFor("/ws/one", func(string) error { return nil })
+	if err != nil {
 		t.Fatal(err)
 	}
-	// The auto-closed record enters the same age-based removal
-	// scope as any other closed record.
+	if closed != name {
+		t.Fatalf("closed %q, want %q", closed, name)
+	}
+	// --rm last-view close purges immediately, so age-based Cleanup
+	// has nothing left to remove.
+	if _, err := e.Load(name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load after --rm close = %v, want ErrNotFound", err)
+	}
 	events, err := e.Cleanup(720*time.Hour, false, testNow.Add(721*time.Hour), func(string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Session != auto || events[0].Action != CleanupRemoved {
-		t.Fatalf("events = %+v", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want none", events)
 	}
 }
 

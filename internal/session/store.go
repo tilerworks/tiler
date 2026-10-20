@@ -13,6 +13,8 @@ import (
 var (
 	// ErrNotFound means no record exists under the given name.
 	ErrNotFound = errors.New("session not found")
+	// ErrExists means a session name is already recorded.
+	ErrExists = errors.New("already exists")
 	// ErrLockHeld means another process holds the record lock; scan
 	// callers skip this round instead of blocking.
 	ErrLockHeld = errors.New("session record is locked")

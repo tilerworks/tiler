@@ -199,7 +199,8 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	// Blocks mounts materialize through reassembly.
@@ -266,7 +267,8 @@ func TestMountBlocksChainReassemblesAndStacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if f.assembleN != 2 {
@@ -374,7 +376,8 @@ func TestMountMembersForestWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if len(f.forestReqs) != 1 {
@@ -425,7 +428,8 @@ func TestMountMembersForestWiring(t *testing.T) {
 		t.Errorf("action = %+v", action)
 	}
 
-	// A reused forest prints the reuse verb.
+	// A reused forest prints the reuse verb without announcing a
+	// discarded generated session.
 	f.forestReused = true
 	stdout, stderr, _, err = runCmd(t,
 		append(lib, "mount", "--read-only", "alice/forest", dir)...)
@@ -433,7 +437,7 @@ func TestMountMembersForestWiring(t *testing.T) {
 		t.Fatalf("remount: %v\n%s", err, stderr)
 	}
 	if stdout != "already mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q, want the reuse verb", stdout)
+		t.Fatalf("stdout = %q, want already mounted without a create line", stdout)
 	}
 }
 
@@ -498,7 +502,8 @@ func TestMountBlocksSubdirUsesReassemble(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reassemble subdir mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if len(f.mountReqs) != 1 || f.mountReqs[0].Subdir != "src" {

@@ -53,7 +53,25 @@ func mountAction(point string) Action {
 // mounted, through the real write-ahead path.
 func seedMounted(t *testing.T, e *Engine, name string, points ...string) {
 	t.Helper()
-	if err := e.New(name); err != nil {
+	seedMountedMarked(t, e, name, false, points...)
+}
+
+// seedRemovableMounted creates one active --rm record whose actions
+// are all mounted.
+func seedRemovableMounted(t *testing.T, e *Engine, name string, points ...string) {
+	t.Helper()
+	seedMountedMarked(t, e, name, true, points...)
+}
+
+func seedMountedMarked(t *testing.T, e *Engine, name string, removable bool, points ...string) {
+	t.Helper()
+	var err error
+	if removable {
+		err = e.NewRemovable(name)
+	} else {
+		err = e.New(name)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	mount := func(a Action) (Result, error) {
@@ -83,19 +101,19 @@ func TestNewCreatesActiveRecordAndRejectsDuplicates(t *testing.T) {
 		t.Errorf("CreatedAt = %v, want the injected clock", rec.CreatedAt)
 	}
 	err = e.New("dev")
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
+	if err == nil || !errors.Is(err, ErrExists) {
 		t.Fatalf("duplicate New error = %v", err)
 	}
-	// Implicit auto-* sessions join the duplicate check.
-	auto, err := ImplicitName(testNow)
+	// Generated adjective-animal names join the duplicate check.
+	generated, err := GenerateName()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.New(auto); err != nil {
+	if err := e.New(generated); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.New(auto); err == nil {
-		t.Fatal("duplicate implicit New accepted")
+	if err := e.New(generated); err == nil {
+		t.Fatal("duplicate generated New accepted")
 	}
 }
 
@@ -672,182 +690,202 @@ func TestCloseRemovableDeletesRecordDespitePurgeError(t *testing.T) {
 	}
 }
 
-func TestDiscardDeletesImplicitRecordWithoutLiveAction(t *testing.T) {
+func TestDiscardDeletesRecordWithoutLiveAction(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	e.Health = func(string) bool { return false }
-	const auto = "auto-20261017T031500Z-01020304"
-	if err := e.New(auto); err != nil {
+	const name = "happy-fox"
+	if err := e.New(name); err != nil {
 		t.Fatal(err)
 	}
 	// One failed action: the mount never came up.
-	if _, err := e.Append(auto, mountAction("/ws/one")); err != nil {
+	if _, err := e.Append(name, mountAction("/ws/one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Writeback(auto, 1, StatusFailed, ""); err != nil {
+	if err := e.Writeback(name, 1, StatusFailed, ""); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := e.Discard(auto, false)
+	deleted, err := e.Discard(name, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !deleted {
 		t.Fatal("Discard kept a record with only a failed action")
 	}
-	if _, err := e.Load(auto); !errors.Is(err, ErrNotFound) {
+	if _, err := e.Load(name); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Load error = %v, want ErrNotFound", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, auto)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 		t.Errorf("session dir stat error = %v, want not-exist", err)
 	}
 }
 
-func TestDiscardKeepsServingRecordsAndExplicitSessions(t *testing.T) {
+func TestDiscardKeepsServingRecords(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
-	const auto = "auto-20261017T031500Z-01020304"
+	const name = "happy-fox"
 
 	// A mounted action that was not an adoption describes a view the
 	// session serves, so the record stays even when the view died:
 	// it is the recovery source for a later open.
-	seedMounted(t, e, auto, "/ws/one")
-	deleted, err := e.Discard(auto, false)
+	seedMounted(t, e, name, "/ws/one")
+	deleted, err := e.Discard(name, false)
 	if err != nil || deleted {
 		t.Fatalf("Discard = %v, %v, want false, nil", deleted, err)
 	}
-	assertRecordState(t, e, auto, StateActive)
+	assertRecordState(t, e, name, StateActive)
 
 	// The same record becomes discardable when the mount merely
 	// adopted a view another session already serves.
-	deleted, err = e.Discard(auto, true)
+	deleted, err = e.Discard(name, true)
 	if err != nil || !deleted {
 		t.Fatalf("Discard = %v, %v, want true, nil", deleted, err)
 	}
-	if _, err := e.Load(auto); !errors.Is(err, ErrNotFound) {
+	if _, err := e.Load(name); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Load error = %v, want ErrNotFound", err)
 	}
 
-	// An explicit name is never discardable.
+	// A named empty/reused record is discardable regardless of name
+	// shape: Discard no longer gates on an auto-* prefix.
 	seedMounted(t, e, "dev", "/ws/two")
-	if _, err := e.Discard("dev", true); err == nil {
-		t.Fatal("Discard accepted an explicit name")
+	deleted, err = e.Discard("dev", true)
+	if err != nil || !deleted {
+		t.Fatalf("Discard named reused = %v, %v, want true, nil", deleted, err)
 	}
-	assertRecordState(t, e, "dev", StateActive)
+	if _, err := e.Load("dev"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load error = %v, want ErrNotFound", err)
+	}
 }
 
 func TestDiscardMissingRecordIsNoop(t *testing.T) {
 	e := newEngine(t.TempDir())
 	e.Health = func(string) bool { return false }
-	deleted, err := e.Discard("auto-20261017T031500Z-01020304", false)
+	deleted, err := e.Discard("happy-fox", false)
 	if err != nil || deleted {
 		t.Fatalf("Discard = %v, %v, want false, nil", deleted, err)
 	}
 }
 
-func TestCloseImplicitForClosesRecordWithoutLiveViews(t *testing.T) {
+func TestReleaseMountMarksActionUnmountedWithoutClosing(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
 	e.Health = func(string) bool { return false }
-	const auto = "auto-20261017T031500Z-01020304"
-	seedMounted(t, e, auto, "/ws/one")
+	const name = "happy-fox"
+	seedMounted(t, e, name, "/ws/one")
+	if err := e.ReleaseMount("/ws/one"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateActive {
+		t.Fatalf("state = %s, want active", rec.State)
+	}
+	if rec.Actions[0].Status != StatusUnmounted {
+		t.Fatalf("action = %+v, want unmounted", rec.Actions[0])
+	}
+}
+
+func TestCloseRemovableForDeletesIdleRemovable(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	e.Health = func(string) bool { return false }
+	const name = "happy-fox"
+	seedRemovableMounted(t, e, name, "/ws/one")
 	var torn []string
-	name, err := e.CloseImplicitFor("/ws/one", func(point string) error {
+	closed, err := e.CloseRemovableFor("/ws/one", func(point string) error {
 		torn = append(torn, point)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != auto {
-		t.Fatalf("closed %q, want %q", name, auto)
+	if closed != name {
+		t.Fatalf("closed %q, want %q", closed, name)
 	}
 	if len(torn) != 1 || torn[0] != "/ws/one" {
 		t.Errorf("umount calls = %v", torn)
 	}
-	rec, err := e.Load(auto)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.State != StateClosed || rec.ClosedAt.IsZero() {
-		t.Fatalf("record = %+v", rec)
-	}
-	if rec.Actions[0].Status != StatusUnmounted {
-		t.Errorf("action = %+v", rec.Actions[0])
+	if _, err := e.Load(name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load after --rm close = %v, want ErrNotFound", err)
 	}
 }
 
-func TestCloseImplicitForKeepsLiveViewsAndExplicitSessions(t *testing.T) {
+func TestCloseRemovableForKeepsNonRemovableAndLiveViews(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
-	const auto = "auto-20261017T031500Z-01020304"
+	const removable = "happy-fox"
 	e.Health = func(point string) bool { return point == "/ws/two" }
-	seedMounted(t, e, auto, "/ws/one", "/ws/two")
+	seedRemovableMounted(t, e, removable, "/ws/one", "/ws/two")
 	seedMounted(t, e, "dev", "/ws/three")
+	seedMounted(t, e, "plain", "/ws/four")
 	never := func(string) error { return errors.New("teardown attempted") }
 
-	// The implicit record still serves /ws/two, so the umount of
+	// The --rm record still serves /ws/two, so the umount of
 	// /ws/one is not its last view.
-	name, err := e.CloseImplicitFor("/ws/one", never)
+	name, err := e.CloseRemovableFor("/ws/one", never)
 	if err != nil || name != "" {
-		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+		t.Fatalf("CloseRemovableFor = %q, %v", name, err)
 	}
-	assertRecordState(t, e, auto, StateActive)
+	assertRecordState(t, e, removable, StateActive)
 
-	// A dead explicit session never auto-closes, and a point no
+	// A dead non--rm session never auto-closes, and a point no
 	// record covers is a no-op.
 	e.Health = func(string) bool { return false }
-	for _, miss := range []string{"/ws/three", "/ws/absent"} {
-		name, err = e.CloseImplicitFor(miss, never)
+	for _, miss := range []string{"/ws/three", "/ws/four", "/ws/absent"} {
+		name, err = e.CloseRemovableFor(miss, never)
 		if err != nil || name != "" {
-			t.Fatalf("CloseImplicitFor(%s) = %q, %v", miss, name, err)
+			t.Fatalf("CloseRemovableFor(%s) = %q, %v", miss, name, err)
 		}
 	}
 	assertRecordState(t, e, "dev", StateActive)
-	assertRecordState(t, e, auto, StateActive)
+	assertRecordState(t, e, "plain", StateActive)
+	assertRecordState(t, e, removable, StateActive)
 }
 
-func TestCloseImplicitForRechecksHealthUnderLock(t *testing.T) {
+func TestCloseRemovableForRechecksHealthUnderLock(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
-	const auto = "auto-20261017T031500Z-01020304"
-	seedMounted(t, e, auto, "/ws/one")
+	const name = "happy-fox"
+	seedRemovableMounted(t, e, name, "/ws/one")
 	// The scan sees a dead view; a concurrent mount revives it
 	// before the mutating lock re-checks the rule.
 	calls := 0
 	e.Health = func(string) bool { calls++; return calls > 1 }
-	name, err := e.CloseImplicitFor("/ws/one", func(string) error {
+	closed, err := e.CloseRemovableFor("/ws/one", func(string) error {
 		return errors.New("teardown attempted")
 	})
-	if err != nil || name != "" {
-		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+	if err != nil || closed != "" {
+		t.Fatalf("CloseRemovableFor = %q, %v", closed, err)
 	}
 	if calls < 2 {
 		t.Errorf("health calls = %d, want the under-lock re-check", calls)
 	}
-	assertRecordState(t, e, auto, StateActive)
+	assertRecordState(t, e, name, StateActive)
 }
 
-func TestCloseImplicitForSkipsBusyRecords(t *testing.T) {
+func TestCloseRemovableForSkipsBusyRecords(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("advisory locking needs linux")
 	}
 	dir := t.TempDir()
 	e := newEngine(dir)
 	e.Health = func(string) bool { return false }
-	const auto = "auto-20261017T031500Z-01020304"
-	seedMounted(t, e, auto, "/ws/one")
-	release, err := e.lockSession(auto, time.Second)
+	const name = "happy-fox"
+	seedRemovableMounted(t, e, name, "/ws/one")
+	release, err := e.lockSession(name, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	name, err := e.CloseImplicitFor("/ws/one", func(string) error {
+	closed, err := e.CloseRemovableFor("/ws/one", func(string) error {
 		return errors.New("teardown attempted")
 	})
-	if err != nil || name != "" {
-		t.Fatalf("CloseImplicitFor = %q, %v", name, err)
+	if err != nil || closed != "" {
+		t.Fatalf("CloseRemovableFor = %q, %v", closed, err)
 	}
-	assertRecordState(t, e, auto, StateActive)
+	assertRecordState(t, e, name, StateActive)
 }
 
 func TestRemoveRejectsActiveAndDeletesClosed(t *testing.T) {

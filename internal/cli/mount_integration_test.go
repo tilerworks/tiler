@@ -108,6 +108,17 @@ func mountCmd(t *testing.T, lib []string, args ...string) string {
 	return mustCmd(t, append(full, args...)...)
 }
 
+// requireCreatedMount checks mount stdout for the create line plus
+// wantMountLine (for example "mounted /path\n").
+func requireCreatedMount(t *testing.T, out, wantMountLine string) {
+	t.Helper()
+	name, rest, ok := parseNewSessionCreated(out)
+	if !ok || !generatedSessionName.MatchString(name) || rest != wantMountLine {
+		t.Fatalf("mount output = %q, want new session created: <name>\\n%s",
+			out, wantMountLine)
+	}
+}
+
 func umountCmd(t *testing.T, lib []string, dir string) string {
 	t.Helper()
 	full := append(append([]string{}, lib...), "umount")
@@ -395,9 +406,8 @@ func TestMountReadOnlyCloneFromBareImage(t *testing.T) {
 
 	view := filepath.Join(work, "view")
 	deferForceUmount(t, sessionsRoot, view)
-	if out := mountCmd(t, lib, "--read-only", "alice/app", view); out != "mounted "+view+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "--read-only", "alice/app", view),
+		"mounted "+view+"\n")
 
 	clone := filepath.Join(work, "clone")
 	runGit(t, work, "clone", view, clone)
@@ -441,9 +451,7 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 
 	view := filepath.Join(work, "view")
 	deferForceUmount(t, sessionsRoot, view)
-	if out := mountCmd(t, lib, "alice/app", view); out != "mounted "+view+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "alice/app", view), "mounted "+view+"\n")
 	entry, ok := entryAt(realTable(t), view)
 	if !ok || entry.Upper == "" {
 		t.Fatalf("no writable overlay entry at %s: %+v", view, entry)
@@ -457,9 +465,10 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 		t.Errorf("lower image digest changed: %s -> %s", before, after)
 	}
 
-	// A repeated mount is an idempotent reuse of the same view.
+	// A repeated mount is an idempotent reuse of the same view and
+	// does not announce a discarded generated session.
 	if out := mountCmd(t, lib, "alice/app", view); out != "already mounted "+view+"\n" {
-		t.Fatalf("reuse output = %q", out)
+		t.Fatalf("remount output = %q, want already mounted without a create line", out)
 	}
 	assertBytesFile(t, filepath.Join(view, "extra.txt"), "extra\n")
 
@@ -470,11 +479,9 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 		t.Fatalf("an idempotent umount printed %q", out)
 	}
 
-	// A remount into a fresh implicit session gets an empty upper:
+	// A remount into a fresh generated session gets an empty upper:
 	// writable layers are session-scoped, not mountpoint-scoped.
-	if out := mountCmd(t, lib, "alice/app", view); out != "mounted "+view+"\n" {
-		t.Fatalf("remount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "alice/app", view), "mounted "+view+"\n")
 	if _, err := os.Stat(filepath.Join(view, "extra.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fresh session upper leaked prior writes: %v", err)
 	}
@@ -514,9 +521,8 @@ func TestMountCascadingChain(t *testing.T) {
 	umountCmd(t, lib, view2)
 
 	// The read-only cascade merges the full image plus both layers.
-	if out := mountCmd(t, lib, "--read-only", "alice/app", view3); out != "mounted "+view3+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "--read-only", "alice/app", view3),
+		"mounted "+view3+"\n")
 	assertBytesFile(t, filepath.Join(view3, "new.txt"), "new\n")
 	assertBytesFile(t, filepath.Join(view3, "second.txt"), "second\n")
 	assertBytesFile(t, filepath.Join(view3, "keep.txt"), "changed\n")
@@ -562,9 +568,9 @@ func TestMountSubdirRouting(t *testing.T) {
 	rwView := filepath.Join(work, "rw")
 	deferForceUmount(t, sessionsRoot, view, viewA, viewB, rwView)
 
-	if out := mountCmd(t, lib, "--read-only", "--subdir", "sub", "alice/app", view); out != "mounted "+view+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t,
+		mountCmd(t, lib, "--read-only", "--subdir", "sub", "alice/app", view),
+		"mounted "+view+"\n")
 	assertBytesFile(t, filepath.Join(view, "inner.txt"), "inner\n")
 	assertBytesFile(t, filepath.Join(view, "deep", "x.txt"), "x\n")
 	if _, err := os.Stat(filepath.Join(view, "top.txt")); err == nil {
@@ -648,10 +654,9 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 	plain := filepath.Join(work, "plain-view")
 	deferForceUmount(t, sessionsRoot, cached, plain)
 
-	out := mountCmd(t, lib, "--cache", "--cache-dir", cacheDir, "alice/app", cached)
-	if out != "mounted "+cached+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t,
+		mountCmd(t, lib, "--cache", "--cache-dir", cacheDir, "alice/app", cached),
+		"mounted "+cached+"\n")
 	cachedCopy := filepath.Join(cacheDir, digest+".sqsh")
 	if _, err := os.Stat(cachedCopy); err != nil {
 		t.Fatalf("the digest-named cache copy is missing: %v", err)
@@ -674,9 +679,7 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := mountCmd(t, lib, "alice/app", plain); out != "mounted "+plain+"\n" {
-		t.Fatalf("mount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "alice/app", plain), "mounted "+plain+"\n")
 	entriesAfter, err := os.ReadDir(cacheDir)
 	if err != nil {
 		t.Fatal(err)
@@ -728,9 +731,7 @@ func TestMountStaleTeardownAndRemount(t *testing.T) {
 	// vanishes; remounting over it must clean up and succeed.
 	killDaemon(t, findDaemon(t, "fuse-overlayfs", view))
 	waitOverlayDead(t, view)
-	if out := mountCmd(t, lib, "alice/app", view); out != "mounted "+view+"\n" {
-		t.Fatalf("remount output = %q", out)
-	}
+	requireCreatedMount(t, mountCmd(t, lib, "alice/app", view), "mounted "+view+"\n")
 	assertBytesFile(t, filepath.Join(view, "top.txt"), "top\n")
 	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
 		t.Fatalf("final umount output = %q", out)

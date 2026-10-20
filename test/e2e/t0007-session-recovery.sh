@@ -25,7 +25,7 @@
 #
 # Scope guard: this case asserts crash recovery of one named session
 # over the default single-file storage only. It does not cover the named
-# lifecycle's error branches (t0006), implicit auto-* sessions (t0008),
+# lifecycle's error branches (t0006), generated sessions (t0008),
 # git-backed images, split storage, or multi-view sessions.
 
 test_description='tiler session open recovers a view after a daemon crash'

@@ -185,7 +185,8 @@ func TestMountLibraryImagePrintsMounted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+view+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if len(f.mountReqs) != 1 {
@@ -201,11 +202,10 @@ func TestMountLibraryImagePrintsMounted(t *testing.T) {
 	if req.MergedDir != view {
 		t.Errorf("merged = %s, want %s", req.MergedDir, view)
 	}
-	// Implicit auto-* session name varies; require sessions/<auto>/runtime/m1.
-	if !strings.HasSuffix(req.RuntimeDir, filepath.Join("runtime", "m1")) ||
-		!strings.HasPrefix(req.RuntimeDir, sessionsDir(home)+string(filepath.Separator)) {
-		t.Errorf("runtime = %s, want under %s/.../runtime/m1",
-			req.RuntimeDir, sessionsDir(home))
+	// Generated session name varies; require sessions/<name>/runtime/m1.
+	wantRuntime := filepath.Join(sessionsDir(home), name, "runtime", "m1")
+	if req.RuntimeDir != wantRuntime {
+		t.Errorf("runtime = %s, want %s", req.RuntimeDir, wantRuntime)
 	}
 	if req.Run == nil {
 		t.Fatal("the tool runner seam is not wired")
@@ -254,7 +254,8 @@ func TestMountFilePathImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+view+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	req := f.mountReqs[0]
@@ -279,7 +280,7 @@ func TestMountReusePrintsAlreadyMounted(t *testing.T) {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
 	if stdout != "already mounted "+view+"\n" {
-		t.Fatalf("stdout = %q", stdout)
+		t.Fatalf("stdout = %q, want already mounted without a create line", stdout)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
@@ -315,6 +316,9 @@ func TestMountDifferentImageConflictsAndExitsNonZero(t *testing.T) {
 	}
 	if strings.Contains(stdout, "already mounted") {
 		t.Errorf("a conflict printed the reuse verb: %q", stdout)
+	}
+	if strings.Contains(stdout, "new session created:") {
+		t.Errorf("a conflict announced a discarded session: %q", stdout)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Errorf("engine calls = %d, want 1", len(f.mountReqs))

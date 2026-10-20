@@ -3,14 +3,14 @@
 # tiler end-to-end test: remounting a different image at the same
 # workdir creates a second implicit session with an isolated upper.
 #
-# Companion to t0008-session-implicit.sh (plain auto-* lifecycle) and
+# Companion to t0008-session-implicit.sh (plain generated sessions) and
 # t0003-image-mount.sh (same-view conflict while still mounted). This
 # case drives the session-scoped runtime layout:
 #
 #   1. mount alice/one at $HOME/work/view, write marker.txt into the
-#      upper, and record the first auto-* session name,
+#      upper, and record the first generated session name,
 #   2. umount closes that implicit session,
-#   3. mount alice/two at the same workdir creates a second auto-*
+#   3. mount alice/two at the same workdir creates a second generated
 #      session whose upper does not contain marker.txt,
 #   4. both sessions keep independent sessions/<name>/runtime/m1/
 #      combination directories.
@@ -85,8 +85,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount image one, write a marker, then 
 	grep -q one "$workdir/who.txt" &&
 	echo one >"$workdir/marker.txt" &&
 	test -f "$workdir/marker.txt" &&
-	"$tiler_bin" session list >list1.out 2>list1.err &&
-	auto1=$(grep -E "^auto-[^ ]+ " list1.out | head -1 | cut -d" " -f1) &&
+	auto1=$(sed -n "s/^new session created: //p" m1.out) &&
 	test -n "$auto1" &&
 	test -d "$sessions_root/$auto1/runtime/m1" &&
 	"$tiler_bin" umount "$workdir" >u1.out 2>u1.err &&
@@ -101,11 +100,12 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount image two at the same workdir wi
 	grep -Eq "^mounted " m2.out &&
 	grep -q two "$workdir/who.txt" &&
 	test ! -e "$workdir/marker.txt" &&
-	"$tiler_bin" session list >list2.out 2>list2.err &&
-	auto2=$(grep -E "^auto-[^ ]+ active " list2.out | head -1 | cut -d" " -f1) &&
+	auto2=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto2" &&
 	test "$auto1" != "$auto2" &&
-	grep -E "^auto-[^ ]+ " list2.out | wc -l | grep -Eq "^[2-9]" &&
+	"$tiler_bin" session list >list2.out 2>list2.err &&
+	grep -q "^$auto1 " list2.out &&
+	grep -q "^$auto2 " list2.out &&
 	test -d "$sessions_root/$auto1/runtime/m1" &&
 	test -d "$sessions_root/$auto2/runtime/m1" &&
 	test "$sessions_root/$auto1/runtime/m1" != "$sessions_root/$auto2/runtime/m1" &&

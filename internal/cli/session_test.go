@@ -17,6 +17,17 @@ import (
 // authoritative store, with the given actions renumbered in order.
 func writeSessionRecord(t *testing.T, dir, name string, actions ...session.Action) {
 	t.Helper()
+	writeSessionRecordMarked(t, dir, name, false, actions...)
+}
+
+// writeRemovableSessionRecord seeds one active --rm session record.
+func writeRemovableSessionRecord(t *testing.T, dir, name string, actions ...session.Action) {
+	t.Helper()
+	writeSessionRecordMarked(t, dir, name, true, actions...)
+}
+
+func writeSessionRecordMarked(t *testing.T, dir, name string, removable bool, actions ...session.Action) {
+	t.Helper()
 	now := time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
 	for i := range actions {
 		actions[i].Seq = i + 1
@@ -29,10 +40,11 @@ func writeSessionRecord(t *testing.T, dir, name string, actions ...session.Actio
 	}
 	store := session.Store{Dir: dir}
 	rec := session.Record{
-		Name:      name,
-		State:     session.StateActive,
-		Actions:   actions,
-		CreatedAt: now,
+		Name:          name,
+		State:         session.StateActive,
+		Actions:       actions,
+		CreatedAt:     now,
+		RemoveOnClose: removable,
 	}
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
@@ -122,6 +134,46 @@ func mustClose(t *testing.T, lib []string, name string) (string, string, error) 
 	return stdout, stderr, err
 }
 
+func TestSessionNewGeneratesName(t *testing.T) {
+	home, _ := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "new")...)
+	if err != nil {
+		t.Fatalf("session new: %v\n%s", err, stderr)
+	}
+	name, ok := strings.CutPrefix(stdout, "created ")
+	if !ok || !strings.HasSuffix(name, "\n") {
+		t.Fatalf("new stdout = %q, want created <name>", stdout)
+	}
+	name = strings.TrimSuffix(name, "\n")
+	if !generatedSessionName.MatchString(name) {
+		t.Fatalf("generated name %q has unexpected shape", name)
+	}
+	rec := loadSessionRecord(t, sessionsDir(home), name)
+	if rec.Name != name || rec.State != session.StateActive || rec.RemoveOnClose {
+		t.Fatalf("record = %+v", rec)
+	}
+
+	// --rm without a name also generates and marks the record.
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "new", "--rm")...)
+	if err != nil {
+		t.Fatalf("session new --rm: %v\n%s", err, stderr)
+	}
+	rmName, ok := strings.CutPrefix(stdout, "created ")
+	if !ok || !strings.HasSuffix(rmName, "\n") {
+		t.Fatalf("--rm stdout = %q", stdout)
+	}
+	rmName = strings.TrimSuffix(rmName, "\n")
+	if !generatedSessionName.MatchString(rmName) || rmName == name {
+		t.Fatalf("generated --rm name %q (earlier %q)", rmName, name)
+	}
+	if rec := loadSessionRecord(t, sessionsDir(home), rmName); !rec.RemoveOnClose {
+		t.Fatalf("generated --rm record not marked: %+v", rec)
+	}
+}
+
 func TestSessionUsageErrors(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
@@ -130,7 +182,6 @@ func TestSessionUsageErrors(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "new without a name", args: []string{"session", "new"}},
 		{name: "new with two names", args: []string{"session", "new", "a", "b"}},
 		{name: "new with a path-shaped name", args: []string{"session", "new", "a/b"}},
 		{name: "new with a dot name", args: []string{"session", "new", ".."}},

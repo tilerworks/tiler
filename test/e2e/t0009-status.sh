@@ -3,7 +3,7 @@
 # tiler end-to-end test: the status command over real mounts.
 #
 # Companion to t0006 (named session lifecycle), t0007 (crash recovery)
-# and t0008 (implicit auto-* sessions). Those drive `session`; this case
+# and t0008 (generated sessions). Those drive `session`; this case
 # drives `status`, the read model that reconciles every record against
 # the live mount table. It covers both forms of the command:
 #
@@ -258,7 +258,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session shows no live views o
 	grep -qF "\"orphan_views\": []" j7.out
 '
 
-# A plain mount with no --session mints an implicit auto-* record. Delete
+# A plain mount with no --session mints a generated record. Delete
 # that record file out-of-band while the view stays live: the mount is
 # now claimed by no active record, so the overview lists it as an orphan
 # and the json carries a non-empty orphan_views naming the view point.
@@ -269,8 +269,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'status lists a live view whose record 
 	mkdir -p "$orph_dir" &&
 	"$tiler_bin" mount tmp/status "$orph_dir" >m8.out 2>m8.err &&
 	grep -Eq "^mounted " m8.out &&
-	"$tiler_bin" session list >l8.out 2>l8.err &&
-	auto=$(grep -E "^auto-[^ ]+ active mounts=1$" l8.out | head -1 | cut -d" " -f1) &&
+	auto=$(sed -n "s/^new session created: //p" m8.out) &&
 	test -n "$auto" &&
 	rm -f "$HOME/.tiler/sessions/$auto/session.json" &&
 	"$tiler_bin" status >ov8.out 2>ov8.err &&

@@ -5,8 +5,8 @@
 #
 # Companion to t0006-session-lifecycle.sh (a plain named session close
 # keeps the record for audit and never deletes the runtime upper) and
-# t0008-session-implicit.sh (a plain implicit auto-* session auto-closes
-# into the kept-for-audit closed state). This case drives the --rm
+# t0008-session-implicit.sh (a plain generated session stays active
+# after its last view unmounts). This case drives the --rm
 # opt-in, which flips that behavior: a session marked --rm deletes its
 # record AND force-removes the session directory of every view -- the
 # sessions/<name>/ tree including runtime/m<seq>/ upper data -- when it
@@ -14,7 +14,7 @@
 #
 #   1. session new --rm <name>, then session close <name> deletes the
 #      record and purges the runtime, upper data included,
-#   2. mount --rm creates an implicit auto-* session marked --rm, and
+#   2. mount --rm creates a generated session marked --rm, and
 #      umounting its last view deletes the record and purges the
 #      runtime,
 #   3. mount --rm refuses a session named by --session or
@@ -137,21 +137,20 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the re
 	! grep -Eq "^dev " list1.out
 '
 
-# mount --rm marks the implicit auto-* session it creates; umounting its
+# mount --rm marks the generated session it creates; umounting its
 # last view auto-closes it, and the --rm marker turns that close into a
 # record deletion plus a runtime purge.
 test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm: umounting the last view deletes the record and purges the runtime' '
 	mkdir -p "$impl_dir" &&
 	"$tiler_bin" mount --rm tmp/auto "$impl_dir" >m2.out 2>m2.err &&
 	grep -Eq "^mounted " m2.out &&
-	echo "scratch" >"$impl_dir/SCRATCH.txt" &&
-	"$tiler_bin" session list >list2.out 2>list2.err &&
-	auto_rm=$(grep -E "^auto-[^ ]+ active mounts=1$" list2.out | head -1 | cut -d" " -f1) &&
+	auto_rm=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto_rm" &&
+	echo "scratch" >"$impl_dir/SCRATCH.txt" &&
 	test -d "$sessions_root/$auto_rm/runtime/m1" &&
 	test -f "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
 	"$tiler_bin" session show "$auto_rm" >show2.out 2>show2.err &&
-	grep -Eq "^auto-[^ ]+ active rm created=" show2.out &&
+	grep -Eq "^$auto_rm active rm created=" show2.out &&
 	"$tiler_bin" umount "$impl_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
 	test ! -e "$sessions_root/$auto_rm" &&

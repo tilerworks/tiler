@@ -191,21 +191,20 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 	proj := filepath.Join(work, "proj")
 	deferForceUmount(t, sessionsRoot, view, proj)
 
-	// A plain mount creates one implicit auto-* session and records
-	// the mount in it.
-	mountOK(t, lib, "mounted "+view+"\n", "mount", "alice/app", view)
+	// A plain mount creates one generated session and records the
+	// mount in it.
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", "alice/app", view)
 	names := listSessionNames(t, sessionsDir(home))
-	if len(names) != 1 || !strings.HasPrefix(names[0], "auto-") {
-		t.Fatalf("sessions = %v, want one auto-* record", names)
+	if len(names) != 1 || names[0] != generated {
+		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
-	auto := names[0]
 	writeTestFile(t, filepath.Join(view, "sub", "wip.txt"), "wip\n")
-	if out := mustCmd(t, append(lib, "session", "list")...); out != auto+" active mounts=1\n" {
+	if out := mustCmd(t, append(lib, "session", "list")...); out != generated+" active mounts=1\n" {
 		t.Fatalf("list output = %q", out)
 	}
 
 	// Close tears the view down and keeps the record.
-	if out := mustCmd(t, append(lib, "session", "close", auto)...); out != "closed "+auto+"\n" {
+	if out := mustCmd(t, append(lib, "session", "close", generated)...); out != "closed "+generated+"\n" {
 		t.Fatalf("close output = %q", out)
 	}
 	if _, err := os.Stat(filepath.Join(view, "sub", "wip.txt")); err == nil {
@@ -214,21 +213,21 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 
 	// Open resumes the closed session: the view remounts with the
 	// upper data and the record becomes active again.
-	if out := mustCmd(t, append(lib, "session", "open", auto)...); out != "opened "+auto+"\n" {
+	if out := mustCmd(t, append(lib, "session", "open", generated)...); out != "opened "+generated+"\n" {
 		t.Fatalf("open output = %q", out)
 	}
 	assertBytesFile(t, filepath.Join(view, "sub", "wip.txt"), "wip\n")
-	rec := loadSessionRecord(t, sessionsDir(home), auto)
+	rec := loadSessionRecord(t, sessionsDir(home), generated)
 	if rec.State != session.StateActive || !rec.ClosedAt.IsZero() {
 		t.Fatalf("record = %+v, want an active record with no close time", rec)
 	}
 
 	// Close again and age the completion time past the retention.
-	if out := mustCmd(t, append(lib, "session", "close", auto)...); out != "closed "+auto+"\n" {
+	if out := mustCmd(t, append(lib, "session", "close", generated)...); out != "closed "+generated+"\n" {
 		t.Fatalf("second close output = %q", out)
 	}
 	store := session.Store{Dir: sessionsDir(home)}
-	rec, err := store.Load(auto)
+	rec, err := store.Load(generated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +237,7 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 	}
 
 	// The garbage collector removes exactly the aged closed record.
-	if out := mustGC(t, lib, "--session-max-age=24h"); out != "removed session "+auto+"\n" {
+	if out := mustGC(t, lib, "--session-max-age=24h"); out != "removed session "+generated+"\n" {
 		t.Fatalf("gc output = %q", out)
 	}
 	if left := listSessionNames(t, sessionsDir(home)); len(left) != 0 {
