@@ -13,16 +13,15 @@ var ErrInvalidName = errors.New("invalid image name")
 // ParseName accepts exactly two non-empty segments separated by one
 // slash. Segments cannot be "." or "..", and cannot contain a slash,
 // whitespace, or control characters. The name is never inferred.
+// Failures quote the full input and name the owner/repo shape so
+// command users know what to pass (for example build --image).
 func ParseName(s string) (string, string, error) {
 	owner, repo, found := strings.Cut(s, "/")
-	if !found || strings.Contains(repo, "/") {
-		return "", "", invalidName(s)
-	}
-	if err := checkSegment(owner); err != nil {
-		return "", "", err
-	}
-	if err := checkSegment(repo); err != nil {
-		return "", "", err
+	if !found || strings.Contains(repo, "/") ||
+		checkSegment(owner) != nil || checkSegment(repo) != nil {
+		return "", "", fmt.Errorf(
+			"%w: %q; want owner/repo (two non-empty segments, no whitespace)",
+			ErrInvalidName, s)
 	}
 	return owner, repo, nil
 }

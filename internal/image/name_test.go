@@ -2,6 +2,8 @@ package image
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +48,27 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 			if !errors.Is(err, ErrInvalidName) {
 				t.Fatalf("error = %v", err)
 			}
+			msg := err.Error()
+			if !strings.Contains(msg, "want owner/repo") {
+				t.Fatalf("error = %q, want format guidance", msg)
+			}
+			if !strings.Contains(msg, strconv.Quote(name)) {
+				t.Fatalf("error = %q, want quoted input %s", msg, strconv.Quote(name))
+			}
 		})
+	}
+}
+
+func TestParseNameRejectsEmptySegmentWithFullInput(t *testing.T) {
+	_, _, err := ParseName("alice/")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"alice/"`) {
+		t.Fatalf("error = %q, want the full input, not an empty segment", msg)
+	}
+	if !strings.Contains(msg, "want owner/repo") {
+		t.Fatalf("error = %q, want format guidance", msg)
 	}
 }
