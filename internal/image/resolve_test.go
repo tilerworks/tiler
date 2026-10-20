@@ -83,9 +83,20 @@ func assertTarget(t *testing.T, got, want Target) {
 	if got.Library != want.Library || got.Name != want.Name {
 		t.Fatalf("target = %+v, want %+v", got, want)
 	}
-	if !slices.Equal(got.Members, want.Members) {
+	if len(got.Members) != len(want.Members) {
 		t.Fatalf("members =\n%+v\nwant\n%+v", got.Members, want.Members)
 	}
+	for i := range want.Members {
+		if !memberEqual(got.Members[i], want.Members[i]) {
+			t.Fatalf("members[%d] =\n%+v\nwant\n%+v", i, got.Members[i], want.Members[i])
+		}
+	}
+}
+
+func memberEqual(got, want Member) bool {
+	return got.Path == want.Path && got.ID == want.ID &&
+		got.Size == want.Size && got.MtimeUnix == want.MtimeUnix &&
+		got.SHA256 == want.SHA256 && slices.Equal(got.Blocks, want.Blocks)
 }
 
 // fileFormCase is one file-path resolution expectation. An empty

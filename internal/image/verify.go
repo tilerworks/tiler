@@ -84,10 +84,30 @@ type payloadFile struct {
 
 // targetFiles flattens the manifest of a split target. The
 // single-file stack form has no split payload files and yields
-// nothing.
+// nothing. A blocks stack walks every layer's Blocks list when
+// Members is set; otherwise it falls back to the full-layer Blocks.
 func targetFiles(t Target) []payloadFile {
 	switch t.Form {
 	case PayloadBlocks:
+		if len(t.Members) > 0 {
+			var files []payloadFile
+			for _, layer := range t.Members {
+				for _, block := range layer.Blocks {
+					what := "block " + block.Name
+					if layer.ID != "" && layer.ID != t.ID {
+						what = "block " + layer.ID + "/" + block.Name
+					}
+					files = append(files, payloadFile{
+						what:  what,
+						path:  block.Path,
+						size:  block.Size,
+						mtime: block.MtimeUnix,
+						sha:   block.SHA256,
+					})
+				}
+			}
+			return files
+		}
 		files := make([]payloadFile, 0, len(t.Blocks))
 		for _, block := range t.Blocks {
 			files = append(files, payloadFile{

@@ -105,6 +105,52 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 	return meta.ID
 }
 
+// writeBlocksChainFixture seeds a blocks full image plus one chain
+// layer under blocks/<incr-id>/. It returns the full and layer
+// whole-image digests used as cache keys on reassembly.
+func writeBlocksChainFixture(
+	t *testing.T, imagesDir, name string, fullBodies, layerBodies []string,
+) (fullSum, layerSum string) {
+	t.Helper()
+	owner, repo, ok := strings.Cut(name, "/")
+	if !ok {
+		t.Fatalf("fixture name %q is not owner/repo", name)
+	}
+	fullID := writeBlocksFixture(t, imagesDir, name, fullBodies, true)
+	var layerWhole []byte
+	for _, body := range layerBodies {
+		layerWhole = append(layerWhole, body...)
+	}
+	layerDigest := sha256.Sum256(layerWhole)
+	layerSum = hex.EncodeToString(layerDigest[:])
+	layerID := image.ID(layerDigest)
+	blocksDir := filepath.Join(imagesDir, owner, repo, "blocks", layerID)
+	metaPath := filepath.Join(imagesDir, owner, repo, "meta.yaml")
+	meta, err := image.Load(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ID != fullID {
+		t.Fatalf("full id = %s, want %s", meta.ID, fullID)
+	}
+	entry := image.ChainEntry{
+		ID: layerID, Parent: meta.ID,
+		Size: int64(len(layerWhole)), SHA256: layerSum,
+		MtimeUnix: splitMtime.Unix(), CreatedAt: splitMtime,
+	}
+	for i, body := range layerBodies {
+		block := fmt.Sprintf("blk.%03d", i)
+		writeSplitFile(t, filepath.Join(blocksDir, block), body)
+		entry.Blocks = append(entry.Blocks, image.BlockEntry{
+			Name: block, Size: int64(len(body)),
+			SHA256: sumOf([]byte(body)), MtimeUnix: splitMtime.Unix(),
+		})
+	}
+	meta.Chain = []image.ChainEntry{entry}
+	storeFixtureMeta(t, filepath.Join(imagesDir, owner, repo), meta)
+	return meta.SHA256, layerSum
+}
+
 // fixtureMember is one members-form partition with its file bytes.
 type fixtureMember struct {
 	name string
@@ -140,14 +186,6 @@ func writeMembersFixture(t *testing.T, imagesDir, name string, members []fixture
 	meta.ID = image.ID(digest)
 	storeFixtureMeta(t, filepath.Join(imagesDir, owner, repo), meta)
 	return meta.ID
-}
-
-// concatRouteArgs used to append the removed global split-route
-// flags. The concat selection path is gone; skipped concat tests
-// keep this helper as a plain library-flag copy until a later mount
-// step redefines how concat is chosen.
-func concatRouteArgs(lib []string) []string {
-	return append([]string(nil), lib...)
 }
 
 func TestMountBlocksReassembleRoute(t *testing.T) {
@@ -216,96 +254,53 @@ func TestMountBlocksCacheEnabledSkipsSecondCopy(t *testing.T) {
 	}
 }
 
-func TestMountBlocksConcatRoute(t *testing.T) {
-	t.Skip("concat route is no longer selected from configuration")
+func TestMountBlocksChainReassemblesAndStacks(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
-	id := writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, true)
+	fullSum, layerSum := writeBlocksChainFixture(t, imagesDir, "alice/app",
+		[]string{"full-one", "full-two"}, []string{"incr-upper"})
 	dir := filepath.Join(work, "view")
 
-	stdout, stderr, _, err := runCmd(t,
-		append(concatRouteArgs(lib), "mount", "alice/app", dir)...)
+	stdout, stderr, _, err := runCmd(t, append(lib, "mount", "alice/app", dir)...)
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
 	if stdout != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if f.assembleN != 0 {
-		t.Errorf("the concat route materialized: %v", f.assembleCalls)
+	if f.assembleN != 2 {
+		t.Fatalf("assemble calls = %d, want one per stack layer", f.assembleN)
+	}
+	// Reassembly walks full then chain (oldest-first); each call
+	// is keyed by that layer's whole digest and byte size.
+	if len(f.assembleCalls) != 2 ||
+		f.assembleCalls[0][1] != fullSum || f.assembleCalls[0][2] != "16" ||
+		f.assembleCalls[0][3] != "2" ||
+		f.assembleCalls[1][1] != layerSum || f.assembleCalls[1][2] != "10" ||
+		f.assembleCalls[1][3] != "1" {
+		t.Fatalf("assemble order/identity = %v, want full %s then incr %s",
+			f.assembleCalls, fullSum, layerSum)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("mount calls = %d", len(f.mountReqs))
 	}
 	req := f.mountReqs[0]
+	cache := filepath.Join(home, ".tiler", "cache")
+	wantFull := filepath.Join(cache, fullSum+image.SquashExt)
+	wantLayer := filepath.Join(cache, layerSum+image.SquashExt)
+	if req.Full != wantFull {
+		t.Errorf("Full = %q, want %q", req.Full, wantFull)
+	}
+	if len(req.Layers) != 1 || req.Layers[0] != wantLayer {
+		t.Errorf("Layers = %v, want [%s]", req.Layers, wantLayer)
+	}
+	if req.Concat != nil {
+		t.Errorf("blocks stack set a concat source: %+v", req.Concat)
+	}
 	canonical := filepath.Join(imagesDir, "alice", "app", image.ImageFile)
-	if req.Full != canonical || req.FullFSName != canonical {
-		t.Errorf("Full = %q fsname = %q, want the canonical identity", req.Full, req.FullFSName)
-	}
-	if req.Concat == nil {
-		t.Fatal("the concat route did not set a concat source")
-	}
-	wantDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
-	if req.Concat.BlocksDir != wantDir || req.Concat.ViewName != concatViewFile {
-		t.Errorf("concat source = %+v, want %s and %s", req.Concat, wantDir, concatViewFile)
-	}
-	if stderr != "" {
-		t.Errorf("the in-place concat route printed guidance: %q", stderr)
-	}
-}
-
-func TestMountBlocksConcatDegradesWithoutTool(t *testing.T) {
-	t.Skip("concat route is no longer selected from configuration")
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	f := withMountSeams(t, nil)
-	writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, true)
-	dir := filepath.Join(work, "view")
-
-	stdout, stderr, _, err := runCmd(t,
-		append(concatRouteArgs(lib), "mount", "alice/app", dir)...)
-	if err != nil {
-		t.Fatalf("mount: %v\n%s", err, stderr)
-	}
-	if stdout != "mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q, want the degraded mount to succeed", stdout)
-	}
-	for _, want := range []string{
-		"concatfs", "reassembly", "contrib/concatfs", "never installs it automatically",
-	} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("guidance = %q, want it to contain %q", stderr, want)
-		}
-	}
-	if f.assembleN != 1 {
-		t.Errorf("the degrade did not materialize: %v", f.assembleCalls)
-	}
-	if len(f.mountReqs) != 1 || f.mountReqs[0].Concat != nil {
-		t.Errorf("the degraded mount kept a concat source: %+v", f.mountReqs)
-	}
-}
-
-func TestMountBlocksConcatMissingDescriptionFails(t *testing.T) {
-	t.Skip("concat route is no longer selected from configuration")
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	f := withMountSeams(t, nil)
-	writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, false)
-	dir := filepath.Join(work, "view")
-
-	_, stderr, _, err := runCmd(t,
-		append(concatRouteArgs(lib), "mount", "alice/app", dir)...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
-	}
-	if !strings.Contains(stderr, "concat") || !strings.Contains(stderr, "description file") {
-		t.Fatalf("stderr = %q, want it to name the missing description file", stderr)
-	}
-	// An explicit route choice with the tool in place never
-	// silently degrades.
-	if f.assembleN != 0 || len(f.mountReqs) != 0 {
-		t.Errorf("the missing description degraded silently: %v %v", f.assembleCalls, f.mountReqs)
+	if req.FullFSName != canonical {
+		t.Errorf("FullFSName = %q, want %q", req.FullFSName, canonical)
 	}
 }
 

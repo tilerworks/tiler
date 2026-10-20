@@ -55,11 +55,11 @@ func TestProbeFileLimitFoundForms(t *testing.T) {
 			wantLimit:  &fourGiB,
 		},
 		{
-			name:       "limit with split enabled is info",
+			name:       "limit with split_size set is info",
 			probe:      refuseFrom(eightGiB, syscall.EFBIG),
-			opts:       Options{SplitEnabled: true, SplitMode: "blocks"},
+			opts:       Options{SplitSize: 2 << 30},
 			wantStatus: statusInfo,
-			wantDetail: "single-file size limit between 4 GiB and 8 GiB; split storage (blocks) is enabled",
+			wantDetail: "single-file size limit between 4 GiB and 8 GiB; split_size 2G is enabled",
 			wantLimit:  &fourGiB,
 		},
 		{

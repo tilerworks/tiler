@@ -294,6 +294,18 @@ func goldenDoctorResults() []doctor.Result {
 	}
 }
 
+func TestDoctorOptionsMapsSplitSize(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	cfg.SplitSize = 2 << 30
+	opts := doctorOptions(cfg)
+	if opts.ImagesDir != cfg.ImagesDir || opts.CacheDir != cfg.CacheDir {
+		t.Fatalf("dirs = %+v", opts)
+	}
+	if opts.SplitSize != 2<<30 {
+		t.Fatalf("SplitSize = %d, want 2G", opts.SplitSize)
+	}
+}
+
 func restoreDoctor(t *testing.T, fn func(context.Context, config.Config) ([]doctor.Result, error)) {
 	t.Helper()
 	previous := runDoctor

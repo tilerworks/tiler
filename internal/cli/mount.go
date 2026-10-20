@@ -339,12 +339,12 @@ func runMountEngine(
 	}
 }
 
-// runBlocksEngine mounts a blocks payload by materializing the
-// logical whole image into the cache directory, content-addressed
-// by its digest, so sessions share one verified copy. It publishes
-// the canonical library path as the mount table identity and does
-// not stack the cache_enabled copy on top — the payload is already
-// local.
+// runBlocksEngine mounts a blocks payload by reassembling every
+// stack layer into the cache directory, content-addressed by its
+// digest, then overlaying them newest-incr-first. Sessions share
+// one verified copy per layer. It publishes the canonical library
+// path as the mount table identity and does not stack the
+// cache_enabled copy on top — the payload is already local.
 func runBlocksEngine(
 	cfg config.Config,
 	target image.Target,
@@ -359,8 +359,9 @@ func runBlocksEngine(
 	return runEngine(req)
 }
 
-// blocksRequest assembles the stack-engine request of a blocks
-// payload with the logical whole image as its single member.
+// blocksRequest reassembles every blocks-form stack layer and
+// builds the overlay request. Layers arrive oldest-first (full,
+// then chain); the workspace reverses them so the newest wins.
 func blocksRequest(
 	cfg config.Config,
 	target image.Target,
@@ -376,13 +377,29 @@ func blocksRequest(
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
+	layers := target.Members
+	if len(layers) == 0 {
+		layers = []image.Member{{
+			Size: target.Size, SHA256: target.SHA256, Blocks: target.Blocks,
+		}}
+	}
+	mounted := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		materialized, err := assembleBlocks(
+			cfg.CacheDir, layer.Blocks, layer.SHA256, layer.Size)
+		if err != nil {
+			return workspace.Request{}, fmt.Errorf("mount: %w", err)
+		}
+		mounted = append(mounted, materialized)
+	}
 	// The canonical library path is the mount-table identity; the
-	// mounted bytes are the materialized cache copy, so the fsname
-	// override keeps the table pointing at the logical image.
+	// mounted bytes are the materialized cache copies, so the
+	// fsname override keeps the table pointing at the logical image.
 	canonical := repo.ImagePath()
-	req := workspace.Request{
-		Full:            canonical,
+	return workspace.Request{
+		Full:            mounted[0],
 		FullFSName:      canonical,
+		Layers:          mounted[1:],
 		ReadOnly:        flags.readOnly,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
@@ -391,13 +408,7 @@ func blocksRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
-	}
-	materialized, err := assembleBlocks(cfg.CacheDir, target.Blocks, target.SHA256, target.Size)
-	if err != nil {
-		return workspace.Request{}, fmt.Errorf("mount: %w", err)
-	}
-	req.Full = materialized
-	return req, nil
+	}, nil
 }
 
 // runForestEngine mounts a members payload as the subpath forest
