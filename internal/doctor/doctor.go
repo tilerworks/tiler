@@ -216,18 +216,28 @@ func probeImageToolchain(ctx context.Context, seams Seams) (Result, error) {
 		}
 	}
 	gaps := container.IncompleteDetail(stacks)
+	missing := missingBinaries(stacks)
 	switch {
 	case len(ready) == 0:
 		detail := "no complete image stack"
 		if gaps != "" {
 			detail += ": " + gaps
 		}
-		return fail(nameImageToolchain, detail), nil
+		return fail(nameImageToolchain, withInstall(detail, missing)), nil
 	case gaps == "":
 		return pass(nameImageToolchain, strings.Join(ready, ", ")), nil
 	default:
-		return warn(nameImageToolchain, strings.Join(ready, ", ")+" ready; "+gaps), nil
+		detail := strings.Join(ready, ", ") + " ready; " + gaps
+		return warn(nameImageToolchain, withInstall(detail, missing)), nil
 	}
+}
+
+func missingBinaries(stacks []container.Stack) []string {
+	var missing []string
+	for _, stack := range stacks {
+		missing = append(missing, stack.Missing...)
+	}
+	return missing
 }
 
 func probeTool(ctx context.Context, seams Seams, spec toolSpec) (parsedTool, error) {
@@ -236,7 +246,8 @@ func probeTool(ctx context.Context, seams Seams, spec toolSpec) (parsedTool, err
 	}
 	path, err := seams.LookPath(spec.binary)
 	if err != nil {
-		return parsedTool{result: fail(spec.name, fmt.Sprintf("%s: %v", spec.binary, err))}, nil
+		detail := fmt.Sprintf("%s: %v", spec.binary, err)
+		return parsedTool{result: fail(spec.name, withInstall(detail, []string{spec.binary}))}, nil
 	}
 	ver, detail, err := readVersion(ctx, seams, path, spec.hints)
 	if err != nil {
@@ -257,7 +268,7 @@ func probeSquashfuseSubdir(ctx context.Context, seams Seams) (Result, error) {
 	}
 	path, err := seams.LookPath("squashfuse_ll")
 	if err != nil {
-		return warn(nameSquashfuseSub, "squashfuse_ll is not installed"), nil
+		return warn(nameSquashfuseSub, withInstall("squashfuse_ll is not installed", []string{"squashfuse_ll"})), nil
 	}
 	ver, detail, err := readVersion(ctx, seams, path, []string{"squashfuse_ll", "squashfuse"})
 	if err != nil {
