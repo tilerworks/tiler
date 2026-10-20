@@ -24,6 +24,8 @@ type rawPatch struct {
 	SessionAutocloseStale *bool              `yaml:"session_autoclose_stale"`
 	SquashfsOptions       *string            `yaml:"squashfs_options"`
 	FuseOptions           *string            `yaml:"fuse_options"`
+	ImageFormat           *string            `yaml:"image_format"`
+	ImageCompression      *string            `yaml:"image_compression"`
 	SplitSize             *splitSizeText     `yaml:"split_size"`
 	CacheEnabled          *bool              `yaml:"cache_enabled"`
 	LogLevel              *string            `yaml:"log_level"`
@@ -150,6 +152,8 @@ func (raw rawPatch) patch() (Patch, error) {
 		SessionAutocloseStale: raw.SessionAutocloseStale,
 		SquashfsOptions:       raw.SquashfsOptions,
 		FuseOptions:           raw.FuseOptions,
+		ImageFormat:           raw.ImageFormat,
+		ImageCompression:      raw.ImageCompression,
 		SplitSize:             splitSizePtr(raw.SplitSize),
 		CacheEnabled:          raw.CacheEnabled,
 		LogLevel:              raw.LogLevel,

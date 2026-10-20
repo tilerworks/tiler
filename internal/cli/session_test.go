@@ -274,7 +274,7 @@ func TestSessionOpenResolvesFileImagesAndModes(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	bare := filepath.Join(work, "bare.sqsh")
-	writeTestFile(t, bare, "not really squashfs")
+	writeSquashFile(t, bare)
 	roView := filepath.Join(work, "ro-view")
 	subView := filepath.Join(work, "sub-view")
 	writeSessionRecord(t, sessionsDir(home), "dev",
@@ -310,7 +310,7 @@ func TestSessionOpenReportsUnavailableEnvironment(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	bare := filepath.Join(work, "bare.sqsh")
-	writeTestFile(t, bare, "bytes")
+	writeSquashFile(t, bare)
 	view := filepath.Join(work, "view")
 	writeSessionRecord(t, sessionsDir(home), "dev", session.Action{
 		Type: session.TypeMount, Image: bare,
@@ -402,7 +402,7 @@ func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
 		}
 	})
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	sessions := sessionsDir(home)
 

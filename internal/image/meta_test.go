@@ -57,8 +57,7 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 		"kind: must be full or incremental",
 		"builder: must be set",
 		"source.commit: must be lowercase hex",
-		"format.type: must be squashfs",
-		"format.compression: must be zstd",
+		"format.type: unknown container type: \"tar\"",
 		"size: must be greater than 0",
 		"mtime_unix: must not be negative",
 		"created_at: must be UTC",
@@ -259,5 +258,39 @@ func validEntry(parent, id string) ChainEntry {
 		SHA256:    id + id + id + id,
 		MtimeUnix: 1710000001,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestValidateAcceptsRegisteredContainers(t *testing.T) {
+	formats := []Format{
+		{Type: FormatSquashfs, Compression: CompressionZstd},
+		{Type: FormatSquashfs, Compression: "gzip"},
+		{Type: FormatSquashfs, Compression: "lz4"},
+		{Type: FormatSquashfs, Compression: "xz"},
+		{Type: FormatErofs, Compression: CompressionZstd},
+		{Type: FormatErofs, Compression: "lz4"},
+		{Type: FormatErofs, Compression: "gzip"},
+	}
+	for _, format := range formats {
+		meta := validMeta()
+		meta.Format = format
+		meta.Chain = []ChainEntry{validEntry(meta.ID, "fedcba9876543210")}
+		if err := meta.Validate(); err != nil {
+			t.Errorf("%s/%s: %v", format.Type, format.Compression, err)
+		}
+	}
+}
+
+func TestValidateRejectsDisallowedCompression(t *testing.T) {
+	meta := validMeta()
+	meta.Format = Format{Type: FormatErofs, Compression: "xz"}
+	err := meta.Validate()
+	if err == nil || !strings.Contains(err.Error(), `format.compression: erofs does not allow "xz"`) {
+		t.Fatalf("erofs xz: %v", err)
+	}
+	meta.Format = Format{Type: FormatSquashfs, Compression: ""}
+	err = meta.Validate()
+	if err == nil || !strings.Contains(err.Error(), `format.compression: squashfs does not allow ""`) {
+		t.Fatalf("empty compression: %v", err)
 	}
 }

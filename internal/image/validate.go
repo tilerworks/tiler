@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 // Validate reports every rule violation in one error.
@@ -30,16 +32,28 @@ func (m Meta) checkIdentity(list *issueList) {
 	checkCommit("source.commit", m.Source.Commit, list)
 }
 
+// checkPayload checks the active container and the payload facts.
+// The active format covers the chain: layers do not store a separate
+// type or compression, so every member stays on this container.
 func (m Meta) checkPayload(list *issueList) {
-	if m.Format.Type != FormatSquashfs {
-		list.add("format.type: must be squashfs")
-	}
-	if m.Format.Compression != CompressionZstd {
-		list.add("format.compression: must be zstd")
-	}
+	checkContainer(m.Format, list)
 	checkSize("size", m.Size, list)
 	checkMtime("mtime_unix", m.MtimeUnix, list)
 	checkTime("created_at", m.CreatedAt, list)
+}
+
+// checkContainer accepts a registered type and a compression that
+// type allows. An empty compression is not a stored default; meta
+// records the concrete name.
+func checkContainer(format Format, list *issueList) {
+	f, err := container.Lookup(format.Type)
+	if err != nil {
+		list.add("format.type: %v", err)
+		return
+	}
+	if format.Compression == "" || !f.AllowsCompression(format.Compression) {
+		list.add("format.compression: %s does not allow %q", f.Type(), format.Compression)
+	}
 }
 
 func (m Meta) checkChain(list *issueList) {

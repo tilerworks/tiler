@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -88,6 +90,15 @@ func (f *mountFake) assemble(
 	if out == "" {
 		out = filepath.Join(cacheDir, wantSHA+image.SquashExt)
 	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return "", err
+	}
+	// The reassembled file has to carry squashfs magic so the
+	// library consistency check can see the container the fixture
+	// metadata records.
+	if err := os.WriteFile(out, []byte("hsqs-reassembled"), 0o644); err != nil {
+		return "", err
+	}
 	return out, nil
 }
 
@@ -111,6 +122,7 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	mountEngine = f.mount
 	unmountEngine = f.umount
 	assembleBlocks = f.assemble
+	installFoundTools(t)
 	return f
 }
 
@@ -183,6 +195,9 @@ func TestMountLibraryImagePrintsMounted(t *testing.T) {
 	if req.Full != filepath.Join(repoDir, "image.sqsh") || len(req.Layers) != 0 {
 		t.Errorf("stack = %s %v", req.Full, req.Layers)
 	}
+	if req.Format != image.FormatSquashfs {
+		t.Errorf("format = %q, want squashfs", req.Format)
+	}
 	if req.ReadOnly || req.Subdir != "" || req.FullFSName != "" {
 		t.Errorf("flags leaked: %+v", req)
 	}
@@ -234,7 +249,7 @@ func TestMountFilePathImage(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	img := filepath.Join(work, "bare.sqsh")
-	writeTestFile(t, img, "not really squashfs")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "mount", img, view)...)
@@ -246,7 +261,7 @@ func TestMountFilePathImage(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	req := f.mountReqs[0]
-	if req.Full != img || req.FullFSName != "" {
+	if req.Full != img || req.FullFSName != "" || req.Format != image.FormatSquashfs {
 		t.Errorf("file-path stack = %+v", req)
 	}
 }
@@ -259,7 +274,7 @@ func TestMountReusePrintsAlreadyMounted(t *testing.T) {
 	f := withMountSeams(t, nil)
 	f.reused = true
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "mount", img, view)...)
@@ -286,7 +301,7 @@ func TestMountDifferentImageConflictsAndExitsNonZero(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	f.mountErr = errors.New(
 		`workspace: ` + view + ` already mounts a different view ` +
@@ -324,7 +339,7 @@ func TestMountTableConversion(t *testing.T) {
 		Lowers:    []string{"/somewhere/lower-0"},
 	}}
 	f := withMountSeams(t, table)
-	writeTestFile(t, filepath.Join(work, "x.sqsh"), "bytes")
+	writeSquashFile(t, filepath.Join(work, "x.sqsh"))
 	view := filepath.Join(work, "view")
 
 	if _, stderr, _, err := runCmd(t, append(lib, "mount", filepath.Join(work, "x.sqsh"), view)...); err != nil {
@@ -480,7 +495,7 @@ func TestMountRuntimeErrors(t *testing.T) {
 	// Engine failures stay runtime errors; an unavailable environment
 	// gains the doctor pointer.
 	bare := filepath.Join(home, "x.sqsh")
-	writeTestFile(t, bare, "bytes")
+	writeSquashFile(t, bare)
 	f.mountErr = errors.New("workspace: view already mounts a different view")
 	if _, _, _, err := runCmd(t, append(lib, "mount", bare, view)...); ExitCode(err) != 1 {
 		t.Fatalf("conflict: ExitCode(%v) = %d, want 1", err, ExitCode(err))
@@ -583,5 +598,217 @@ func TestMountCorruptMetaIsRuntimeError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "meta") {
 		t.Fatalf("err = %v, want the validation text", err)
+	}
+}
+
+func TestMountFilePathDetectsErofs(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	img := filepath.Join(work, "layer.img")
+	writeErofsFile(t, img)
+	view := filepath.Join(work, "view")
+
+	if _, stderr, _, err := runCmd(t, append(lib, "mount", img, view)...); err != nil {
+		t.Fatalf("mount: %v\n%s", err, stderr)
+	}
+	if len(f.mountReqs) != 1 || f.mountReqs[0].Format != image.FormatErofs {
+		t.Fatalf("request = %+v, want erofs", f.mountReqs)
+	}
+}
+
+func TestMountFilePathRefusesUnknownMagic(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	img := filepath.Join(work, "plain.img")
+	writeTestFile(t, img, "not a container")
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", img, view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not detected") {
+		t.Fatalf("ExitCode(%v) = %d, want a usage refusal", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
+func TestMountRefusesMetaMagicMismatch(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	body := make([]byte, 1028)
+	copy(body[1024:], []byte{0xE2, 0xE1, 0xF5, 0xE0})
+	writeLibraryContainer(t, imagesDir, image.FormatSquashfs, body)
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "erofs") ||
+		!strings.Contains(err.Error(), "squashfs") {
+		t.Fatalf("ExitCode(%v) = %d, want a meta/magic refusal", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
+// TestMountFormatRefusalLeavesNamedSessionEmpty checks that a
+// deterministic format refusal never becomes a replayable mount
+// action. Implicit sessions used to hide the write-ahead record by
+// discarding it; a named session keeps every failed action.
+func TestMountFormatRefusalLeavesNamedSessionEmpty(t *testing.T) {
+	t.Run("unknown magic file", func(t *testing.T) {
+		home, work := withWorkspace(t)
+		_, lib := libFlags(home)
+		f := withMountSeams(t, nil)
+		mustSessionNew(t, lib, "dev")
+		img := filepath.Join(work, "notes.txt")
+		writeTestFile(t, img, "not a container")
+		view := filepath.Join(work, "view")
+
+		_, _, _, err := runCmd(t, append(lib, "mount", "--session", "dev", img, view)...)
+		if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not detected") {
+			t.Fatalf("ExitCode(%v) = %d, want a usage refusal", err, ExitCode(err))
+		}
+		assertNoMountAction(t, f, home, "dev")
+	})
+
+	t.Run("meta magic mismatch", func(t *testing.T) {
+		home, work := withWorkspace(t)
+		imagesDir, lib := libFlags(home)
+		f := withMountSeams(t, nil)
+		mustSessionNew(t, lib, "dev")
+		body := make([]byte, 1028)
+		copy(body[1024:], []byte{0xE2, 0xE1, 0xF5, 0xE0})
+		writeLibraryContainer(t, imagesDir, image.FormatSquashfs, body)
+		view := filepath.Join(work, "view")
+
+		_, _, _, err := runCmd(t, append(lib, "mount", "--session", "dev", "alice/app", view)...)
+		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "erofs") ||
+			!strings.Contains(err.Error(), "squashfs") {
+			t.Fatalf("ExitCode(%v) = %d, want a meta/magic refusal", err, ExitCode(err))
+		}
+		assertNoMountAction(t, f, home, "dev")
+	})
+
+	t.Run("blocks meta magic mismatch", func(t *testing.T) {
+		home, work := withWorkspace(t)
+		imagesDir, lib := libFlags(home)
+		f := withMountSeams(t, nil)
+		mustSessionNew(t, lib, "dev")
+		writeBlocksFixture(t, imagesDir, "alice/app", []string{"block-one-bytes", "tail"}, true)
+		repo := filepath.Join(imagesDir, "alice", "app")
+		meta, err := image.Load(filepath.Join(repo, "meta.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta.Format.Type = image.FormatErofs
+		storeFixtureMeta(t, repo, meta)
+		view := filepath.Join(work, "view")
+
+		_, _, _, err = runCmd(t, append(lib, "mount", "--session", "dev", "alice/app", view)...)
+		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "erofs") ||
+			!strings.Contains(err.Error(), "squashfs") {
+			t.Fatalf("ExitCode(%v) = %d, want a meta/magic refusal after reassembly", err, ExitCode(err))
+		}
+		if f.assembleN != 1 {
+			t.Fatalf("assemble calls = %d, want one reassembly before the refusal", f.assembleN)
+		}
+		assertNoMountAction(t, f, home, "dev")
+	})
+}
+
+// assertNoMountAction reports when a format refusal still invoked
+// the engine or left a mount action on the named session.
+func assertNoMountAction(t *testing.T, f *mountFake, home, name string) {
+	t.Helper()
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+	if rec := loadSessionRecord(t, sessionsDir(home), name); len(rec.Actions) != 0 {
+		t.Fatalf("session %s recorded a mount action: %+v", name, rec.Actions)
+	}
+}
+
+func TestMountLibraryErofsReachesTheEngine(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	body := make([]byte, 1028)
+	copy(body[1024:], []byte{0xE2, 0xE1, 0xF5, 0xE0})
+	writeLibraryContainer(t, imagesDir, image.FormatErofs, body)
+	view := filepath.Join(work, "view")
+
+	if _, stderr, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...); err != nil {
+		t.Fatalf("mount: %v\n%s", err, stderr)
+	}
+	if len(f.mountReqs) != 1 || f.mountReqs[0].Format != image.FormatErofs {
+		t.Fatalf("request = %+v, want erofs", f.mountReqs)
+	}
+}
+
+// writeLibraryContainer publishes one single-file library image whose
+// bytes and metadata agree on size and mtime. format is the type
+// recorded in metadata; body is the file the magic check reads.
+func writeLibraryContainer(t *testing.T, imagesDir, format string, body []byte) {
+	t.Helper()
+	repo := filepath.Join(imagesDir, "alice", "app")
+	path := filepath.Join(repo, image.ImageFile)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(1710000000, 0).UTC()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	meta := image.Meta{
+		ID: image.ID(sum), Owner: "alice", Repo: "app",
+		Kind:      image.KindFull,
+		Format:    image.Format{Type: format, Compression: image.CompressionZstd},
+		Size:      int64(len(body)),
+		SHA256:    hex.EncodeToString(sum[:]),
+		MtimeUnix: when.Unix(),
+		CreatedAt: when,
+		Builder:   "tiler test",
+	}
+	if err := image.Store(filepath.Join(repo, "meta.yaml"), meta); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMountRefusesWhenNoStack(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+	toolLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	view := filepath.Join(work, "view")
+	_, _, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "no complete image toolchain") ||
+		!strings.Contains(err.Error(), "tiler doctor") {
+		t.Fatalf("ExitCode(%v) = %d", err, ExitCode(err))
+	}
+}
+
+func TestMountRefusesIncompleteFormatTools(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	writeLibraryContainer(t, imagesDir, image.FormatSquashfs, []byte("hsqs-fake-image"))
+	toolLookPath = lookOnly("mkfs.erofs", "erofsfuse")
+	view := filepath.Join(work, "view")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := runCmd(t, append(lib, "mount", "alice/app", view)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "squashfs toolchain is incomplete") {
+		t.Fatalf("ExitCode(%v) = %d", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("engine calls = %d, want none", len(f.mountReqs))
 	}
 }

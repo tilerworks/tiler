@@ -141,6 +141,7 @@ func TestImagesListHumanRecord(t *testing.T) {
 		"  size        2048 (2 KiB)\n" +
 		"  sha256      " + goldenActiveSum + "\n" +
 		"  form        single\n" +
+		"  format      squashfs/zstd\n" +
 		"  builder     tiler golden\n" +
 		"  chain       1\n" +
 		"    " + goldenChainID + "  parent=" + goldenActiveID + "  1 KiB  2026-03-04T04:06:07Z\n" +

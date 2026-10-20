@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 func upperDir(t *testing.T) string {
@@ -867,4 +868,196 @@ func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
 		t.Fatalf("blocks incr left incr/: %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
+}
+
+func TestBuildIncrInheritsActiveFormat(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	active.Format = Format{Type: FormatErofs, Compression: "lz4"}
+	if err := Store(repo.MetaPath(), active); err != nil {
+		t.Fatal(err)
+	}
+	upper := upperDir(t)
+	runner := &fakeRunner{body: []byte("layer-erofs")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upper,
+		Now: fixedNow, Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner calls = %v", runner.calls)
+	}
+	call := runner.calls[0]
+	if call[0] != "mkfs.erofs" || call[3] != "-zlz4" || call[len(call)-1] != upper {
+		t.Fatalf("runner call = %q", call)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Format != active.Format || len(loaded.Chain) != 1 {
+		t.Fatalf("meta = %+v", loaded)
+	}
+}
+
+func TestBuildIncrDefaultSmokeMountsActiveFormat(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	active.Format = Format{Type: FormatErofs, Compression: "lz4"}
+	if err := Store(repo.MetaPath(), active); err != nil {
+		t.Fatal(err)
+	}
+	format, err := container.Lookup(FormatErofs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prevReady, prevRun := smokeReady, smokeRun
+	t.Cleanup(func() {
+		smokeReady = prevReady
+		smokeRun = prevRun
+	})
+	var readyType string
+	var cmds [][]string
+	smokeReady = func(f container.Format) error {
+		readyType = f.Type()
+		return nil
+	}
+	smokeRun = func(name string, args ...string) error {
+		cmds = append(cmds, append([]string{name}, args...))
+		return nil
+	}
+
+	runner := &fakeRunner{body: []byte("layer-erofs-smoke")}
+	// MountSmoke stays nil so the default gate chooses the command.
+	res, err := BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Now: fixedNow, Run: runner.run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readyType != FormatErofs {
+		t.Fatalf("smoke checked %q", readyType)
+	}
+	for _, cmd := range cmds {
+		if len(cmd) > 0 && cmd[0] == "squashfuse_ll" {
+			t.Fatalf("smoke used squashfuse_ll: %q", cmd)
+		}
+	}
+	if len(cmds) != 2 {
+		t.Fatalf("smoke commands = %q", cmds)
+	}
+	point := cmds[0][len(cmds[0])-1]
+	want := format.MountArgv(res.Path, "", "", res.Path, point)
+	if !equalArgs(cmds[0], want) {
+		t.Fatalf("mount = %q, want %q", cmds[0], want)
+	}
+	unmount := []string{"fusermount3", "-u", point}
+	if !equalArgs(cmds[1], unmount) {
+		t.Fatalf("unmount = %q, want %q", cmds[1], unmount)
+	}
+}
+
+func TestBuildIncrAcceptsMatchingFormat(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedActive(t, repo, []byte("base-full"), false)
+	upper := upperDir(t)
+	runner := &fakeRunner{body: []byte("layer-match")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upper,
+		Format: FormatSquashfs, Compression: CompressionZstd,
+		Now: fixedNow, Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := runner.calls[0]
+	want := []string{"mksquashfs", upper, call[2], "-comp", "zstd", "-noappend", "-xattrs"}
+	if !equalArgs(call, want) {
+		t.Fatalf("runner call = %q", call)
+	}
+}
+
+func TestBuildIncrRefusesFormatConflict(t *testing.T) {
+	cases := []struct {
+		name        string
+		format      string
+		compression string
+		want        string
+	}{
+		{name: "format", format: FormatErofs, want: "--format erofs"},
+		{name: "compression", compression: "gzip", want: "--compression gzip"},
+		{
+			name: "both", format: FormatErofs, compression: "lz4",
+			want: "--format erofs, --compression lz4",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := buildConfig(t)
+			repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedActive(t, repo, []byte("base-full"), false)
+			runner := &fakeRunner{body: []byte("should-not-pack")}
+			_, err = BuildIncr(IncrRequest{
+				Config: cfg, Name: "alice/app", Upper: upperDir(t),
+				Format: tc.format, Compression: tc.compression,
+				Run: runner.run, MountSmoke: skipSmoke,
+			})
+			if err == nil || !errors.Is(err, ErrFormatConflict) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("packer ran: %v", runner.calls)
+			}
+		})
+	}
+}
+
+func TestBuildIncrRefusesIllegalActiveFormat(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedActive(t, repo, []byte("base-full"), false)
+	// Store refuses this pair, so the test writes the bytes the way a
+	// hand-edited meta.yaml would.
+	body, err := os.ReadFile(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(string(body), "type: squashfs", "type: erofs", 1)
+	text = strings.Replace(text, "compression: zstd", "compression: xz", 1)
+	if err := os.WriteFile(repo.MetaPath(), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), `does not allow "xz"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran: %v", runner.calls)
+	}
 }

@@ -41,12 +41,15 @@ cannot support them:
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
-  `t0003` through `t0012` need `/dev/fuse` and the external
+  `t0003` through `t0014` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
   stale case in `t0009-status.sh` also need `pgrep` to find the daemon
   they SIGKILL. Where they are absent, the case skips rather than
   false-fails.
+- **No EROFS toolchain** — `t0015-erofs-image.sh` needs `/dev/fuse`,
+  `mkfs.erofs`, `erofsfuse`, `fuse-overlayfs`, `fusermount3`, and
+  `git`. It skips cleanly on a squashfs-only host.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -145,6 +148,22 @@ equipped host, so a genuine regression is never masked by a skip.
   into a session-pinned `hold/<id>/blocks/` (not archives). Omitting
   `--split` or setting project `split_size: 0` stays a single
   `image.sqsh`. Needs the FUSE toolchain; skips cleanly without it.
+- `e2e/t0014-squashfs-compression.sh` — builds a full image with
+  non-default `--compression gzip`, mounts it read-write, and appends
+  an incremental layer with no format flags so the layer inherits
+  `squashfs/gzip`. A fresh remount serves the upper file. A squashfs
+  packed outside the library with `mksquashfs -comp xz` mounts
+  read-write. The active file stays `image.sqsh`. Needs the FUSE
+  toolchain; skips cleanly without it.
+- `e2e/t0015-erofs-image.sh` — rejects `erofs` with `xz` (exit 2),
+  packs a full image from project `image_format: erofs` (no
+  `--format` flag) as `image.sqsh` with the erofs compression
+  `mkfs.erofs` can pack (zstd, otherwise lz4, then gzip), mounts it
+  read-write, and appends an incremental layer that inherits that
+  pair. The same project config with `--split` publishes blocks and
+  still mounts. `--subdir` exposes one image directory as the mount
+  root. `tiler doctor` exits 0 when `PATH` offers only the erofs
+  stack. Needs the EROFS toolchain; skips cleanly without it.
 
 ## Adding cases in later phases
 

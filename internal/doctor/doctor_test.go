@@ -24,12 +24,11 @@ func TestProbeShapes(t *testing.T) {
 			host:   healthyHost("0.5.0"),
 			status: allPass(),
 			details: map[string]string{
-				nameSquashfuseLL:  "0.5.0",
-				nameSquashfuseSub: "0.5.0",
-				nameFuseOverlayfs: "1.18",
-				nameFusermount3:   "3.14.0",
-				nameMksquashfs:    "4.6.1",
-				nameGit:           "2.43.0",
+				nameImageToolchain: "erofs, squashfs",
+				nameSquashfuseSub:  "0.5.0",
+				nameFuseOverlayfs:  "1.18",
+				nameFusermount3:    "3.14.0",
+				nameGit:            "2.43.0",
 			},
 		},
 		{
@@ -37,7 +36,6 @@ func TestProbeShapes(t *testing.T) {
 			host:   healthyHost("0.10.0"),
 			status: allPass(),
 			details: map[string]string{
-				nameSquashfuseLL:  "0.10.0",
 				nameSquashfuseSub: "0.10.0",
 			},
 		},
@@ -45,13 +43,12 @@ func TestProbeShapes(t *testing.T) {
 			name: "missing tool",
 			host: healthyHost("0.5.1").without("git"),
 			status: map[string]string{
-				nameFuseDevice:    statusPass,
-				nameSquashfuseLL:  statusPass,
-				nameFuseOverlayfs: statusPass,
-				nameFusermount3:   statusPass,
-				nameMksquashfs:    statusPass,
-				nameGit:           statusFail,
-				nameSquashfuseSub: statusPass,
+				nameFuseDevice:     statusPass,
+				nameFuseOverlayfs:  statusPass,
+				nameFusermount3:    statusPass,
+				nameGit:            statusFail,
+				nameImageToolchain: statusPass,
+				nameSquashfuseSub:  statusPass,
 			},
 			details: map[string]string{
 				nameGit: "git",
@@ -61,16 +58,14 @@ func TestProbeShapes(t *testing.T) {
 			name: "squashfuse below baseline",
 			host: healthyHost("0.4.10"),
 			status: map[string]string{
-				nameFuseDevice:    statusPass,
-				nameSquashfuseLL:  statusPass,
-				nameFuseOverlayfs: statusPass,
-				nameFusermount3:   statusPass,
-				nameMksquashfs:    statusPass,
-				nameGit:           statusPass,
-				nameSquashfuseSub: statusFail,
+				nameFuseDevice:     statusPass,
+				nameFuseOverlayfs:  statusPass,
+				nameFusermount3:    statusPass,
+				nameGit:            statusPass,
+				nameImageToolchain: statusPass,
+				nameSquashfuseSub:  statusFail,
 			},
 			details: map[string]string{
-				nameSquashfuseLL:  "0.4.10",
 				nameSquashfuseSub: "0.4.10 is below 0.5.0",
 			},
 		},
@@ -86,17 +81,6 @@ func TestProbeShapes(t *testing.T) {
 			details: map[string]string{
 				nameGit:           "unparsable version",
 				nameSquashfuseSub: "0.5.0",
-			},
-		},
-		{
-			name: "banner surrounded by unrelated lines",
-			host: healthyHost("0.5.0").withOutput("mksquashfs", "--version", ""+
-				"wrapper version 1.2.3\n"+
-				"loading plugins\n"+
-				"mksquashfs version 4.6.1 (2023/01/01)\n"+
-				"done version 9.8.7\n", nil),
-			details: map[string]string{
-				nameMksquashfs: "4.6.1",
 			},
 		},
 		{
@@ -153,22 +137,83 @@ func TestProbeShapes(t *testing.T) {
 	}
 }
 
-func TestMissingSquashfuseFailsSubdirWithReason(t *testing.T) {
+func TestImageToolchainThreeStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		missing []string
+		status  string
+		want    []string
+		failed  bool
+	}{
+		{
+			name:    "squashfs only",
+			missing: []string{"mkfs.erofs", "erofsfuse"},
+			status:  statusWarn,
+			want:    []string{"squashfs", "erofs missing"},
+		},
+		{
+			name:    "erofs only",
+			missing: []string{"mksquashfs", "squashfuse_ll"},
+			status:  statusWarn,
+			want:    []string{"erofs", "squashfs missing"},
+		},
+		{
+			name:    "neither stack",
+			missing: []string{"mksquashfs", "squashfuse_ll", "mkfs.erofs", "erofsfuse"},
+			status:  statusFail,
+			want:    []string{"no complete image stack", "squashfs missing", "erofs missing"},
+			failed:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := healthyHost("0.5.0")
+			for _, binary := range tt.missing {
+				host = host.without(binary)
+			}
+			results, err := Probe(context.Background(), host.seams(), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := byName(t, results)[nameImageToolchain]
+			if got.Status != tt.status {
+				t.Fatalf("status = %s, want %s (%s)", got.Status, tt.status, got.Detail)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(got.Detail, want) {
+					t.Fatalf("detail = %q, want %q", got.Detail, want)
+				}
+			}
+			names := Failed(results)
+			var saw bool
+			for _, name := range names {
+				if name == nameImageToolchain {
+					saw = true
+				}
+			}
+			if saw != tt.failed {
+				t.Fatalf("Failed = %v, image_toolchain failed = %v, want %v", names, saw, tt.failed)
+			}
+		})
+	}
+}
+
+func TestMissingSquashfuseWarnsSubdir(t *testing.T) {
 	host := healthyHost("0.5.0").without("squashfuse_ll")
 	results, err := Probe(context.Background(), host.seams(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := byName(t, results)
-	if got[nameSquashfuseLL].Status != statusFail {
-		t.Fatalf("squashfuse_ll status = %s", got[nameSquashfuseLL].Status)
-	}
 	sub := got[nameSquashfuseSub]
-	if sub.Status != statusFail {
-		t.Fatalf("subdir status = %s", sub.Status)
+	if sub.Status != statusWarn {
+		t.Fatalf("subdir status = %s, want warn (%s)", sub.Status, sub.Detail)
 	}
-	if !strings.Contains(sub.Detail, got[nameSquashfuseLL].Detail) {
-		t.Fatalf("subdir detail %q does not include %q", sub.Detail, got[nameSquashfuseLL].Detail)
+	if !strings.Contains(sub.Detail, "not installed") {
+		t.Fatalf("subdir detail = %q", sub.Detail)
+	}
+	if got[nameImageToolchain].Status != statusWarn {
+		t.Fatalf("toolchain = %s (%s), want warn", got[nameImageToolchain].Status, got[nameImageToolchain].Detail)
 	}
 }
 
@@ -205,11 +250,11 @@ func TestFailedCollectsFailingProbeNamesInOrder(t *testing.T) {
 		{Name: nameFuseDevice, Status: statusPass, Detail: fuseDevicePath},
 		{Name: nameGit, Status: statusFail, Detail: "missing"},
 		{Name: "file_limit_images", Status: statusWarn, Detail: "limit found"},
-		{Name: nameSquashfuseLL, Status: statusFail, Detail: "unparsable version"},
+		{Name: nameImageToolchain, Status: statusFail, Detail: "no complete image stack"},
 		{Name: "storage_perf_cache", Status: statusInfo, Detail: "measured"},
 	}
 	got := Failed(results)
-	want := []string{nameGit, nameSquashfuseLL}
+	want := []string{nameGit, nameImageToolchain}
 	if len(got) != len(want) {
 		t.Fatalf("Failed = %v, want %v", got, want)
 	}
@@ -317,8 +362,8 @@ func assertResults(t *testing.T, results []Result, status, details map[string]st
 
 func assertProbeNames(t *testing.T, results []Result, rendered string) {
 	t.Helper()
-	if len(results) != len(toolSpecs)+9 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+9)
+	if len(results) != probeCount() {
+		t.Fatalf("probe count = %d, want %d", len(results), probeCount())
 	}
 	for _, result := range results {
 		switch result.Status {
@@ -340,6 +385,17 @@ func assertProbeNames(t *testing.T, results []Result, rendered string) {
 	}
 }
 
+func indexOf(t *testing.T, results []Result, name string) int {
+	t.Helper()
+	for i, result := range results {
+		if result.Name == name {
+			return i
+		}
+	}
+	t.Fatalf("missing probe %s", name)
+	return -1
+}
+
 func byName(t *testing.T, results []Result) map[string]Result {
 	t.Helper()
 	got := make(map[string]Result, len(results))
@@ -350,8 +406,8 @@ func byName(t *testing.T, results []Result) map[string]Result {
 		got[result.Name] = result
 	}
 	for _, name := range []string{
-		nameFuseDevice, nameSquashfuseLL, nameFuseOverlayfs, nameFusermount3,
-		nameMksquashfs, nameGit, nameSquashfuseSub,
+		nameFuseDevice, nameFuseOverlayfs, nameFusermount3,
+		nameGit, nameImageToolchain, nameSquashfuseSub,
 		nameFileLimitImages, nameFileLimitCache,
 		namePerfImages, namePerfCache, nameCacheAdvice,
 		nameContribConcatfs, nameContribSlowfs,
@@ -365,13 +421,12 @@ func byName(t *testing.T, results []Result) map[string]Result {
 
 func allPass() map[string]string {
 	return map[string]string{
-		nameFuseDevice:    statusPass,
-		nameSquashfuseLL:  statusPass,
-		nameFuseOverlayfs: statusPass,
-		nameFusermount3:   statusPass,
-		nameMksquashfs:    statusPass,
-		nameGit:           statusPass,
-		nameSquashfuseSub: statusPass,
+		nameFuseDevice:     statusPass,
+		nameFuseOverlayfs:  statusPass,
+		nameFusermount3:    statusPass,
+		nameGit:            statusPass,
+		nameImageToolchain: statusPass,
+		nameSquashfuseSub:  statusPass,
 	}
 }
 

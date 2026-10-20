@@ -272,7 +272,7 @@ func sessionMount(cfg config.Config, name string) session.MountFunc {
 		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
 			readOnly: action.Mode == session.ModeRO,
 			subdir:   action.Subdir,
-		}, sessionRuntimeDir(cfg, name, action))
+		}, sessionRuntimeDir(cfg, name, action), nil)
 	}
 }
 

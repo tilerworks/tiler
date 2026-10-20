@@ -458,3 +458,36 @@ func assertNoStaging(t *testing.T, runtimeDir string) {
 		}
 	}
 }
+
+func TestBuildBlocksPacksRequestedFormat(t *testing.T) {
+	cfg := blocksConfig(t)
+	src := sourceDir(t)
+	body := []byte(strings.Repeat("0123456789abcdef", 2))
+	runner := &fakeRunner{body: body}
+	req := blocksRequest(cfg, src, runner.run, 16)
+	req.Format = FormatErofs
+	req.Compression = "gzip"
+	res, err := BuildFull(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner calls = %v", runner.calls)
+	}
+	call := runner.calls[0]
+	if call[0] != "mkfs.erofs" || call[3] != "-zdeflate" || call[len(call)-1] != src {
+		t.Fatalf("runner call = %q", call)
+	}
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Format.Type != FormatErofs || loaded.Format.Compression != "gzip" ||
+		loaded.ID != res.ID || len(loaded.Blocks) == 0 {
+		t.Fatalf("meta = %+v", loaded)
+	}
+}

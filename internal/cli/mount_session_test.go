@@ -155,7 +155,7 @@ func TestMountSessionShortFlag(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	mustSessionNew(t, lib, "dev")
 	view := filepath.Join(work, "view")
 	mountOK(t, lib, "mounted "+view+"\n", "mount", "-s", "dev", img, view)
@@ -177,7 +177,7 @@ func TestMountSessionResolutionPriority(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	mustSessionNew(t, lib, "flag-sess")
 	mustSessionNew(t, lib, "env-sess")
 	sessions := sessionsDir(home)
@@ -221,7 +221,7 @@ func TestMountImplicitSessionIsIsomorphic(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 
@@ -271,7 +271,7 @@ func TestMountWriteAheadOrdering(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	sessions := sessionsDir(home)
 	mustSessionNew(t, lib, "dev")
@@ -306,7 +306,7 @@ func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "bare.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "mounted "+view+"\n", "mount", "--session", "dev", img, view)
@@ -325,7 +325,7 @@ func TestMountSessionErrors(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 
 	// A bad flag value is a usage problem.
@@ -357,7 +357,7 @@ func TestMountFailureRecordsFailedAction(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	mustSessionNew(t, lib, "dev")
 
@@ -389,7 +389,7 @@ func TestMountReuseKeepsOutputAndRecords(t *testing.T) {
 	f := withMountSeams(t, nil)
 	f.reused = true
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	mustSessionNew(t, lib, "dev")
 	mountOK(t, lib, "already mounted "+view+"\n", "mount", "--session", "dev", img, view)
@@ -405,7 +405,7 @@ func TestMountImplicitSessionDiscardsFailedAndReusedRecords(t *testing.T) {
 	_, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	sessions := sessionsDir(home)
 
@@ -446,7 +446,7 @@ func TestMountIntoClosedSessionIsRefused(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	mustSessionNew(t, lib, "dev")
 	if _, stderr, _, err := runCmd(t, append(lib, "session", "close", "dev")...); err != nil {
@@ -463,7 +463,7 @@ func TestMountRemovableMarksImplicitSession(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	sessions := sessionsDir(home)
 
@@ -493,7 +493,7 @@ func TestMountRemovableRejectsNamedSession(t *testing.T) {
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
 	img := filepath.Join(work, "x.sqsh")
-	writeTestFile(t, img, "bytes")
+	writeSquashFile(t, img)
 	view := filepath.Join(work, "view")
 	mustSessionNew(t, lib, "dev")
 

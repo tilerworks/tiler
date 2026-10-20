@@ -29,11 +29,10 @@ func TestDoctorPrintsEveryProbeName(t *testing.T) {
 	}
 	for _, name := range []string{
 		"fuse_device",
-		"squashfuse_ll",
 		"fuse_overlayfs",
 		"fusermount3",
-		"mksquashfs",
 		"git",
+		"image_toolchain",
 		"squashfuse_subdir",
 		"file_limit_images",
 		"file_limit_cache",

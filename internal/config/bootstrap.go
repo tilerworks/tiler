@@ -21,6 +21,8 @@ images_dir: ~/.tiler/images
 sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
 cache_dir: ~/.tiler/cache
 log_level: info
+# image_format: squashfs        # squashfs or erofs; omit to infer from tools
+# image_compression: zstd       # omit to use the format default
 # split_size: 2G                # 0 disables splitting; bare bytes or k/m/g/t
 `
 

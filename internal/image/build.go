@@ -3,15 +3,14 @@ package image
 import (
 	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/gitscene"
 )
 
@@ -38,6 +37,14 @@ type FullRequest struct {
 	Source  Source
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
+	// Format is the container type to pack, for example "squashfs"
+	// or "erofs". Empty selects squashfs, so callers that omit the
+	// field keep the historical default.
+	Format string
+	// Compression is the container compression. Empty selects the
+	// format default. The registered format decides which names are
+	// legal.
+	Compression string
 	// BlockSize, when positive, selects the blocks pipeline and is the
 	// chunk size. Zero lets Config.SplitSize decide: a positive
 	// SplitSize selects blocks with that size; zero keeps the
@@ -49,7 +56,8 @@ type FullRequest struct {
 	Refs Refs
 	// Now returns the creation time. Nil means time.Now.
 	Now func() time.Time
-	// Run executes external tools. Nil runs mksquashfs through exec.
+	// Run executes external tools. Nil runs the container packer
+	// through exec.
 	Run ToolRunner
 	// PrepareScene sanitizes a git source before packing. Nil uses
 	// gitscene.Prepare when the source looks like a git repository;
@@ -78,7 +86,7 @@ type FullResult struct {
 // `tiler build --split`. The source must exist and stay
 // outside every reserved tree. When the source is a git repository,
 // it is sanitized first and any git failure aborts the build before
-// packing. mksquashfs writes a synced temporary file inside the
+// packing. The container packer writes a synced temporary file inside the
 // repository directory; the image is hashed from disk, the metadata
 // is validated, and the atomic publish renames both into place,
 // archiving the previous chain when it is not referenced. An
@@ -93,14 +101,14 @@ func BuildFull(req FullRequest) (FullResult, error) {
 	if req.BlockSize > 0 {
 		return buildBlocks(req)
 	}
-	repo, err := validateFull(req)
+	repo, err := validateFull(&req)
 	if err != nil {
 		return FullResult{}, err
 	}
 	if err := prepareScene(req); err != nil {
 		return FullResult{}, err
 	}
-	imgTmp, err := packTemp(repo, req.SrcDir, toolRunner(req))
+	imgTmp, err := packTemp(repo, req.SrcDir, toolRunner(req), req.Format, req.Compression)
 	if err != nil {
 		return FullResult{}, err
 	}
@@ -145,7 +153,7 @@ func prepareScene(req FullRequest) error {
 	return nil
 }
 
-func validateFull(req FullRequest) (Repo, error) {
+func validateFull(req *FullRequest) (Repo, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
 		return Repo{}, err
@@ -153,7 +161,55 @@ func validateFull(req FullRequest) (Repo, error) {
 	if err := checkSourceDir(req.SrcDir, req.Config); err != nil {
 		return Repo{}, err
 	}
+	if err := resolveFullRequest(req); err != nil {
+		return Repo{}, err
+	}
 	return repo, nil
+}
+
+// resolveFullRequest fills the container type and compression used
+// to pack and to record meta. An empty type selects squashfs. An
+// empty compression selects that format's default.
+func resolveFullRequest(req *FullRequest) error {
+	typ := req.Format
+	if typ == "" {
+		typ = FormatSquashfs
+	}
+	format, err := container.Lookup(typ)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	compression := req.Compression
+	if compression == "" {
+		compression = format.DefaultCompression()
+	}
+	if err := acceptCompression(format, compression); err != nil {
+		return err
+	}
+	req.Format = format.Type()
+	req.Compression = compression
+	return nil
+}
+
+// acceptStoredContainer checks a container recorded on metadata.
+// Incremental builds inherit this pair and refuse a type or
+// compression the registry does not allow.
+func acceptStoredContainer(format Format) error {
+	f, err := container.Lookup(format.Type)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	return acceptCompression(f, format.Compression)
+}
+
+// acceptCompression reports a compression the format refuses. An
+// empty compression is refused; callers that want the default fill
+// it in before calling.
+func acceptCompression(f container.Format, compression string) error {
+	if compression == "" || !f.AllowsCompression(compression) {
+		return fmt.Errorf("build: %s compression %q is not allowed", f.Type(), compression)
+	}
+	return nil
 }
 
 // checkSourceDir requires an existing directory outside every
@@ -173,10 +229,10 @@ func checkSourceDir(src string, cfg config.Config) error {
 	return nil
 }
 
-// packTemp runs mksquashfs into a fresh temporary file inside the
-// repository directory and syncs it, so the digest and the later
-// rename cover the bytes that actually landed on disk.
-func packTemp(repo Repo, src string, run ToolRunner) (string, error) {
+// packTemp runs the container packer into a fresh temporary file
+// inside the repository directory and syncs it, so the digest and
+// the later rename cover the bytes that actually landed on disk.
+func packTemp(repo Repo, src string, run ToolRunner, typ, compression string) (string, error) {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
@@ -185,7 +241,7 @@ func packTemp(repo Repo, src string, run ToolRunner) (string, error) {
 		return "", fmt.Errorf("build: %w", err)
 	}
 	tmp := filepath.Join(repo.Dir, name)
-	if err := packFullImage(run, src, tmp); err != nil {
+	if err := packFullImage(run, src, tmp, typ, compression); err != nil {
 		removeFile(tmp)
 		return "", failTool(tmp, err)
 	}
@@ -200,11 +256,26 @@ func packTemp(repo Repo, src string, run ToolRunner) (string, error) {
 	return tmp, nil
 }
 
-// packFullImage is the mksquashfs argument list for a full image.
-// The creation timestamp is pinned so the same tree packs to the
-// same bytes.
-func packFullImage(run ToolRunner, src, dst string) error {
-	return run("mksquashfs", sourceDateEnv(src), src, dst, "-comp", "zstd", "-noappend")
+// packFullImage packs a full image through the registered container.
+// The format pins the creation timestamp so the same tree packs to
+// the same bytes.
+func packFullImage(run ToolRunner, src, dst, typ, compression string) error {
+	return packContainer(run, src, dst, typ, compression, false)
+}
+
+// packContainer looks up typ and packs src to dst. incr selects the
+// incremental packer, which keeps whiteouts when the format stores
+// them.
+func packContainer(run ToolRunner, src, dst, typ, compression string, incr bool) error {
+	format, err := container.Lookup(typ)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	runner := container.ToolRunner(run)
+	if incr {
+		return format.PackIncr(runner, src, dst, compression)
+	}
+	return format.PackFull(runner, src, dst, compression)
 }
 
 // finishFull hashes the packed file, assembles and validates the
@@ -261,7 +332,7 @@ func newFullMeta(repo Repo, req FullRequest, now func() time.Time) Meta {
 		Repo:      repo.Repo,
 		Version:   req.Version,
 		Kind:      KindFull,
-		Format:    Format{Type: FormatSquashfs, Compression: CompressionZstd},
+		Format:    Format{Type: req.Format, Compression: req.Compression},
 		Source:    req.Source,
 		CreatedAt: now().UTC(),
 		Builder:   req.Builder,
@@ -284,42 +355,6 @@ func runTool(name string, env []string, args ...string) error {
 		return fmt.Errorf("%s: %w: %s", name, err, tailOutput(out))
 	}
 	return nil
-}
-
-// sourceDateEnv pins the filesystem creation time mksquashfs embeds,
-// so an unchanged tree packs to byte-identical images and the image
-// id stays reproducible. A SOURCE_DATE_EPOCH already in the
-// environment is honored; otherwise the epoch derives from the
-// newest mtime in the tree that is about to be packed.
-func sourceDateEnv(src string) []string {
-	return []string{"SOURCE_DATE_EPOCH=" + strconv.FormatInt(sourceDateEpoch(src), 10)}
-}
-
-// sourceDateEpoch is the deterministic build timestamp of one source
-// tree. Unreadable entries never abort the build; a tree with no
-// readable mtime falls back to the zero epoch, keeping same input
-// same output.
-func sourceDateEpoch(src string) int64 {
-	if value, ok := os.LookupEnv("SOURCE_DATE_EPOCH"); ok {
-		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n >= 0 {
-			return n
-		}
-	}
-	var newest int64
-	_ = filepath.WalkDir(src, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return nil
-		}
-		if m := info.ModTime().Unix(); m > newest {
-			newest = m
-		}
-		return nil
-	})
-	return newest
 }
 
 func tailOutput(out []byte) string {

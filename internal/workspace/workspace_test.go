@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 type recRunner struct {
@@ -49,6 +51,7 @@ func testRequest(t *testing.T) (Request, string) {
 	req := Request{
 		Full:       filepath.Join(dir, "image.sqsh"),
 		Layers:     []string{filepath.Join(dir, "inc1.sqsh"), filepath.Join(dir, "inc2.sqsh")},
+		Format:     "squashfs",
 		RuntimeDir: filepath.Join(dir, "runtime", "m1"),
 		MergedDir:  filepath.Join(dir, "merged"),
 	}
@@ -1158,54 +1161,103 @@ func TestMountCleansResidueOnPlannedLowerPoints(t *testing.T) {
 	}
 }
 
-func TestSquashfsArgvGolden(t *testing.T) {
-	const (
-		orig   = "/images/alice/app/image.sqsh"
-		cached = "/cache/4f2a9c.sqsh"
-		point  = "/runtime/up-1-2/lower-0"
-	)
-	tests := []struct {
-		name    string
-		fsname  string
-		subdir  string
-		options string
-		path    string
-		want    string
-	}{
-		{
-			name:   "plain member publishes its own path",
-			fsname: orig, path: orig,
-			want: "fsname=" + orig,
-		},
-		{
-			name:   "cache copy keeps the original identity",
-			fsname: orig, path: cached,
-			want: "fsname=" + orig,
-		},
-		{
-			name:   "subdir joins the built-in option",
-			fsname: orig, subdir: "src/lib", path: orig,
-			want: "fsname=" + orig + ",subdir=src/lib",
-		},
-		{
-			name:   "configured options come last",
-			fsname: orig, options: "allow_other", path: cached,
-			want: "fsname=" + orig + ",allow_other",
-		},
-		{
-			name:   "subdir stays before configured options",
-			fsname: orig, subdir: "src", options: "allow_other", path: orig,
-			want: "fsname=" + orig + ",subdir=src,allow_other",
-		},
+// stubTools puts no-op binaries at the front of PATH so preflight
+// can see a container's FUSE client without the real program.
+func stubTools(t *testing.T, names ...string) {
+	t.Helper()
+	bin := t.TempDir()
+	for _, name := range names {
+		script := filepath.Join(bin, name)
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := squashfsArgv(tc.fsname, tc.subdir, tc.options, tc.path, point)
-			want := []string{"squashfuse_ll", "-o", tc.want, tc.path, point}
-			if !slices.Equal(got, want) {
-				t.Fatalf("argv = %q, want %q", got, want)
-			}
-		})
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestMountErofsUsesMountArgv(t *testing.T) {
+	req, _ := testRequest(t)
+	req.Format = "erofs"
+	req.SquashfsOptions = "allow_other"
+	stubTools(t, "erofsfuse", "fusermount3", "fuse-overlayfs")
+	rec := &recRunner{}
+	w, err := mountTest(t, req, rec.run, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, err := container.Lookup("erofs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rec.find("erofsfuse")
+	wantBytes := []string{req.Layers[1], req.Layers[0], req.Full}
+	if len(got) != len(wantBytes) {
+		t.Fatalf("erofsfuse calls = %v", got)
+	}
+	for i, call := range got {
+		want := format.MountArgv(wantBytes[i], "", req.SquashfsOptions, wantBytes[i], w.mounts[i])
+		if !slices.Equal(call, want) {
+			t.Fatalf("call %d = %q, want %q", i, call, want)
+		}
+	}
+	if len(rec.find("squashfuse_ll")) != 0 {
+		t.Fatalf("squashfuse_ll ran for an erofs stack: %v", rec.find("squashfuse_ll"))
+	}
+	if len(rec.find("fuse-overlayfs")) != 1 {
+		t.Fatalf("fuse-overlayfs calls = %v", rec.find("fuse-overlayfs"))
+	}
+}
+
+func TestMountErofsSubdirProbesWithHasSubdir(t *testing.T) {
+	req, _ := testRequest(t)
+	req.Format = "erofs"
+	req.Layers = nil
+	req.ReadOnly = true
+	req.Subdir = "src"
+	stubTools(t, "erofsfuse", "fusermount3")
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "subdir src") {
+		t.Fatalf("err = %v, want a missing-subdir refusal", err)
+	}
+	probes := rec.find("erofsfuse")
+	if len(probes) != 1 || probes[0][1] != "-o" || probes[0][2] != "ro" || probes[0][3] != req.Full {
+		t.Fatalf("probe = %v", probes)
+	}
+	if len(rec.find("unsquashfs")) != 0 || len(rec.find("squashfuse_ll")) != 0 {
+		t.Fatalf("wrong tools ran: %v", rec.calls)
+	}
+}
+
+func TestMountRejectsUnknownFormat(t *testing.T) {
+	req, _ := testRequest(t)
+	req.Format = "tar"
+	rec := &recRunner{}
+	_, err := mount(req, rec.run, testHooks())
+	if errors.Is(err, ErrUnavailable) {
+		t.Skipf("mounting unavailable here: %v", err)
+	}
+	if err == nil || !errors.Is(err, container.ErrUnknownType) {
+		t.Fatalf("err = %v, want an unknown container type", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran: %v", rec.calls)
+	}
+}
+
+func TestMountRejectsEmptyFormat(t *testing.T) {
+	req, _ := testRequest(t)
+	req.Format = ""
+	rec := &recRunner{}
+	_, err := mount(req, rec.run, testHooks())
+	if errors.Is(err, ErrUnavailable) {
+		t.Skipf("mounting unavailable here: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "container format is required") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran: %v", rec.calls)
 	}
 }
 
@@ -1254,7 +1306,10 @@ func TestPreflightToolchain(t *testing.T) {
 	if err := available(); err != nil {
 		t.Skipf("mounting unavailable here: %v", err)
 	}
-	all := []string{"squashfuse_ll", "fusermount3", "fuse-overlayfs", "unsquashfs", "concatfs"}
+	all := []string{
+		"squashfuse_ll", "erofsfuse", "fusermount3",
+		"fuse-overlayfs", "unsquashfs", "concatfs",
+	}
 	tests := []struct {
 		name    string
 		present []string
@@ -1264,25 +1319,37 @@ func TestPreflightToolchain(t *testing.T) {
 		{
 			name:    "direct read-only needs no overlay tools",
 			present: []string{"squashfuse_ll", "fusermount3"},
-			req:     Request{ReadOnly: true},
+			req:     Request{ReadOnly: true, Format: "squashfs"},
 		},
 		{
 			name:    "a read-only chain needs fuse-overlayfs",
 			present: []string{"squashfuse_ll", "fusermount3"},
-			req:     Request{ReadOnly: true, Layers: []string{"inc.sqsh"}},
+			req:     Request{ReadOnly: true, Format: "squashfs", Layers: []string{"inc.sqsh"}},
 			wantErr: "fuse-overlayfs is missing",
 		},
 		{
-			name:    "a subdir needs unsquashfs",
+			name:    "a squashfs subdir needs unsquashfs",
 			present: []string{"squashfuse_ll", "fusermount3", "fuse-overlayfs"},
-			req:     Request{Subdir: "src"},
+			req:     Request{Format: "squashfs", Subdir: "src"},
 			wantErr: "unsquashfs is missing",
+		},
+		{
+			name:    "an erofs subdir reuses erofsfuse",
+			present: []string{"erofsfuse", "fusermount3"},
+			req:     Request{ReadOnly: true, Format: "erofs", Subdir: "src"},
+		},
+		{
+			name:    "erofs needs its own fuse client",
+			present: []string{"squashfuse_ll", "fusermount3"},
+			req:     Request{ReadOnly: true, Format: "erofs"},
+			wantErr: "erofsfuse is missing",
 		},
 		{
 			name:    "a concat route needs concatfs",
 			present: []string{"squashfuse_ll", "fusermount3"},
 			req: Request{
 				ReadOnly: true,
+				Format:   "squashfs",
 				Concat:   &ConcatSource{BlocksDir: "blocks", ViewName: "image.concat"},
 			},
 			wantErr: "concatfs is missing",
@@ -1290,7 +1357,7 @@ func TestPreflightToolchain(t *testing.T) {
 		{
 			name:    "the complete toolchain passes",
 			present: all,
-			req:     Request{Layers: []string{"inc.sqsh"}, Subdir: "src"},
+			req:     Request{Format: "squashfs", Layers: []string{"inc.sqsh"}, Subdir: "src"},
 		},
 	}
 	for _, tc := range tests {

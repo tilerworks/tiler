@@ -62,9 +62,10 @@ func newImagesShowCmd() *cobra.Command {
 		Use:   "show <owner/repo>",
 		Short: "Show one image in detail",
 		Long: "Show prints a multi-line record for one active image:\n" +
-			"identity, each chain layer, the split payload, and the\n" +
-			"parked archive and hold ids. --json renders the same\n" +
-			"repository as one machine-readable object.",
+			"identity, the container format, each chain layer, the\n" +
+			"split payload, and the parked archive and hold ids.\n" +
+			"--json renders the same repository as one machine-readable\n" +
+			"object.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -270,6 +271,9 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 		{"sha256", meta.SHA256},
 		{"form", image.PayloadKind(meta)},
 	}
+	if line := formatDetail(meta.Format); line != "" {
+		fields = append(fields, [2]string{"format", line})
+	}
 	if meta.Builder != "" {
 		fields = append(fields, [2]string{"builder", meta.Builder})
 	}
@@ -335,6 +339,17 @@ func detailSource(src image.Source) string {
 	return strings.Join(parts, " ")
 }
 
+// formatDetail is the images show container line, type/compression.
+func formatDetail(format image.Format) string {
+	if format.Type == "" {
+		return ""
+	}
+	if format.Compression == "" {
+		return format.Type
+	}
+	return format.Type + "/" + format.Compression
+}
+
 // formatSize renders a byte count in binary units. Values under 1 KiB
 // stay in bytes. Larger values use one decimal only when it is not
 // zero.
@@ -395,6 +410,7 @@ type metaJSON struct {
 	Version    string      `json:"version"`
 	Kind       string      `json:"kind"`
 	Form       string      `json:"form,omitempty"`
+	Format     string      `json:"format,omitempty"`
 	Size       int64       `json:"size"`
 	SHA256     string      `json:"sha256"`
 	CreatedAt  string      `json:"created_at"`
@@ -453,6 +469,7 @@ func newMetaJSON(meta image.Meta) metaJSON {
 	if kind := image.PayloadKind(meta); kind != image.PayloadSingle {
 		view.Form = kind
 	}
+	view.Format = formatDetail(meta.Format)
 	for _, entry := range meta.Chain {
 		view.Chain = append(view.Chain, chainJSON{
 			ID:        entry.ID,

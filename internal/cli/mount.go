@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -55,8 +56,8 @@ func newMountCmd() *cobra.Command {
 		Short: "Mount an image as a workspace",
 		Long: "Mount serves <image> at <dir>: a writable merged view by\n" +
 			"default, or a read-only view with --read-only. <image> is an\n" +
-			"owner/repo library reference or the path of a single squashfs\n" +
-			"file; the library reference wins when an argument is both.\n" +
+			"owner/repo library reference or the path of one squashfs or\n" +
+			"erofs file; the library reference wins when an argument is both.\n" +
 			"Chain layers mount as a cascade, --subdir exposes one image\n" +
 			"subdirectory as the mount root, and --verify re-hashes every\n" +
 			"recorded digest instead of the default quick check. <dir>\n" +
@@ -93,6 +94,9 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if !ok {
 		return errors.New("mount: configuration is not loaded")
 	}
+	if err := gateAnyStack("mount"); err != nil {
+		return err
+	}
 	dir, err := filepath.Abs(args[1])
 	if err != nil {
 		return fmt.Errorf("mount: target: %w", err)
@@ -121,6 +125,21 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 			"mount: --verify needs an owner/repo image; a file path records no digest")}
 	}
 	if err := verifyTarget(target, flags.verify); err != nil {
+		return err
+	}
+	// Unknown magic and a meta/magic mismatch cannot succeed on
+	// replay. Refuse them before the write-ahead action is appended,
+	// or session open retries the bad mount and stops restoring
+	// later views in the same record.
+	blockPaths, err := guardMountFormat(cfg, target)
+	if err != nil {
+		return err
+	}
+	format, err := formatForGate(target, blockPaths)
+	if err != nil {
+		return err
+	}
+	if err := gateFormatTools("mount", format); err != nil {
 		return err
 	}
 	name, implicit, err := resolveMountSession(flags.session)
@@ -159,7 +178,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	result, err := engine.RunMount(name, action,
 		func(stored session.Action) (session.Result, error) {
 			return runMountEngine(cfg, target, dir, flags,
-				sessionRuntimeDir(cfg, name, stored))
+				sessionRuntimeDir(cfg, name, stored), blockPaths)
 		})
 	if implicit && (err != nil || result.Reused) {
 		// A just-created record whose action failed or merely adopted
@@ -350,16 +369,29 @@ func sessionRuntimeDir(cfg config.Config, name string, action session.Action) st
 // form selects the engine: the single-file cascade keeps the plain
 // stack mount, and a blocks payload reassembles into the cache.
 // runtimeDir is the session-scoped combination directory for this
-// action.
+// action. blockPaths, when non-nil, are blocks layers the mount
+// command already reassembled so a magic refusal could return
+// before this record existed. Replay passes nil and assembles here.
 func runMountEngine(
 	cfg config.Config,
 	target image.Target,
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
+	blockPaths []string,
 ) (session.Result, error) {
+	format, err := formatForGate(target, blockPaths)
+	if err != nil {
+		return session.Result{}, err
+	}
+	if err := gateAnyStack("mount"); err != nil {
+		return session.Result{}, err
+	}
+	if err := gateFormatTools("mount", format); err != nil {
+		return session.Result{}, err
+	}
 	if target.Form == image.PayloadBlocks {
-		return runBlocksEngine(cfg, target, dir, flags, runtimeDir)
+		return runBlocksEngine(cfg, target, dir, flags, runtimeDir, blockPaths)
 	}
 	return runStackEngine(cfg, target, dir, flags, runtimeDir)
 }
@@ -376,23 +408,28 @@ func runBlocksEngine(
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
+	blockPaths []string,
 ) (session.Result, error) {
-	req, err := blocksRequest(cfg, target, dir, flags, runtimeDir)
+	req, err := blocksRequest(cfg, target, dir, flags, runtimeDir, blockPaths)
 	if err != nil {
 		return session.Result{}, err
 	}
 	return runEngine(req)
 }
 
-// blocksRequest reassembles every blocks-form stack layer and
-// builds the overlay request. Layers arrive oldest-first (full,
-// then chain); the workspace reverses them so the newest wins.
+// blocksRequest builds the overlay request for a blocks payload.
+// blockPaths are layers the mount command already reassembled so a
+// magic refusal could return before write-ahead; nil means this
+// call reassembles them, which is the session replay path. Layers
+// arrive oldest-first (full, then chain); the workspace reverses
+// them so the newest wins.
 func blocksRequest(
 	cfg config.Config,
 	target image.Target,
 	dir string,
 	flags mountFlags,
 	runtimeDir string,
+	blockPaths []string,
 ) (workspace.Request, error) {
 	repo, err := image.OpenRepo(cfg.ImagesDir, target.Name)
 	if err != nil {
@@ -402,20 +439,16 @@ func blocksRequest(
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
-	layers := target.Members
-	if len(layers) == 0 {
-		layers = []image.Member{{
-			Size: target.Size, SHA256: target.SHA256, Blocks: target.Blocks,
-		}}
-	}
-	mounted := make([]string, 0, len(layers))
-	for _, layer := range layers {
-		materialized, err := assembleBlocks(
-			cfg.CacheDir, layer.Blocks, layer.SHA256, layer.Size)
+	mounted := blockPaths
+	if mounted == nil {
+		mounted, err = materializeBlockLayers(cfg, target)
 		if err != nil {
-			return workspace.Request{}, fmt.Errorf("mount: %w", err)
+			return workspace.Request{}, err
 		}
-		mounted = append(mounted, materialized)
+	}
+	format, err := resolveRequestFormat(target, mounted)
+	if err != nil {
+		return workspace.Request{}, err
 	}
 	// The canonical library path is the mount-table identity; the
 	// mounted bytes are the materialized cache copies, so the
@@ -425,6 +458,7 @@ func blocksRequest(
 		Full:            mounted[0],
 		FullFSName:      canonical,
 		Layers:          mounted[1:],
+		Format:          format,
 		ReadOnly:        flags.readOnly,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
@@ -544,10 +578,14 @@ func mountRequest(
 	flags mountFlags,
 	runtimeDir string,
 ) (workspace.Request, error) {
+	original := memberPaths(target)
+	format, err := resolveRequestFormat(target, original)
+	if err != nil {
+		return workspace.Request{}, err
+	}
 	mounted := make([]string, 0, len(target.Members))
-	original := make([]string, 0, len(target.Members))
-	for _, m := range target.Members {
-		path := m.Path
+	for i, m := range target.Members {
+		path := original[i]
 		if cfg.CacheEnabled {
 			cached, _, err := ensureCache(cfg.CacheDir, m.Path, m.SHA256)
 			if err != nil {
@@ -556,7 +594,6 @@ func mountRequest(
 			path = cached
 		}
 		mounted = append(mounted, path)
-		original = append(original, m.Path)
 	}
 	table, err := loadMountTable()
 	if err != nil {
@@ -565,6 +602,7 @@ func mountRequest(
 	req := workspace.Request{
 		Full:            mounted[0],
 		Layers:          mounted[1:],
+		Format:          format,
 		ReadOnly:        flags.readOnly,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
@@ -579,6 +617,134 @@ func mountRequest(
 		req.LayerFSNames = original[1:]
 	}
 	return req, nil
+}
+
+// guardMountFormat refuses unknown or mismatched container magic
+// before a mount action is appended. File-path and single-file
+// library paths are already known. A blocks payload is reassembled
+// first so the check sees the bytes that would be mounted; the cache
+// is content-addressed, and the returned paths are what the action
+// callback stacks. A nil path list means the payload is not blocks.
+func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) {
+	if target.Form == image.PayloadBlocks {
+		mounted, err := materializeBlockLayers(cfg, target)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := resolveRequestFormat(target, mounted); err != nil {
+			return nil, err
+		}
+		return mounted, nil
+	}
+	_, err := resolveRequestFormat(target, memberPaths(target))
+	return nil, err
+}
+
+// memberPaths lists single-file cascade paths in stack order. A
+// file-path image contributes its one file. Blocks layers keep empty
+// paths until reassembly fills the cache copies.
+func memberPaths(target image.Target) []string {
+	paths := make([]string, len(target.Members))
+	for i, member := range target.Members {
+		paths[i] = member.Path
+	}
+	return paths
+}
+
+// materializeBlockLayers reassembles every blocks-form stack layer
+// into the content-addressed cache, oldest first. An empty member
+// list falls back to the full-image block manifest.
+func materializeBlockLayers(cfg config.Config, target image.Target) ([]string, error) {
+	layers := target.Members
+	if len(layers) == 0 {
+		layers = []image.Member{{
+			Size: target.Size, SHA256: target.SHA256, Blocks: target.Blocks,
+		}}
+	}
+	mounted := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		materialized, err := assembleBlocks(
+			cfg.CacheDir, layer.Blocks, layer.SHA256, layer.Size)
+		if err != nil {
+			return nil, fmt.Errorf("mount: %w", err)
+		}
+		mounted = append(mounted, materialized)
+	}
+	return mounted, nil
+}
+
+// formatForGate is the container type the toolchain gate checks.
+// Library metadata already names it. A file path is detected, which
+// guardMountFormat has already refused when the magic is unknown.
+func formatForGate(target image.Target, blockPaths []string) (string, error) {
+	if target.Format != "" {
+		return target.Format, nil
+	}
+	paths := memberPaths(target)
+	if len(blockPaths) > 0 {
+		paths = blockPaths
+	}
+	return resolveRequestFormat(target, paths)
+}
+
+// resolveRequestFormat chooses the container type for one mount.
+// A file path is detected from magic and refused when no format
+// claims it. A library image must match the type recorded in
+// metadata on every file that will be mounted.
+func resolveRequestFormat(target image.Target, paths []string) (string, error) {
+	if !target.Library {
+		return detectMountFile(paths)
+	}
+	return matchLibraryFormat(target, paths)
+}
+
+// detectMountFile reads the magic of one file-path image. Unknown
+// or ambiguous magic is a usage error, raised before a FUSE client
+// is chosen for the wrong container.
+func detectMountFile(paths []string) (string, error) {
+	if len(paths) != 1 || paths[0] == "" {
+		return "", errors.New("mount: file path has no image file")
+	}
+	format, err := container.DetectFile(paths[0])
+	if err != nil {
+		if errors.Is(err, container.ErrNotDetected) || errors.Is(err, container.ErrAmbiguous) {
+			return "", usageError{fmt.Errorf("mount: %w", err)}
+		}
+		return "", fmt.Errorf("mount: %w", err)
+	}
+	return format.Type(), nil
+}
+
+// matchLibraryFormat refuses a library mount whose files do not
+// carry the magic of the type recorded in metadata.
+func matchLibraryFormat(target image.Target, paths []string) (string, error) {
+	if target.Format == "" {
+		return "", fmt.Errorf("mount: %s records no container format", target.Name)
+	}
+	want, err := container.Lookup(target.Format)
+	if err != nil {
+		return "", fmt.Errorf("mount: %w", err)
+	}
+	for _, path := range paths {
+		if err := matchOneFormat(path, want); err != nil {
+			return "", err
+		}
+	}
+	return want.Type(), nil
+}
+
+// matchOneFormat reports when path is not the container want names.
+func matchOneFormat(path string, want container.Format) error {
+	got, err := container.DetectFile(path)
+	if err != nil {
+		return fmt.Errorf("mount: %s does not match meta format %s: %w",
+			path, want.Type(), err)
+	}
+	if got.Type() != want.Type() {
+		return fmt.Errorf("mount: %s is %s but meta records %s",
+			path, got.Type(), want.Type())
+	}
+	return nil
 }
 
 // toEntries converts mount table rows into the minimal entries the

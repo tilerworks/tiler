@@ -99,10 +99,15 @@ func TestProbeAppendsFileLimitResultsAfterSubdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != len(toolSpecs)+9 {
-		t.Fatalf("probe count = %d, want %d", len(results), len(toolSpecs)+9)
+	if len(results) != probeCount() {
+		t.Fatalf("probe count = %d, want %d", len(results), probeCount())
 	}
-	limits := results[len(toolSpecs)+2 : len(toolSpecs)+4]
+	imagesAt := indexOf(t, results, nameFileLimitImages)
+	if results[imagesAt-1].Name != nameSquashfuseSub {
+		t.Fatalf("probe before file limits = %s, want %s",
+			results[imagesAt-1].Name, nameSquashfuseSub)
+	}
+	limits := results[imagesAt : imagesAt+2]
 	for i, want := range []struct {
 		name string
 		dir  string

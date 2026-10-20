@@ -21,7 +21,7 @@ func TestResolveMountBlocksForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Library || got.Name != "alice/app" || got.ID != fx.meta.ID {
+	if !got.Library || got.Name != "alice/app" || got.ID != fx.meta.ID || got.Format != FormatSquashfs {
 		t.Fatalf("target identity = %+v", got)
 	}
 	if got.Form != PayloadBlocks {
@@ -226,6 +226,7 @@ func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
+		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
 			Size:      meta.Size,

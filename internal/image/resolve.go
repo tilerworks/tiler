@@ -30,7 +30,11 @@ type Target struct {
 	// ID is the full image id of the resolved active chain or split
 	// payload when Library is true, and empty for a file path.
 	ID string
-	// Members lists the squashfs files to stack-mount: the full
+	// Format is the container type recorded on library metadata,
+	// for example "squashfs". A file path leaves it empty; the
+	// mount command detects that file.
+	Format string
+	// Members lists the container files to stack-mount: the full
 	// image first, then chain layers in stored oldest-first order.
 	Members []Member
 	// Form names the split payload shape: empty for the single-file
@@ -69,12 +73,12 @@ type BlockFile struct {
 	SHA256 string
 }
 
-// Member is one squashfs file of the stack with the facts recorded in
-// metadata, so callers can run the cheap quick check by default and a
-// full sha256 verification on demand. A file-path member records zero
-// facts because no metadata exists for it. For a blocks-form target,
-// Path stays empty and Blocks holds the layer's byte-block files;
-// mount reassembles each layer before stacking.
+// Member is one container file of the stack with the facts recorded
+// in metadata, so callers can run the cheap quick check by default
+// and a full sha256 verification on demand. A file-path member
+// records zero facts because no metadata exists for it. For a
+// blocks-form target, Path stays empty and Blocks holds the layer's
+// byte-block files; mount reassembles each layer before stacking.
 type Member struct {
 	// Path is the full image file or an incr/<id>.sqsh layer file.
 	// Empty for a blocks-form layer until reassembly fills a cache path.
@@ -140,7 +144,10 @@ func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{Library: true, Name: name, ID: meta.ID, Members: members}, nil
+	return Target{
+		Library: true, Name: name, ID: meta.ID,
+		Format: meta.Format.Type, Members: members,
+	}, nil
 }
 
 // resolveBlocks expands the full image blocks plus every chain layer
@@ -187,6 +194,7 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 		Library:    true,
 		Name:       name,
 		ID:         meta.ID,
+		Format:     meta.Format.Type,
 		Form:       PayloadBlocks,
 		Size:       meta.Size,
 		SHA256:     meta.SHA256,

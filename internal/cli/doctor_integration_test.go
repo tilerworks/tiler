@@ -15,11 +15,10 @@ import (
 // doctorProbeNames is the full probe set a real doctor run renders.
 var doctorProbeNames = []string{
 	"fuse_device",
-	"squashfuse_ll",
 	"fuse_overlayfs",
 	"fusermount3",
-	"mksquashfs",
 	"git",
+	"image_toolchain",
 	"squashfuse_subdir",
 	"file_limit_images",
 	"file_limit_cache",
@@ -74,10 +73,8 @@ func TestDoctorRealEnvironmentFullProbe(t *testing.T) {
 	// real tool output; only genuinely absent tools may fail. This is
 	// the assertion that catches a parser regression on a live host.
 	toolBinaries := map[string]string{
-		"squashfuse_ll":  "squashfuse_ll",
 		"fuse_overlayfs": "fuse-overlayfs",
 		"fusermount3":    "fusermount3",
-		"mksquashfs":     "mksquashfs",
 		"git":            "git",
 	}
 	for name, binary := range toolBinaries {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,6 +44,25 @@ func withBuildSeams(t *testing.T, table []mountinfo.Mount) {
 	loadMountTable = func() ([]mountinfo.Mount, error) { return table, nil }
 	packTool = fakePacker(t)
 	incrSmoke = func(string) error { return nil }
+	installFoundTools(t)
+}
+
+// installFoundTools reports every external binary as present. Command
+// tests that need a missing stack replace toolLookPath afterwards.
+func installFoundTools(t *testing.T) {
+	t.Helper()
+	orig := toolLookPath
+	toolLookPath = func(name string) (string, error) {
+		return "/usr/bin/" + name, nil
+	}
+	origHelp := erofsHelp
+	erofsHelp = func() (string, error) {
+		return "Available compressors are: lz4, lz4hc, lzma, deflate, zstd\n", nil
+	}
+	t.Cleanup(func() {
+		toolLookPath = orig
+		erofsHelp = origHelp
+	})
 }
 
 // fakePacker writes deterministic bytes derived from the source tree
@@ -78,9 +98,25 @@ func fakePacker(t *testing.T) image.ToolRunner {
 		if err != nil {
 			return err
 		}
-		body := "fake-squashfs " + hex.EncodeToString(sum.Sum(nil))
+		body := "hsqs-fake " + hex.EncodeToString(sum.Sum(nil))
 		return os.WriteFile(args[1], []byte(body), 0o644)
 	}
+}
+
+// writeSquashFile writes a regular file whose leading bytes are the
+// squashfs magic, so a file-path mount detects squashfs.
+func writeSquashFile(t *testing.T, path string) {
+	t.Helper()
+	writeTestFile(t, path, "hsqs-fake")
+}
+
+// writeErofsFile writes a regular file with the erofs superblock
+// magic at offset 1024, so a file-path mount detects erofs.
+func writeErofsFile(t *testing.T, path string) {
+	t.Helper()
+	body := make([]byte, 1028)
+	copy(body[1024:], []byte{0xE2, 0xE1, 0xF5, 0xE0})
+	writeTestFile(t, path, string(body))
 }
 
 func writeTestFile(t *testing.T, path, body string) {
@@ -165,6 +201,9 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 	if meta.Builder != Version {
 		t.Fatalf("builder = %q, want %q", meta.Builder, Version)
 	}
+	if meta.Format.Type != image.FormatSquashfs || meta.Format.Compression != image.CompressionZstd {
+		t.Fatalf("format = %s/%s, want squashfs/zstd", meta.Format.Type, meta.Format.Compression)
+	}
 }
 
 func TestBuildHelpShowsSplit(t *testing.T) {
@@ -176,6 +215,7 @@ func TestBuildHelpShowsSplit(t *testing.T) {
 	help := stdout + stderr
 	for _, want := range []string{
 		"-s, --split", "-f, --full", "-i, --incremental", "-I, --image",
+		"--format", "--compression",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("build help missing %s:\n%s", want, help)
@@ -266,6 +306,8 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 		{name: "short incr outside a view", args: []string{"build", "-i", "-I", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
 		{name: "bad split size", args: []string{"build", "--split", "1.5G", "--image", "alice/app", src}},
+		{name: "erofs xz", args: []string{"build", "--format", "erofs", "--compression", "xz", "--image", "alice/app", src}},
+		{name: "unknown format", args: []string{"build", "--format", "tar", "--image", "alice/app", src}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -443,5 +485,211 @@ func TestTreeBytesSumsFilesNotDirectories(t *testing.T) {
 	}
 	if got != 6 {
 		t.Fatalf("treeBytes = %d, want 6", got)
+	}
+}
+
+func TestBuildResolvesFormatFlagConfigThenTools(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	t.Run("config selects erofs", func(t *testing.T) {
+		writeProjectConfig(t, work, "image_format: erofs\nimage_compression: lz4\n")
+		packTool = packAny(t, "mkfs.erofs")
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/cfg", src)...)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, stderr)
+		}
+		assertBuiltFormat(t, imagesDir, "alice/cfg", buildOutput(t, stdout), image.FormatErofs, "lz4")
+	})
+
+	t.Run("flag overrides config", func(t *testing.T) {
+		writeProjectConfig(t, work, "image_format: erofs\nimage_compression: lz4\n")
+		packTool = fakePacker(t)
+		stdout, stderr, _, err := runCmd(t, append(lib,
+			"build", "--format", "squashfs", "--compression", "gzip", "--image", "alice/flag", src)...)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, stderr)
+		}
+		assertBuiltFormat(t, imagesDir, "alice/flag", buildOutput(t, stdout), image.FormatSquashfs, "gzip")
+	})
+
+	t.Run("erofs toolchain alone infers erofs", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(work, ".tiler.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		toolLookPath = lookOnly("mkfs.erofs", "erofsfuse")
+		packTool = packAny(t, "mkfs.erofs")
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/infer", src)...)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, stderr)
+		}
+		assertBuiltFormat(t, imagesDir, "alice/infer", buildOutput(t, stdout), image.FormatErofs, image.CompressionZstd)
+	})
+}
+
+func TestBuildErofsUsesLz4WhenZstdIsMissing(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	erofsHelp = func() (string, error) {
+		return "Available compressors are: lz4, lz4hc, lzma, deflate, libdeflate\n", nil
+	}
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	packTool = packAny(t, "mkfs.erofs")
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--format", "erofs", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	assertBuiltFormat(t, imagesDir, "alice/app", buildOutput(t, stdout), image.FormatErofs, "lz4")
+
+	_, _, _, err = runCmd(t, append(lib,
+		"build", "--format", "erofs", "--compression", "zstd", "--image", "alice/zstd", src)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), `no "zstd" compressor`) {
+		t.Fatalf("explicit zstd: ExitCode(%v) = %d", err, ExitCode(err))
+	}
+}
+
+func TestBuildErofsXZIsUsage(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	_, _, _, err := runCmd(t, append(lib,
+		"build", "--format", "erofs", "--compression", "xz", "--image", "alice/app", src)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("ExitCode(%v) = %d, want usage", err, ExitCode(err))
+	}
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("rejected build left an image: %v", statErr)
+	}
+}
+
+func TestBuildRefusesWhenNoStackOrFormatToolsMissing(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	toolLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	_, _, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "no complete image toolchain") ||
+		!strings.Contains(err.Error(), "tiler doctor") {
+		t.Fatalf("no stack: ExitCode(%v) = %d", err, ExitCode(err))
+	}
+
+	toolLookPath = lookOnly("mkfs.erofs", "erofsfuse")
+	_, _, _, err = runCmd(t, append(lib, "build", "--format", "squashfs", "--image", "alice/app", src)...)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "squashfs toolchain is incomplete") {
+		t.Fatalf("fine gate: ExitCode(%v) = %d", err, ExitCode(err))
+	}
+}
+
+func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	runtimeDir := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(runtimeDir, "upper")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	buildImage(t, lib, "alice/app", src)
+	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(merged)
+
+	_, _, _, err := runCmd(t, append(lib, "build", "--incremental", "--format", "erofs")...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("format conflict: ExitCode(%v) = %d", err, ExitCode(err))
+	}
+	_, _, _, err = runCmd(t, append(lib, "build", "--compression", "gzip")...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("compression conflict: ExitCode(%v) = %d", err, ExitCode(err))
+	}
+
+	writeProjectConfig(t, work, "image_format: erofs\nimage_compression: lz4\n")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
+	if err != nil {
+		t.Fatalf("inherit build: %v\n%s", err, stderr)
+	}
+	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Format.Type != image.FormatSquashfs || meta.Format.Compression != image.CompressionZstd {
+		t.Fatalf("inherited format = %s/%s", meta.Format.Type, meta.Format.Compression)
+	}
+	if len(meta.Chain) != 1 || meta.Chain[0].ID != buildOutput(t, stdout) {
+		t.Fatalf("chain = %+v", meta.Chain)
+	}
+}
+
+func assertBuiltFormat(t *testing.T, imagesDir, name, id, format, compression string) {
+	t.Helper()
+	owner, repo, _ := strings.Cut(name, "/")
+	meta, err := image.Load(filepath.Join(imagesDir, owner, repo, "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ID != id || meta.Format.Type != format || meta.Format.Compression != compression {
+		t.Fatalf("meta id=%s format=%s/%s, want %s %s/%s",
+			meta.ID, meta.Format.Type, meta.Format.Compression, id, format, compression)
+	}
+}
+
+func packAny(t *testing.T, names ...string) image.ToolRunner {
+	t.Helper()
+	allow := map[string]bool{}
+	for _, name := range names {
+		allow[name] = true
+	}
+	return func(name string, _ []string, args ...string) error {
+		if !allow[name] {
+			return fmt.Errorf("unexpected tool %q", name)
+		}
+		dst, err := packDestination(name, args)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, []byte("packed-by-"+name), 0o644)
+	}
+}
+
+func packDestination(name string, args []string) (string, error) {
+	switch name {
+	case "mksquashfs":
+		if len(args) < 2 {
+			return "", fmt.Errorf("mksquashfs args %v", args)
+		}
+		return args[1], nil
+	case "mkfs.erofs":
+		if len(args) < 2 {
+			return "", fmt.Errorf("mkfs.erofs args %v", args)
+		}
+		return args[len(args)-2], nil
+	default:
+		return "", fmt.Errorf("no destination for %s", name)
+	}
+}
+
+func lookOnly(names ...string) func(string) (string, error) {
+	set := map[string]bool{}
+	for _, name := range names {
+		set[name] = true
+	}
+	return func(name string) (string, error) {
+		if set[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", exec.ErrNotFound
 	}
 }

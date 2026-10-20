@@ -180,6 +180,9 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if req.FullFSName != canonical {
 		t.Errorf("FullFSName = %q, want the canonical library path", req.FullFSName)
 	}
+	if req.Format != image.FormatSquashfs {
+		t.Errorf("format = %q, want squashfs", req.Format)
+	}
 	if req.Concat != nil {
 		t.Errorf("the reassembly route set a concat source: %+v", req.Concat)
 	}
@@ -254,6 +257,9 @@ func TestMountBlocksChainReassemblesAndStacks(t *testing.T) {
 	wantLayer := filepath.Join(cache, layerSum+image.SquashExt)
 	if req.Full != wantFull {
 		t.Errorf("Full = %q, want %q", req.Full, wantFull)
+	}
+	if req.Format != image.FormatSquashfs {
+		t.Errorf("format = %q, want squashfs", req.Format)
 	}
 	if len(req.Layers) != 1 || req.Layers[0] != wantLayer {
 		t.Errorf("Layers = %v, want [%s]", req.Layers, wantLayer)
