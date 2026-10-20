@@ -193,12 +193,11 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 
 	// A plain mount creates one generated session and records the
 	// mount in it.
-	mountOK(t, lib, "mounted "+view+"\n", "mount", "alice/app", view)
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", "alice/app", view)
 	names := listSessionNames(t, sessionsDir(home))
-	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
-		t.Fatalf("sessions = %v, want one generated record", names)
+	if len(names) != 1 || names[0] != generated {
+		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
-	generated := names[0]
 	writeTestFile(t, filepath.Join(view, "sub", "wip.txt"), "wip\n")
 	if out := mustCmd(t, append(lib, "session", "list")...); out != generated+" active mounts=1\n" {
 		t.Fatalf("list output = %q", out)

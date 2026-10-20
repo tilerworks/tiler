@@ -134,6 +134,46 @@ func mustClose(t *testing.T, lib []string, name string) (string, string, error) 
 	return stdout, stderr, err
 }
 
+func TestSessionNewGeneratesName(t *testing.T) {
+	home, _ := withWorkspace(t)
+	_, lib := libFlags(home)
+	withMountSeams(t, nil)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "new")...)
+	if err != nil {
+		t.Fatalf("session new: %v\n%s", err, stderr)
+	}
+	name, ok := strings.CutPrefix(stdout, "created ")
+	if !ok || !strings.HasSuffix(name, "\n") {
+		t.Fatalf("new stdout = %q, want created <name>", stdout)
+	}
+	name = strings.TrimSuffix(name, "\n")
+	if !generatedSessionName.MatchString(name) {
+		t.Fatalf("generated name %q has unexpected shape", name)
+	}
+	rec := loadSessionRecord(t, sessionsDir(home), name)
+	if rec.Name != name || rec.State != session.StateActive || rec.RemoveOnClose {
+		t.Fatalf("record = %+v", rec)
+	}
+
+	// --rm without a name also generates and marks the record.
+	stdout, stderr, _, err = runCmd(t, append(lib, "session", "new", "--rm")...)
+	if err != nil {
+		t.Fatalf("session new --rm: %v\n%s", err, stderr)
+	}
+	rmName, ok := strings.CutPrefix(stdout, "created ")
+	if !ok || !strings.HasSuffix(rmName, "\n") {
+		t.Fatalf("--rm stdout = %q", stdout)
+	}
+	rmName = strings.TrimSuffix(rmName, "\n")
+	if !generatedSessionName.MatchString(rmName) || rmName == name {
+		t.Fatalf("generated --rm name %q (earlier %q)", rmName, name)
+	}
+	if rec := loadSessionRecord(t, sessionsDir(home), rmName); !rec.RemoveOnClose {
+		t.Fatalf("generated --rm record not marked: %+v", rec)
+	}
+}
+
 func TestSessionUsageErrors(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
@@ -142,7 +182,6 @@ func TestSessionUsageErrors(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "new without a name", args: []string{"session", "new"}},
 		{name: "new with two names", args: []string{"session", "new", "a", "b"}},
 		{name: "new with a path-shaped name", args: []string{"session", "new", "a/b"}},
 		{name: "new with a dot name", args: []string{"session", "new", ".."}},

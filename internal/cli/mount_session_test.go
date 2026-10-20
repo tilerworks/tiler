@@ -61,6 +61,37 @@ func mountOK(t *testing.T, lib []string, want string, args ...string) {
 	}
 }
 
+// parseNewSessionCreated splits mount stdout into the generated
+// session name and the remaining mounted/already-mounted line.
+func parseNewSessionCreated(stdout string) (name, rest string, ok bool) {
+	const prefix = "new session created: "
+	if !strings.HasPrefix(stdout, prefix) {
+		return "", "", false
+	}
+	name, rest, ok = strings.Cut(stdout[len(prefix):], "\n")
+	return name, rest, ok
+}
+
+// mountCreatedOK runs a mount that creates a generated session and
+// checks stdout is "new session created: <name>\n" plus wantMountLine.
+// It returns the generated session name.
+func mountCreatedOK(t *testing.T, lib []string, wantMountLine string, args ...string) string {
+	t.Helper()
+	stdout, stderr, _, err := runCmd(t, append(lib, args...)...)
+	if err != nil {
+		t.Fatalf("mount %v: %v\n%s", args, err, stderr)
+	}
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) {
+		t.Fatalf("mount stdout = %q, want new session created: <name>\\n%s",
+			stdout, wantMountLine)
+	}
+	if rest != wantMountLine {
+		t.Fatalf("mount stdout after create = %q, want %q", rest, wantMountLine)
+	}
+	return name
+}
+
 func TestMountRecordsActionInFlagSession(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -135,7 +166,7 @@ func TestMountSessionResolutionPriority(t *testing.T) {
 		t.Errorf("env session actions = %+v", rec.Actions)
 	}
 
-	// The environment wins over implicit creation.
+	// The environment wins over generated creation.
 	view = filepath.Join(work, "view2")
 	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 	rec := loadSessionRecord(t, sessions, "env-sess")
@@ -146,22 +177,10 @@ func TestMountSessionResolutionPriority(t *testing.T) {
 	// Without any context a generated adjective-animal session is created.
 	t.Setenv(sessionEnvVar, "")
 	view = filepath.Join(work, "view3")
-	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 	names := listSessionNames(t, sessions)
 	if len(names) != 3 {
 		t.Fatalf("sessions = %v", names)
-	}
-	var generated string
-	for _, name := range names {
-		if name != "flag-sess" && name != "env-sess" {
-			generated = name
-		}
-	}
-	if generated == "" {
-		t.Fatalf("no generated session in %v", names)
-	}
-	if !generatedSessionName.MatchString(generated) {
-		t.Fatalf("generated session name %q has unexpected shape", generated)
 	}
 	if rec := loadSessionRecord(t, sessions, generated); len(rec.Actions) != 1 ||
 		rec.Actions[0].Mountpoint != view {
@@ -176,13 +195,12 @@ func TestMountImplicitSessionIsIsomorphic(t *testing.T) {
 	img := filepath.Join(work, "x.sqsh")
 	writeTestFile(t, img, "bytes")
 	view := filepath.Join(work, "view")
-	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 
 	names := listSessionNames(t, sessionsDir(home))
-	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
-		t.Fatalf("sessions = %v, want one generated record", names)
+	if len(names) != 1 || names[0] != generated {
+		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
-	generated := names[0]
 
 	// The same command surface operates on the generated session.
 	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", generated)...)
@@ -374,20 +392,20 @@ func TestMountImplicitSessionDiscardsFailedAndReusedRecords(t *testing.T) {
 
 	// A successful generated mount keeps its record.
 	f.mountErr = nil
-	mountOK(t, lib, "mounted "+view+"\n", "mount", img, view)
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", img, view)
 	names := listSessionNames(t, sessions)
-	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
-		t.Fatalf("sessions = %v, want one generated record", names)
+	if len(names) != 1 || names[0] != generated {
+		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
 
-	// An implicit remount that merely adopts the healthy view leaves
-	// no second record behind.
+	// A remount that merely adopts the healthy view still prints the
+	// create line for the discarded draw, then leaves no second record.
 	f.reused = true
-	mountOK(t, lib, "already mounted "+view+"\n", "mount", img, view)
-	if names := listSessionNames(t, sessions); len(names) != 1 {
+	mountCreatedOK(t, lib, "already mounted "+view+"\n", "mount", img, view)
+	if names := listSessionNames(t, sessions); len(names) != 1 || names[0] != generated {
 		t.Fatalf("sessions after reuse = %v, want the original record only", names)
 	}
-	rec := loadSessionRecord(t, sessions, names[0])
+	rec := loadSessionRecord(t, sessions, generated)
 	if len(rec.Actions) != 1 || rec.Actions[0].Status != session.StatusMounted {
 		t.Fatalf("original record actions = %+v", rec.Actions)
 	}
@@ -421,20 +439,20 @@ func TestMountRemovableMarksImplicitSession(t *testing.T) {
 
 	// --rm on a mount without session context marks the generated
 	// record it creates.
-	mountOK(t, lib, "mounted "+view+"\n", "mount", "--rm", img, view)
+	generated := mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", "--rm", img, view)
 	names := listSessionNames(t, sessions)
-	if len(names) != 1 || !generatedSessionName.MatchString(names[0]) {
-		t.Fatalf("sessions = %v, want one generated record", names)
+	if len(names) != 1 || names[0] != generated {
+		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
-	if rec := loadSessionRecord(t, sessions, names[0]); !rec.RemoveOnClose {
+	if rec := loadSessionRecord(t, sessions, generated); !rec.RemoveOnClose {
 		t.Fatalf("generated --rm record not marked: %+v", rec)
 	}
 	// show flags the --rm session with the rm marker.
-	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", names[0])...)
+	stdout, stderr, _, err := runCmd(t, append(lib, "session", "show", generated)...)
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, names[0]+" active rm") {
+	if !strings.Contains(stdout, generated+" active rm") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 }

@@ -41,35 +41,53 @@ func newSessionCmd() *cobra.Command {
 func newSessionNewCmd() *cobra.Command {
 	var removeOnClose bool
 	cmd := &cobra.Command{
-		Use:   "new <name>",
+		Use:   "new [name]",
 		Short: "Create an empty session",
 		Long: "New creates an empty session record. Mounts join it through\n" +
 			"the mount command's --session flag or the TILER_SESSION_ID\n" +
-			"environment variable. A name that already exists is refused.\n" +
+			"environment variable. Omit the name to generate an\n" +
+			"adjective-animal name. A name that already exists is refused.\n" +
 			"With --rm the session deletes itself when it closes: 'session\n" +
 			"close' removes the record and purges the runtime of every view,\n" +
 			"upper data included, instead of keeping the record for audit.",
-		Args: exactOneArg,
+		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, engine, err := sessionCommandEngine(cmd, "session new", args[0])
-			if err != nil {
-				return err
-			}
-			if removeOnClose {
-				err = engine.NewRemovable(args[0])
-			} else {
-				err = engine.New(args[0])
-			}
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", args[0])
-			return err
+			return runSessionNew(cmd, args, removeOnClose)
 		},
 	}
 	cmd.Flags().BoolVar(&removeOnClose, "rm", false,
 		"delete the session and purge its runtime when it closes")
 	return cmd
+}
+
+// runSessionNew creates one empty session: a caller-supplied name,
+// or a GenerateName draw with the same collision retry mount uses.
+func runSessionNew(cmd *cobra.Command, args []string, removeOnClose bool) error {
+	cfg, ok := loadedConfig(cmd)
+	if !ok {
+		return errors.New("session new: configuration is not loaded")
+	}
+	engine := sessionEngine(cfg)
+	var name string
+	var err error
+	if len(args) == 1 {
+		name = args[0]
+		if err := session.ValidateName(name); err != nil {
+			return usageError{err}
+		}
+		if removeOnClose {
+			err = engine.NewRemovable(name)
+		} else {
+			err = engine.New(name)
+		}
+	} else {
+		name, err = allocateGeneratedSession(engine, removeOnClose, "session new")
+	}
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", name)
+	return err
 }
 
 func newSessionOpenCmd() *cobra.Command {

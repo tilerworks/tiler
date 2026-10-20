@@ -68,11 +68,11 @@ func newMountCmd() *cobra.Command {
 			"binds one, and without either a generated adjective-animal\n" +
 			"session is created. 'session open' later replays the record.\n" +
 			"\n" +
-			"--rm marks that generated session for removal: once its last\n" +
+			"--rm marks the just-created session for removal: once its last\n" +
 			"view is unmounted the record is deleted and its runtime\n" +
 			"purged, upper data included. --rm cannot target a session\n" +
 			"named by --session or " + sessionEnvVar + "; use 'session new\n" +
-			"--rm <name>' for a named session.",
+			"--rm [name]' for a removable session created ahead of time.",
 		Args: exactTwoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMount(cmd, args, flags)
@@ -83,7 +83,7 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flags.verify, "verify", false, "re-verify every recorded digest with sha256")
 	cmd.Flags().StringVar(&flags.session, "session", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
-		"remove the generated session and purge its runtime when its last view unmounts")
+		"remove the just-created session and purge its runtime when its last view unmounts")
 	return cmd
 }
 
@@ -135,9 +135,10 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if flags.rm && !implicit {
 		return usageError{errors.New(
-			"mount: --rm applies to the implicit session mount creates;" +
-				" it cannot target a session named by --session or " + sessionEnvVar +
-				"; create one with 'session new --rm <name>'")}
+			"mount: --rm applies to the session mount creates when no" +
+				" --session or " + sessionEnvVar + " is set;" +
+				" it cannot target a named session;" +
+				" create one with 'session new --rm [name]'")}
 	}
 	// A killed FUSE daemon can leave the target unlisted while its
 	// session-scoped squashfuse lowers remain. Tear that residue down
@@ -146,7 +147,10 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	preemptStaleView(cfg, dir)
 	engine := sessionEngine(cfg)
 	if implicit {
-		if name, err = newImplicitSession(engine, flags.rm); err != nil {
+		if name, err = allocateGeneratedSession(engine, flags.rm, "mount"); err != nil {
+			return err
+		}
+		if _, err = fmt.Fprintf(cmd.OutOrStdout(), "new session created: %s\n", name); err != nil {
 			return err
 		}
 	}
@@ -164,10 +168,10 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 				sessionRuntimeDir(cfg, name, stored))
 		})
 	if implicit && (err != nil || result.Reused) {
-		// An implicit record whose action failed or merely adopted an
-		// already-healthy view never serves a live view of its own;
+		// A just-created record whose action failed or merely adopted
+		// an already-healthy view never serves a live view of its own;
 		// keeping it would pin the image and leak an active name.
-		discardImplicitSession(engine, name, err == nil && result.Reused)
+		discardGeneratedSession(engine, name, err == nil && result.Reused)
 	}
 	if err != nil {
 		return err
@@ -200,7 +204,7 @@ func resolveMountSession(flag string) (string, bool, error) {
 	return "", true, nil
 }
 
-// nameAllocAttempts is how many GenerateName draws a mount may take
+// nameAllocAttempts is how many GenerateName draws a caller may take
 // before giving up on a free session name.
 const nameAllocAttempts = 16
 
@@ -208,22 +212,21 @@ const nameAllocAttempts = 16
 // starts appending a trailing 0-9 to diversify after collisions.
 const nameDigitAfter = 8
 
-// newImplicitSession creates the single-action session a mount
-// without context records into. Generated sessions are isomorphic
-// with explicitly named ones and answer to the same session
-// commands. With removeOnClose the record is marked --rm, so it
-// deletes itself and purges its runtime once its last view
-// unmounts.
-func newImplicitSession(engine *session.Engine, removeOnClose bool) (string, error) {
+// allocateGeneratedSession creates a session with a GenerateName
+// draw, retrying on collisions. Generated sessions are isomorphic
+// with explicitly named ones. With removeOnClose the record is
+// marked --rm, so it deletes itself and purges its runtime once it
+// closes (or its last view unmounts).
+func allocateGeneratedSession(engine *session.Engine, removeOnClose bool, label string) (string, error) {
 	for attempt := 0; attempt < nameAllocAttempts; attempt++ {
 		name, err := session.GenerateName()
 		if err != nil {
-			return "", fmt.Errorf("mount: %w", err)
+			return "", fmt.Errorf("%s: %w", label, err)
 		}
 		if attempt >= nameDigitAfter {
 			name, err = session.WithCollisionDigit(name)
 			if err != nil {
-				return "", fmt.Errorf("mount: %w", err)
+				return "", fmt.Errorf("%s: %w", label, err)
 			}
 		}
 		if removeOnClose {
@@ -238,14 +241,14 @@ func newImplicitSession(engine *session.Engine, removeOnClose bool) (string, err
 			return "", err
 		}
 	}
-	return "", fmt.Errorf("mount: could not allocate a unique session name")
+	return "", fmt.Errorf("%s: could not allocate a unique session name", label)
 }
 
-// discardImplicitSession drops one implicit record that never came
-// to serve a live view. A discard failure is swallowed: the mount
-// outcome owns the command's error, and garbage collection remains
-// the fallback for the record.
-func discardImplicitSession(engine *session.Engine, name string, reused bool) {
+// discardGeneratedSession drops one just-created record that never
+// came to serve a live view. A discard failure is swallowed: the
+// mount outcome owns the command's error, and garbage collection
+// remains the fallback for the record.
+func discardGeneratedSession(engine *session.Engine, name string, reused bool) {
 	_, _ = engine.Discard(name, reused)
 }
 

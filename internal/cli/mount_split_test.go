@@ -199,7 +199,8 @@ func TestMountBlocksReassembleRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	// Blocks mounts materialize through reassembly.
@@ -266,7 +267,8 @@ func TestMountBlocksChainReassemblesAndStacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if f.assembleN != 2 {
@@ -374,7 +376,8 @@ func TestMountMembersForestWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if len(f.forestReqs) != 1 {
@@ -432,8 +435,10 @@ func TestMountMembersForestWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remount: %v\n%s", err, stderr)
 	}
-	if stdout != "already mounted "+dir+"\n" {
-		t.Fatalf("stdout = %q, want the reuse verb", stdout)
+	name, rest, ok = parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) ||
+		rest != "already mounted "+dir+"\n" {
+		t.Fatalf("stdout = %q, want create line plus the reuse verb", stdout)
 	}
 }
 
@@ -498,7 +503,8 @@ func TestMountBlocksSubdirUsesReassemble(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reassemble subdir mount: %v\n%s", err, stderr)
 	}
-	if stdout != "mounted "+dir+"\n" {
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+dir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if len(f.mountReqs) != 1 || f.mountReqs[0].Subdir != "src" {
