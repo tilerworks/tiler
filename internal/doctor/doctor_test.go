@@ -240,10 +240,45 @@ func TestWriteRendersWarnAndInfoStatuses(t *testing.T) {
 	if err := Write(&buf, results); err != nil {
 		t.Fatal(err)
 	}
-	want := "file_limit_images\twarn\tlimit found\n" +
-		"storage_perf_cache\tinfo\tseq 100 MiB/s\n"
+	want := "🔧 Checks\n" +
+		"\n" +
+		"  file_limit_images   warn  limit found\n" +
+		"  storage_perf_cache  info  seq 100 MiB/s\n"
 	if buf.String() != want {
 		t.Fatalf("Write = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestWriteWrapsLongDetailUnderTheValueColumn(t *testing.T) {
+	var buf bytes.Buffer
+	detail := "optional tool; sources ship in the contrib/ directory " +
+		"of the tiler source tree with origin, license, and build notes"
+	if err := Write(&buf, []Result{{Name: "contrib_concatfs", Status: statusWarn, Detail: detail}}); err != nil {
+		t.Fatal(err)
+	}
+	text := buf.String()
+	if strings.Contains(text, "\t") {
+		t.Fatalf("rendered output contains a tab:\n%s", text)
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected a wrapped detail, got %q", text)
+	}
+	first := lines[2]
+	if !strings.Contains(first, "contrib_concatfs") || !strings.Contains(first, "warn") {
+		t.Fatalf("first row = %q", first)
+	}
+	detailAt := strings.Index(first, "optional tool")
+	if detailAt < 0 {
+		t.Fatalf("detail missing from first row %q", first)
+	}
+	for _, line := range lines[3:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, strings.Repeat(" ", detailAt)) {
+			t.Fatalf("continuation %q is not aligned at column %d", line, detailAt)
+		}
 	}
 }
 
@@ -291,9 +326,16 @@ func assertProbeNames(t *testing.T, results []Result, rendered string) {
 		default:
 			t.Fatalf("%s status = %s", result.Name, result.Status)
 		}
-		line := result.Name + "\t" + result.Status + "\t"
-		if !strings.Contains(rendered, line) {
-			t.Fatalf("rendered output missing %q\n%s", line, rendered)
+		found := false
+		for _, line := range strings.Split(rendered, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == result.Name && fields[1] == result.Status {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("rendered output missing %s %s\n%s", result.Name, result.Status, rendered)
 		}
 	}
 }

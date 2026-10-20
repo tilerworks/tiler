@@ -245,15 +245,26 @@ tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
 Every command shares one exit-code contract: 0 succeeds, 1 is a
 runtime or probe failure, and 2 is a usage error.
 
-`tiler doctor` prints one tab-separated line per probe, for
-example (details elided):
+`tiler doctor` prints two space-aligned sections. Resolved
+configuration comes first, then the probes. Columns are padded with
+spaces. A detail that does not fit the line wraps, and the
+continuation is indented to the detail column:
 
 ```text
-file_limit_images	pass	no single-file size limit below 512 GiB
-storage_perf_images	info	seq 112.5 MiB/s in 145.6 ms; rand avg 6.12 ms ...
-storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
-cache_advice	warn	image storage random read averages 6.12 ms, ...
-contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
+📋 Config
+
+  path          /home/alice/.tiler.yaml
+  images_dir    /home/alice/.tiler/images
+  sessions_dir  /home/alice/.tiler/sessions
+  cache_dir     /home/alice/.tiler/cache
+  log_level     info
+
+🔧 Checks
+
+  file_limit_images    pass  no single-file size limit below 512 GiB
+  storage_perf_images  info  seq 112.5 MiB/s in 145.6 ms; rand avg ...
+  contrib_concatfs     warn  optional tool; sources ship in the
+                             contrib/ directory ...
 ```
 
 ## Configuration
@@ -300,15 +311,9 @@ read, and a ceiling that is not an ancestor is ignored. This bounds
 discovery inside a test sandbox or a checkout that must not inherit a
 parent directory's configuration.
 
-`tiler doctor` reports the resolved configuration before the probe
-table — the config file location and the core directories, one
-tab-separated `config` line each:
-
-```text
-config	path	/home/alice/.tiler.yaml
-config	images_dir	/home/alice/.tiler/images
-config	sessions_dir	/home/alice/.tiler/sessions
-```
+`tiler doctor` reports the resolved configuration in the `📋 Config`
+section before `🔧 Checks`: the config file location and the core
+directories, one space-aligned row each.
 
 The `--json` form carries the same data as a top-level `config`
 object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,

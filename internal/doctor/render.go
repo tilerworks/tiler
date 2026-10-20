@@ -6,16 +6,36 @@ import (
 	"strings"
 )
 
-// Write renders one tab-separated line per probe. The detail is
-// flattened so a host error cannot break the line into extra rows.
+const (
+	// headingConfig labels the resolved-configuration section.
+	headingConfig = "📋 Config"
+	// headingChecks labels the probe section.
+	headingChecks = "🔧 Checks"
+	// reportWidth is the soft line length. Detail past this wraps.
+	reportWidth = 96
+	// columnGap separates aligned columns. Spaces only: a tab shifts
+	// with the terminal's tab stop and the columns stop lining up.
+	columnGap = "  "
+	// rowIndent keeps section titles and rows visually apart.
+	rowIndent = "  "
+	// wrapFloor is the shortest detail slice, so a very wide name
+	// column still leaves room for a readable continuation.
+	wrapFloor = 24
+)
+
+// Write renders the probe section: an emoji heading, then one
+// space-aligned row per probe (name, status, detail). A detail that
+// does not fit reportWidth wraps on spaces, and each continuation
+// line is indented to the detail column.
 func Write(w io.Writer, results []Result) error {
-	for _, result := range results {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\n", result.Name, result.Status, result.Detail)
-		if err != nil {
-			return err
-		}
+	if _, err := fmt.Fprintf(w, "%s\n\n", headingChecks); err != nil {
+		return err
 	}
-	return nil
+	rows := make([][]string, len(results))
+	for i, result := range results {
+		rows[i] = []string{result.Name, result.Status, cleanDetail(result.Detail)}
+	}
+	return writeAligned(w, rows)
 }
 
 // ConfigSummary describes the resolved tiler configuration that doctor
@@ -30,25 +50,104 @@ type ConfigSummary struct {
 	LogLevel    string `json:"log_level"`
 }
 
-// WriteConfig renders the config summary as its own section: one
-// config<TAB>key<TAB>value line per field. It keeps the same
-// three-column shape as the probe table so a strict TSV reader stays
-// valid, precedes the probes so the effective configuration is always
-// visible, and never affects the doctor verdict.
+// WriteConfig renders the config summary under its own heading, one
+// space-aligned key/value row per field, then a blank line before the
+// probe section. It precedes the probes so the effective configuration
+// is always visible, and never affects the doctor verdict.
 func WriteConfig(w io.Writer, s ConfigSummary) error {
-	rows := []struct{ key, value string }{
-		{"path", s.Path},
-		{"images_dir", s.ImagesDir},
-		{"sessions_dir", s.SessionsDir},
-		{"cache_dir", s.CacheDir},
-		{"log_level", s.LogLevel},
+	if _, err := fmt.Fprintf(w, "%s\n\n", headingConfig); err != nil {
+		return err
+	}
+	rows := [][]string{
+		{"path", cleanDetail(s.Path)},
+		{"images_dir", cleanDetail(s.ImagesDir)},
+		{"sessions_dir", cleanDetail(s.SessionsDir)},
+		{"cache_dir", cleanDetail(s.CacheDir)},
+		{"log_level", cleanDetail(s.LogLevel)},
+	}
+	if err := writeAligned(w, rows); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w)
+	return err
+}
+
+// writeAligned prints rows using spaces. Every column but the last is
+// padded to the widest value in that column; the last column is the
+// body and wraps to stay within reportWidth.
+func writeAligned(w io.Writer, rows [][]string) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cols := len(rows[0])
+	widths := make([]int, cols-1)
+	for _, row := range rows {
+		for i := 0; i < cols-1 && i < len(row); i++ {
+			if n := len(row[i]); n > widths[i] {
+				widths[i] = n
+			}
+		}
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(w, "config\t%s\t%s\n", row.key, cleanDetail(row.value)); err != nil {
-			return err
+		var prefix strings.Builder
+		prefix.WriteString(rowIndent)
+		for i := 0; i < cols-1; i++ {
+			cell := ""
+			if i < len(row) {
+				cell = row[i]
+			}
+			prefix.WriteString(cell)
+			if pad := widths[i] - len(cell); pad > 0 {
+				prefix.WriteString(strings.Repeat(" ", pad))
+			}
+			prefix.WriteString(columnGap)
+		}
+		head := prefix.String()
+		detail := ""
+		if cols-1 < len(row) {
+			detail = row[cols-1]
+		}
+		budget := reportWidth - len(head)
+		if budget < wrapFloor {
+			budget = wrapFloor
+		}
+		parts := wrapWords(detail, budget)
+		for i, part := range parts {
+			line := head + part
+			if i > 0 {
+				line = strings.Repeat(" ", len(head)) + part
+			}
+			if _, err := fmt.Fprintln(w, line); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// wrapWords splits text into chunks of at most width, breaking on
+// spaces. A single token longer than width is cut so the line still
+// ends.
+func wrapWords(text string, width int) []string {
+	if text == "" {
+		return []string{""}
+	}
+	if len(text) <= width {
+		return []string{text}
+	}
+	var lines []string
+	for len(text) > width {
+		cut := strings.LastIndex(text[:width+1], " ")
+		if cut <= 0 {
+			cut = width
+		}
+		lines = append(lines, strings.TrimRight(text[:cut], " "))
+		text = strings.TrimLeft(text[cut:], " ")
+		if text == "" {
+			return lines
+		}
+	}
+	return append(lines, text)
 }
 
 func cleanDetail(detail string) string {

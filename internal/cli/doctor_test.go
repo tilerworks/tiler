@@ -43,7 +43,7 @@ func TestDoctorPrintsEveryProbeName(t *testing.T) {
 		"contrib_concatfs",
 		"contrib_slowfs",
 	} {
-		if !strings.Contains(stdout, name+"\t") {
+		if !strings.Contains(stdout, name) {
 			t.Fatalf("stdout missing %s\n%s", name, stdout)
 		}
 	}
@@ -58,11 +58,11 @@ func TestDoctorFailingProbeExitsOne(t *testing.T) {
 	if ExitCode(err) != 1 {
 		t.Fatalf("ExitCode(%v) = %d, want 1\n%s", err, ExitCode(err), stderr)
 	}
-	if !strings.HasSuffix(stdout, "git\tfail\tmissing\n") {
+	if !strings.HasSuffix(stdout, "  git  fail  missing\n") {
 		t.Fatalf("stdout = %q, want the report rendered before the verdict", stdout)
 	}
-	if !strings.Contains(stdout, "config\tpath\t") {
-		t.Fatalf("stdout missing the config section\n%s", stdout)
+	if !strings.Contains(stdout, "📋 Config") || strings.Contains(stdout, "\t") {
+		t.Fatalf("stdout missing the config section or still tab-aligned\n%s", stdout)
 	}
 	if !strings.Contains(stderr, "failing probes: git") {
 		t.Fatalf("stderr does not list the failed probe name\n%s", stderr)
@@ -84,12 +84,12 @@ func TestDoctorWarnAndInfoProbesExitZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v\n%s", err, stderr)
 	}
-	want := "file_limit_images\twarn\tlimit found\n" +
-		"storage_perf_cache\tinfo\tmeasured\n"
+	want := "  file_limit_images   warn  limit found\n" +
+		"  storage_perf_cache  info  measured\n"
 	if !strings.HasSuffix(stdout, want) {
 		t.Fatalf("stdout = %q, want it to end with %q", stdout, want)
 	}
-	if !strings.Contains(stdout, "config\tpath\t") {
+	if !strings.Contains(stdout, "📋 Config") {
 		t.Fatalf("stdout missing the config section\n%s", stdout)
 	}
 }
@@ -173,7 +173,7 @@ func TestDoctorContribWarningsKeepExitZero(t *testing.T) {
 		t.Fatalf("doctor with contrib warnings: %v\n%s", err, stderr)
 	}
 	for _, name := range []string{"contrib_concatfs", "contrib_slowfs"} {
-		if !strings.Contains(stdout, name+"\twarn\t") {
+		if !strings.Contains(stdout, name) || !strings.Contains(stdout, "warn") {
 			t.Fatalf("stdout missing the %s warn line\n%s", name, stdout)
 		}
 	}
@@ -213,21 +213,24 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 		t.Fatalf("doctor: %v", err)
 	}
 	for _, want := range []string{
-		"config\tpath\t" + filepath.Join(home, ".tiler.yaml") + "\n",
-		"config\timages_dir\t" + filepath.Join(home, ".tiler", "images") + "\n",
-		"config\tsessions_dir\t" + filepath.Join(home, ".tiler", "sessions") + "\n",
-		"config\tcache_dir\t" + filepath.Join(home, ".tiler", "cache") + "\n",
-		"config\tlog_level\tinfo\n",
+		"path          " + filepath.Join(home, ".tiler.yaml"),
+		"images_dir    " + filepath.Join(home, ".tiler", "images"),
+		"sessions_dir  " + filepath.Join(home, ".tiler", "sessions"),
+		"cache_dir     " + filepath.Join(home, ".tiler", "cache"),
+		"log_level     info",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q\n%s", want, stdout)
 		}
 	}
-	if strings.Contains(stdout, "config\truntime_dir\t") {
+	if strings.Contains(stdout, "runtime_dir") {
 		t.Fatalf("doctor config section still reports runtime_dir\n%s", stdout)
 	}
-	// The config section precedes the probe table.
-	if strings.Index(stdout, "config\tpath\t") > strings.Index(stdout, "git\tpass") {
+	if strings.Contains(stdout, "\t") {
+		t.Fatalf("doctor human output is tab-aligned\n%s", stdout)
+	}
+	// The config heading precedes the probe heading.
+	if strings.Index(stdout, "📋 Config") > strings.Index(stdout, "🔧 Checks") {
 		t.Fatalf("config section is not rendered before the probes\n%s", stdout)
 	}
 }

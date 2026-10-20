@@ -197,15 +197,24 @@ tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
 全部命令共享同一退出码契约：0 成功；1 运行或探测失败；2 usage
 错误。
 
-`tiler doctor` 每个探测项输出一行 tab 分隔文本，例如（详情从
-略）：
+`tiler doctor` 分两段输出，列用空格对齐。先是解析后的配置，再是
+探测项。说明放不下一行时按词折行，续行缩进到说明列：
 
 ```text
-file_limit_images	pass	no single-file size limit below 512 GiB
-storage_perf_images	info	seq 112.5 MiB/s in 145.6 ms; rand avg 6.12 ms ...
-storage_perf_cache	info	seq 4180.2 MiB/s in 3.9 ms; rand avg 0.05 ms ...
-cache_advice	warn	image storage random read averages 6.12 ms, ...
-contrib_concatfs	warn	optional tool; sources ship in the contrib/ ...
+📋 Config
+
+  path          /home/alice/.tiler.yaml
+  images_dir    /home/alice/.tiler/images
+  sessions_dir  /home/alice/.tiler/sessions
+  cache_dir     /home/alice/.tiler/cache
+  log_level     info
+
+🔧 Checks
+
+  file_limit_images    pass  no single-file size limit below 512 GiB
+  storage_perf_images  info  seq 112.5 MiB/s in 145.6 ms; rand avg ...
+  contrib_concatfs     warn  optional tool; sources ship in the
+                             contrib/ directory ...
 ```
 
 ## 配置
@@ -244,14 +253,8 @@ log_level: info
 时忽略。它把配置发现约束在测试沙箱内，或某个不应继承父目录配置
 的检出内。
 
-`tiler doctor` 在探测表之前先报告解析后的配置——配置文件位置与
-核心目录，每项一行 tab 分隔的 `config` 行：
-
-```text
-config	path	/home/alice/.tiler.yaml
-config	images_dir	/home/alice/.tiler/images
-config	sessions_dir	/home/alice/.tiler/sessions
-```
+`tiler doctor` 在 `🔧 Checks` 之前用 `📋 Config` 报告解析后的
+配置：配置文件位置与核心目录，每项一行，用空格对齐。
 
 `--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
 `images_dir`、`sessions_dir`、`cache_dir`、`log_level`）与

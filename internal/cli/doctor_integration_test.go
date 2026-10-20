@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -174,23 +175,50 @@ func TestDoctorRealEnvironmentFullProbe(t *testing.T) {
 	}
 }
 
-// parseDoctorLines parses the tab-separated human report.
+// doctorProbeLine matches one probe row. The config section uses the
+// same indent but its second column is a path or a log level, never a
+// status, so those rows do not match.
+var doctorProbeLine = regexp.MustCompile(`^  (\S+)\s+(pass|fail|warn|info)(?:\s+(.*))?$`)
+
+// parseDoctorLines parses the space-aligned human report. Wrapped
+// detail continuations are indented past the name column and are
+// joined back onto the probe they continue.
 func parseDoctorLines(t *testing.T, stdout string) map[string]doctorLine {
 	t.Helper()
 	lines := map[string]doctorLine{}
+	current := ""
+	inChecks := false
 	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
-		if line == "" {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) != 3 {
-			t.Fatalf("bad doctor line %q", line)
-		}
-		if fields[0] == "config" {
-			// The config section precedes the probes and is not a probe.
+		// Config values such as log_level "info" share the status
+		// vocabulary, so probe rows count only after the checks heading.
+		if !strings.HasPrefix(line, " ") {
+			current = ""
+			inChecks = strings.HasPrefix(trimmed, "🔧")
 			continue
 		}
-		lines[fields[0]] = doctorLine{status: fields[1], detail: fields[2]}
+		if !inChecks {
+			continue
+		}
+		if match := doctorProbeLine.FindStringSubmatch(line); match != nil {
+			current = match[1]
+			lines[current] = doctorLine{status: match[2], detail: match[3]}
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		got := lines[current]
+		extra := strings.TrimSpace(line)
+		if got.detail == "" {
+			got.detail = extra
+		} else {
+			got.detail += " " + extra
+		}
+		lines[current] = got
 	}
 	return lines
 }

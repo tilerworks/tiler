@@ -83,12 +83,16 @@ test_expect_success TILER 'legacy user config without version is upgraded' '
 # but it renders the config section and the probe report first. Capture
 # the output and tolerate either verdict; the assertions are on content.
 test_expect_success TILER 'doctor prints the config section as text' '
-	tab=$(printf "\t") &&
 	status=0 &&
 	{ "$tiler_bin" doctor >doctor.txt 2>doctor.txt.err || status=$?; } &&
 	{ test "$status" -eq 0 || test "$status" -eq 1; } &&
-	grep -qF "config${tab}path${tab}$HOME/.tiler.yaml" doctor.txt &&
-	grep -qF "config${tab}images_dir${tab}$HOME/.tiler/images" doctor.txt
+	grep -qF "📋 Config" doctor.txt &&
+	grep -qF "🔧 Checks" doctor.txt &&
+	grep -qF "path" doctor.txt &&
+	grep -qF ".tiler.yaml" doctor.txt &&
+	grep -qF "images_dir" doctor.txt &&
+	grep -qF ".tiler/images" doctor.txt &&
+	! grep -q "$(printf "\t")" doctor.txt
 '
 
 test_expect_success TILER 'doctor --json reports the config location and dirs' '
