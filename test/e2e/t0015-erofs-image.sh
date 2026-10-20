@@ -9,9 +9,10 @@
 #   1. --format erofs --compression xz is a usage error and publishes
 #      nothing,
 #   2. a project image_format: erofs, with no --format flag, packs a
-#      full image as image.sqsh with format erofs/zstd,
+#      full image as image.sqsh. The compression is zstd when
+#      mkfs.erofs provides it, otherwise lz4, then gzip,
 #   3. a writable mount and an incremental build with no format flags
-#      inherit erofs/zstd; a fresh remount serves the upper file,
+#      inherit that pair; a fresh remount serves the upper file,
 #   4. the same project config with --split 64k publishes blocks and
 #      still mounts,
 #   5. --subdir exposes one image directory as the mount root,
@@ -35,6 +36,22 @@ TEST_DIRECTORY=$tiler_case_dir
 export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
+
+# An omitted erofs compression prefers zstd, then lz4, then gzip,
+# matching the compressors this mkfs.erofs was built with.
+erofs_comp=zstd
+erofs_help=$(mkfs.erofs --help 2>&1 || true)
+erofs_has() {
+	printf '%s\n' "$erofs_help" | tr ',:' '  ' |
+		grep -Eq "(^|[[:space:]])$1([[:space:]]|$)"
+}
+if erofs_has zstd; then
+	erofs_comp=zstd
+elif erofs_has lz4; then
+	erofs_comp=lz4
+elif erofs_has deflate || erofs_has libdeflate; then
+	erofs_comp=gzip
+fi
 
 # Prefer the repository build; fall back to a tiler found on PATH.
 tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
@@ -122,13 +139,13 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs packs a fu
 	test ! -e "$img_dir/blocks" &&
 	grep -Eq "^id: \"?$id1\"?$" "$meta_file" &&
 	grep -q "^    type: erofs$" "$meta_file" &&
-	grep -q "^    compression: zstd$" "$meta_file" &&
+	grep -q "^    compression: $erofs_comp$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show.out 2>show.err &&
-	grep -Eq "^  format +erofs/zstd$" show.out &&
+	grep -Eq "^  format +erofs/$erofs_comp$" show.out &&
 	grep -Eq "^  form +single$" show.out
 '
 
-test_expect_success TILER,EROFS_TOOLCHAIN 'writable mount and incr inherit erofs/zstd' '
+test_expect_success TILER,EROFS_TOOLCHAIN 'writable mount and incr inherit the erofs compression' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/erofs "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
@@ -143,9 +160,9 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'writable mount and incr inherit erofs
 	test -f "$img_dir/image.sqsh" &&
 	test -f "$img_dir/incr/$layer.sqsh" &&
 	grep -q "^    type: erofs$" "$meta_file" &&
-	grep -q "^    compression: zstd$" "$meta_file" &&
+	grep -q "^    compression: $erofs_comp$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show-incr.out 2>show-incr.err &&
-	grep -Eq "^  format +erofs/zstd$" show-incr.out &&
+	grep -Eq "^  format +erofs/$erofs_comp$" show-incr.out &&
 	grep -Eq "^  chain +1$" show-incr.out
 '
 
@@ -182,9 +199,9 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs --split pu
 	test -f "$blk_dir/blocks/$blk_id/blk.000" &&
 	test ! -e "$blk_dir/image.sqsh" &&
 	grep -q "^    type: erofs$" "$blk_meta" &&
-	grep -q "^    compression: zstd$" "$blk_meta" &&
+	grep -q "^    compression: $erofs_comp$" "$blk_meta" &&
 	"$tiler_bin" images show alice/blocks >show-blk.out 2>show-blk.err &&
-	grep -Eq "^  format +erofs/zstd$" show-blk.out &&
+	grep -Eq "^  format +erofs/$erofs_comp$" show-blk.out &&
 	grep -Eq "^  form +blocks$" show-blk.out &&
 	mkdir -p "$blk_work" &&
 	"$tiler_bin" mount alice/blocks "$blk_work" >blk-mount.out 2>blk-mount.err &&

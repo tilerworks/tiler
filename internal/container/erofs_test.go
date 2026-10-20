@@ -10,6 +10,41 @@ import (
 	"testing"
 )
 
+func TestErofsCompressionFollowsTheTool(t *testing.T) {
+	help := "Available compressors are: lz4, lz4hc, lzma, deflate, libdeflate\nmkfs.erofs 1.7.1\n"
+	listed := ErofsCompressors(help)
+	if !slices.Equal(listed, []string{"lz4", "lz4hc", "lzma", "deflate", "libdeflate"}) {
+		t.Fatalf("compressors = %q", listed)
+	}
+	if ErofsCompressors("no such line") != nil {
+		t.Fatal("missing line should yield nil")
+	}
+	if ErofsToolSupports("zstd", listed) || !ErofsToolSupports("lz4", listed) || !ErofsToolSupports("gzip", listed) {
+		t.Fatalf("support = zstd %v lz4 %v gzip %v",
+			ErofsToolSupports("zstd", listed),
+			ErofsToolSupports("lz4", listed),
+			ErofsToolSupports("gzip", listed))
+	}
+	if ErofsToolSupports("lz4", []string{"lz4hc"}) {
+		t.Fatal("lz4hc must not satisfy lz4")
+	}
+	picked, err := PickErofsCompression(listed)
+	if err != nil || picked != "lz4" {
+		t.Fatalf("pick = %q, %v", picked, err)
+	}
+	picked, err = PickErofsCompression([]string{"zstd", "lz4"})
+	if err != nil || picked != "zstd" {
+		t.Fatalf("zstd pick = %q, %v", picked, err)
+	}
+	picked, err = PickErofsCompression([]string{"libdeflate"})
+	if err != nil || picked != "gzip" {
+		t.Fatalf("gzip pick = %q, %v", picked, err)
+	}
+	if _, err := PickErofsCompression([]string{"lzma"}); err == nil {
+		t.Fatal("lzma alone should not be usable")
+	}
+}
+
 func TestErofsRegistered(t *testing.T) {
 	got, err := Lookup("erofs")
 	if err != nil {

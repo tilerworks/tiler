@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
@@ -185,19 +186,53 @@ func chooseFormat(cmd *cobra.Command, cfg config.Config, flag string) (string, e
 
 func chooseCompression(cmd *cobra.Command, cfg config.Config, format container.Format, flag string) (string, error) {
 	comp := format.DefaultCompression()
+	pinned := false
 	switch {
 	case cmd.Flags().Changed("compression"):
 		if flag == "" {
 			return "", usageError{errors.New("build: --compression is empty")}
 		}
 		comp = flag
+		pinned = true
 	case cfg.ImageCompression != "":
 		comp = cfg.ImageCompression
+		pinned = true
 	}
 	if !format.AllowsCompression(comp) {
 		return "", usageError{fmt.Errorf("build: %s compression %q is not allowed", format.Type(), comp)}
 	}
-	return comp, nil
+	if format.Type() != image.FormatErofs {
+		return comp, nil
+	}
+	return fitErofsCompression(comp, pinned)
+}
+
+// fitErofsCompression keeps a pinned compression only when mkfs.erofs
+// can pack it. An omitted compression uses the first supported of
+// zstd, lz4, and gzip. A missing or unreadable help text leaves the
+// choice unchanged.
+func fitErofsCompression(comp string, pinned bool) (string, error) {
+	help, err := erofsHelp()
+	if err != nil {
+		return comp, nil
+	}
+	listed := container.ErofsCompressors(help)
+	if len(listed) == 0 {
+		return comp, nil
+	}
+	if pinned {
+		if container.ErofsToolSupports(comp, listed) {
+			return comp, nil
+		}
+		return "", usageError{fmt.Errorf(
+			"build: mkfs.erofs has no %q compressor (available: %s)",
+			comp, strings.Join(listed, ", "))}
+	}
+	picked, err := container.PickErofsCompression(listed)
+	if err != nil {
+		return "", fmt.Errorf("build: %w", err)
+	}
+	return picked, nil
 }
 
 func explicitContainer(cmd *cobra.Command, format, compression string) (string, string, error) {

@@ -13,6 +13,18 @@ import (
 // do not depend on the host toolchain.
 var toolLookPath = exec.LookPath
 
+// erofsHelp is the text of mkfs.erofs --help. Tests replace it so
+// compression selection does not depend on how the host was built.
+var erofsHelp = readErofsHelp
+
+func readErofsHelp() (string, error) {
+	out, err := exec.Command("mkfs.erofs", "--help").CombinedOutput()
+	if len(out) == 0 && err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // gateAnyStack refuses the command when no container stack is
 // complete. A later check still requires the resolved format's tools.
 func gateAnyStack(label string) error {

@@ -73,7 +73,8 @@ tiler session close feature                # 逆序卸载，记录保留
   一个增量层。`--format` 优先于 `image_format`，再优先于工具链
   推断：双栈齐全选 squashfs，仅 erofs 选 erofs，仅 squashfs 选
   squashfs。`--compression` 优先于 `image_compression`，否则用该
-  格式的默认压缩（zstd）。双栈主机上不带这些 flag、也不写配置时，
+  格式的默认压缩。squashfs 默认 zstd。erofs 在 `mkfs.erofs` 提供
+  zstd 时默认 zstd，否则依次用 lz4、gzip。双栈主机上不带这些 flag、也不写配置时，
   镜像仍是 squashfs 加 zstd。增量构建继承 base 的格式与压缩；与
   base 冲突的 flag 是用法错误。erofs 不接受 xz。普通目录默认全量构建，必须显式给出 `owner/repo`
   名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的

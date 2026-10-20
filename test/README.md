@@ -157,7 +157,8 @@ equipped host, so a genuine regression is never masked by a skip.
   toolchain; skips cleanly without it.
 - `e2e/t0015-erofs-image.sh` — rejects `erofs` with `xz` (exit 2),
   packs a full image from project `image_format: erofs` (no
-  `--format` flag) as `image.sqsh` with `erofs/zstd`, mounts it
+  `--format` flag) as `image.sqsh` with the erofs compression
+  `mkfs.erofs` can pack (zstd, otherwise lz4, then gzip), mounts it
   read-write, and appends an incremental layer that inherits that
   pair. The same project config with `--split` publishes blocks and
   still mounts. `--subdir` exposes one image directory as the mount

@@ -55,7 +55,14 @@ func installFoundTools(t *testing.T) {
 	toolLookPath = func(name string) (string, error) {
 		return "/usr/bin/" + name, nil
 	}
-	t.Cleanup(func() { toolLookPath = orig })
+	origHelp := erofsHelp
+	erofsHelp = func() (string, error) {
+		return "Available compressors are: lz4, lz4hc, lzma, deflate, zstd\n", nil
+	}
+	t.Cleanup(func() {
+		toolLookPath = orig
+		erofsHelp = origHelp
+	})
 }
 
 // fakePacker writes deterministic bytes derived from the source tree
@@ -521,6 +528,30 @@ func TestBuildResolvesFormatFlagConfigThenTools(t *testing.T) {
 		}
 		assertBuiltFormat(t, imagesDir, "alice/infer", buildOutput(t, stdout), image.FormatErofs, image.CompressionZstd)
 	})
+}
+
+func TestBuildErofsUsesLz4WhenZstdIsMissing(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	erofsHelp = func() (string, error) {
+		return "Available compressors are: lz4, lz4hc, lzma, deflate, libdeflate\n", nil
+	}
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	packTool = packAny(t, "mkfs.erofs")
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--format", "erofs", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	assertBuiltFormat(t, imagesDir, "alice/app", buildOutput(t, stdout), image.FormatErofs, "lz4")
+
+	_, _, _, err = runCmd(t, append(lib,
+		"build", "--format", "erofs", "--compression", "zstd", "--image", "alice/zstd", src)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), `no "zstd" compressor`) {
+		t.Fatalf("explicit zstd: ExitCode(%v) = %d", err, ExitCode(err))
+	}
 }
 
 func TestBuildErofsXZIsUsage(t *testing.T) {

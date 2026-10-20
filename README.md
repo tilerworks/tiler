@@ -86,8 +86,10 @@ Available now:
   over `image_format`, which wins over toolchain inference: both
   stacks select squashfs, erofs alone selects erofs, and squashfs
   alone selects squashfs. `--compression` wins over
-  `image_compression`, which otherwise uses the format default
-  (zstd). With neither flag nor config on a dual-stack host the
+  `image_compression`, which otherwise uses the format default.
+  Squashfs defaults to zstd. erofs defaults to zstd when `mkfs.erofs`
+  provides it, and otherwise to lz4, then gzip. With neither flag nor
+  config on a dual-stack host the
   image stays squashfs with zstd. An incremental build inherits the
   base format and compression; a flag that disagrees is a usage
   error. erofs does not accept xz. A plain directory

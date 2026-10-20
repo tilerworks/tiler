@@ -43,6 +43,56 @@ func (erofs) Type() string { return erofsType }
 
 func (erofs) DefaultCompression() string { return erofsComp }
 
+// ErofsCompressors reads compressor ids from mkfs.erofs --help.
+// The line looks like "Available compressors are: lz4, deflate".
+// An unrecognized help text returns nil.
+func ErofsCompressors(help string) []string {
+	const marker = "Available compressors are:"
+	idx := strings.Index(help, marker)
+	if idx < 0 {
+		return nil
+	}
+	rest := help[idx+len(marker):]
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[:nl]
+	}
+	return strings.FieldsFunc(rest, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+}
+
+// ErofsToolSupports reports whether mkfs.erofs can pack compression.
+// gzip is the metadata name for the deflate compressor. lz4hc does
+// not satisfy lz4.
+func ErofsToolSupports(compression string, compressors []string) bool {
+	has := map[string]bool{}
+	for _, name := range compressors {
+		has[name] = true
+	}
+	switch compression {
+	case "zstd":
+		return has["zstd"]
+	case "lz4":
+		return has["lz4"]
+	case "gzip":
+		return has["deflate"] || has["libdeflate"]
+	default:
+		return false
+	}
+}
+
+// PickErofsCompression chooses the compression recorded in metadata
+// when the user did not set one. zstd stays first. lz4, then gzip,
+// cover mkfs.erofs builds that omit libzstd, such as Ubuntu 24.04.
+func PickErofsCompression(compressors []string) (string, error) {
+	for _, compression := range []string{"zstd", "lz4", "gzip"} {
+		if ErofsToolSupports(compression, compressors) {
+			return compression, nil
+		}
+	}
+	return "", errors.New("container: mkfs.erofs has no usable compressor")
+}
+
 // AllowsCompression accepts zstd, lz4, and gzip. An empty name means
 // the format default. xz is not an erofs compressor here.
 func (e erofs) AllowsCompression(compression string) bool {
