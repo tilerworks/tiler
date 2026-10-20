@@ -417,6 +417,10 @@ func TestMountUsageErrors(t *testing.T) {
 			args: []string{"mount", "alice/app", filepath.Join(home, ".tiler", "view")},
 		},
 		{
+			name: "target covering the sessions tree",
+			args: []string{"mount", "alice/app", filepath.Join(home, "lib")},
+		},
+		{
 			name: "absolute subdir",
 			args: []string{"mount", "--subdir", "/abs", "alice/app", view},
 		},

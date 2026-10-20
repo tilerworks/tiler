@@ -144,9 +144,11 @@ Available now:
   mounting, so NAS-backed images mount from a local copy while
   the mount table keeps naming the original library path. The
   target must be an empty directory owned by the current user,
-  outside the runtime tree and every reserved directory. Every
-  mount is recorded write-ahead in a session before the engine
-  runs: `-s, --session <name>` attaches a session created with
+  outside the runtime tree and every reserved directory, and must
+  not be an ancestor of those trees (a mount must not cover
+  `sessions_dir`, `images_dir`, `cache_dir`, or `$HOME/.tiler`).
+  Every mount is recorded write-ahead in a session before the
+  engine runs: `-s, --session <name>` attaches a session created with
   `session new`, the `TILER_SESSION_ID` environment variable binds
   one, and without either a generated `adjective-animal` session
   (for example `happy-fox`) is created. That mount prints

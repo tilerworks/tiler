@@ -676,6 +676,19 @@ func TestMountRejectsTargetUnderRuntime(t *testing.T) {
 	}
 }
 
+func TestMountRejectsRuntimeUnderTarget(t *testing.T) {
+	req, _ := testRequest(t)
+	req.RuntimeDir = filepath.Join(req.MergedDir, "runtime", "m1")
+	rec := &recRunner{}
+	_, err := mountTest(t, req, rec.run, testHooks())
+	if err == nil || !strings.Contains(err.Error(), "inside the mount target") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("tools ran despite the refusal: %v", rec.calls)
+	}
+}
+
 func TestMountRejectsNonEmptyTarget(t *testing.T) {
 	req, _ := testRequest(t)
 	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {

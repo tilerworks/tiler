@@ -61,7 +61,10 @@ func newMountCmd() *cobra.Command {
 			"file; the library reference wins when an argument is both.\n" +
 			"Chain layers mount as a cascade, --subdir exposes one image\n" +
 			"subdirectory as the mount root, and --verify re-hashes every\n" +
-			"recorded digest instead of the default quick check.\n" +
+			"recorded digest instead of the default quick check. <dir>\n" +
+			"must be an empty directory owned by the current user, outside\n" +
+			"every reserved tree, and must not cover sessions_dir,\n" +
+			"images_dir, cache_dir, or $HOME/.tiler.\n" +
 			"\n" +
 			"Every mount is recorded write-ahead in a session: -s, --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +
@@ -97,6 +100,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		return fmt.Errorf("mount: target: %w", err)
 	}
 	if err := config.OutsideReserved(dir, cfg); err != nil {
+		return usageError{err}
+	}
+	// A target that sits above sessions_dir (or another reserved
+	// root) would hide that tree under the view and put upper/work
+	// storage inside the merged path — refuse before write-ahead.
+	if err := config.CoversReserved(dir, cfg); err != nil {
 		return usageError{err}
 	}
 	if err := workspace.CheckSubdir(flags.subdir); err != nil {

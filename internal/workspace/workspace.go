@@ -204,6 +204,12 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace: %s is inside the runtime tree %s",
 			req.MergedDir, req.RuntimeDir)
 	}
+	// The reverse nesting would place upper/work/lower under the
+	// merged view and create an overlay self-reference.
+	if underPrefix(req.RuntimeDir, req.MergedDir) {
+		return nil, fmt.Errorf("workspace: runtime tree %s is inside the mount target %s",
+			req.RuntimeDir, req.MergedDir)
+	}
 	members, err = pruneBySubdir(members, req, run)
 	if err != nil {
 		return nil, err
