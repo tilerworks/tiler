@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -173,7 +174,11 @@ func newSessionListCmd() *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List every session record",
-		Args:    cobra.NoArgs,
+		Long: "Print one aligned row per session: name, state, live\n" +
+			"mount count, created and closed dates, and an RM marker\n" +
+			"for --rm sessions. --json renders one machine-readable\n" +
+			"document instead of the human listing.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
@@ -200,7 +205,10 @@ func newSessionShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show one session record in detail",
-		Args:  exactOneArg,
+		Long: "Show prints a multi-line record: state, rm marker,\n" +
+			"timestamps, mount and action counts, then one aligned\n" +
+			"line per action. --json renders the record object.",
+		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, engine, err := sessionCommandEngine(cmd, "session show", args[0])
 			if err != nil {
@@ -294,15 +302,57 @@ func sessionUmount(cfg config.Config) session.UmountFunc {
 	}
 }
 
-// writeSessionList renders one line per record.
+// sessionTableHeader names the short-list columns.
+var sessionTableHeader = []string{"NAME", "STATE", "MOUNTS", "CREATED", "CLOSED", "RM"}
+
+// writeSessionList prints an aligned table: a header and one row per
+// session. An empty library prints nothing.
 func writeSessionList(w io.Writer, summaries []session.Summary) error {
-	for _, summary := range summaries {
-		line := fmt.Sprintf("%s %s mounts=%d", summary.Name, summary.State, summary.Mounts)
-		if _, err := fmt.Fprintln(w, line); err != nil {
+	if len(summaries) == 0 {
+		return nil
+	}
+	rows := make([][]string, len(summaries))
+	widths := make([]int, len(sessionTableHeader))
+	copy(widths, lengths(sessionTableHeader))
+	for i, summary := range summaries {
+		rows[i] = sessionTableCols(summary)
+		for c, col := range rows[i] {
+			if len(col) > widths[c] {
+				widths[c] = len(col)
+			}
+		}
+	}
+	if err := writePadded(w, sessionTableHeader, widths, "", false); err != nil {
+		return err
+	}
+	for _, cols := range rows {
+		if err := writePadded(w, cols, widths, "", false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sessionTableCols(summary session.Summary) []string {
+	rm := "-"
+	if summary.RemoveOnClose {
+		rm = "yes"
+	}
+	return []string{
+		summary.Name,
+		summary.State,
+		strconv.Itoa(summary.Mounts),
+		formatSessionDate(summary.Created),
+		formatSessionDate(summary.Closed),
+		rm,
+	}
+}
+
+func formatSessionDate(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.UTC().Format("2006-01-02")
 }
 
 // sessionsDocument is the session list --json envelope.
@@ -335,30 +385,88 @@ func writeSessionListJSON(w io.Writer, summaries []session.Summary) error {
 	return writeJSON(w, doc)
 }
 
-// writeSessionShow renders the record header and its action log.
+// sessionDetailKeyWidth is the padded key column of a named session
+// record. It fits "actions".
+const sessionDetailKeyWidth = 10
+
+// writeSessionShow renders a multi-line record: identity fields, then
+// one aligned line per action.
 func writeSessionShow(w io.Writer, rec session.Record) error {
-	state := rec.State
-	if rec.RemoveOnClose {
-		state += " rm"
-	}
-	header := fmt.Sprintf("%s %s created=%s",
-		rec.Name, state, rec.CreatedAt.Format(time.RFC3339))
-	if !rec.ClosedAt.IsZero() {
-		header += " closed=" + rec.ClosedAt.Format(time.RFC3339)
-	}
-	if _, err := fmt.Fprintln(w, header); err != nil {
+	if _, err := fmt.Fprintln(w, rec.Name); err != nil {
 		return err
 	}
-	for _, action := range rec.Actions {
-		line := fmt.Sprintf("  %d %s %s %s mode=%s status=%s at=%s",
-			action.Seq, action.Type, action.Image, action.Mountpoint,
-			action.Mode, action.Status, action.Timestamp.Format(time.RFC3339))
+	fields := [][2]string{
+		{"state", rec.State},
+	}
+	if rec.RemoveOnClose {
+		fields = append(fields, [2]string{"rm", "true"})
+	}
+	fields = append(fields,
+		[2]string{"created", rec.CreatedAt.UTC().Format(time.RFC3339)},
+		[2]string{"closed", formatSessionRFC3339(rec.ClosedAt)},
+		[2]string{"mounts", strconv.Itoa(session.Summarize(rec).Mounts)},
+		[2]string{"actions", strconv.Itoa(len(rec.Actions))},
+	)
+	for _, field := range fields {
+		if _, err := fmt.Fprintf(w, "  %-*s  %s\n",
+			sessionDetailKeyWidth, field[0], field[1]); err != nil {
+			return err
+		}
+	}
+	return writeSessionActionLines(w, rec.Actions)
+}
+
+func formatSessionRFC3339(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func writeSessionActionLines(w io.Writer, actions []session.Action) error {
+	if len(actions) == 0 {
+		return nil
+	}
+	typeWidth, imageWidth, pointWidth := 0, 0, 0
+	for _, action := range actions {
+		if len(action.Type) > typeWidth {
+			typeWidth = len(action.Type)
+		}
+		image := sessionActionImage(action)
+		if len(image) > imageWidth {
+			imageWidth = len(image)
+		}
+		if len(action.Mountpoint) > pointWidth {
+			pointWidth = len(action.Mountpoint)
+		}
+	}
+	for _, action := range actions {
+		mode := action.Mode
+		if mode == "" {
+			mode = "-"
+		}
+		line := fmt.Sprintf("    %d  %-*s  %-*s  %-*s  mode=%s  status=%s  at=%s",
+			action.Seq, typeWidth, action.Type,
+			imageWidth, sessionActionImage(action),
+			pointWidth, action.Mountpoint,
+			mode, action.Status,
+			action.Timestamp.UTC().Format(time.RFC3339))
 		if action.Subdir != "" {
-			line += " subdir=" + action.Subdir
+			line += "  subdir=" + action.Subdir
+		}
+		if action.RuntimeID != "" {
+			line += "  runtime=" + action.RuntimeID
 		}
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sessionActionImage(action session.Action) string {
+	if action.Image == "" {
+		return "-"
+	}
+	return action.Image
 }

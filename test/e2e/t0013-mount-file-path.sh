@@ -119,8 +119,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount the absolute path and serve the 
 # on-disk record both omit owner/repo/full_id for this form.
 test_expect_success TILER,FUSE_TOOLCHAIN 'session records the image path with empty library identity' '
 	"$tiler_bin" session show ext >show.out 2>show.err &&
-	grep -qF "mount $img " show.out &&
-	grep -Eq "mode=rw status=mounted" show.out &&
+	grep -qF "mount  $img  " show.out &&
+	grep -Eq "mode=rw  status=mounted" show.out &&
 	"$tiler_bin" session show ext --json >showj.out 2>showj.err &&
 	grep -qF "\"image\": \"$img\"" showj.out &&
 	! grep -q "\"owner\"" showj.out &&

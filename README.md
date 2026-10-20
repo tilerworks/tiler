@@ -186,11 +186,13 @@ Available now:
   directory of every view is purged, upper data included, and the
   command prints `removed` rather than `closed`. `session remove <name>`
   deletes a closed record and refuses an active one. `session
-  list [--json]` prints one line per record and `session show
-  <name> [--json]` its full action log; the `--json` form of show
-  is the record object itself. A generated name and an explicit
-  name accept the same commands; only `--rm` changes close into a
-  delete.
+  list [--json]` prints one aligned row per record (name, state,
+  mount count, created and closed dates, and an RM marker for
+  `--rm` sessions). `session show <name> [--json]` prints a
+  multi-line record — identity fields, then one line per action
+  — and the `--json` form of show is the record object itself. A
+  generated name and an explicit name accept the same commands;
+  only `--rm` changes close into a delete.
 - `tiler status [<path>] [--json]` reconciles the session records
   with the real mount state. Without a path it prints one block
   per record — every live mount action marked `healthy` or

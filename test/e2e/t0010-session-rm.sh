@@ -118,7 +118,9 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the re
 	"$tiler_bin" session new --rm dev >new1.out 2>new1.err &&
 	grep -Eq "^created dev$" new1.out &&
 	"$tiler_bin" session show dev >show1.out 2>show1.err &&
-	grep -Eq "^dev active rm created=" show1.out &&
+	grep -Eq "^dev$" show1.out &&
+	grep -Eq "^  state +active$" show1.out &&
+	grep -Eq "^  rm +true$" show1.out &&
 	mkdir -p "$named_dir" &&
 	"$tiler_bin" mount --session dev tmp/auto "$named_dir" >m1.out 2>m1.err &&
 	grep -Eq "^mounted " m1.out &&
@@ -150,7 +152,9 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm: umounting the last view de
 	test -d "$sessions_root/$auto_rm/runtime/m1" &&
 	test -f "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
 	"$tiler_bin" session show "$auto_rm" >show2.out 2>show2.err &&
-	grep -Eq "^$auto_rm active rm created=" show2.out &&
+	grep -Eq "^$auto_rm$" show2.out &&
+	grep -Eq "^  state +active$" show2.out &&
+	grep -Eq "^  rm +true$" show2.out &&
 	"$tiler_bin" umount "$impl_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
 	test ! -e "$sessions_root/$auto_rm" &&
@@ -175,8 +179,10 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm refuses a session named by 
 	grep -q "session new --rm" u2.err &&
 	test ! -e "$usage_dir/README.txt" &&
 	"$tiler_bin" session show target >show3.out 2>show3.err &&
-	grep -Eq "^target active created=" show3.out &&
-	! grep -Eq "^  1 mount" show3.out
+	grep -Eq "^target$" show3.out &&
+	grep -Eq "^  state +active$" show3.out &&
+	! grep -Eq "^  rm " show3.out &&
+	! grep -Eq "^    1  mount" show3.out
 '
 
 # The contrast that proves --rm is opt-in: a plain session close keeps
@@ -190,12 +196,13 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a plain session close keeps the record
 	echo "keep me" >"$ctrl_dir/KEEP.txt" &&
 	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt" &&
 	"$tiler_bin" session show ctrl >show4.out 2>show4.err &&
-	grep -Eq "^ctrl active created=" show4.out &&
-	! grep -Eq "^ctrl active rm" show4.out &&
+	grep -Eq "^ctrl$" show4.out &&
+	grep -Eq "^  state +active$" show4.out &&
+	! grep -Eq "^  rm " show4.out &&
 	"$tiler_bin" session close ctrl >close4.out 2>close4.err &&
 	grep -Eq "^closed ctrl$" close4.out &&
 	"$tiler_bin" session list >list4.out 2>list4.err &&
-	grep -Eq "^ctrl closed mounts=0$" list4.out &&
+	grep -Eq "^ctrl[[:space:]]+closed[[:space:]]+0[[:space:]]" list4.out &&
 	test -d "$sessions_root/ctrl/runtime/m1" &&
 	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt"
 '

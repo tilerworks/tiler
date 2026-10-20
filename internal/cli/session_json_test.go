@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -42,14 +41,16 @@ func TestSessionListJSONMatchesGolden(t *testing.T) {
 		t.Fatalf("old = %+v, want closed without mounts", old)
 	}
 
-	// The human listing is unchanged.
 	human, stderr, _, err := runCmd(t, append(lib, "session", "list")...)
 	if err != nil {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
-	want := "dev active mounts=1\nold closed mounts=0\n"
+	want := "" +
+		"NAME  STATE   MOUNTS  CREATED     CLOSED      RM\n" +
+		"dev   active  1       2026-10-17  -           -\n" +
+		"old   closed  0       2026-10-16  2026-10-16  -\n"
 	if human != want {
-		t.Fatalf("human list = %q, want %q", human, want)
+		t.Fatalf("human list =\n%s\nwant:\n%s", human, want)
 	}
 }
 
@@ -79,17 +80,21 @@ func TestSessionShowJSONMatchesGolden(t *testing.T) {
 		t.Fatalf("actions = %+v, want the subdir mount and the umount", rec.Actions)
 	}
 
-	// The human rendering is unchanged.
 	human, stderr, _, err := runCmd(t, append(lib, "session", "show", "dev")...)
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	lines := strings.Split(strings.TrimSuffix(human, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("human show = %q, want a header and three action lines", human)
-	}
-	if lines[0] != "dev active created=2026-10-17T03:15:00Z" {
-		t.Fatalf("header = %q", lines[0])
+	want := "dev\n" +
+		"  state       active\n" +
+		"  created     2026-10-17T03:15:00Z\n" +
+		"  closed      -\n" +
+		"  mounts      1\n" +
+		"  actions     3\n" +
+		"    1  mount   alice/app          /ws/dev/app   mode=rw  status=mounted  at=2026-10-17T03:15:00Z\n" +
+		"    2  mount   /images/tool.sqsh  /ws/dev/tool  mode=ro  status=unmounted  at=2026-10-17T03:16:00Z  subdir=docs\n" +
+		"    3  umount  /images/tool.sqsh  /ws/dev/tool  mode=-  status=unmounted  at=2026-10-17T03:17:00Z\n"
+	if human != want {
+		t.Fatalf("human show =\n%s\nwant:\n%s", human, want)
 	}
 }
 

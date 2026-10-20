@@ -86,7 +86,8 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
-	if stdout != "dev active mounts=0\n" {
+	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "dev") ||
+		!strings.Contains(stdout, "active") {
 		t.Fatalf("list stdout = %q", stdout)
 	}
 
@@ -94,7 +95,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, "dev active created=2026-") {
+	if !strings.HasPrefix(stdout, "dev\n") || !strings.Contains(stdout, "  state       active\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 
@@ -113,7 +114,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdout != "dev closed mounts=0\n" {
+	if !strings.Contains(stdout, "dev") || !strings.Contains(stdout, "closed") {
 		t.Fatalf("closed list stdout = %q", stdout)
 	}
 	stdout, stderr, _, err = runCmd(t, append(lib, "session", "remove", "dev")...)
@@ -375,17 +376,17 @@ func TestSessionShowRendersActionLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("show stdout = %q", stdout)
-	}
-	if !strings.HasPrefix(lines[0], "dev active created=2026-10-17T03:15:00Z") {
-		t.Errorf("header = %q", lines[0])
-	}
-	want := fmt.Sprintf("  1 mount alice/app %s mode=rw status=mounted "+
-		"at=2026-10-17T03:15:00Z subdir=src", view)
-	if lines[1] != want {
-		t.Errorf("action line = %q, want %q", lines[1], want)
+	for _, want := range []string{
+		"dev\n",
+		"  state       active\n",
+		"  created     2026-10-17T03:15:00Z\n",
+		"  mounts      1\n",
+		"  actions     1\n",
+		fmt.Sprintf("    1  mount  alice/app  %s  mode=rw  status=mounted  at=2026-10-17T03:15:00Z  subdir=src\n", view),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("show missing %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -420,7 +421,8 @@ func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, "dev active rm created=2026-") {
+	if !strings.Contains(stdout, "  state       active\n") ||
+		!strings.Contains(stdout, "  rm          true\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 

@@ -149,10 +149,11 @@ tiler session close feature                # 逆序卸载，记录保留
   视图的 runtime 目录被清理（upper 数据一并抹除），命令打印
   `removed` 而非 `closed`。`session remove <name>` 删除 closed
   记录，active 拒绝。
-  `session list [--json]` 每条记录打印一行，`session show <name>
-  [--json]` 展示完整动作流水，show 的 `--json` 形态就是记录对象
-  本身。生成的名字与显式名字接受同一套命令；只有 `--rm`
-  会把 close 变成删除。
+  `session list [--json]` 把每条记录打成对齐的一行（名字、状态、
+  挂载数、创建/关闭日期，以及 `--rm` 的 RM 标记）。`session
+  show <name> [--json]` 输出多行记录——身份字段，再跟每条动作
+  一行——show 的 `--json` 形态就是记录对象本身。生成的名字与
+  显式名字接受同一套命令；只有 `--rm` 会把 close 变成删除。
 - `tiler status [<path>] [--json]` 把 session 记录与真实挂载状态
   对账。不带路径时每条记录输出一块——每个未卸载的挂载动作标注
   `healthy` 或 `stale`——`TILER_SESSION_ID` 命名的 session 标记

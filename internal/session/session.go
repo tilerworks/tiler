@@ -661,8 +661,7 @@ func (e *Engine) Show(name string) (Record, error) {
 	return e.Load(name)
 }
 
-// Summary is the one-line read model of one session for the list
-// command.
+// Summary is the short-list read model of one session.
 type Summary struct {
 	// Name is the session name.
 	Name string
@@ -674,9 +673,11 @@ type Summary struct {
 	Created time.Time
 	// Closed is when the record reached the closed state.
 	Closed time.Time
+	// RemoveOnClose is true for a --rm session.
+	RemoveOnClose bool
 }
 
-// Summarize reduces one record to its list line.
+// Summarize reduces one record to its list row.
 func Summarize(rec Record) Summary {
 	mounts := 0
 	for _, action := range rec.Actions {
@@ -685,11 +686,12 @@ func Summarize(rec Record) Summary {
 		}
 	}
 	return Summary{
-		Name:    rec.Name,
-		State:   rec.State,
-		Mounts:  mounts,
-		Created: rec.CreatedAt,
-		Closed:  rec.ClosedAt,
+		Name:          rec.Name,
+		State:         rec.State,
+		Mounts:        mounts,
+		Created:       rec.CreatedAt,
+		Closed:        rec.ClosedAt,
+		RemoveOnClose: rec.RemoveOnClose,
 	}
 }
 

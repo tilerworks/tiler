@@ -142,7 +142,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the record survives a daemon crash' '
 	sleep 1 &&
 	! ls "$rec_dir" >/dev/null 2>&1 &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^rec active mounts=1$" list1.out
+	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
 '
 
 # session open finds the stale view unhealthy, cleans and remounts it,
@@ -156,7 +156,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session open replays the view and the 
 	test -f "$rec_dir/KEEP.txt" &&
 	grep -q survived "$rec_dir/KEEP.txt" &&
 	"$tiler_bin" session list >list2.out 2>list2.err &&
-	grep -Eq "^rec active mounts=1$" list2.out
+	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list2.out
 '
 
 # A second open over the now-healthy view is a pure no-op: the health
@@ -176,12 +176,12 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session revives through open'
 	"$tiler_bin" session close rec >close.out 2>close.err &&
 	grep -Eq "^closed rec$" close.out &&
 	"$tiler_bin" session list >list4a.out 2>list4a.err &&
-	grep -Eq "^rec closed mounts=0$" list4a.out &&
+	grep -Eq "^rec[[:space:]]+closed[[:space:]]+0[[:space:]]" list4a.out &&
 	test ! -e "$rec_dir/README.txt" &&
 	"$tiler_bin" session open rec >open3.out 2>open3.err &&
 	grep -Eq "^opened rec$" open3.out &&
 	"$tiler_bin" session list >list4b.out 2>list4b.err &&
-	grep -Eq "^rec active mounts=1$" list4b.out &&
+	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list4b.out &&
 	grep -q hello "$rec_dir/README.txt" &&
 	test -f "$rec_dir/KEEP.txt"
 '

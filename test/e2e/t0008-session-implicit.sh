@@ -109,15 +109,17 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount without --session creates a gene
 	test -n "$auto1" &&
 	test -e "$a1_dir/README.txt" &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^$auto1 active mounts=1$" list1.out
+	grep -Eq "^$auto1[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
 '
 
 # show renders the generated record with the same header + action shape
 # as a named one, and has a --json form.
 test_expect_success TILER,FUSE_TOOLCHAIN 'session show renders a generated record' '
 	"$tiler_bin" session show "$auto1" >show2.out 2>show2.err &&
-	grep -Eq "^$auto1 active created=" show2.out &&
-	grep -Eq "^  1 mount tmp/auto .* mode=rw status=mounted" show2.out &&
+	grep -Eq "^$auto1$" show2.out &&
+	grep -Eq "^  state +active$" show2.out &&
+	grep -Eq "^  created +" show2.out &&
+	grep -Eq "^    1  mount  tmp/auto  .*  mode=rw  status=mounted" show2.out &&
 	"$tiler_bin" session show "$auto1" --json >showj.out 2>showj.err &&
 	grep -q "\"actions\"" showj.out &&
 	grep -q "tmp/auto" showj.out
@@ -129,7 +131,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'umounting the last view keeps a non-rm
 	"$tiler_bin" umount "$a1_dir" >um1.out 2>um1.err &&
 	grep -Eq "^unmounted " um1.out &&
 	"$tiler_bin" session list >list3.out 2>list3.err &&
-	grep -Eq "^$auto1 active mounts=0$" list3.out
+	grep -Eq "^$auto1[[:space:]]+active[[:space:]]+0[[:space:]]" list3.out
 '
 
 # A generated session is still an ordinary record: it can be closed and

@@ -111,7 +111,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new creates an active record a
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	grep -Eq "^created dev$" new.out &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^dev active mounts=0$" list1.out &&
+	grep -Eq "^dev[[:space:]]+active[[:space:]]+0[[:space:]]" list1.out &&
 	status=0 &&
 	{ "$tiler_bin" session new dev >dup.out 2>dup.err || status=$?; } &&
 	test "$status" -ne 0 &&
@@ -145,18 +145,20 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --session and TILER_SESSION_ID g
 	test -e "$s2_dir/TOOLS.txt"
 '
 
-# list renders one `<name> <state> mounts=<n>` line and show renders the
-# header plus one indented action line per mount, in seq order. Both have
-# a --json form. The mountpoint is an absolute path that may contain
-# spaces, so the action regex wildcards it with `.*`.
+# list renders an aligned table row and show renders a multi-line
+# record plus one indented action line per mount, in seq order. Both
+# have a --json form. The mountpoint is an absolute path that may
+# contain spaces, so the action regex wildcards it with `.*`.
 test_expect_success TILER,FUSE_TOOLCHAIN 'session list and show render the record' '
 	"$tiler_bin" session list >list3.out 2>list3.err &&
-	grep -Eq "^dev active mounts=3$" list3.out &&
+	grep -Eq "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list3.out &&
 	"$tiler_bin" session show dev >show3.out 2>show3.err &&
-	grep -Eq "^dev active created=" show3.out &&
-	grep -Eq "^  1 mount alice/app .* mode=rw status=mounted" show3.out &&
-	grep -Eq "^  2 mount bob/tools .* mode=ro status=mounted" show3.out &&
-	grep -Eq "^  3 mount alice/app .* mode=rw status=mounted" show3.out &&
+	grep -Eq "^dev$" show3.out &&
+	grep -Eq "^  state +active$" show3.out &&
+	grep -Eq "^  created +" show3.out &&
+	grep -Eq "^    1  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
+	grep -Eq "^    2  mount  bob/tools  .*  mode=ro  status=mounted" show3.out &&
+	grep -Eq "^    3  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
 	"$tiler_bin" session show dev --json >showj.out 2>showj.err &&
 	grep -q "\"actions\"" showj.out &&
 	grep -q "dev" showj.out &&
@@ -186,7 +188,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session remove refuses an active recor
 	test "$status" -ne 0 &&
 	grep -q "close it before removing" rmact.err &&
 	"$tiler_bin" session list >list5.out 2>list5.err &&
-	grep -Eq "^dev active mounts=3$" list5.out
+	grep -Eq "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list5.out
 '
 
 # A manual umount of one view does NOT close a named session. It does
@@ -197,7 +199,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'umount of one view keeps a named sessi
 	"$tiler_bin" umount "$s2_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
 	"$tiler_bin" session list >list6.out 2>list6.err &&
-	grep -Eq "^dev active mounts=2$" list6.out &&
+	grep -Eq "^dev[[:space:]]+active[[:space:]]+2[[:space:]]" list6.out &&
 	test -e "$s1_dir/README.txt"
 '
 
@@ -210,7 +212,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session close tears down views and is 
 	grep -Eq "^closed dev$" close.out &&
 	test ! -e "$s1_dir/README.txt" &&
 	"$tiler_bin" session list >list7.out 2>list7.err &&
-	grep -Eq "^dev closed mounts=0$" list7.out &&
+	grep -Eq "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list7.out &&
 	"$tiler_bin" session close dev >close2.out 2>close2.err &&
 	grep -Eq "^closed dev$" close2.out
 '
@@ -223,7 +225,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount into a closed session is refused
 	test "$status" -ne 0 &&
 	grep -q "is closed" mclosed.err &&
 	"$tiler_bin" session list >list8.out 2>list8.err &&
-	grep -Eq "^dev closed mounts=0$" list8.out
+	grep -Eq "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list8.out
 '
 
 # A closed record removes cleanly and drops out of the listing; removing

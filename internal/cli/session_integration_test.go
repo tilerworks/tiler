@@ -199,7 +199,8 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 		t.Fatalf("sessions = %v, want [%s]", names, generated)
 	}
 	writeTestFile(t, filepath.Join(view, "sub", "wip.txt"), "wip\n")
-	if out := mustCmd(t, append(lib, "session", "list")...); out != generated+" active mounts=1\n" {
+	if out := mustCmd(t, append(lib, "session", "list")...); !strings.Contains(out, generated) ||
+		!strings.Contains(out, "active") {
 		t.Fatalf("list output = %q", out)
 	}
 
