@@ -6,7 +6,7 @@
 # incremental cascade and the full merge, this case exercises the
 # library-management subcommands over a real, mounted image:
 #
-#   1. images ls renders the active image, its chain, and --json,
+#   1. images list/show render the active image, its chain, and --json,
 #   2. images gc promotes an unreferenced hold into an archive,
 #   3. images gc --keep-versions expires the older archive,
 #   4. images rm deprecates then removes an unreferenced image,
@@ -97,7 +97,7 @@ fi
 
 # One active image with a single increment exercises every ls form: the
 # all-images line, the per-name chain expansion, and the --json document.
-test_expect_success TILER,FUSE_TOOLCHAIN 'images ls lists the active image, its chain, and json' '
+test_expect_success TILER,FUSE_TOOLCHAIN 'images list and show render the active image, its chain, and json' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -112,7 +112,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'images ls lists the active image, its 
 	grep -Eq "^incr alice/app [0-9a-f]+" incr.out &&
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	grep -q "alice/app" lsall.out &&
-	"$tiler_bin" images ls alice/app >ls.out 2>ls.err &&
+	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
 	grep -Eq "^  chain +1$" ls.out &&
 	grep -Eq "^    [0-9a-f][0-9a-f]*  parent=" ls.out &&
 	"$tiler_bin" images ls --json >lsjson.out 2>lsjson.err &&
@@ -132,7 +132,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into 
 	"$tiler_bin" umount "$work_dir" &&
 	"$tiler_bin" images gc >gc.out 2>gc.err &&
 	grep -Eq "^archived alice/app $id1$" gc.out &&
-	"$tiler_bin" images ls alice/app --archives >lsa.out 2>lsa.err &&
+	"$tiler_bin" images show alice/app >lsa.out 2>lsa.err &&
 	grep -Eq "^    $id1$" lsa.out
 '
 
@@ -151,7 +151,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc --keep-versions expires the older a
 	grep -Eq "^archived alice/app $id2$" gc2.out &&
 	"$tiler_bin" images gc --keep-versions 1 >gc3.out 2>gc3.err &&
 	grep -Eq "^removed alice/app $id1$" gc3.out &&
-	"$tiler_bin" images ls alice/app --archives >lsb.out 2>lsb.err &&
+	"$tiler_bin" images show alice/app >lsb.out 2>lsb.err &&
 	grep -Eq "^    $id2$" lsb.out &&
 	! grep -Eq "^    $id1$" lsb.out
 '

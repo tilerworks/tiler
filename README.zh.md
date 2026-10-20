@@ -74,15 +74,17 @@ tiler session close feature                # 逆序卸载，记录保留
   大小切成字节块入库，而不再是单个 `image.sqsh` /
   `incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
   blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
-- `tiler images list [owner/repo] [--archives] [--json]` 把每个
-  活跃镜像打成对齐的一行：名字、id、创建日期、体积、链长、载荷
-  形态（`single`、`blocks` 或 `members`），以及归档和 hold 的
-  个数。被标记废弃，或记录了 ref / 短 commit 时，这些信息跟在
-  行尾。给出名字则改为多行记录：身份、每一层增量、分块载荷
-  （块数，或每个分区一行），以及停放的链 id。`--archives` 在
-  列表每一行下面补上这些 id；点名记录不受这个旗标影响。
-  `--json` 改为渲染一份机器可读文档，分块活跃位新增 `form` 与
-  `members` 字段（契约只增不改）。
+- `tiler images list [--archives] [--json]` 把每个活跃镜像打成
+  对齐的一行：名字、id、创建日期、体积、链长、载荷形态
+  （`single`、`blocks` 或 `members`），以及归档和 hold 的个数。
+  被标记废弃，或记录了 ref / 短 commit 时，这些信息跟在行尾。
+  `--archives` 在列表每一行下面补上停放的链 id。`--json` 改为
+  渲染一份机器可读文档，分块活跃位新增 `form` 与 `members`
+  字段（契约只增不改）。
+- `tiler images show <owner/repo> [--json]` 输出一个活跃镜像的
+  多行记录：身份、每一层增量、分块载荷（块数，或每个分区一
+  行），以及停放的归档和 hold id。`--json` 把同一仓库渲染成
+  一个对象。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
@@ -290,11 +292,11 @@ lower 时，每个 upper 的稳态大约 6.5 MB。
 overlay。同一个镜像库、同一套命令面，块大小只是配置（或单次
 构建旗标）选择。
 
-机器读同一套命令面。`images list`、`session list`、`session show`、
-`status` 与 `doctor` 都带 `--json` 形态，schema 稳定、字段只增不
-改并由 golden 文件钉住：CI 门禁可以直接断言镜像齐全、没有 stale
-挂载，Agent 可以从 doctor 的性能数字决定要不要开启缓存，无需
-解析人类文本。
+机器读同一套命令面。`images list`、`images show`、`session list`、
+`session show`、`status` 与 `doctor` 都带 `--json` 形态，schema
+稳定、字段只增不改并由 golden 文件钉住：CI 门禁可以直接断言
+镜像齐全、没有 stale 挂载，Agent 可以从 doctor 的性能数字决定
+要不要开启缓存，无需解析人类文本。
 
 ## 许可证
 

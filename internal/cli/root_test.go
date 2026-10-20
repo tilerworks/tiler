@@ -31,7 +31,7 @@ func TestListAndRemoveAbbreviations(t *testing.T) {
 		}
 	}
 	imagesHelp := mustHelp(t, "images", "--help")
-	for _, want := range []string{"\n  list ", "\n  remove ", "\n  gc "} {
+	for _, want := range []string{"\n  list ", "\n  show ", "\n  remove ", "\n  gc "} {
 		if !strings.Contains(imagesHelp, want) {
 			t.Fatalf("images help missing %q:\n%s", want, imagesHelp)
 		}

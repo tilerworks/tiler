@@ -23,6 +23,7 @@ func newImagesCmd() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newImagesListCmd())
+	cmd.AddCommand(newImagesShowCmd())
 	cmd.AddCommand(newImagesGCCmd())
 	cmd.AddCommand(newImagesRemoveCmd())
 	return cmd
@@ -32,31 +33,48 @@ func newImagesListCmd() *cobra.Command {
 	var archives bool
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:     "list [owner/repo]",
+		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List active images",
-		Long: "Without a name, print one aligned row per active image: name,\n" +
-			"id, creation date, size, chain length, payload form, and the\n" +
-			"archive and hold counts. With a name, print a multi-line\n" +
-			"record: identity, each chain layer, the split payload, and\n" +
-			"the parked chain ids. --archives adds those ids under each\n" +
-			"row of the list. --json renders one machine-readable document\n" +
-			"instead of the human listing.",
-		Args: maxOneArg,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Long: "Print one aligned row per active image: name, id, creation\n" +
+			"date, size, chain length, payload form, and the archive and\n" +
+			"hold counts. --archives adds those parked chain ids under\n" +
+			"each row. --json renders one machine-readable document\n" +
+			"instead of the human listing. Use 'images show' for one\n" +
+			"repository in detail.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("images list: configuration is not loaded")
 			}
-			out := cmd.OutOrStdout()
-			if len(args) == 1 {
-				return listOneImage(out, cfg, args[0], archives, asJSON)
-			}
-			return listAllImages(out, cfg, archives, asJSON)
+			return listAllImages(cmd.OutOrStdout(), cfg, archives, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&archives, "archives", false, "include archive and held chain ids")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
+	return cmd
+}
+
+func newImagesShowCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "show <owner/repo>",
+		Short: "Show one image in detail",
+		Long: "Show prints a multi-line record for one active image:\n" +
+			"identity, each chain layer, the split payload, and the\n" +
+			"parked archive and hold ids. --json renders the same\n" +
+			"repository as one machine-readable object.",
+		Args: exactOneArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, ok := loadedConfig(cmd)
+			if !ok {
+				return errors.New("images show: configuration is not loaded")
+			}
+			return showOneImage(cmd.OutOrStdout(), cfg, args[0], asJSON)
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "render the image as a JSON document")
 	return cmd
 }
 
@@ -99,23 +117,24 @@ func activeStates(repos []image.Repo) ([]namedState, error) {
 	return states, nil
 }
 
-func listOneImage(w io.Writer, cfg config.Config, name string, archives, asJSON bool) error {
+func showOneImage(w io.Writer, cfg config.Config, name string, asJSON bool) error {
 	repo, err := image.OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
 		return usageError{err}
 	}
 	state, err := image.Inspect(repo)
 	if err != nil {
-		return fmt.Errorf("images list: %w", err)
+		return fmt.Errorf("images show: %w", err)
 	}
 	if !state.HasActive {
-		return fmt.Errorf("images list: %s has no active image", name)
+		return fmt.Errorf("images show: %s has no active image", name)
 	}
+	named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
 	if asJSON {
-		named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
-		return writeImagesJSON(w, []namedState{named}, archives)
+		// Show always includes parked chains, matching the human record.
+		return writeJSON(w, newImageJSON(named.name, named.state, true))
 	}
-	return writeImageDetail(w, repo.Owner+"/"+repo.Repo, state)
+	return writeImageDetail(w, named.name, state)
 }
 
 // detailKeyWidth is the padded key column of a named image record.
@@ -238,8 +257,7 @@ func writePadded(w io.Writer, cols []string, widths []int, suffix string, padLas
 }
 
 // writeImageDetail prints the multi-line record of one image. Parked
-// chain ids are always included; the archives flag does not change
-// this view.
+// chain ids are always included.
 func writeImageDetail(w io.Writer, name string, state image.State) error {
 	meta := state.Active
 	if _, err := fmt.Fprintln(w, name); err != nil {

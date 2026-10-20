@@ -64,17 +64,38 @@ func TestImagesListJSONGoldens(t *testing.T) {
 		}
 	})
 
-	t.Run("single repository", func(t *testing.T) {
-		stdout := mustListJSON(t, lib, "alice/app", "--archives", "--json")
-		assertGolden(t, "images_ls_single", []byte(stdout))
-		doc := parseImagesDocument(t, stdout)
-		if len(doc.Images) != 1 || doc.Images[0].Name != "alice/app" {
-			t.Fatalf("images = %+v, want the single alice/app entry", doc.Images)
+	t.Run("list rejects a repository name", func(t *testing.T) {
+		_, _, _, err := runCmd(t, append(lib, "images", "ls", "alice/app", "--json")...)
+		if ExitCode(err) != 2 {
+			t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 		}
 	})
 }
 
-func TestImagesListJSONKeepsErrorSemantics(t *testing.T) {
+func TestImagesShowJSONGolden(t *testing.T) {
+	home, _ := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	writeGoldenLibrary(t, imagesDir)
+
+	stdout := mustShowJSON(t, lib, "alice/app")
+	assertGolden(t, "images_show", []byte(stdout))
+	var view imageJSON
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("images show --json is not parseable: %v\n%s", err, stdout)
+	}
+	if view.Name != "alice/app" || view.Active.ID != goldenActiveID {
+		t.Fatalf("show = %+v", view)
+	}
+	if len(view.Archives) != 1 || view.Archives[0] != goldenArchiveID {
+		t.Fatalf("archives = %v, want [%s]", view.Archives, goldenArchiveID)
+	}
+	if len(view.Holds) != 1 || view.Holds[0] != goldenHoldID {
+		t.Fatalf("holds = %v, want [%s]", view.Holds, goldenHoldID)
+	}
+}
+
+func TestImagesShowJSONKeepsErrorSemantics(t *testing.T) {
 	home, _ := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
@@ -87,12 +108,13 @@ func TestImagesListJSONKeepsErrorSemantics(t *testing.T) {
 	}{
 		{name: "bad name is a usage error", args: []string{"nope", "--json"}, want: 2},
 		{name: "too many arguments is a usage error", args: []string{"a", "b", "--json"}, want: 2},
+		{name: "missing name is a usage error", args: []string{"--json"}, want: 2},
 		{name: "repository without an active image fails", args: []string{"carol/old", "--json"}, want: 1},
 		{name: "unknown repository fails", args: []string{"bob/missing", "--json"}, want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, err := runCmd(t, append(lib, append([]string{"images", "ls"}, tt.args...)...)...)
+			_, _, _, err := runCmd(t, append(lib, append([]string{"images", "show"}, tt.args...)...)...)
 			if ExitCode(err) != tt.want {
 				t.Fatalf("ExitCode(%v) = %d, want %d", err, ExitCode(err), tt.want)
 			}
@@ -126,8 +148,8 @@ func TestImagesListHumanRecord(t *testing.T) {
 		"    " + goldenArchiveID + "\n" +
 		"  holds       1\n" +
 		"    " + goldenHoldID + "\n"
-	if out := mustList(t, lib, "alice/app"); out != want {
-		t.Fatalf("ls single:\n%s\nwant:\n%s", out, want)
+	if out := mustShow(t, lib, "alice/app"); out != want {
+		t.Fatalf("show:\n%s\nwant:\n%s", out, want)
 	}
 }
 
@@ -194,6 +216,17 @@ func mustListJSON(t *testing.T, lib []string, args ...string) string {
 	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
 	if err != nil {
 		t.Fatalf("images ls %v: %v\n%s", args, err, stderr)
+	}
+	return stdout
+}
+
+func mustShowJSON(t *testing.T, lib []string, args ...string) string {
+	t.Helper()
+	full := append([]string{"images", "show"}, args...)
+	full = append(full, "--json")
+	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
+	if err != nil {
+		t.Fatalf("images show %v: %v\n%s", args, err, stderr)
 	}
 	return stdout
 }

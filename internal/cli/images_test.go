@@ -24,6 +24,16 @@ func mustList(t *testing.T, lib []string, args ...string) string {
 	return stdout
 }
 
+func mustShow(t *testing.T, lib []string, args ...string) string {
+	t.Helper()
+	full := append([]string{"images", "show"}, args...)
+	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
+	if err != nil {
+		t.Fatalf("images show %v: %v\n%s", args, err, stderr)
+	}
+	return stdout
+}
+
 func mustGC(t *testing.T, lib []string, args ...string) string {
 	t.Helper()
 	full := append([]string{"images", "gc"}, args...)
@@ -167,7 +177,7 @@ func TestImagesListEmptyLibrary(t *testing.T) {
 	}
 }
 
-func TestImagesListAllAndSingle(t *testing.T) {
+func TestImagesListAllAndShow(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
@@ -189,33 +199,44 @@ func TestImagesListAllAndSingle(t *testing.T) {
 	if strings.Contains(out, id1) {
 		t.Fatalf("short list included archived id %s:\n%s", id1, out)
 	}
-	detail := mustList(t, lib, "alice/app")
+	detail := mustShow(t, lib, "alice/app")
 	for _, want := range []string{"  id          " + id2, "    " + id1, "  holds       0"} {
 		if !strings.Contains(detail, want) {
-			t.Fatalf("ls single missing %q:\n%s", want, detail)
+			t.Fatalf("show missing %q:\n%s", want, detail)
 		}
-	}
-	if again := mustList(t, lib, "alice/app", "--archives"); again != detail {
-		t.Fatalf("--archives changed the named record:\n%s\nwant:\n%s", again, detail)
 	}
 	if out = mustList(t, lib, "--archives"); !strings.Contains(out, "  archive "+id1) {
 		t.Fatalf("ls all --archives:\n%s\nwant archive %s", out, id1)
 	}
 }
 
-func TestImagesListBadNames(t *testing.T) {
+func TestImagesListRejectsAName(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
-	_, _, _, err := runCmd(t, append(lib, "images", "ls", "nope")...)
+	_, _, _, err := runCmd(t, append(lib, "images", "ls", "alice/app")...)
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
-	_, _, _, err = runCmd(t, append(lib, "images", "ls", "bob/missing")...)
+}
+
+func TestImagesShowBadNames(t *testing.T) {
+	home, _ := withWorkspace(t)
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	_, _, _, err := runCmd(t, append(lib, "images", "show", "nope")...)
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+	_, _, _, err = runCmd(t, append(lib, "images", "show", "bob/missing")...)
 	if ExitCode(err) != 1 {
 		t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
 	}
-	_, _, _, err = runCmd(t, append(lib, "images", "ls", "a", "b")...)
+	_, _, _, err = runCmd(t, append(lib, "images", "show", "a", "b")...)
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+	_, _, _, err = runCmd(t, append(lib, "images", "show")...)
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
@@ -241,13 +262,13 @@ func TestImagesListChainAndDeprecated(t *testing.T) {
 	}
 	incrID := buildOutput(t, stdout)
 
-	out := mustList(t, lib, "alice/app")
+	out := mustShow(t, lib, "alice/app")
 	for _, want := range []string{
 		"  chain       1",
 		"    " + incrID + "  parent=" + fullID,
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("ls chain missing %q:\n%s", want, out)
+			t.Fatalf("show chain missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "deprecated") {
@@ -256,9 +277,9 @@ func TestImagesListChainAndDeprecated(t *testing.T) {
 	if out := mustRemove(t, lib, "alice/app"); out != "deprecated alice/app\n" {
 		t.Fatalf("rm phase 1 printed %q", out)
 	}
-	out = mustList(t, lib, "alice/app")
+	out = mustShow(t, lib, "alice/app")
 	if !strings.Contains(out, "  deprecated  true") {
-		t.Fatalf("ls deprecated:\n%s", out)
+		t.Fatalf("show deprecated:\n%s", out)
 	}
 }
 
@@ -275,9 +296,9 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	id2 := buildImage(t, lib, "alice/app", src)
 
-	out := mustList(t, lib, "alice/app")
+	out := mustShow(t, lib, "alice/app")
 	if !strings.Contains(out, id2) || !strings.Contains(out, "    "+id1) || !strings.Contains(out, "  holds       1") {
-		t.Fatalf("ls held:\n%s\nwant active %s and hold %s", out, id2, id1)
+		t.Fatalf("show held:\n%s\nwant active %s and hold %s", out, id2, id1)
 	}
 	if out := mustGC(t, lib); out != "" {
 		t.Fatalf("gc with a referenced hold printed %q", out)
@@ -320,9 +341,9 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessions, "live", "session.json")); err != nil {
 		t.Fatalf("the active record was deleted: %v", err)
 	}
-	out := mustList(t, lib, "alice/app")
+	out := mustShow(t, lib, "alice/app")
 	if !strings.Contains(out, activeID) || !strings.Contains(out, "    "+id1) || !strings.Contains(out, "  holds       1") {
-		t.Fatalf("ls after gc:\n%s\nwant active %s and hold %s", out, activeID, id1)
+		t.Fatalf("show after gc:\n%s\nwant active %s and hold %s", out, activeID, id1)
 	}
 }
 
@@ -366,9 +387,9 @@ func TestImagesGCExpiresByCount(t *testing.T) {
 	if out := mustGC(t, lib, "--keep-versions=1"); out != "" {
 		t.Fatalf("second gc printed %q", out)
 	}
-	out := mustList(t, lib, "alice/app")
+	out := mustShow(t, lib, "alice/app")
 	if !strings.Contains(out, "    "+ids[1]) || !strings.Contains(out, "  archives    1") {
-		t.Fatalf("ls after gc:\n%s\nwant archive %s", out, ids[1])
+		t.Fatalf("show after gc:\n%s\nwant archive %s", out, ids[1])
 	}
 }
 
@@ -479,16 +500,16 @@ func TestImagesListSplitForms(t *testing.T) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}
 	}
-	out = mustList(t, lib, "alice/data")
+	out = mustShow(t, lib, "alice/data")
 	for _, want := range []string{"  form        blocks", "  blocks      2"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("ls blocks missing %q:\n%s", want, out)
+			t.Fatalf("show blocks missing %q:\n%s", want, out)
 		}
 	}
-	out = mustList(t, lib, "bob/forest")
+	out = mustShow(t, lib, "bob/forest")
 	for _, want := range []string{"  form        members", "  members     2", "    docs  ", "    src   "} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("ls members missing %q:\n%s", want, out)
+			t.Fatalf("show members missing %q:\n%s", want, out)
 		}
 	}
 }

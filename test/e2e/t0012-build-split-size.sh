@@ -106,7 +106,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'full --split 64k publishes more than o
 	test $# -gt 1 &&
 	test -f "$img_dir/blocks/$id1/blk.000" &&
 	test ! -e "$img_dir/image.sqsh" &&
-	"$tiler_bin" images ls alice/split >ls.out 2>ls.err &&
+	"$tiler_bin" images show alice/split >ls.out 2>ls.err &&
 	grep -Eq "^  form +blocks$" ls.out &&
 	grep -Eq "^  blocks +[2-9][0-9]*$" ls.out &&
 	grep -Eq "^id: \"?$id1\"?$" "$meta_file" &&
@@ -133,7 +133,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with t
 	test ! -d "$img_dir/incr" &&
 	grep -Eq "^[[:space:]]*- id: \"?$layer\"?$" "$meta_file" &&
 	grep -Eq "^[[:space:]]*- name: blk.000$" "$meta_file" &&
-	"$tiler_bin" images ls alice/split >ls-incr.out 2>ls-incr.err &&
+	"$tiler_bin" images show alice/split >ls-incr.out 2>ls-incr.err &&
 	grep -Eq "^  chain +1$" ls-incr.out &&
 	grep -Eq "^  form +blocks$" ls-incr.out &&
 	echo "$layer" >layer.id
@@ -180,10 +180,10 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a new full retires the split chain int
 	test -f "$img_dir/hold/$id1/blocks/$id1/blk.000" &&
 	test -f "$img_dir/hold/$id1/blocks/$layer/blk.000" &&
 	test ! -d "$img_dir/archives" &&
-	"$tiler_bin" images ls alice/split >ls-new.out 2>ls-new.err &&
+	"$tiler_bin" images show alice/split >ls-new.out 2>ls-new.err &&
 	grep -Eq "^  chain +0$" ls-new.out &&
 	grep -Eq "^  form +blocks$" ls-new.out &&
-	"$tiler_bin" images ls alice/split --archives >ls-hold.out 2>ls-hold.err &&
+	"$tiler_bin" images show alice/split >ls-hold.out 2>ls-hold.err &&
 	grep -Eq "^    $id1$" ls-hold.out &&
 	"$tiler_bin" umount "$verify_dir" >unpin.out 2>unpin.err &&
 	grep -Eq "^unmounted " unpin.out
@@ -196,10 +196,10 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a build with no --split stays a single
 	grep -Eq "^full bob/plain [0-9a-f]+" plain.out &&
 	test -f "$plain_dir/image.sqsh" &&
 	test ! -e "$plain_dir/blocks" &&
-	"$tiler_bin" images ls bob/plain >ls-plain.out 2>ls-plain.err &&
+	"$tiler_bin" images show bob/plain >ls-plain.out 2>ls-plain.err &&
 	grep -Eq "^  chain +0$" ls-plain.out &&
 	grep -Eq "^  form +single$" ls-plain.out &&
-	! grep -q "blocks" ls-plain.out
+	! grep -Eq "^  form +blocks$" ls-plain.out
 '
 
 # Project split_size: 0 is an explicit off, same as omitting the key.
@@ -216,8 +216,9 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'project split_size 0 stays a single fi
 	grep -Eq "^full carol/zero [0-9a-f]+" zero.out &&
 	test -f "$zero_dir/image.sqsh" &&
 	test ! -e "$zero_dir/blocks" &&
-	"$tiler_bin" images ls carol/zero >ls-zero.out 2>ls-zero.err &&
-	! grep -q "form=" ls-zero.out
+	"$tiler_bin" images show carol/zero >ls-zero.out 2>ls-zero.err &&
+	grep -Eq "^  form +single$" ls-zero.out &&
+	! grep -Eq "^  form +blocks$" ls-zero.out
 '
 
 test_done

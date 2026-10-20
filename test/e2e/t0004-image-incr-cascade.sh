@@ -137,7 +137,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount and append two distinct incremen
 '
 
 test_expect_success TILER,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
-	"$tiler_bin" images ls alice/app >ls.out 2>ls.err &&
+	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
 	grep -Eq "^  chain +2$" ls.out &&
 	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 2 &&
@@ -169,7 +169,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build --full merges the view into a ne
 test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
 	grep -Eq "^id: \"?$id2\"?$" "$meta_file" &&
 	! grep -q "^chain:" "$meta_file" &&
-	"$tiler_bin" images ls alice/app >ls2.out 2>ls2.err &&
+	"$tiler_bin" images show alice/app >ls2.out 2>ls2.err &&
 	grep -Eq "^  chain +0$" ls2.out
 '
 
@@ -177,7 +177,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged fu
 # implicit session pins the retired chain: it lands in hold/<old-id> (still
 # serving the live view through open fds) rather than being freed at once.
 test_expect_success TILER,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
-	"$tiler_bin" images ls alice/app --archives >ls3.out 2>ls3.err &&
+	"$tiler_bin" images show alice/app >ls3.out 2>ls3.err &&
 	grep -Eq "^    $id1$" ls3.out &&
 	test -f "$img_dir/hold/$id1/image.sqsh"
 '
@@ -189,7 +189,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the merged full remounts and stands al
 	grep -q "hello tiler" "$verify_dir/README.txt" &&
 	test -f "$verify_dir/a.txt" &&
 	test -f "$verify_dir/b.txt" &&
-	"$tiler_bin" images ls alice/app >ls4.out 2>ls4.err &&
+	"$tiler_bin" images show alice/app >ls4.out 2>ls4.err &&
 	grep -Eq "^  chain +0$" ls4.out
 '
 

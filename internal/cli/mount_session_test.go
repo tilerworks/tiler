@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -103,11 +104,15 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	// The library id the action records is the one the list command
 	// reports for the active image. JSON keeps that id stable when
 	// the human record is reformatted.
-	stdout, stderr, _, err := runCmd(t, append(lib, "images", "ls", "alice/app", "--json")...)
+	stdout, stderr, _, err := runCmd(t, append(lib, "images", "show", "alice/app", "--json")...)
 	if err != nil {
-		t.Fatalf("images ls: %v\n%s", err, stderr)
+		t.Fatalf("images show: %v\n%s", err, stderr)
 	}
-	fullID := parseImagesDocument(t, stdout).Images[0].Active.ID
+	var listed imageJSON
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("images show --json: %v\n%s", err, stdout)
+	}
+	fullID := listed.Active.ID
 
 	mountOK(t, lib, "mounted "+view+"\n",
 		"mount", "--session", "dev", "alice/app", view)

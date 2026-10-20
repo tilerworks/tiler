@@ -87,17 +87,19 @@ Available now:
   one `image.sqsh` / `incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [owner/repo] [--archives] [--json]` lists every
-  active image as one aligned row: name, id, creation date, size,
-  chain length, payload form (`single`, `blocks`, or `members`), and
-  the archive and hold counts. A deprecated image, and a recorded
-  ref or short commit, trail that row. A name prints a multi-line
-  record instead: identity, each chain layer, the split payload
-  (block count, or one line per member), and the parked chain ids.
-  `--archives` adds those ids under each row of the list; it does
-  not change the named record. `--json` renders one machine-readable
-  document instead, with the additive `form` and `members` fields
-  for split actives.
+- `tiler images list [--archives] [--json]` lists every active image
+  as one aligned row: name, id, creation date, size, chain length,
+  payload form (`single`, `blocks`, or `members`), and the archive
+  and hold counts. A deprecated image, and a recorded ref or short
+  commit, trail that row. `--archives` adds those parked chain ids
+  under each row. `--json` renders one machine-readable document
+  instead, with the additive `form` and `members` fields for split
+  actives.
+- `tiler images show <owner/repo> [--json]` prints a multi-line
+  record for one active image: identity, each chain layer, the
+  split payload (block count, or one line per member), and the
+  parked archive and hold ids. `--json` renders the same repository
+  as one object.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass
@@ -359,11 +361,12 @@ and overlays them. One library, one command surface — the block
 size is a configuration (or per-build flag) choice.
 
 Machines read the same command surface. Every list and view
-command — `images list`, `session list`, `session show`, `status`,
-and `doctor` — carries a `--json` form with a stable, add-only
-schema pinned by golden files: a CI gate fails on a missing image
-or a stale mount, and an agent picks the cache setting from the
-doctor performance numbers without parsing human text.
+command — `images list`, `images show`, `session list`,
+`session show`, `status`, and `doctor` — carries a `--json` form
+with a stable, add-only schema pinned by golden files: a CI gate
+fails on a missing image or a stale mount, and an agent picks the
+cache setting from the doctor performance numbers without parsing
+human text.
 
 ## License
 
