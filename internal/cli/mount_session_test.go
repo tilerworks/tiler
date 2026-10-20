@@ -100,13 +100,14 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	mustSessionNew(t, lib, "dev")
 	view := filepath.Join(work, "view")
 
-	// The library id the action records is the one the ls command
-	// reports for the active image.
-	stdout, stderr, _, err := runCmd(t, append(lib, "images", "ls", "alice/app")...)
+	// The library id the action records is the one the list command
+	// reports for the active image. JSON keeps that id stable when
+	// the human record is reformatted.
+	stdout, stderr, _, err := runCmd(t, append(lib, "images", "ls", "alice/app", "--json")...)
 	if err != nil {
 		t.Fatalf("images ls: %v\n%s", err, stderr)
 	}
-	fullID := strings.Fields(stdout)[1]
+	fullID := parseImagesDocument(t, stdout).Images[0].Active.ID
 
 	mountOK(t, lib, "mounted "+view+"\n",
 		"mount", "--session", "dev", "alice/app", view)

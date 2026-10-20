@@ -100,20 +100,34 @@ func TestImagesListJSONKeepsErrorSemantics(t *testing.T) {
 	}
 }
 
-func TestImagesListHumanOutputUnchanged(t *testing.T) {
+func TestImagesListHumanRecord(t *testing.T) {
 	home, _ := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	writeGoldenLibrary(t, imagesDir)
 
-	want := "alice/app " + goldenActiveID + " chain=1\nbob/tool " + goldenBobID + " chain=0\n"
+	want := "" +
+		"NAME       ID                CREATED     SIZE   CHAIN  FORM    ARCH  HOLD\n" +
+		"alice/app  " + goldenActiveID + "  2026-03-04  2 KiB  1      single  1     1\n" +
+		"bob/tool   " + goldenBobID + "  2026-03-04  4 KiB  0      single  0     0\n"
 	if out := mustList(t, lib); out != want {
 		t.Fatalf("ls all:\n%s\nwant:\n%s", out, want)
 	}
-	want = "alice/app " + goldenActiveID + " chain=1\n  incr " + goldenChainID + "\n" +
-		"  archive " + goldenArchiveID + "\n  hold " + goldenHoldID + "\n"
-	if out := mustList(t, lib, "alice/app", "--archives"); out != want {
-		t.Fatalf("ls single --archives:\n%s\nwant:\n%s", out, want)
+	want = "alice/app\n" +
+		"  id          " + goldenActiveID + "\n" +
+		"  created     2026-03-04T05:06:07Z\n" +
+		"  size        2048 (2 KiB)\n" +
+		"  sha256      " + goldenActiveSum + "\n" +
+		"  form        single\n" +
+		"  builder     tiler golden\n" +
+		"  chain       1\n" +
+		"    " + goldenChainID + "  parent=" + goldenActiveID + "  1 KiB  2026-03-04T04:06:07Z\n" +
+		"  archives    1\n" +
+		"    " + goldenArchiveID + "\n" +
+		"  holds       1\n" +
+		"    " + goldenHoldID + "\n"
+	if out := mustList(t, lib, "alice/app"); out != want {
+		t.Fatalf("ls single:\n%s\nwant:\n%s", out, want)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -33,10 +35,13 @@ func newImagesListCmd() *cobra.Command {
 		Use:     "list [owner/repo]",
 		Aliases: []string{"ls"},
 		Short:   "List active images",
-		Long: "Without a name, list every active image in the library. With a\n" +
-			"name, also list each incremental chain id. --archives adds the\n" +
-			"archive and held chain ids. --json renders one machine-readable\n" +
-			"document instead of the human listing.",
+		Long: "Without a name, print one aligned row per active image: name,\n" +
+			"id, creation date, size, chain length, payload form, and the\n" +
+			"archive and hold counts. With a name, print a multi-line\n" +
+			"record: identity, each chain layer, the split payload, and\n" +
+			"the parked chain ids. --archives adds those ids under each\n" +
+			"row of the list. --json renders one machine-readable document\n" +
+			"instead of the human listing.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -74,17 +79,7 @@ func listAllImages(w io.Writer, cfg config.Config, archives, asJSON bool) error 
 	if asJSON {
 		return writeImagesJSON(w, states, archives)
 	}
-	for _, named := range states {
-		if err := writeImageLine(w, named.name, named.state); err != nil {
-			return err
-		}
-		if archives {
-			if err := writeSideChains(w, named.state); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return writeImageTable(w, states, archives)
 }
 
 // activeStates inspects every repository and keeps the ones with an
@@ -120,47 +115,251 @@ func listOneImage(w io.Writer, cfg config.Config, name string, archives, asJSON 
 		named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
 		return writeImagesJSON(w, []namedState{named}, archives)
 	}
-	if err := writeImageLine(w, name, state); err != nil {
-		return err
+	return writeImageDetail(w, repo.Owner+"/"+repo.Repo, state)
+}
+
+// detailKeyWidth is the padded key column of a named image record.
+// It fits the longest key ("deprecated") so optional lines do not
+// shift the values.
+const detailKeyWidth = 10
+
+// imageTableHeader names the short-list columns. Widths grow to fit
+// the values printed under them.
+var imageTableHeader = []string{"NAME", "ID", "CREATED", "SIZE", "CHAIN", "FORM", "ARCH", "HOLD"}
+
+// writeImageTable prints the short list: a header and one space-aligned
+// row per active image. A deprecated image and a recorded ref or
+// commit trail the row. With archives set, parked chain ids follow
+// the row they belong to.
+func writeImageTable(w io.Writer, states []namedState, archives bool) error {
+	if len(states) == 0 {
+		return nil
 	}
-	for _, entry := range state.Active.Chain {
-		if _, err := fmt.Fprintf(w, "  incr %s\n", entry.ID); err != nil {
-			return err
+	rows := make([]imageTableRow, len(states))
+	widths := make([]int, len(imageTableHeader))
+	copy(widths, lengths(imageTableHeader))
+	padLast := false
+	for i, named := range states {
+		rows[i] = newImageTableRow(named)
+		if rows[i].suffix != "" {
+			padLast = true
+		}
+		for c, col := range rows[i].cols {
+			if len(col) > widths[c] {
+				widths[c] = len(col)
+			}
 		}
 	}
-	// The single-name listing expands the split payload manifest:
-	// every partition of a members form, the block count of a
-	// blocks form. The single-file form keeps its chain listing.
-	switch image.PayloadKind(state.Active) {
-	case image.PayloadMembers:
-		for _, entry := range state.Active.Members {
-			if _, err := fmt.Fprintf(w, "  member %s\n", entry.Name); err != nil {
+	if err := writePadded(w, imageTableHeader, widths, "", padLast); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := writePadded(w, row.cols, widths, row.suffix, padLast); err != nil {
+			return err
+		}
+		if archives {
+			if err := writeSideChains(w, row.state); err != nil {
 				return err
 			}
 		}
-	case image.PayloadBlocks:
-		if _, err := fmt.Fprintf(w, "  blocks %d\n", len(state.Active.Blocks)); err != nil {
-			return err
-		}
-	}
-	if archives {
-		return writeSideChains(w, state)
 	}
 	return nil
 }
 
-func writeImageLine(w io.Writer, name string, state image.State) error {
-	line := fmt.Sprintf("%s %s chain=%d", name, state.Active.ID, len(state.Active.Chain))
-	if state.Active.Deprecated {
-		line += " deprecated"
+type imageTableRow struct {
+	cols   []string
+	suffix string
+	state  image.State
+}
+
+func newImageTableRow(named namedState) imageTableRow {
+	meta := named.state.Active
+	var suffix []string
+	if meta.Deprecated {
+		suffix = append(suffix, "deprecated")
 	}
-	// The form marker is appended for split actives only, so the
-	// default single-file output stays byte-identical.
-	if kind := image.PayloadKind(state.Active); kind != image.PayloadSingle {
-		line += " form=" + kind
+	if meta.Source.Ref != "" {
+		suffix = append(suffix, "ref="+meta.Source.Ref)
 	}
-	_, err := fmt.Fprintln(w, line)
+	if meta.Source.Commit != "" {
+		commit := meta.Source.Commit
+		if len(commit) > 7 {
+			commit = commit[:7]
+		}
+		suffix = append(suffix, "commit="+commit)
+	}
+	return imageTableRow{
+		cols: []string{
+			named.name,
+			meta.ID,
+			meta.CreatedAt.UTC().Format("2006-01-02"),
+			formatSize(meta.Size),
+			strconv.Itoa(len(meta.Chain)),
+			image.PayloadKind(meta),
+			strconv.Itoa(len(named.state.Archives)),
+			strconv.Itoa(len(named.state.Holds)),
+		},
+		suffix: strings.Join(suffix, " "),
+		state:  named.state,
+	}
+}
+
+func lengths(cols []string) []int {
+	out := make([]int, len(cols))
+	for i, col := range cols {
+		out[i] = len(col)
+	}
+	return out
+}
+
+// writePadded joins columns with two spaces. Every column but the
+// last is padded to its width; the last is padded only when a later
+// row carries a suffix, so those suffixes share a column.
+func writePadded(w io.Writer, cols []string, widths []int, suffix string, padLast bool) error {
+	var b strings.Builder
+	for i, col := range cols {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(col)
+		if i == len(cols)-1 && !padLast {
+			continue
+		}
+		if pad := widths[i] - len(col); pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
+	}
+	if suffix != "" {
+		b.WriteString("  ")
+		b.WriteString(suffix)
+	}
+	_, err := fmt.Fprintln(w, b.String())
 	return err
+}
+
+// writeImageDetail prints the multi-line record of one image. Parked
+// chain ids are always included; the archives flag does not change
+// this view.
+func writeImageDetail(w io.Writer, name string, state image.State) error {
+	meta := state.Active
+	if _, err := fmt.Fprintln(w, name); err != nil {
+		return err
+	}
+	fields := [][2]string{
+		{"id", meta.ID},
+		{"created", meta.CreatedAt.UTC().Format(time.RFC3339)},
+		{"size", fmt.Sprintf("%d (%s)", meta.Size, formatSize(meta.Size))},
+		{"sha256", meta.SHA256},
+		{"form", image.PayloadKind(meta)},
+	}
+	if meta.Builder != "" {
+		fields = append(fields, [2]string{"builder", meta.Builder})
+	}
+	if src := detailSource(meta.Source); src != "" {
+		fields = append(fields, [2]string{"source", src})
+	}
+	if meta.Deprecated {
+		fields = append(fields, [2]string{"deprecated", "true"})
+	}
+	fields = append(fields, [2]string{"chain", strconv.Itoa(len(meta.Chain))})
+	for _, field := range fields {
+		if err := writeDetailField(w, field[0], field[1]); err != nil {
+			return err
+		}
+	}
+	for _, entry := range meta.Chain {
+		if _, err := fmt.Fprintf(w, "    %s  parent=%s  %s  %s\n",
+			entry.ID, entry.Parent, formatSize(entry.Size),
+			entry.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	switch image.PayloadKind(meta) {
+	case image.PayloadMembers:
+		if err := writeDetailField(w, "members", strconv.Itoa(len(meta.Members))); err != nil {
+			return err
+		}
+		if err := writeMemberLines(w, meta.Members); err != nil {
+			return err
+		}
+	case image.PayloadBlocks:
+		if err := writeDetailField(w, "blocks", strconv.Itoa(len(meta.Blocks))); err != nil {
+			return err
+		}
+	}
+	if err := writeDetailField(w, "archives", strconv.Itoa(len(state.Archives))); err != nil {
+		return err
+	}
+	for _, id := range state.Archives {
+		if _, err := fmt.Fprintf(w, "    %s\n", id); err != nil {
+			return err
+		}
+	}
+	if err := writeDetailField(w, "holds", strconv.Itoa(len(state.Holds))); err != nil {
+		return err
+	}
+	for _, id := range state.Holds {
+		if _, err := fmt.Fprintf(w, "    %s\n", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeDetailField(w io.Writer, key, value string) error {
+	_, err := fmt.Fprintf(w, "  %-*s  %s\n", detailKeyWidth, key, value)
+	return err
+}
+
+func writeMemberLines(w io.Writer, members []image.MemberEntry) error {
+	width := 0
+	for _, member := range members {
+		if len(member.Name) > width {
+			width = len(member.Name)
+		}
+	}
+	for _, member := range members {
+		if _, err := fmt.Fprintf(w, "    %-*s  %s\n", width, member.Name, formatSize(member.Size)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func detailSource(src image.Source) string {
+	var parts []string
+	if src.Repo != "" {
+		parts = append(parts, "repo="+src.Repo)
+	}
+	if src.Ref != "" {
+		parts = append(parts, "ref="+src.Ref)
+	}
+	if src.Commit != "" {
+		parts = append(parts, "commit="+src.Commit)
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatSize renders a byte count in binary units. Values under 1 KiB
+// stay in bytes. Larger values use one decimal only when it is not
+// zero.
+func formatSize(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	if n < 1024 {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	value := float64(n)
+	unit := -1
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	text := strconv.FormatFloat(value, 'f', 1, 64)
+	text = strings.TrimSuffix(text, ".0")
+	return text + " " + units[unit]
 }
 
 func writeSideChains(w io.Writer, state image.State) error {
