@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/mountinfo"
@@ -33,6 +34,28 @@ func TestResolveCombinationRuntimeFromSession(t *testing.T) {
 	writeSessionRecord(t, sessionsDir(home), "dev",
 		libraryAction("alice/app", view, session.ModeRW))
 	cfg := config.Config{SessionsDir: sessionsDir(home)}
+	want := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
+	got := resolveCombinationRuntime(cfg, view, nil)
+	if got != want {
+		t.Fatalf("runtime = %q, want %q", got, want)
+	}
+}
+
+func TestResolveCombinationRuntimeStoreFallbackWhenLocked(t *testing.T) {
+	home, work := withWorkspace(t)
+	view := filepath.Join(work, "view")
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		libraryAction("alice/app", view, session.ModeRW))
+	cfg := config.Config{SessionsDir: sessionsDir(home)}
+	withMountSeams(t, nil)
+	// Simulate close holding the advisory lock: SessionForPath's
+	// non-blocking scan skips the record, so the unlocked store
+	// fallback must still recover the combination directory.
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.Lock = func(string, time.Duration) (func(), error) {
+			return nil, session.ErrLockHeld
+		}
+	})
 	want := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
 	got := resolveCombinationRuntime(cfg, view, nil)
 	if got != want {
@@ -105,7 +128,7 @@ func TestUmountReloadRereadsTableSeam(t *testing.T) {
 	view := filepath.Join(work, "view")
 	f := withMountSeams(t, nil)
 	f.removed = 1
-	other := filepath.Join(home, "lib", "runtime", "up-1-2", "lower-0")
+	other := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "lower-0")
 	f.table = []mountinfo.Mount{{Point: other, FSType: "fuse", Source: "/img/image.sqsh"}}
 
 	if _, stderr, _, err := runCmd(t, append(lib, "umount", view)...); err != nil {

@@ -79,12 +79,12 @@ test_lazy_prereq KILL_VIEW '
 '
 
 # HOME is the per-run trash directory, so tiler's default layout
-# ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
-# needs no --*-dir flags. Mount targets must sit OUTSIDE the runtime tree
-# and the reserved directories, so keep them under $HOME/work. s_dir and
-# s2_dir are two views of one named session (dev); orph_dir is a plain
-# mount whose record is deleted to make it an orphan; uncov_dir is never
-# mounted and stands in for a path no session covers.
+# ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
+# needs no --*-dir flags. Mount targets must sit OUTSIDE the sessions
+# tree and the reserved directories, so keep them under $HOME/work.
+# s_dir and s2_dir are two views of one named session (dev); orph_dir
+# is a plain mount whose record is deleted to make it an orphan;
+# uncov_dir is never mounted and stands in for a path no session covers.
 src_dir=$HOME/src/app
 s_dir=$HOME/work/status
 s2_dir=$HOME/work/status2
@@ -259,9 +259,12 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session shows no live views o
 '
 
 # A plain mount with no --session mints an implicit auto-* record. Delete
-# that record out-of-band while the view stays live: the mount is now
-# claimed by no active record, so the overview lists it as an orphan and
-# the json carries a non-empty orphan_views naming the view point.
+# that record file out-of-band while the view stays live: the mount is
+# now claimed by no active record, so the overview lists it as an orphan
+# and the json carries a non-empty orphan_views naming the view point.
+# Only session.json is removed — the session directory still holds live
+# runtime mounts under runtime/m<seq>/, so rm -rf of the whole tree
+# cannot succeed and is not the "lost record" signal names()/Load use.
 test_expect_success TILER,FUSE_TOOLCHAIN 'status lists a live view whose record was lost as an orphan' '
 	mkdir -p "$orph_dir" &&
 	"$tiler_bin" mount tmp/status "$orph_dir" >m8.out 2>m8.err &&
@@ -269,7 +272,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'status lists a live view whose record 
 	"$tiler_bin" session list >l8.out 2>l8.err &&
 	auto=$(grep -E "^auto-[^ ]+ active mounts=1$" l8.out | head -1 | cut -d" " -f1) &&
 	test -n "$auto" &&
-	rm -rf "$HOME/.tiler/sessions/$auto" &&
+	rm -f "$HOME/.tiler/sessions/$auto/session.json" &&
 	"$tiler_bin" status >ov8.out 2>ov8.err &&
 	grep -Eq "^orphan " ov8.out &&
 	grep -qF "$orph_dir" ov8.out &&

@@ -88,9 +88,12 @@ func reloadEntries() ([]workspace.Entry, error) {
 
 // resolveCombinationRuntime recovers the session-scoped combination
 // directory for one mountpoint: prefer the live table entry's
-// upper/lower path, then fall back to the covering session record's
-// RuntimeID when the overlay entry has already vanished or does not
-// expose a recoverable combination path.
+// upper/lower path, then the covering session record's RuntimeID
+// when the overlay entry has already vanished or does not expose a
+// recoverable combination path (fuse-overlayfs stays anonymous once
+// its daemon is gone). The store scan is lock-free so session close,
+// which already holds the advisory lock, can still recover the path
+// and sweep stale lowers that SessionForPath would skip.
 func resolveCombinationRuntime(
 	cfg config.Config,
 	dir string,
@@ -105,6 +108,15 @@ func resolveCombinationRuntime(
 		}
 		break
 	}
+	if runtime := runtimeFromSessionLookup(cfg, dir); runtime != "" {
+		return runtime
+	}
+	return runtimeFromStore(cfg, dir)
+}
+
+// runtimeFromSessionLookup asks SessionForPath for the covering
+// record. It fails closed when the record's scan lock is held.
+func runtimeFromSessionLookup(cfg config.Config, dir string) string {
 	engine := sessionEngine(cfg)
 	hit, err := engine.SessionForPath(dir)
 	if err != nil {
@@ -119,6 +131,36 @@ func resolveCombinationRuntime(
 		}
 		if runtime := sessionRuntimeDir(cfg, hit.Record.Name, action); runtime != "" {
 			return runtime
+		}
+	}
+	return ""
+}
+
+// runtimeFromStore reads session records without the advisory lock
+// and returns sessions/<name>/runtime/m<seq> for an active mount at
+// dir. Close holds that lock while tearing views down, so the locked
+// SessionForPath scan cannot see the record under close.
+func runtimeFromStore(cfg config.Config, dir string) string {
+	if cfg.SessionsDir == "" || dir == "" {
+		return ""
+	}
+	records, err := session.Store{Dir: cfg.SessionsDir}.List()
+	if err != nil {
+		return ""
+	}
+	for _, rec := range records {
+		if rec.State != session.StateActive {
+			continue
+		}
+		for _, action := range rec.Actions {
+			if action.Type != session.TypeMount ||
+				action.Status == session.StatusUnmounted ||
+				action.Mountpoint != dir {
+				continue
+			}
+			if runtime := sessionRuntimeDir(cfg, rec.Name, action); runtime != "" {
+				return runtime
+			}
 		}
 	}
 	return ""
