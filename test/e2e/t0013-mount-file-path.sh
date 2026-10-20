@@ -1,0 +1,141 @@
+#!/bin/sh
+#
+# tiler end-to-end test: mount a squashfs by absolute path outside
+# images_dir, with no meta.yaml beside it.
+#
+# Companion to t0003-image-mount.sh (library owner/repo mounts). This
+# case covers the third-party / NAS file-path form:
+#
+#   1. pack a bare squashfs with mksquashfs into a directory that is
+#      not under $HOME/.tiler/images and carries no meta.yaml,
+#   2. mount that absolute path into a named session,
+#   3. confirm the view serves the packed content,
+#   4. confirm the session record stores the path as given and leaves
+#      owner/repo/full_id empty,
+#   5. umount.
+#
+# A real mount needs a writable /dev/fuse plus the squashfs and overlay
+# toolchain that `tiler doctor` treats as fail-level. The FUSE_TOOLCHAIN
+# prereq below models exactly that, so the case skips cleanly -- rather
+# than false-fails -- on a host without the toolchain.
+#
+# Scope guard: this case asserts file-path mount + session identity
+# only. It does not cover library mounts, --verify (rejected for file
+# paths), split blocks, or incremental builds.
+
+test_description='tiler mounts a bare squashfs path outside images_dir'
+
+# Resolve paths against this script's location BEFORE sourcing the
+# framework: test-lib.sh moves the working directory into a per-run
+# trash directory and repoints HOME there.
+tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
+TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
+export TEST_LIB_DIRECTORY
+TEST_DIRECTORY=$tiler_case_dir
+export TEST_DIRECTORY
+
+. "$TEST_LIB_DIRECTORY/test-lib.sh"
+
+# Prefer the repository build; fall back to a tiler found on PATH.
+tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
+tiler_bin=$tiler_repo_root/bin/tiler
+if ! test -x "$tiler_bin"
+then
+	tiler_bin=$(command -v tiler) || tiler_bin=
+fi
+if test -n "$tiler_bin"
+then
+	test_set_prereq TILER
+fi
+
+# A real mount needs the FUSE device and the squashfs/overlay toolchain
+# (the same set `tiler doctor` reports as fail-level). Model it here so
+# the assertions stay real checks when the tools are present and skip
+# cleanly when they are not.
+test_lazy_prereq FUSE_TOOLCHAIN '
+	test -e /dev/fuse &&
+	command -v squashfuse_ll >/dev/null 2>&1 &&
+	command -v fuse-overlayfs >/dev/null 2>&1 &&
+	command -v fusermount3 >/dev/null 2>&1 &&
+	command -v mksquashfs >/dev/null 2>&1 &&
+	command -v git >/dev/null 2>&1
+'
+
+# HOME is the per-run trash directory, so tiler's default layout
+# ($HOME/.tiler/{images,sessions,cache}) is already sandboxed.
+# The third-party squashfs lives under $HOME/nas/ so it is outside
+# images_dir; the mount target stays under $HOME/work.
+src_dir=$HOME/src/vendor
+nas_dir=$HOME/nas
+img=$nas_dir/vendor.sqsh
+work_dir=$HOME/work/vendor
+session_json=$HOME/.tiler/sessions/ext/session.json
+images_dir=$HOME/.tiler/images
+
+# Guarantee every FUSE mount is torn down before the framework removes
+# the trash directory, even if an assertion fails or the run is
+# interrupted. `tiler umount` is idempotent; fusermount3 -uz is the
+# fallback for a view whose daemon already died.
+if test -n "$tiler_bin"
+then
+	test_atexit '
+		"$tiler_bin" umount "$work_dir" >/dev/null 2>&1 ||
+		fusermount3 -uz "$work_dir" >/dev/null 2>&1 ||
+		true
+	'
+fi
+
+# Pack with mksquashfs directly so the payload never enters the library
+# and never grows a meta.yaml. The path must stay outside images_dir.
+test_expect_success TILER,FUSE_TOOLCHAIN 'pack a bare squashfs outside images_dir without meta' '
+	mkdir -p "$src_dir/docs" "$nas_dir" &&
+	echo "hello vendor" >"$src_dir/README.txt" &&
+	echo "# guide" >"$src_dir/docs/guide.md" &&
+	mksquashfs "$src_dir" "$img" -comp zstd -noappend -xattrs >/dev/null &&
+	test -f "$img" &&
+	case "$img" in
+	"$images_dir"/*)
+		echo "image path must stay outside images_dir: $img" >&2
+		false
+		;;
+	esac &&
+	test ! -e "$nas_dir/meta.yaml" &&
+	test ! -e "$images_dir/meta.yaml" &&
+	! find "$nas_dir" -name meta.yaml | grep -q .
+'
+
+test_expect_success TILER,FUSE_TOOLCHAIN 'mount the absolute path and serve the content' '
+	"$tiler_bin" session new ext >new.out 2>new.err &&
+	grep -Eq "^created ext$" new.out &&
+	mkdir -p "$work_dir" &&
+	"$tiler_bin" mount --session ext "$img" "$work_dir" >mount.out 2>mount.err &&
+	grep -Eq "^mounted " mount.out &&
+	grep -q "hello vendor" "$work_dir/README.txt" &&
+	test -f "$work_dir/docs/guide.md"
+'
+
+# The session action stores the reference as given (here the absolute
+# path) and leaves library identity empty. session show --json and the
+# on-disk record both omit owner/repo/full_id for this form.
+test_expect_success TILER,FUSE_TOOLCHAIN 'session records the image path with empty library identity' '
+	"$tiler_bin" session show ext >show.out 2>show.err &&
+	grep -qF "mount $img " show.out &&
+	grep -Eq "mode=rw status=mounted" show.out &&
+	"$tiler_bin" session show ext --json >showj.out 2>showj.err &&
+	grep -qF "\"image\": \"$img\"" showj.out &&
+	! grep -q "\"owner\"" showj.out &&
+	! grep -q "\"repo\"" showj.out &&
+	! grep -q "\"full_id\"" showj.out &&
+	test -f "$session_json" &&
+	grep -qF "\"image\": \"$img\"" "$session_json" &&
+	! grep -q "\"owner\"" "$session_json" &&
+	! grep -q "\"repo\"" "$session_json" &&
+	! grep -q "\"full_id\"" "$session_json"
+'
+
+test_expect_success TILER,FUSE_TOOLCHAIN 'umount tears the view down' '
+	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
+	grep -Eq "^unmounted " umount.out
+'
+
+test_done
