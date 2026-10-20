@@ -37,10 +37,25 @@ func (f *fakeRunner) run(name string, env []string, args ...string) error {
 	if f.err != nil {
 		return f.err
 	}
-	if len(args) < 2 {
-		return errors.New("fake runner: missing destination")
+	dst, err := fakePackDst(name, args)
+	if err != nil {
+		return err
 	}
-	return os.WriteFile(args[1], f.body, 0o644)
+	return os.WriteFile(dst, f.body, 0o644)
+}
+
+// fakePackDst is the image file the packer would create. mksquashfs
+// takes source then destination. mkfs.erofs takes -U clear, the
+// compression flag, the destination, then the source.
+func fakePackDst(name string, args []string) (string, error) {
+	idx := 1
+	if name == "mkfs.erofs" {
+		idx = 3
+	}
+	if len(args) <= idx {
+		return "", errors.New("fake runner: missing destination")
+	}
+	return args[idx], nil
 }
 
 func sourceDir(t *testing.T) string {
@@ -552,67 +567,14 @@ func epochTree(t *testing.T, unix int64) string {
 	return src
 }
 
-func TestSourceDateEpochDerivesFromTreeMtime(t *testing.T) {
-	src := epochTree(t, 1700000000)
-	// The same tree derives the same epoch on every call, so builds
-	// seconds apart pack identical bytes.
-	for i := 0; i < 2; i++ {
-		if got := sourceDateEpoch(src); got != 1700000000 {
-			t.Fatalf("call %d: epoch = %d", i, got)
-		}
-	}
-	// A changed tree derives a different epoch.
-	file := filepath.Join(src, "a.txt")
-	if err := os.WriteFile(file, []byte("b"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	newer := time.Unix(1700009999, 0)
-	if err := os.Chtimes(file, newer, newer); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(src, newer, newer); err != nil {
-		t.Fatal(err)
-	}
-	if got := sourceDateEpoch(src); got != 1700009999 {
-		t.Fatalf("changed epoch = %d", got)
-	}
-}
-
-func TestSourceDateEpochHonorsEnvironment(t *testing.T) {
-	t.Setenv("SOURCE_DATE_EPOCH", "1234567890")
-	src := epochTree(t, 1700000000)
-	t.Setenv("SOURCE_DATE_EPOCH", "1234567890")
-	if got := sourceDateEpoch(src); got != 1234567890 {
-		t.Fatalf("epoch = %d", got)
-	}
-}
-
-func TestSourceDateEpochIgnoresUnparsableEnvironment(t *testing.T) {
-	src := epochTree(t, 1700000000)
-	t.Setenv("SOURCE_DATE_EPOCH", "not-a-number")
-	if got := sourceDateEpoch(src); got != 1700000000 {
-		t.Fatalf("epoch = %d", got)
-	}
-}
-
-func TestSourceDateEpochFallsBackToZero(t *testing.T) {
-	// A tree with no readable mtime keeps the fixed zero epoch, so
-	// same input still packs to same output and the build never
-	// aborts on a stat failure.
-	t.Setenv("SOURCE_DATE_EPOCH", "")
-	if got := sourceDateEpoch(filepath.Join(t.TempDir(), "absent")); got != 0 {
-		t.Fatalf("epoch = %d", got)
-	}
-}
-
 func TestPackPathsExportSourceDateEpoch(t *testing.T) {
 	src := epochTree(t, 1700000000)
 	runner := &fakeRunner{body: []byte("packed")}
 	dst := filepath.Join(t.TempDir(), "out.sqsh")
-	if err := packFullImage(runner.run, src, dst); err != nil {
+	if err := packFullImage(runner.run, src, dst, FormatSquashfs, CompressionZstd); err != nil {
 		t.Fatal(err)
 	}
-	if err := packIncrImage(runner.run, src, dst+".incr"); err != nil {
+	if err := packIncrImage(runner.run, src, dst+".incr", FormatSquashfs, CompressionZstd); err != nil {
 		t.Fatal(err)
 	}
 	want := "SOURCE_DATE_EPOCH=1700000000"
@@ -623,5 +585,117 @@ func TestPackPathsExportSourceDateEpoch(t *testing.T) {
 		if len(env) != 1 || env[0] != want {
 			t.Fatalf("pack %d env = %v, want [%s]", i, env, want)
 		}
+	}
+}
+
+func TestBuildFullPacksRequestedContainer(t *testing.T) {
+	src := sourceDir(t)
+	cases := []struct {
+		name        string
+		format      string
+		compression string
+		wantName    string
+		wantComp    string
+		metaType    string
+		metaComp    string
+	}{
+		{
+			name: "explicit squashfs zstd", format: FormatSquashfs, compression: CompressionZstd,
+			wantName: "mksquashfs", wantComp: "zstd",
+			metaType: FormatSquashfs, metaComp: CompressionZstd,
+		},
+		{
+			name: "squashfs xz", format: FormatSquashfs, compression: "xz",
+			wantName: "mksquashfs", wantComp: "xz",
+			metaType: FormatSquashfs, metaComp: "xz",
+		},
+		{
+			name: "default type with gzip", compression: "gzip",
+			wantName: "mksquashfs", wantComp: "gzip",
+			metaType: FormatSquashfs, metaComp: "gzip",
+		},
+		{
+			name: "erofs gzip", format: FormatErofs, compression: "gzip",
+			wantName: "mkfs.erofs", wantComp: "-zdeflate",
+			metaType: FormatErofs, metaComp: "gzip",
+		},
+		{
+			name: "erofs default compression", format: FormatErofs,
+			wantName: "mkfs.erofs", wantComp: "-zzstd",
+			metaType: FormatErofs, metaComp: CompressionZstd,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := buildConfig(t)
+			runner := &fakeRunner{body: []byte("packed-" + tc.name)}
+			res, err := BuildFull(FullRequest{
+				Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test",
+				Format: tc.format, Compression: tc.compression,
+				Now: fixedNow, Run: runner.run,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("runner calls = %v", runner.calls)
+			}
+			call := runner.calls[0]
+			// The compressor is its own argv element. A substring of
+			// the joined command also matches the temp directory,
+			// whose name keeps this subtest's compressor word.
+			var want []string
+			switch tc.wantName {
+			case "mksquashfs":
+				want = []string{"mksquashfs", src, call[2], "-comp", tc.wantComp, "-noappend"}
+			case "mkfs.erofs":
+				want = []string{"mkfs.erofs", "-U", "clear", tc.wantComp, call[4], src}
+			default:
+				t.Fatalf("unexpected packer %s", tc.wantName)
+			}
+			if !equalArgs(call, want) {
+				t.Fatalf("runner call = %q, want %q", call, want)
+			}
+			repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(repo.MetaPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Format.Type != tc.metaType || loaded.Format.Compression != tc.metaComp ||
+				loaded.ID != res.ID {
+				t.Fatalf("meta format = %+v id %s", loaded.Format, loaded.ID)
+			}
+		})
+	}
+}
+
+func TestBuildFullRejectsBadContainer(t *testing.T) {
+	cases := []struct {
+		name        string
+		format      string
+		compression string
+		want        string
+	}{
+		{name: "unknown type", format: "tar", compression: "zstd", want: "unknown container type"},
+		{name: "erofs xz", format: FormatErofs, compression: "xz", want: "not allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{body: []byte("nope")}
+			_, err := BuildFull(FullRequest{
+				Config: buildConfig(t), Name: "alice/app", SrcDir: sourceDir(t),
+				Builder: "test", Format: tc.format, Compression: tc.compression,
+				Run: runner.run,
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("packer ran: %v", runner.calls)
+			}
+		})
 	}
 }

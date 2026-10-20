@@ -4,11 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
@@ -22,6 +26,13 @@ type IncrRequest struct {
 	Config config.Config
 	// Name is the resolved owner/repo image name.
 	Name string
+	// Format, when set, must match the active image container type.
+	// Empty inherits that type. A mismatch is ErrFormatConflict and
+	// packs nothing.
+	Format string
+	// Compression, when set, must match the active image compression.
+	// Empty inherits it. A mismatch is ErrFormatConflict.
+	Compression string
 	// Upper is the writable upper directory to pack. It lives under
 	// the runtime tree, so no reserved-tree check applies.
 	Upper string
@@ -35,12 +46,14 @@ type IncrRequest struct {
 	Refs Refs
 	// Now returns the creation time. Nil means time.Now.
 	Now func() time.Time
-	// Run executes external tools. Nil runs mksquashfs through exec.
+	// Run executes external tools. Nil runs the container packer
+	// through exec. The packer is the active image format.
 	Run ToolRunner
 	// MountSmoke is the quality gate run on the published layer.
-	// Nil runs the default: a read-only mount spot check where
-	// mounting works, and a distinguishable ErrSmokeSkipped where it
-	// cannot, which still succeeds the build.
+	// Nil mounts that layer read-only through the active image
+	// format. Missing format tools or a missing /dev/fuse become
+	// ErrSmokeSkipped, which still succeeds the build. A mount
+	// that fails is a real error.
 	MountSmoke func(image string) error
 }
 
@@ -62,8 +75,8 @@ type IncrResult struct {
 // chain must stay below the stack depth limit. A subdir prefix moves
 // the upper under the image layout with rename, never copy, so
 // device nodes keep their inode type; the upper is moved back even
-// when packing fails. mksquashfs keeps xattrs so whiteout and
-// opaque markers survive. An unsplit layer is renamed into incr/
+// when packing fails. The container packer keeps whiteout and
+// opaque markers. An unsplit layer is renamed into incr/
 // first. A split layer is packed outside incr/ and published as
 // blocks/<id>/, so the blocks layout never gains an incr/ directory.
 // Metadata is replaced atomically afterwards; a failed metadata
@@ -96,15 +109,17 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 		now = time.Now
 	}
 	var tmp string
+	typ := active.Format.Type
+	compression := active.Format.Compression
 	if req.Config.SplitSize > 0 {
 		var stage string
-		stage, tmp, err = packIncrStaged(req.Config.CacheDir, src, run)
+		stage, tmp, err = packIncrStaged(req.Config.CacheDir, src, run, typ, compression)
 		if err != nil {
 			return IncrResult{}, err
 		}
 		defer func() { _ = os.RemoveAll(stage) }()
 	} else {
-		tmp, err = packIncrTemp(repo, src, run)
+		tmp, err = packIncrTemp(repo, src, run, typ, compression)
 		if err != nil {
 			return IncrResult{}, err
 		}
@@ -139,7 +154,35 @@ func validateIncr(req IncrRequest) (Repo, Meta, error) {
 	if err := checkIncrForm(active, req.Config.SplitSize); err != nil {
 		return Repo{}, Meta{}, err
 	}
+	if err := formatConflict(active.Format, req.Format, req.Compression); err != nil {
+		return Repo{}, Meta{}, err
+	}
+	if err := acceptStoredContainer(active.Format); err != nil {
+		return Repo{}, Meta{}, err
+	}
 	return repo, active, nil
+}
+
+// ErrFormatConflict means an incremental build named a container type
+// or compression other than the active image. Callers map it to a
+// usage error.
+var ErrFormatConflict = errors.New("format does not match the active image")
+
+// formatConflict refuses a requested type or compression that would
+// diverge from the active image. Empty fields inherit.
+func formatConflict(active Format, typ, compression string) error {
+	var bad []string
+	if typ != "" && typ != active.Type {
+		bad = append(bad, "--format "+typ)
+	}
+	if compression != "" && compression != active.Compression {
+		bad = append(bad, "--compression "+compression)
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("build: %s: %w (active %s/%s)",
+		strings.Join(bad, ", "), ErrFormatConflict, active.Type, active.Compression)
 }
 
 // checkIncrForm keeps the active payload form aligned with the
@@ -198,7 +241,7 @@ func stageUpper(upper, subdir string) (string, func() error, error) {
 
 // packIncrTemp packs the staged upper into a synced temporary file
 // inside the incr directory of the repository.
-func packIncrTemp(repo Repo, src string, run ToolRunner) (string, error) {
+func packIncrTemp(repo Repo, src string, run ToolRunner, typ, compression string) (string, error) {
 	dir := filepath.Join(repo.Dir, dirIncr)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("build: %w", err)
@@ -208,7 +251,7 @@ func packIncrTemp(repo Repo, src string, run ToolRunner) (string, error) {
 		return "", fmt.Errorf("build: %w", err)
 	}
 	tmp := filepath.Join(dir, name)
-	if err := packIncrImage(run, src, tmp); err != nil {
+	if err := packIncrImage(run, src, tmp, typ, compression); err != nil {
 		removeFile(tmp)
 		return "", err
 	}
@@ -226,13 +269,13 @@ func packIncrTemp(repo Repo, src string, run ToolRunner) (string, error) {
 // packIncrStaged packs a blocks incr into a cache staging file. The
 // packed bytes stay outside incr/, which is not part of a blocks
 // layout. The caller removes stage after the split finishes.
-func packIncrStaged(cacheDir, src string, run ToolRunner) (stage, tmp string, err error) {
+func packIncrStaged(cacheDir, src string, run ToolRunner, typ, compression string) (stage, tmp string, err error) {
 	stage, err = makeStagingDir(cacheDir)
 	if err != nil {
 		return "", "", err
 	}
 	tmp = filepath.Join(stage, fileImage)
-	if err = packIncrImage(run, src, tmp); err != nil {
+	if err = packIncrImage(run, src, tmp, typ, compression); err != nil {
 		_ = os.RemoveAll(stage)
 		return "", "", err
 	}
@@ -247,12 +290,11 @@ func packIncrStaged(cacheDir, src string, run ToolRunner) (stage, tmp string, er
 	return stage, tmp, nil
 }
 
-// packIncrImage is the mksquashfs argument list for one layer.
-// Xattrs stay stored so whiteout markers in the user namespace
-// survive; mksquashfs keeps device nodes as they are. The creation
-// timestamp is pinned so the same upper packs to the same bytes.
-func packIncrImage(run ToolRunner, src, dst string) error {
-	return run("mksquashfs", sourceDateEnv(src), src, dst, "-comp", "zstd", "-noappend", "-xattrs")
+// packIncrImage packs one layer through the registered container.
+// The format keeps whiteouts and pins the creation timestamp so the
+// same upper packs to the same bytes.
+func packIncrImage(run ToolRunner, src, dst, typ, compression string) error {
+	return packContainer(run, src, dst, typ, compression, true)
 }
 
 // finishIncr hashes the packed layer, appends the chain entry, and
@@ -325,7 +367,7 @@ func finishIncrSingle(
 		removeFile(final)
 		return IncrResult{}, err
 	}
-	if err := runIncrSmoke(req, final, entry); err != nil {
+	if err := runIncrSmoke(req, final, entry, active.Format); err != nil {
 		return IncrResult{}, err
 	}
 	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
@@ -401,7 +443,7 @@ func finishIncrBlocks(
 		_ = os.RemoveAll(final)
 		return IncrResult{}, err
 	}
-	if err := runIncrSmoke(req, final, entry); err != nil {
+	if err := runIncrSmoke(req, final, entry, active.Format); err != nil {
 		return IncrResult{}, err
 	}
 	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
@@ -411,24 +453,93 @@ func finishIncrBlocks(
 // mounting is unavailable here. The build treats it as success.
 var ErrSmokeSkipped = errors.New("build: mount smoke gate skipped")
 
-// defaultMountSmoke is the quality gate used when a request injects
-// none: a read-only mount spot check of the fresh layer where
-// mounting works, and a distinguishable skip where it cannot.
-func defaultMountSmoke(path string) error {
-	err := workspace.SmokeReadOnly(path)
-	if errors.Is(err, workspace.ErrUnavailable) {
-		return ErrSmokeSkipped
+// smokeReady and smokeRun are the default quality gate's host check
+// and command runner. Tests replace them to observe MountArgv
+// without attaching FUSE.
+var (
+	smokeReady = defaultSmokeReady
+	smokeRun   = defaultSmokeRun
+)
+
+func defaultSmokeRun(name string, args ...string) error {
+	return runTool(name, nil, args...)
+}
+
+// defaultMountSmoke mounts path with the active image format and
+// lists the root. The command is that format's MountArgv, so an
+// erofs layer is not handed to squashfuse. Missing /dev/fuse or
+// missing format tools become ErrSmokeSkipped; a mount that fails
+// is a real error.
+func defaultMountSmoke(format Format, path string) error {
+	f, err := container.Lookup(format.Type)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
 	}
-	return err
+	if err := smokeReady(f); err != nil {
+		if errors.Is(err, workspace.ErrUnavailable) {
+			return ErrSmokeSkipped
+		}
+		return err
+	}
+	return smokeMount(f, path)
+}
+
+// defaultSmokeReady reports when this host cannot mount format.
+// Non-Linux, a missing /dev/fuse, a missing format tool, or a
+// missing fusermount3 are all unavailable. fusermount3 is required
+// to detach the smoke mount; skipping first avoids leaving it up.
+func defaultSmokeReady(f container.Format) error {
+	if runtime.GOOS != "linux" {
+		return workspace.ErrUnavailable
+	}
+	if _, err := os.Stat("/dev/fuse"); err != nil {
+		return fmt.Errorf("%w: /dev/fuse: %v", workspace.ErrUnavailable, err)
+	}
+	tools := append(append([]string{}, f.Tools()...), "fusermount3")
+	for _, tool := range tools {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%w: %s is missing", workspace.ErrUnavailable, tool)
+		}
+	}
+	return nil
+}
+
+// smokeMount attaches path with format.MountArgv, lists the root,
+// and detaches it. A failed mount does not unmount.
+func smokeMount(f container.Format, imagePath string) error {
+	point, err := os.MkdirTemp("", "tiler-smoke-")
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(point) }()
+
+	argv := f.MountArgv(imagePath, "", "", imagePath, point)
+	if len(argv) == 0 {
+		return errors.New("build: empty mount command")
+	}
+	if err := smokeRun(argv[0], argv[1:]...); err != nil {
+		return fmt.Errorf("build: smoke mount: %w", err)
+	}
+	_, listErr := os.ReadDir(point)
+	unmountErr := smokeRun("fusermount3", "-u", point)
+	if listErr != nil {
+		return fmt.Errorf("build: smoke read: %w", listErr)
+	}
+	if unmountErr != nil {
+		return fmt.Errorf("build: smoke unmount: %w", unmountErr)
+	}
+	return nil
 }
 
 // runIncrSmoke runs the quality gate on a single-file layer path, or
 // on a reassembled blocks layer when the entry carries a Blocks
-// manifest.
-func runIncrSmoke(req IncrRequest, path string, entry ChainEntry) error {
+// manifest. A nil MountSmoke mounts through the active format.
+func runIncrSmoke(req IncrRequest, path string, entry ChainEntry, format Format) error {
 	smoke := req.MountSmoke
 	if smoke == nil {
-		smoke = defaultMountSmoke
+		smoke = func(image string) error {
+			return defaultMountSmoke(format, image)
+		}
 	}
 	target := path
 	if len(entry.Blocks) > 0 {
@@ -445,7 +556,7 @@ func runIncrSmoke(req IncrRequest, path string, entry ChainEntry) error {
 }
 
 // assembleIncrBlocks materializes blocks/<id>/ into the content-
-// addressed cache so the smoke gate can mount a real squashfs file.
+// addressed cache so the smoke gate can mount one image file.
 func assembleIncrBlocks(cacheDir, blocksDir string, entry ChainEntry) (string, error) {
 	files := make([]BlockFile, 0, len(entry.Blocks))
 	for _, block := range entry.Blocks {

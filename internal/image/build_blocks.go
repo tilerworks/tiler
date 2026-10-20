@@ -20,7 +20,7 @@ import (
 // the call. Callers must set a positive BlockSize (BuildFull copies
 // SplitSize when needed).
 func buildBlocks(req FullRequest) (FullResult, error) {
-	repo, err := validateFull(req)
+	repo, err := validateFull(&req)
 	if err != nil {
 		return FullResult{}, err
 	}
@@ -37,7 +37,7 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	}
 	defer func() { _ = os.RemoveAll(stageDir) }()
 	staged := filepath.Join(stageDir, fileImage)
-	if err := packStagedImage(toolRunner(req), req.SrcDir, staged); err != nil {
+	if err := packStagedImage(toolRunner(req), req.SrcDir, staged, req.Format, req.Compression); err != nil {
 		return FullResult{}, err
 	}
 	payloadTmp, err := makePayloadTmpDir(repo, tempBlocksDirName)
@@ -115,8 +115,8 @@ func makeStagingDir(cacheDir string) (string, error) {
 // packStagedImage runs the packer into the staging file and syncs
 // it, so the streaming split reads bytes that survived a crash. The
 // failures route through the single-file limit classifier.
-func packStagedImage(run ToolRunner, src, dst string) error {
-	if err := packFullImage(run, src, dst); err != nil {
+func packStagedImage(run ToolRunner, src, dst, typ, compression string) error {
+	if err := packFullImage(run, src, dst, typ, compression); err != nil {
 		return failTool(dst, err)
 	}
 	if err := syncFile(dst); err != nil {

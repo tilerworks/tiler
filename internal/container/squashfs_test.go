@@ -354,3 +354,22 @@ func squashEpochTree(t *testing.T, unix int64) string {
 	}
 	return src
 }
+
+func TestSourceDateEpochEdges(t *testing.T) {
+	src := squashEpochTree(t, 1700000000)
+	if got := sourceDateEpoch(src); got != 1700000000 {
+		t.Fatalf("epoch = %d", got)
+	}
+	t.Setenv("SOURCE_DATE_EPOCH", "not-a-number")
+	if got := sourceDateEpoch(src); got != 1700000000 {
+		t.Fatalf("unparsable epoch = %d", got)
+	}
+	t.Setenv("SOURCE_DATE_EPOCH", "1234567890")
+	if got := sourceDateEpoch(src); got != 1234567890 {
+		t.Fatalf("env epoch = %d", got)
+	}
+	t.Setenv("SOURCE_DATE_EPOCH", "")
+	if got := sourceDateEpoch(filepath.Join(t.TempDir(), "absent")); got != 0 {
+		t.Fatalf("missing tree epoch = %d", got)
+	}
+}

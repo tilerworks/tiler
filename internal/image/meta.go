@@ -6,14 +6,16 @@ import (
 )
 
 const (
-	// KindFull is a complete squashfs image.
+	// KindFull is a complete image.
 	KindFull = "full"
-	// KindIncremental is one upper-layer squashfs.
+	// KindIncremental is one upper layer appended to the active image.
 	KindIncremental = "incremental"
 
-	// FormatSquashfs is the only image container.
+	// FormatSquashfs is the default image container type.
 	FormatSquashfs = "squashfs"
-	// CompressionZstd is the only squashfs compression.
+	// FormatErofs is the erofs image container type.
+	FormatErofs = "erofs"
+	// CompressionZstd is the default container compression.
 	CompressionZstd = "zstd"
 
 	idHexLen  = 16
