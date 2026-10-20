@@ -107,8 +107,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'full --split 64k publishes more than o
 	test -f "$img_dir/blocks/$id1/blk.000" &&
 	test ! -e "$img_dir/image.sqsh" &&
 	"$tiler_bin" images ls alice/split >ls.out 2>ls.err &&
-	grep -Eq " form=blocks$" ls.out &&
-	grep -Eq "^  blocks [2-9][0-9]*$" ls.out &&
+	grep -Eq "^  form +blocks$" ls.out &&
+	grep -Eq "^  blocks +[2-9][0-9]*$" ls.out &&
 	grep -Eq "^id: \"?$id1\"?$" "$meta_file" &&
 	echo "$id1" >full.id
 '
@@ -134,7 +134,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with t
 	grep -Eq "^[[:space:]]*- id: \"?$layer\"?$" "$meta_file" &&
 	grep -Eq "^[[:space:]]*- name: blk.000$" "$meta_file" &&
 	"$tiler_bin" images ls alice/split >ls-incr.out 2>ls-incr.err &&
-	grep -Eq " chain=1 form=blocks$" ls-incr.out &&
+	grep -Eq "^  chain +1$" ls-incr.out &&
+	grep -Eq "^  form +blocks$" ls-incr.out &&
 	echo "$layer" >layer.id
 '
 
@@ -180,9 +181,10 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a new full retires the split chain int
 	test -f "$img_dir/hold/$id1/blocks/$layer/blk.000" &&
 	test ! -d "$img_dir/archives" &&
 	"$tiler_bin" images ls alice/split >ls-new.out 2>ls-new.err &&
-	grep -Eq " chain=0 form=blocks$" ls-new.out &&
+	grep -Eq "^  chain +0$" ls-new.out &&
+	grep -Eq "^  form +blocks$" ls-new.out &&
 	"$tiler_bin" images ls alice/split --archives >ls-hold.out 2>ls-hold.err &&
-	grep -Eq "^  hold $id1$" ls-hold.out &&
+	grep -Eq "^    $id1$" ls-hold.out &&
 	"$tiler_bin" umount "$verify_dir" >unpin.out 2>unpin.err &&
 	grep -Eq "^unmounted " unpin.out
 '
@@ -195,8 +197,9 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a build with no --split stays a single
 	test -f "$plain_dir/image.sqsh" &&
 	test ! -e "$plain_dir/blocks" &&
 	"$tiler_bin" images ls bob/plain >ls-plain.out 2>ls-plain.err &&
-	grep -Eq " chain=0$" ls-plain.out &&
-	! grep -q "form=" ls-plain.out
+	grep -Eq "^  chain +0$" ls-plain.out &&
+	grep -Eq "^  form +single$" ls-plain.out &&
+	! grep -q "blocks" ls-plain.out
 '
 
 # Project split_size: 0 is an explicit off, same as omitting the key.

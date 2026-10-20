@@ -113,8 +113,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'images ls lists the active image, its 
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	grep -q "alice/app" lsall.out &&
 	"$tiler_bin" images ls alice/app >ls.out 2>ls.err &&
-	grep -Eq " chain=1$" ls.out &&
-	grep -Eq "^  incr [0-9a-f]" ls.out &&
+	grep -Eq "^  chain +1$" ls.out &&
+	grep -Eq "^    [0-9a-f][0-9a-f]*  parent=" ls.out &&
 	"$tiler_bin" images ls --json >lsjson.out 2>lsjson.err &&
 	grep -q "\"images\"" lsjson.out
 '
@@ -133,7 +133,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into 
 	"$tiler_bin" images gc >gc.out 2>gc.err &&
 	grep -Eq "^archived alice/app $id1$" gc.out &&
 	"$tiler_bin" images ls alice/app --archives >lsa.out 2>lsa.err &&
-	grep -Eq "^  archive $id1$" lsa.out
+	grep -Eq "^    $id1$" lsa.out
 '
 
 # A second rebuild+umount+gc cycle leaves two archives, id1 older and id2
@@ -152,8 +152,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc --keep-versions expires the older a
 	"$tiler_bin" images gc --keep-versions 1 >gc3.out 2>gc3.err &&
 	grep -Eq "^removed alice/app $id1$" gc3.out &&
 	"$tiler_bin" images ls alice/app --archives >lsb.out 2>lsb.err &&
-	grep -Eq "^  archive $id2$" lsb.out &&
-	! grep -Eq "^  archive $id1$" lsb.out
+	grep -Eq "^    $id2$" lsb.out &&
+	! grep -Eq "^    $id1$" lsb.out
 '
 
 # A never-mounted image carries no session pin, so the two-phase rm runs

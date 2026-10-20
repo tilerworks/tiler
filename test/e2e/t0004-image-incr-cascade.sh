@@ -138,8 +138,8 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount and append two distinct incremen
 
 test_expect_success TILER,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
 	"$tiler_bin" images ls alice/app >ls.out 2>ls.err &&
-	grep -Eq " chain=2$" ls.out &&
-	test "$(grep -c "^  incr [0-9a-f]" ls.out)" = 2 &&
+	grep -Eq "^  chain +2$" ls.out &&
+	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 2 &&
 	grep -Eq "^id: \"?$id1\"?$" "$meta_file"
 '
@@ -170,7 +170,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged fu
 	grep -Eq "^id: \"?$id2\"?$" "$meta_file" &&
 	! grep -q "^chain:" "$meta_file" &&
 	"$tiler_bin" images ls alice/app >ls2.out 2>ls2.err &&
-	grep -Eq " chain=0$" ls2.out
+	grep -Eq "^  chain +0$" ls2.out
 '
 
 # The merge retires the old full + chain. verify_dir is still live, so its
@@ -178,7 +178,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged fu
 # serving the live view through open fds) rather than being freed at once.
 test_expect_success TILER,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
 	"$tiler_bin" images ls alice/app --archives >ls3.out 2>ls3.err &&
-	grep -Eq "^  hold $id1$" ls3.out &&
+	grep -Eq "^    $id1$" ls3.out &&
 	test -f "$img_dir/hold/$id1/image.sqsh"
 '
 
@@ -190,7 +190,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the merged full remounts and stands al
 	test -f "$verify_dir/a.txt" &&
 	test -f "$verify_dir/b.txt" &&
 	"$tiler_bin" images ls alice/app >ls4.out 2>ls4.err &&
-	grep -Eq " chain=0$" ls4.out
+	grep -Eq "^  chain +0$" ls4.out
 '
 
 test_done

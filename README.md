@@ -88,13 +88,16 @@ Available now:
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
 - `tiler images list [owner/repo] [--archives] [--json]` lists every
-  active image with its chain length. A name lists each chain id, and
-  `--archives` adds the archived and held chain ids. A split active
-  appends a `form=blocks` or `form=members` marker, and the
-  single-name listing then shows a `blocks <n>` line or one
-  `member <name>` line per partition. `--json` renders one
-  machine-readable document instead, with the additive `form` and
-  `members` fields for split actives.
+  active image as one aligned row: name, id, creation date, size,
+  chain length, payload form (`single`, `blocks`, or `members`), and
+  the archive and hold counts. A deprecated image, and a recorded
+  ref or short commit, trail that row. A name prints a multi-line
+  record instead: identity, each chain layer, the split payload
+  (block count, or one line per member), and the parked chain ids.
+  `--archives` adds those ids under each row of the list; it does
+  not change the named record. `--json` renders one machine-readable
+  document instead, with the additive `form` and `members` fields
+  for split actives.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass

@@ -74,12 +74,15 @@ tiler session close feature                # 逆序卸载，记录保留
   大小切成字节块入库，而不再是单个 `image.sqsh` /
   `incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
   blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
-- `tiler images list [owner/repo] [--archives] [--json]` 列出每个
-  活跃镜像与链长。给出名字则列出每个链 id，`--archives` 追加
-  归档与 hold 中的链 id。分块活跃位追加 `form=blocks` 或
-  `form=members` 标记；单名列表随之输出 `blocks <n>` 行或逐分区
-  一行 `member <name>`。`--json` 改为渲染一份机器可读文档，分块
-  活跃位新增 `form` 与 `members` 字段（契约只增不改）。
+- `tiler images list [owner/repo] [--archives] [--json]` 把每个
+  活跃镜像打成对齐的一行：名字、id、创建日期、体积、链长、载荷
+  形态（`single`、`blocks` 或 `members`），以及归档和 hold 的
+  个数。被标记废弃，或记录了 ref / 短 commit 时，这些信息跟在
+  行尾。给出名字则改为多行记录：身份、每一层增量、分块载荷
+  （块数，或每个分区一行），以及停放的链 id。`--archives` 在
+  列表每一行下面补上这些 id；点名记录不受这个旗标影响。
+  `--json` 改为渲染一份机器可读文档，分块活跃位新增 `form` 与
+  `members` 字段（契约只增不改）。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
