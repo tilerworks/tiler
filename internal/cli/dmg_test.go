@@ -15,6 +15,7 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 )
 
 func TestImagesShowDMGFromMeta(t *testing.T) {
@@ -169,21 +170,31 @@ func TestEmptyHostDefaultStillInfersSquashfs(t *testing.T) {
 	}
 }
 
-func TestDarwinBuildDefaultDoesNotPackSquashfs(t *testing.T) {
+func TestDarwinDirectoryBuildPublishesImageDMG(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	useDarwinHost(t)
+	calls := installHdiutil(t, []byte("created-dmg"))
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
-	_, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
-	if err == nil {
-		t.Fatal("dmg packing is not implemented; build succeeded")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
 	}
-	msg := err.Error() + "\n" + stderr
-	if !strings.Contains(msg, "dmg") && !strings.Contains(msg, "macOS") {
-		t.Fatalf("build err = %v\n%s", err, stderr)
+	if !strings.HasPrefix(stdout, "full alice/app ") {
+		t.Fatalf("stdout = %q", stdout)
 	}
+	if strings.Contains(stderr, "incremental") {
+		t.Fatalf("directory build warned: %s", stderr)
+	}
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder "+src) {
+		t.Fatalf("calls = %q", *calls)
+	}
+	if strings.Contains(strings.Join((*calls)[0], " "), "-shadow") {
+		t.Fatalf("directory build passed a shadow: %q", (*calls)[0])
+	}
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "created-dmg")
 	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", image.ImageFile)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("darwin default left %s: %v", image.ImageFile, statErr)
 	}
@@ -491,4 +502,438 @@ func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Me
 		t.Fatal("fixture must not include image.sqsh")
 	}
 	return meta
+}
+
+func installHdiutil(t *testing.T, body []byte) *[][]string {
+	t.Helper()
+	calls := [][]string{}
+	prev := hdiutilTool
+	hdiutilTool = func(name string, _ []string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		return os.WriteFile(hdiutilDest(args), body, 0o644)
+	}
+	t.Cleanup(func() { hdiutilTool = prev })
+	return &calls
+}
+
+func assertFileText(t *testing.T, path, want string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != want {
+		t.Fatalf("%s = %q, %v", path, body, err)
+	}
+}
+
+func hdiutilDest(args []string) string {
+	for i, arg := range args {
+		if arg == "-o" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return args[len(args)-1]
+}
+
+func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
+	for _, flag := range []string{"", "-i", "--full"} {
+		name := flag
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			home, work := withWorkspace(t)
+			imagesDir, lib := libFlags(home)
+			old := []byte("old-dmg")
+			meta := writeHashedDMGFixture(t, imagesDir, old)
+			shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+			if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(shadow, []byte("live-shadow"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			withBuildSeams(t, []mountinfo.Mount{{
+				Point:  work,
+				FSType: "fuse.dmg",
+				Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+				Upper:  shadow,
+			}})
+			useDarwinHost(t)
+			calls := installHdiutil(t, []byte("baked-dmg"))
+			action := libraryAction("alice/app", work, session.ModeRW)
+			action.FullID = meta.ID
+			writeSessionRecord(t, sessionsDir(home), "dev", action)
+			args := append(lib, "build")
+			if flag != "" {
+				args = append(args, flag)
+			}
+			args = append(args, "--image", "alice/app")
+			stdout, stderr, _, err := runCmd(t, args...)
+			if err != nil {
+				t.Fatalf("build: %v\n%s", err, stderr)
+			}
+			if !strings.HasPrefix(stdout, "full alice/app ") || strings.Contains(stdout, "incr ") {
+				t.Fatalf("stdout = %q", stdout)
+			}
+			if !strings.Contains(stderr, "dmg has no incremental layer") {
+				t.Fatalf("stderr = %q", stderr)
+			}
+			joined := strings.Join((*calls)[0], " ")
+			if len(*calls) != 1 || !strings.Contains(joined, "-shadow "+shadow) {
+				t.Fatalf("calls = %q", *calls)
+			}
+			if strings.Contains(joined, "mv ") || strings.Contains(joined, "rm ") {
+				t.Fatalf("bake renamed or removed the shadow: %q", (*calls)[0])
+			}
+			if body, readErr := os.ReadFile(shadow); readErr != nil || string(body) != "live-shadow" {
+				t.Fatalf("shadow = %q %v", body, readErr)
+			}
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "hold", meta.ID, image.ImageDMG), "old-dmg")
+			if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("active session archived the pinned image: %v", statErr)
+			}
+			rec, err := (session.Store{Dir: sessionsDir(home)}).Load("dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.Actions[0].FullID != action.FullID {
+				t.Fatalf("session full id = %s, want %s", rec.Actions[0].FullID, action.FullID)
+			}
+		})
+	}
+}
+
+func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	old := []byte("old-dmg")
+	meta := writeHashedDMGFixture(t, imagesDir, old)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("live-shadow"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point: work, FSType: "fuse.dmg", Upper: shadow,
+		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+	}})
+	useDarwinHost(t)
+	calls := installHdiutil(t, []byte("baked-dmg"))
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	if !strings.HasPrefix(stdout, "full alice/app ") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-shadow "+shadow) {
+		t.Fatalf("calls = %q", *calls)
+	}
+	assertFileText(t, shadow, "live-shadow")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "archives", meta.ID, image.ImageDMG), "old-dmg")
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "hold")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unreferenced bake held the image: %v", statErr)
+	}
+}
+
+func TestDMGBakeFailureLeavesImageAndShadow(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	writeHashedDMGFixture(t, imagesDir, []byte("old-dmg"))
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("live-shadow"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point: work, FSType: "fuse.dmg", Upper: shadow,
+		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+	}})
+	useDarwinHost(t)
+	prev := hdiutilTool
+	hdiutilTool = func(string, []string, ...string) error {
+		return errors.New("hdiutil: convert failed")
+	}
+	t.Cleanup(func() { hdiutilTool = prev })
+	_, stderr, _, err := runCmd(t, append(lib, "build", "-i", "--image", "alice/app")...)
+	if err == nil || !strings.Contains(err.Error()+"\n"+stderr, "convert failed") {
+		t.Fatalf("err = %v\n%s", err, stderr)
+	}
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "old-dmg")
+	assertFileText(t, shadow, "live-shadow")
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed bake archived the image: %v", statErr)
+	}
+}
+
+func TestImagesGCLeavesSessionShadow(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("keep-shadow"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		libraryAction("alice/app", filepath.Join(work, "view"), session.ModeRW))
+	if _, stderr, _, err := runCmd(t, append(lib, "images", "gc")...); err != nil {
+		t.Fatalf("gc: %v\n%s", err, stderr)
+	}
+	assertFileText(t, shadow, "keep-shadow")
+}
+
+func TestImagesRemoveRefusesAttachedDMG(t *testing.T) {
+	home, _ := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	writeHashedDMGFixture(t, imagesDir, []byte("live-dmg"))
+	imagePath := filepath.Join(imagesDir, "alice", "app", image.ImageDMG)
+	restoreDiskSeams(t)
+	readHdiutilInfo = func() ([]byte, error) {
+		return hdiutilStatusPlist([]statusVolume{{
+			image:  imagePath,
+			point:  filepath.Join(home, "view"),
+			shadow: filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow"),
+		}}), nil
+	}
+	for i := 0; i < 2; i++ {
+		_, stderr, _, err := runCmd(t, append(lib, "images", "rm", "alice/app")...)
+		if err == nil || !strings.Contains(err.Error()+"\n"+stderr, "still attached") {
+			t.Fatalf("call %d: %v\n%s", i, err, stderr)
+		}
+	}
+	assertFileText(t, imagePath, "live-dmg")
+}
+
+func TestBuildFromDiskInfoInfersUnresolvedSession(t *testing.T) {
+	t.Run("omitted image", func(t *testing.T) {
+		imagesDir, lib, shadow, resolved := diskInfoSession(t)
+		calls := installHdiutil(t, []byte("from-session"))
+		t.Chdir(resolved)
+		stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, stderr)
+		}
+		if !strings.HasPrefix(stdout, "full alice/app ") {
+			t.Fatalf("stdout = %q", stdout)
+		}
+		if len(*calls) != 1 {
+			t.Fatalf("calls = %q", *calls)
+		}
+		joined := strings.Join((*calls)[0], " ")
+		wantImage := filepath.Join(imagesDir, "alice", "app", image.ImageDMG)
+		if !strings.Contains(joined, "-shadow "+shadow) || !strings.Contains(joined, wantImage) {
+			t.Fatalf("calls = %q", *calls)
+		}
+		if strings.Contains(joined, "mv ") || strings.Contains(joined, "rm ") {
+			t.Fatalf("bake renamed or removed the shadow: %q", (*calls)[0])
+		}
+		assertFileText(t, shadow, "info-shadow")
+	})
+	t.Run("conflicting image", func(t *testing.T) {
+		imagesDir, lib, shadow, resolved := diskInfoSession(t)
+		prev := hdiutilTool
+		hdiutilTool = func(string, []string, ...string) error {
+			t.Fatal("conflicting image ran hdiutil")
+			return nil
+		}
+		t.Cleanup(func() { hdiutilTool = prev })
+		t.Chdir(resolved)
+		_, stderr, _, err := runCmd(t, append(lib, "build", "--image", "bob/other")...)
+		if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "conflicts") {
+			t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+		}
+		assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "info-base")
+		assertFileText(t, shadow, "info-shadow")
+	})
+}
+
+// diskInfoSession is a writable dmg view whose hdiutil mount point is
+// symlink-resolved and whose session record keeps filepath.Abs.
+func diskInfoSession(t *testing.T) (imagesDir string, lib []string, shadow, resolved string) {
+	t.Helper()
+	home, _ := withWorkspace(t)
+	imagesDir, lib = libFlags(home)
+	meta := writeHashedDMGFixture(t, imagesDir, []byte("info-base"))
+	shadow = filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("info-shadow"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recorded, resolved := symlinkView(t, home)
+	action := libraryAction("alice/app", recorded, session.ModeRW)
+	action.FullID = meta.ID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+	withBuildSeams(t, nil)
+	useDarwinHost(t)
+	restoreDiskSeams(t)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return nil, mountinfo.ErrUnavailable
+	}
+	imagePath := filepath.Join(imagesDir, "alice", "app", image.ImageDMG)
+	readHdiutilInfo = func() ([]byte, error) {
+		return hdiutilStatusPlist([]statusVolume{{
+			image:  imagePath,
+			shadow: shadow,
+			point:  resolved,
+		}}), nil
+	}
+	return imagesDir, lib, shadow, resolved
+}
+
+func symlinkView(t *testing.T, home string) (recorded, resolved string) {
+	t.Helper()
+	concrete := filepath.Join(home, "private", "view")
+	if err := os.MkdirAll(concrete, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "tmp", "view")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(concrete, link); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	recorded, err = filepath.Abs(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = filepath.EvalSymlinks(recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == recorded {
+		t.Fatal("symlink fixture resolved to the recorded mount point")
+	}
+	return recorded, resolved
+}
+
+func TestMountedFullIDUsesSessionShadow(t *testing.T) {
+	home, _ := withWorkspace(t)
+	sessions := sessionsDir(home)
+	action := libraryAction("alice/app", "/view", session.ModeRW)
+	action.FullID = "abcdef0123456789"
+	writeSessionRecord(t, sessions, "dev", action)
+	shadow := filepath.Join(sessions, "dev", "runtime", "m1", "upper.shadow")
+	id, err := mountedFullID(sessions, shadow)
+	if err != nil || id != action.FullID {
+		t.Fatalf("id = %q %v", id, err)
+	}
+	id, err = mountedFullID(sessions, filepath.Join(sessions, "dev", "upper.shadow"))
+	if err != nil || id != "" {
+		t.Fatalf("unrelated shadow = %q %v", id, err)
+	}
+}
+
+func TestBuildUsesHdiutilInfoWhenMountTableIsUnavailable(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	writeHashedDMGFixture(t, imagesDir, []byte("info-base"))
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("info-shadow"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, nil)
+	useDarwinHost(t)
+	restoreDiskSeams(t)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return nil, mountinfo.ErrUnavailable
+	}
+	readHdiutilInfo = func() ([]byte, error) {
+		return hdiutilStatusPlist([]statusVolume{{
+			image:  filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+			shadow: shadow,
+			point:  work,
+		}}), nil
+	}
+	calls := installHdiutil(t, []byte("from-info"))
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "-i", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	if !strings.HasPrefix(stdout, "full alice/app ") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-shadow "+shadow) {
+		t.Fatalf("calls = %q", *calls)
+	}
+	assertFileText(t, shadow, "info-shadow")
+}
+
+func TestDirectoryBuildWhenDiskInfoIsEmpty(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	useDarwinHost(t)
+	restoreDiskSeams(t)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return nil, mountinfo.ErrUnavailable
+	}
+	readHdiutilInfo = func() ([]byte, error) {
+		return []byte(`<plist version="1.0"><dict><key>images</key><array></array></dict></plist>`), nil
+	}
+	calls := installHdiutil(t, []byte("plain-dmg"))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	if !strings.HasPrefix(stdout, "full alice/app ") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	got := []string{}
+	if calls != nil && len(*calls) == 1 {
+		got = (*calls)[0]
+	}
+	srcArg := ""
+	for i, arg := range got {
+		if arg == "-srcfolder" && i+1 < len(got) {
+			srcArg = got[i+1]
+		}
+	}
+	if srcArg != src && srcArg != resolveBuildPath(src) {
+		t.Fatalf("srcfolder = %q, calls = %q", srcArg, got)
+	}
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "plain-dmg")
+}
+
+func TestReadOnlyDiskInfoRefusesPublish(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	writeHashedDMGFixture(t, imagesDir, []byte("ro-dmg"))
+	withBuildSeams(t, nil)
+	restoreDiskSeams(t)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return nil, mountinfo.ErrUnavailable
+	}
+	readHdiutilInfo = func() ([]byte, error) {
+		return hdiutilStatusPlist([]statusVolume{{
+			image: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+			point: work,
+		}}), nil
+	}
+	prev := hdiutilTool
+	hdiutilTool = func(string, []string, ...string) error {
+		t.Fatal("read-only view ran hdiutil")
+		return nil
+	}
+	t.Cleanup(func() { hdiutilTool = prev })
+	_, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "read-only dmg") {
+		t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+	}
 }

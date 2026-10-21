@@ -72,12 +72,27 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	if err := commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam); err != nil {
+	dst, err := singlePublishPath(repo, meta)
+	if err != nil {
+		removeFile(imgTmp)
+		removeFile(metaTmp)
+		return err
+	}
+	if err := commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam); err != nil {
 		removeFile(imgTmp)
 		removeFile(metaTmp)
 		return err
 	}
 	return nil
+}
+
+// singlePublishPath is the active file a single-file publish renames
+// onto. dmg lands on image.dmg. Squashfs and erofs keep image.sqsh.
+func singlePublishPath(repo Repo, meta Meta) (string, error) {
+	if meta.Format.Type != FormatDMG {
+		return repo.ImagePath(), nil
+	}
+	return activePayloadPath(repo, meta)
 }
 
 // publishStaged publishes a temporary image and meta pair that
@@ -105,7 +120,11 @@ func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam
 	if !match {
 		return errors.New("publish: payload does not match meta")
 	}
-	return commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam)
+	dst, err := singlePublishPath(repo, meta)
+	if err != nil {
+		return err
+	}
+	return commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam)
 }
 
 // publishStagedPayload publishes a temporary split payload directory

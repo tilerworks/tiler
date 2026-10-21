@@ -546,7 +546,8 @@ func newImagesRemoveCmd() *cobra.Command {
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
 			"physically removes it. Both calls refuse while a session still\n" +
-			"references the target.",
+			"references the target, and while hdiutil info shows a dmg\n" +
+			"target is attached. Only image files and archives are deleted.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -554,8 +555,8 @@ func newImagesRemoveCmd() *cobra.Command {
 				return errors.New("images remove: configuration is not loaded")
 			}
 			target := args[0]
-			outcome, err := image.RemoveTarget(cfg, target,
-				session.Refs{Dir: cfg.SessionsDir})
+			outcome, err := image.RemoveChecked(cfg, target,
+				session.Refs{Dir: cfg.SessionsDir}, attachedDMG)
 			if err != nil {
 				if isTargetUsage(err) {
 					return usageError{err}

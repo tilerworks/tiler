@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/mountinfo"
@@ -20,6 +22,38 @@ var readHdiutilInfo func() ([]byte, error)
 // selects the platform exec inside the workspace. Tests install a
 // recorder.
 var runHdiutil func(argv []string, consErr error) ([]byte, error)
+
+// attachedDMG reports whether dir contains an image hdiutil info
+// still has attached. A nil reader means this host has no disk-image
+// table, so nothing is attached. The check looks at image paths
+// only; a session shadow is not an image file.
+func attachedDMG(dir string) (bool, error) {
+	if readHdiutilInfo == nil {
+		return false, nil
+	}
+	images, err := diskImagesFromInfo(readHdiutilInfo)
+	if err != nil {
+		return false, err
+	}
+	for _, img := range images {
+		if img.Image != "" && pathWithin(img.Image, dir) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func pathWithin(path, dir string) bool {
+	path, dir = filepath.Clean(path), filepath.Clean(dir)
+	if path == dir {
+		return true
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 // diskImagesFromInfo parses one hdiutil info -plist snapshot into
 // the session reconciliation model.

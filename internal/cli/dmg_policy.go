@@ -11,6 +11,7 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
+	"github.com/jiangxin/tiler/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -178,6 +179,88 @@ func regularFileKoly(source string) (bool, error) {
 		return false, nil
 	}
 	return container.ReadKolyTrailer(source)
+}
+
+// dmgBuildPlanned reports a build that will publish a dmg, so the
+// selectable-stack gate can stay out of its way. An explicit
+// squashfs or erofs flag is not a dmg build.
+func dmgBuildPlanned(cmd *cobra.Command, cfg config.Config, format string) bool {
+	if !darwinHost() {
+		return false
+	}
+	if cmd.Flags().Changed("format") {
+		return format == image.FormatDMG
+	}
+	if cfg.ImageFormat != "" {
+		return cfg.ImageFormat == image.FormatDMG
+	}
+	return true
+}
+
+// dmgViewShadow is the upper.shadow of a writable dmg view. A plain
+// directory and a read-only view have none. The path is the mount's
+// upper, including when --full left it off the decision.
+func dmgViewShadow(table []mountinfo.Mount, decision mountinfo.Decision) (string, bool) {
+	if decision.MountPoint == "" {
+		return "", false
+	}
+	mount, ok := mountByPoint(table, decision.MountPoint)
+	if !ok || filepath.Base(mount.Upper) != "upper.shadow" {
+		return "", false
+	}
+	return mount.Upper, true
+}
+
+// buildMountTable reads the host mount table. When that table is
+// unavailable, hdiutil info supplies the attached volumes so a Mac
+// can still tell a plain directory from a writable shadow mount.
+func buildMountTable() ([]mountinfo.Mount, bool, error) {
+	table, err := loadMountTable()
+	if err == nil {
+		return table, false, nil
+	}
+	if !errors.Is(err, mountinfo.ErrUnavailable) || readHdiutilInfo == nil {
+		return nil, false, err
+	}
+	images, infoErr := diskImagesFromInfo(readHdiutilInfo)
+	if infoErr != nil {
+		return nil, false, infoErr
+	}
+	return mountsFromDiskImages(images), true, nil
+}
+
+func mountsFromDiskImages(images []session.DiskImage) []mountinfo.Mount {
+	out := make([]mountinfo.Mount, 0, len(images))
+	for _, img := range images {
+		if img.Point == "" {
+			continue
+		}
+		out = append(out, mountinfo.Mount{
+			Point:  resolveBuildPath(img.Point),
+			FSType: "fuse.dmg",
+			Source: img.Image,
+			Upper:  img.Shadow,
+		})
+	}
+	return out
+}
+
+// resolveBuildPath cleans a path and resolves symlinks when the
+// path exists. hdiutil info reports the resolved mount point, while
+// filepath.Abs keeps a symlink such as /tmp.
+func resolveBuildPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(resolved)
 }
 
 func readOnlyView(table []mountinfo.Mount, point string) bool {

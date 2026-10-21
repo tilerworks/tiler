@@ -25,6 +25,10 @@ var (
 	loadMountTable = mountinfo.Load
 	// packTool runs mksquashfs. Nil keeps the image package default.
 	packTool image.ToolRunner
+	// hdiutilTool runs hdiutil create and convert. Nil keeps the
+	// platform default, which executes /usr/bin/hdiutil only on
+	// darwin. Tests install a recorder and do not exec hdiutil.
+	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
 	incrSmoke func(string) error
 )
@@ -77,8 +81,12 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 	if !ok {
 		return errors.New("build: configuration is not loaded")
 	}
-	if err := gateAnyStack("build"); err != nil {
-		return err
+	// A dmg build uses hdiutil. It is not a selectable stack, so a
+	// Mac without squashfs or erofs tools can still publish.
+	if !dmgBuildPlanned(cmd, cfg, format) {
+		if err := gateAnyStack("build"); err != nil {
+			return err
+		}
 	}
 	if cmd.Flags().Changed("split") {
 		size, err := config.ParseByteSize(split)
@@ -91,9 +99,12 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 	if err != nil {
 		return err
 	}
-	table, err := loadMountTable()
+	table, fromDisk, err := buildMountTable()
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
+	}
+	if fromDisk {
+		target = resolveBuildPath(target)
 	}
 	decision, err := mountinfo.Decide(target, table, mountinfo.Prefixes{
 		// Combination dirs live under sessions/<name>/runtime/.
@@ -122,6 +133,11 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 		// was invoked: flags, name, or the chosen directory.
 		return usageError{err}
 	}
+	// A writable dmg view bakes its shadow into a new full image
+	// whether the caller asked for -i, --full, or the default.
+	if shadow, ok := dmgViewShadow(table, decision); ok {
+		return runDMGBake(cmd, cfg, decision, shadow, format, compression)
+	}
 	// --incremental is an explicit choice and is never rewritten. The size
 	// check only changes the default inside a writable view.
 	if decision.Mode == mountinfo.ModeIncr && !incr {
@@ -145,6 +161,18 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 		}
 		if err := refuseDMGSplit(cmd, cfg, typ); err != nil {
 			return err
+		}
+		if typ == image.FormatDMG {
+			if !darwinHost() {
+				// Linux keeps the registry error: dmg mounts only
+				// on macOS. A darwin host publishes without Lookup,
+				// because the format is not a selectable stack and
+				// tests on Linux simulate the host default.
+				if _, err := container.Lookup(typ); err != nil {
+					return usageError{fmt.Errorf("build: %w", err)}
+				}
+			}
+			return runDMGCreate(cmd, cfg, decision, comp)
 		}
 		// dmg is not registered on Linux, so a build of that type
 		// stays an unknown-format error there.
@@ -406,4 +434,147 @@ func readActiveFormat(cfg config.Config, name string) (image.Format, error) {
 		return image.Format{}, err
 	}
 	return meta.Format, nil
+}
+
+func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, compression string) error {
+	res, err := image.BuildDMG(image.DMGRequest{
+		Config:      cfg,
+		Name:        decision.Name.String(),
+		SrcDir:      decision.SrcDir,
+		Compression: compression,
+		Builder:     Version,
+		Refs:        session.Refs{Dir: cfg.SessionsDir},
+		Run:         hdiutilTool,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
+	return err
+}
+
+// runDMGBake converts the mounted image with its shadow. -i and
+// --full both take this path and warn that dmg has no incremental
+// layer. The live attach is left on the old base: this does not
+// detach or attach, and it does not rewrite the session record.
+func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, shadow, format, compression string) error {
+	if err := refuseBakeFormat(cmd, format); err != nil {
+		return err
+	}
+	if err := refuseDMGSplit(cmd, cfg, image.FormatDMG); err != nil {
+		return err
+	}
+	comp, err := bakeCompression(cmd, compression)
+	if err != nil {
+		return err
+	}
+	// The live shadow belongs to the session's full id. After the
+	// first publish that id rests in hold/, not at image.dmg.
+	mounted, err := mountedFullID(cfg.SessionsDir, shadow)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	if _, err := fmt.Fprintln(cmd.ErrOrStderr(),
+		"warning: dmg has no incremental layer; baking a full image"); err != nil {
+		return err
+	}
+	res, err := image.BuildDMG(image.DMGRequest{
+		Config:      cfg,
+		Name:        decision.Name.String(),
+		Shadow:      shadow,
+		MountedID:   mounted,
+		Compression: comp,
+		Builder:     Version,
+		Refs:        session.Refs{Dir: cfg.SessionsDir},
+		Run:         hdiutilTool,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
+	return err
+}
+
+// mountedFullID is the full image id of the live mount that owns
+// shadow. The shadow path is
+// sessions/<name>/runtime/m<seq>/upper.shadow. A shadow that is not
+// that layout, or a session that does not pin an id, returns empty.
+func mountedFullID(sessionsDir, shadow string) (string, error) {
+	name, runtime, ok := shadowSession(sessionsDir, shadow)
+	if !ok {
+		return "", nil
+	}
+	rec, err := (session.Store{Dir: sessionsDir}).Load(name)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) || errors.Is(err, session.ErrInvalidName) {
+			return "", nil
+		}
+		return "", err
+	}
+	if rec.State != session.StateActive {
+		return "", nil
+	}
+	for _, action := range rec.Actions {
+		if action.Type != session.TypeMount || action.Status == session.StatusUnmounted {
+			continue
+		}
+		if runtimeID(action) != runtime || action.FullID == "" {
+			continue
+		}
+		return action.FullID, nil
+	}
+	return "", nil
+}
+
+func shadowSession(sessionsDir, shadow string) (name, runtime string, ok bool) {
+	if sessionsDir == "" || shadow == "" {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(sessionsDir), filepath.Clean(shadow))
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", "", false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 4 || parts[1] != "runtime" || parts[3] != "upper.shadow" {
+		return "", "", false
+	}
+	return parts[0], parts[2], true
+}
+
+func runtimeID(action session.Action) string {
+	if action.RuntimeID != "" {
+		return action.RuntimeID
+	}
+	if action.Seq > 0 {
+		return fmt.Sprintf("m%d", action.Seq)
+	}
+	return ""
+}
+
+func refuseBakeFormat(cmd *cobra.Command, format string) error {
+	if !cmd.Flags().Changed("format") {
+		return nil
+	}
+	if err := refuseDarwinForeignFormat(format); err != nil {
+		return err
+	}
+	if format != image.FormatDMG {
+		return usageError{fmt.Errorf("build: --format %s is not a dmg image", format)}
+	}
+	return nil
+}
+
+// bakeCompression is the convert format. An omitted flag follows the
+// mounted image. A set flag must be ulfo, ulmo, or udro.
+func bakeCompression(cmd *cobra.Command, flag string) (string, error) {
+	if !cmd.Flags().Changed("compression") {
+		return "", nil
+	}
+	if flag == "" {
+		return "", usageError{errors.New("build: --compression is empty")}
+	}
+	if !container.DMG().AllowsCompression(flag) {
+		return "", usageError{fmt.Errorf("build: dmg compression %q is not allowed", flag)}
+	}
+	return flag, nil
 }
