@@ -49,6 +49,9 @@ func withBuildSeams(t *testing.T, table []mountinfo.Mount) {
 
 // installFoundTools reports every external binary as present. Command
 // tests that need a missing stack replace toolLookPath afterwards.
+// The host default is pinned empty so an omitted --format still
+// follows toolchain inference on a Mac. Darwin policy tests set the
+// host default after this helper.
 func installFoundTools(t *testing.T) {
 	t.Helper()
 	orig := toolLookPath
@@ -59,9 +62,12 @@ func installFoundTools(t *testing.T) {
 	erofsHelp = func() (string, error) {
 		return "Available compressors are: lz4, lz4hc, lzma, deflate, zstd\n", nil
 	}
+	origHost := hostDefaultType
+	hostDefaultType = func() string { return "" }
 	t.Cleanup(func() {
 		toolLookPath = orig
 		erofsHelp = origHelp
+		hostDefaultType = origHost
 	})
 }
 

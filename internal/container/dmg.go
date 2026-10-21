@@ -26,6 +26,12 @@ var errDmgNoIncr = errors.New("container: dmg has no stackable incremental layer
 // keeps the squashfs and erofs registry.
 type dmg struct{}
 
+// DMG is the disk-image format value. It does not register the
+// format. Config validation still uses Lookup, so Linux rejects
+// image_format: dmg. Callers use this value to apply dmg compression
+// rules on a host where the format is not registered.
+func DMG() Format { return dmg{} }
+
 var _ Format = dmg{}
 
 func (dmg) Type() string { return dmgType }
@@ -82,33 +88,46 @@ func (dmg) HasSubdir(_ ToolRunner, _, subdir string) (bool, error) {
 
 // Detect reports whether path ends in a 512-byte trailer that
 // starts with koly. A short file or a read error is not a dmg.
+// Callers that must not treat a read error as a negative result
+// use ReadKolyTrailer.
 func (dmg) Detect(path string) (bool, error) {
-	return kolyTrailer(path), nil
+	ok, err := readKolyTrailer(path)
+	if err != nil {
+		return false, nil
+	}
+	return ok, nil
 }
 
-// kolyTrailer reads the UDIF magic. It has no build tag, so Linux
-// tests can feed bytes without a darwin registry.
-func kolyTrailer(path string) bool {
+// ReadKolyTrailer reports whether path ends in a UDIF trailer.
+// A short file is not a dmg. Open, seek, and read failures are
+// returned so a caller does not treat them as a negative result.
+// It has no build tag, so Linux tests can feed bytes without a
+// darwin registry.
+func ReadKolyTrailer(path string) (bool, error) {
+	return readKolyTrailer(path)
+}
+
+func readKolyTrailer(path string) (bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
-		return false
+		return false, err
 	}
 	size := info.Size()
 	if size < dmgTrailerLen {
-		return false
+		return false, nil
 	}
 	if _, err := file.Seek(size-dmgTrailerLen, io.SeekStart); err != nil {
-		return false
+		return false, err
 	}
 	var magic [4]byte
 	if _, err := io.ReadFull(file, magic[:]); err != nil {
-		return false
+		return false, err
 	}
-	return magic == kolyMagic
+	return magic == kolyMagic, nil
 }

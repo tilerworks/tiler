@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/container"
 )
 
 const testHome = "/injected/home"
@@ -339,6 +341,21 @@ func TestImageContainerOverlay(t *testing.T) {
 	}
 	if Defaults(testHome).ImageFormat != "" || Defaults(testHome).ImageCompression != "" {
 		t.Fatal("defaults set a container")
+	}
+}
+
+func TestImageFormatDMGFollowsRegistration(t *testing.T) {
+	_, err := applyDoc("image_format: dmg\n")
+	_, lookupErr := container.Lookup("dmg")
+	if lookupErr != nil {
+		if err == nil || !strings.Contains(err.Error(), "image_format") ||
+			!strings.Contains(err.Error(), "unknown") {
+			t.Fatalf("linux config error = %v, want an unknown image_format", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("registered dmg was rejected: %v", err)
 	}
 }
 

@@ -50,11 +50,13 @@ func newBuildCmd() *cobra.Command {
 			"--full always packs the whole view.\n" +
 			"\n" +
 			"--format and --compression select the container. An omitted\n" +
-			"format uses image_format, then the installed tools: both stacks\n" +
-			"select squashfs, erofs alone selects erofs, and squashfs alone\n" +
-			"selects squashfs. An omitted compression uses image_compression\n" +
-			"or that format's default. An incremental build inherits the\n" +
-			"base image; a flag that disagrees is a usage error.",
+			"format uses image_format, then the host default (dmg on macOS),\n" +
+			"then the installed tools: both stacks select squashfs, erofs\n" +
+			"alone selects erofs, and squashfs alone selects squashfs. An\n" +
+			"omitted compression uses image_compression or that format's\n" +
+			"default. --format squashfs or erofs on macOS is a usage error.\n" +
+			"An incremental build inherits the base image; a flag that\n" +
+			"disagrees is a usage error.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBuild(cmd, args, full, incr, imageName, split, format, compression)
@@ -63,7 +65,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
 	cmd.Flags().BoolVarP(&incr, "incremental", "i", false, "force an incremental build")
 	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit owner/repo image name")
-	cmd.Flags().StringVar(&format, "format", "", "container format: squashfs or erofs")
+	cmd.Flags().StringVar(&format, "format", "", "container format: dmg, squashfs, or erofs")
 	cmd.Flags().StringVar(&compression, "compression", "", "container compression; default is the format default")
 	cmd.Flags().StringVarP(&split, "split", "s", "",
 		"block size for split builds (e.g. 512M, 2G); 0 disables for this build")
@@ -134,9 +136,20 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 	}
 	switch decision.Mode {
 	case mountinfo.ModeFull:
-		typ, comp, err := resolveFullContainer(cmd, cfg, format, compression)
+		if err := refuseReadOnlyDMGPublish(table, decision); err != nil {
+			return err
+		}
+		typ, comp, err := selectContainer(cmd, cfg, format, compression)
 		if err != nil {
 			return err
+		}
+		if err := refuseDMGSplit(cmd, cfg, typ); err != nil {
+			return err
+		}
+		// dmg is not registered on Linux, so a build of that type
+		// stays an unknown-format error there.
+		if _, err := container.Lookup(typ); err != nil {
+			return usageError{fmt.Errorf("build: %w", err)}
 		}
 		if err := gateFormatTools("build", typ); err != nil {
 			return err
@@ -149,33 +162,25 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 	}
 }
 
-// resolveFullContainer applies flag, then config, then toolchain
-// inference. An illegal pair, including erofs with xz, is a usage error.
-func resolveFullContainer(cmd *cobra.Command, cfg config.Config, format, compression string) (string, string, error) {
-	typ, err := chooseFormat(cmd, cfg, format)
-	if err != nil {
-		return "", "", err
-	}
-	parsed, err := container.Lookup(typ)
-	if err != nil {
-		return "", "", usageError{fmt.Errorf("build: %w", err)}
-	}
-	comp, err := chooseCompression(cmd, cfg, parsed, compression)
-	if err != nil {
-		return "", "", err
-	}
-	return parsed.Type(), comp, nil
-}
-
+// chooseFormat applies the flag, then image_format, then the host
+// default, then toolchain inference. A dmg host default rejects
+// squashfs and erofs flags. An empty host default leaves inference
+// unchanged.
 func chooseFormat(cmd *cobra.Command, cfg config.Config, flag string) (string, error) {
 	if cmd.Flags().Changed("format") {
 		if flag == "" {
 			return "", usageError{errors.New("build: --format is empty")}
 		}
+		if err := refuseDarwinForeignFormat(flag); err != nil {
+			return "", err
+		}
 		return flag, nil
 	}
 	if cfg.ImageFormat != "" {
 		return cfg.ImageFormat, nil
+	}
+	if typ := hostDefaultType(); typ != "" {
+		return typ, nil
 	}
 	typ, err := container.InferType(toolLookPath)
 	if err != nil {

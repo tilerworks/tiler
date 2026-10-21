@@ -127,6 +127,19 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err := verifyTarget(target, flags.verify); err != nil {
 		return err
 	}
+	// A file path records no format. Detect it before --subdir is
+	// judged, so a koly file is a dmg usage error. A library image
+	// already names its type, and formatForGate returns that without
+	// reading the file. The magic guard stays after this check: a
+	// dmg --subdir is a usage error even when the bytes would also
+	// fail the magic match.
+	format, err := formatForGate(target, nil)
+	if err != nil {
+		return err
+	}
+	if err := refuseDMGSubdir(flags.subdir, format); err != nil {
+		return err
+	}
 	// Unknown magic and a meta/magic mismatch cannot succeed on
 	// replay. Refuse them before the write-ahead action is appended,
 	// or session open retries the bad mount and stops restoring
@@ -135,7 +148,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err != nil {
 		return err
 	}
-	format, err := formatForGate(target, blockPaths)
+	format, err = formatForGate(target, blockPaths)
 	if err != nil {
 		return err
 	}

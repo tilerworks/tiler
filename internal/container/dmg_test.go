@@ -106,6 +106,10 @@ func TestDmgDetectKoly(t *testing.T) {
 	if err != nil || got {
 		t.Fatalf("unreadable = %v, %v", got, err)
 	}
+	ok, readErr := ReadKolyTrailer(unread)
+	if readErr == nil || ok {
+		t.Fatalf("ReadKolyTrailer(unreadable) = %v, %v", ok, readErr)
+	}
 }
 
 func TestDmgToolsMountAndPack(t *testing.T) {
