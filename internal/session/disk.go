@@ -39,6 +39,21 @@ func (e *Engine) useDiskImages() bool {
 	return e.LoadDiskImages != nil && e.Health == nil
 }
 
+// diskListed reports whether hdiutil info still has point attached.
+// A point the listing omits is down. Mount points are compared
+// after symlink resolution, the same way info and the session
+// record spell a /tmp prefix.
+func diskListed(images []DiskImage) HealthFunc {
+	return func(point string) bool {
+		for _, image := range images {
+			if SameMountPoint(image.Point, point) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // diskImages loads one hdiutil info snapshot.
 func (e *Engine) diskImages() ([]DiskImage, error) {
 	images, err := e.LoadDiskImages()

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 	"github.com/spf13/cobra"
@@ -39,6 +40,9 @@ func runUmount(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("umount: target: %w", err)
 	}
 	table, err := loadMountTable()
+	if errors.Is(err, mountinfo.ErrUnavailable) && readHdiutilInfo != nil {
+		return umountDisk(cmd, cfg, dir)
+	}
 	if err != nil {
 		return fmt.Errorf("umount: %w", err)
 	}
@@ -56,6 +60,34 @@ func runUmount(cmd *cobra.Command, args []string) error {
 	}
 	if removed == 0 {
 		return nil
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "unmounted %s\n", dir); err != nil {
+		return err
+	}
+	closeRemovableSession(cmd, cfg, dir)
+	return nil
+}
+
+// umountDisk detaches one volume through hdiutil info when this
+// host has no mount table. A point info does not list is already
+// down, so the command stays idempotent and leaves the shadow file.
+func umountDisk(cmd *cobra.Command, cfg config.Config, dir string) error {
+	images, err := diskImagesFromInfo(readHdiutilInfo)
+	if err != nil {
+		return fmt.Errorf("umount: %w", err)
+	}
+	listed := false
+	for _, image := range images {
+		if session.SameMountPoint(image.Point, dir) {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return nil
+	}
+	if err := detachDiskMount(dir); err != nil {
+		return err
 	}
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "unmounted %s\n", dir); err != nil {
 		return err

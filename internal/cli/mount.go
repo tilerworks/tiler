@@ -107,8 +107,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if !ok {
 		return errors.New("mount: configuration is not loaded")
 	}
-	if err := gateAnyStack("mount"); err != nil {
-		return err
+	// A missing FUSE stack blocks every format except dmg, which
+	// attaches with hdiutil. A non-dmg host still refuses before
+	// resolve, so a missing image reports the toolchain gap.
+	stackErr := gateAnyStack("mount")
+	if stackErr != nil && !darwinHost() {
+		return stackErr
 	}
 	dir, err := filepath.Abs(args[1])
 	if err != nil {
@@ -164,6 +168,9 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	format, err = formatForGate(target, blockPaths)
 	if err != nil {
 		return err
+	}
+	if stackErr != nil && format != image.FormatDMG {
+		return stackErr
 	}
 	if err := gateFormatTools("mount", format); err != nil {
 		return err
@@ -410,8 +417,10 @@ func runMountEngine(
 	if err != nil {
 		return session.Result{}, err
 	}
-	if err := gateAnyStack("mount"); err != nil {
-		return session.Result{}, err
+	if format != image.FormatDMG {
+		if err := gateAnyStack("mount"); err != nil {
+			return session.Result{}, err
+		}
 	}
 	if err := gateFormatTools("mount", format); err != nil {
 		return session.Result{}, err

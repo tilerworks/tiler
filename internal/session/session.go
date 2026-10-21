@@ -585,9 +585,18 @@ func (s Store) deleteRecordFiles(name string) error {
 	return nil
 }
 
-// healthFunc resolves the health seam over one fresh table
-// snapshot.
+// healthFunc resolves the health seam over one fresh snapshot. A
+// host that reconciles through hdiutil info uses that listing. The
+// Linux mount table is not available there; returning that error
+// would skip a --rm close after detach had already succeeded.
 func (e *Engine) healthFunc() (HealthFunc, error) {
+	if e.useDiskImages() {
+		images, err := e.diskImages()
+		if err != nil {
+			return nil, err
+		}
+		return diskListed(images), nil
+	}
 	table, err := e.loadTable()
 	if err != nil {
 		return nil, err
