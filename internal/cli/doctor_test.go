@@ -211,6 +211,9 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
+	// macOS temp dirs exceed the report width, so a path continues on
+	// the next line. Join those continuations before matching.
+	flat := unwrapReport(stdout)
 	for _, want := range []string{
 		"path          " + filepath.Join(home, ".tiler.yaml"),
 		"images_dir    " + filepath.Join(home, ".tiler", "images"),
@@ -218,7 +221,7 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 		"cache_dir     " + filepath.Join(home, ".tiler", "cache"),
 		"log_level     info",
 	} {
-		if !strings.Contains(stdout, want) {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("stdout missing %q\n%s", want, stdout)
 		}
 	}
@@ -305,6 +308,46 @@ func TestDoctorOptionsMapsSplitSize(t *testing.T) {
 	}
 	if opts.SplitSize != 2<<30 {
 		t.Fatalf("SplitSize = %d, want 2G", opts.SplitSize)
+	}
+}
+
+// unwrapReport joins a detail that Write wrapped under the value
+// column. A continuation is indented past the two-space row indent;
+// a new row starts at that indent. Short lines stay unchanged.
+func unwrapReport(stdout string) string {
+	var b strings.Builder
+	first := true
+	for _, line := range strings.Split(stdout, "\n") {
+		if wrappedContinuation(line) {
+			b.WriteString(strings.TrimLeft(line, " "))
+			continue
+		}
+		if !first {
+			b.WriteByte('\n')
+		}
+		first = false
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+func wrappedContinuation(line string) bool {
+	return len(line) >= 3 &&
+		line[0] == ' ' && line[1] == ' ' && line[2] == ' ' &&
+		strings.TrimLeft(line, " ") != ""
+}
+
+func TestUnwrapReportJoinsValueContinuations(t *testing.T) {
+	const head = "  path          "
+	detail := "/var/folders/gk/TestDoctorReportsConfigSection565068672/001/.tiler.yaml"
+	wrapped := head + detail[:20] + "\n" + strings.Repeat(" ", len(head)) + detail[20:] + "\n" +
+		"  log_level     info\n"
+	flat := unwrapReport(wrapped)
+	if !strings.Contains(flat, head+detail) {
+		t.Fatalf("flat = %q, want the path on one line", flat)
+	}
+	if !strings.Contains(flat, "log_level     info") {
+		t.Fatalf("flat = %q, want the next row preserved", flat)
 	}
 }
 

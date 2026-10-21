@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +227,10 @@ func TestSessionOpenReplaysMissingMountsAndIsIdempotent(t *testing.T) {
 	repoDir := buildLibrary(t, home, lib, imagesDir, "alice/app")
 	view := filepath.Join(work, "view")
 	f := withMountSeams(t, nil)
+	// The real health probe is Linux-only. Off Linux, classify the
+	// fake table with the same listed-and-readable rule, so a
+	// repeated open skips a view that is listed and still opens.
+	pinPortableHealth(t, f)
 	writeSessionRecord(t, sessionsDir(home), "dev",
 		libraryAction("alice/app", view, session.ModeRW))
 
@@ -267,6 +272,41 @@ func TestSessionOpenReplaysMissingMountsAndIsIdempotent(t *testing.T) {
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("a healthy view was remounted: %d calls", len(f.mountReqs))
 	}
+}
+
+// pinPortableHealth installs a health seam for platforms whose real
+// probe always reports unavailable. A point is healthy when the fake
+// table lists it and the directory still opens, which is the
+// listed-and-readable half of the Linux classification. Linux keeps
+// the real probe.
+func pinPortableHealth(t *testing.T, f *mountFake) {
+	t.Helper()
+	if runtime.GOOS == "linux" {
+		return
+	}
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.Health = func(point string) bool {
+			return mountListed(f.table, point) && dirAnswers(point)
+		}
+	})
+}
+
+func mountListed(table []mountinfo.Mount, point string) bool {
+	for _, m := range table {
+		if m.Point == point {
+			return true
+		}
+	}
+	return false
+}
+
+func dirAnswers(point string) bool {
+	file, err := os.Open(point)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
 }
 
 func TestSessionOpenResolvesFileImagesAndModes(t *testing.T) {
