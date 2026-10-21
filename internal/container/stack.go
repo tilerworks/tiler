@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ErrNoToolchain means no registered format has every tool available.
+// ErrNoToolchain means no selectable format has every tool available.
 var ErrNoToolchain = errors.New("no complete image toolchain")
 
 // Stack is one registered format and the tools look could not resolve.
@@ -17,19 +17,30 @@ type Stack struct {
 // Complete reports whether every tool of the format was found.
 func (s Stack) Complete() bool { return len(s.Missing) == 0 }
 
-// Stacks reports each registered format in registration order.
-// look resolves a binary name the way exec.LookPath does. A nil look
-// treats every tool as missing.
+// Stacks reports each selectable image format in registration order.
+// dmg stays registered so Tools can list hdiutil, and is omitted
+// here until it can pack and mount. look resolves a binary name the
+// way exec.LookPath does. A nil look treats every tool as missing.
 func Stacks(look func(string) (string, error)) []Stack {
 	formats := All()
 	out := make([]Stack, 0, len(formats))
 	for _, format := range formats {
+		if !selectableStack(format) {
+			continue
+		}
 		out = append(out, Stack{
 			Format:  format,
 			Missing: MissingTools(format, look),
 		})
 	}
 	return out
+}
+
+// selectableStack reports whether format may be inferred or treated
+// as a ready image toolchain. dmg lists hdiutil, but pack and mount
+// are not implemented, so that one binary is not a finished stack.
+func selectableStack(format Format) bool {
+	return format.Type() != dmgType
 }
 
 // MissingTools returns the Tools of format that look cannot resolve,
@@ -48,7 +59,7 @@ func MissingTools(format Format, look func(string) (string, error)) []string {
 	return missing
 }
 
-// AnyComplete reports whether at least one registered format has
+// AnyComplete reports whether at least one selectable format has
 // every tool available.
 func AnyComplete(look func(string) (string, error)) bool {
 	for _, stack := range Stacks(look) {

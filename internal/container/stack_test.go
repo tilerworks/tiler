@@ -45,6 +45,28 @@ func TestInferTypeSelectsTheOnlyCompleteStack(t *testing.T) {
 	}
 }
 
+func TestDmgIsNotASelectableImageStack(t *testing.T) {
+	_, err := InferType(lookSet(toolSet("hdiutil")))
+	if !errors.Is(err, ErrNoToolchain) {
+		t.Fatalf("InferType err = %v, want ErrNoToolchain", err)
+	}
+	if AnyComplete(lookSet(toolSet("hdiutil"))) {
+		t.Fatal("hdiutil alone was a complete image stack")
+	}
+	got, err := InferType(lookSet(toolSet("hdiutil", "mkfs.erofs", "erofsfuse")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != erofsType {
+		t.Fatalf("InferType = %q, want erofs", got)
+	}
+	for _, stack := range Stacks(lookPresent()) {
+		if stack.Format.Type() == dmgType {
+			t.Fatal("dmg was reported as a selectable stack")
+		}
+	}
+}
+
 func TestInferTypeFailsWhenNoStackIsComplete(t *testing.T) {
 	_, err := InferType(lookSet(nil))
 	if !errors.Is(err, ErrNoToolchain) {
