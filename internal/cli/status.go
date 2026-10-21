@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +30,11 @@ func newStatusCmd() *cobra.Command {
 				return errors.New("status: configuration is not loaded")
 			}
 			engine := sessionEngine(cfg)
+			// A platform with no host mount table has no tiler mount
+			// to reconcile. An empty table lets an empty store and an
+			// uncovered path report themselves instead of failing
+			// before any output.
+			engine.LoadTable = emptyWhenMountTableUnavailable(engine.LoadTable)
 			out := cmd.OutOrStdout()
 			if len(args) == 1 {
 				found, err := engine.SessionForPath(args[0])
@@ -52,6 +58,23 @@ func newStatusCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the status as a JSON document")
 	return cmd
+}
+
+// emptyWhenMountTableUnavailable keeps a missing host mount table
+// from aborting status. Any other load error is unchanged.
+func emptyWhenMountTableUnavailable(
+	load func() ([]mountinfo.Mount, error),
+) func() ([]mountinfo.Mount, error) {
+	if load == nil {
+		return nil
+	}
+	return func() ([]mountinfo.Mount, error) {
+		table, err := load()
+		if errors.Is(err, mountinfo.ErrUnavailable) {
+			return nil, nil
+		}
+		return table, err
+	}
 }
 
 // writeStatusOverview renders one block per session followed by the

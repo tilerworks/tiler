@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,6 +40,31 @@ func withStatusSeeds(t *testing.T, home string, healthy map[string]bool) (lib []
 	writeSession(t, sessions, "dev", "alice", "app", "0123456789abcdef", "running")
 	writeSession(t, sessions, "old", "alice", "app", "0123456789abcdef", "closed")
 	return lib, sessions
+}
+
+func TestStatusTreatsUnavailableMountTableAsEmpty(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.LoadTable = func() ([]mountinfo.Mount, error) {
+			return nil, mountinfo.ErrUnavailable
+		}
+	})
+	stdout, stderr, _, err := runCmd(t, append(lib, "status")...)
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, stderr)
+	}
+	if stdout != "no sessions recorded\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	plain := filepath.Join(work, "plain")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, _, err = runCmd(t, append(lib, "status", plain)...)
+	if ExitCode(err) != 1 || !strings.Contains(stderr, "no session covers") {
+		t.Fatalf("uncovered: ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+	}
 }
 
 func TestStatusOverviewRendering(t *testing.T) {

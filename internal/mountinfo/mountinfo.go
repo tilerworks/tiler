@@ -33,6 +33,12 @@ type Mount struct {
 	Lowers []string
 }
 
+// ErrUnavailable means this platform cannot read a host mount table.
+// Status treats it as an empty table, because there is no tiler mount
+// to reconcile. Commands that must attach or detach still fail.
+var ErrUnavailable = errors.New(
+	"mountinfo: reading the host mount table requires linux")
+
 // minMountFields is the smallest legal entry: id, parent, maj:min,
 // root, point, options, separator, fstype, source, super options.
 const minMountFields = 10
