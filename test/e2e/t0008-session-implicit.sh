@@ -40,7 +40,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -73,7 +73,7 @@ fi
 
 # A plain mount with no --session and no TILER_SESSION_ID creates a
 # generated record that list renders exactly like a named one.
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount without --session creates a generated session' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount without --session creates a generated session' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/auto "$src_dir" >build.out 2>build.err &&
@@ -91,7 +91,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount without --session creates a gene
 
 # show renders the generated record with the same header + action shape
 # as a named one, and has a --json form.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session show renders a generated record' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show renders a generated record' '
 	"$tiler_bin" session show "$auto1" >show2.out 2>show2.err &&
 	grep -Eq "^$auto1$" show2.out &&
 	grep -Eq "^  state +active$" show2.out &&
@@ -104,7 +104,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session show renders a generated recor
 
 # Umounting the last view of a non--rm session does not close it: the
 # record stays active with mounts=0.
-test_expect_success TILER,FUSE_TOOLCHAIN 'umounting the last view keeps a non-rm session active' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umounting the last view keeps a non-rm session active' '
 	"$tiler_bin" umount "$a1_dir" >um1.out 2>um1.err &&
 	grep -Eq "^unmounted " um1.out &&
 	"$tiler_bin" session list >list3.out 2>list3.err &&
@@ -113,7 +113,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'umounting the last view keeps a non-rm
 
 # A generated session is still an ordinary record: it can be closed and
 # removed by name. A second mount mints a distinct name.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a generated session can be closed and removed by name' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a generated session can be closed and removed by name' '
 	mkdir -p "$a2_dir" &&
 	"$tiler_bin" mount tmp/auto "$a2_dir" >m2.out 2>m2.err &&
 	grep -Eq "^mounted " m2.out &&

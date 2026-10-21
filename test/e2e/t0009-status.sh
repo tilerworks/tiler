@@ -46,8 +46,8 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view come from
-# sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view
+# come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
@@ -112,7 +112,7 @@ test_expect_success TILER 'status of an uncovered path is an error in text and j
 # Build one image and mount it at two views under a named session. With
 # TILER_SESSION_ID naming that session, the overview marks it current and
 # annotates both live mounts healthy, in text and json.
-test_expect_success TILER,FUSE_TOOLCHAIN 'status overview marks a healthy current session' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status overview marks a healthy current session' '
 	mkdir -p "$src_dir/sub/deep" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/status "$src_dir" >build.out 2>build.err &&
@@ -137,7 +137,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'status overview marks a healthy curren
 # The environment marker is carried verbatim and may match no record;
 # that is not an error. No header is marked current, yet the json
 # current_session still echoes the marker.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a current marker matching no record is not an error' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a current marker matching no record is not an error' '
 	TILER_SESSION_ID=bogus "$tiler_bin" status >nc.out 2>nc.err &&
 	grep -Eq "^dev active created=" nc.out &&
 	! grep -Eq " current$" nc.out &&
@@ -150,7 +150,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a current marker matching no record is
 # mountpoint itself to the covering session. Its action line carries no
 # health mark (that lives only in the overview and the json), and a
 # healthy view is not stale.
-test_expect_success TILER,FUSE_TOOLCHAIN 'status of a path resolves the covering session' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status of a path resolves the covering session' '
 	"$tiler_bin" status "$s_dir/sub/deep/x.txt" >p1.out 2>p1.err &&
 	grep -Eq "^dev active mountpoint=" p1.out &&
 	grep -qF "$s_dir" p1.out &&
@@ -170,7 +170,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'status of a path resolves the covering
 # returns ENOTCONN). The overview annotates that view stale while its
 # peer stays healthy, the path form marks the header stale, and the json
 # reports stale with a stale action health.
-test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'status reports a killed view stale while its peer stays healthy' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'status reports a killed view stale while its peer stays healthy' '
 	kill_view "$s2_dir" &&
 	sleep 1 &&
 	! ls "$s2_dir" >/dev/null 2>&1 &&
@@ -190,7 +190,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'status reports a killed view
 # record to closed. The overview then shows the closed header with no
 # expanded actions and no orphans, and the json carries an empty action
 # list.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session shows no live views or orphans' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a closed session shows no live views or orphans' '
 	"$tiler_bin" session close dev >cl7.out 2>cl7.err &&
 	grep -Eq "^closed dev$" cl7.out &&
 	"$tiler_bin" status >ov7.out 2>ov7.err &&
@@ -210,7 +210,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session shows no live views o
 # Only session.json is removed — the session directory still holds live
 # runtime mounts under runtime/m<seq>/, so rm -rf of the whole tree
 # cannot succeed and is not the "lost record" signal names()/Load use.
-test_expect_success TILER,FUSE_TOOLCHAIN 'status lists a live view whose record was lost as an orphan' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status lists a live view whose record was lost as an orphan' '
 	mkdir -p "$orph_dir" &&
 	"$tiler_bin" mount tmp/status "$orph_dir" >m8.out 2>m8.err &&
 	grep -Eq "^mounted " m8.out &&

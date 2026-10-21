@@ -4,9 +4,11 @@
 # Provides:
 #   tiler_bin          repository bin/tiler, else a tiler on PATH
 #   TILER              set when tiler_bin is non-empty
-#   FUSE_TOOLCHAIN     /dev/fuse plus squashfs and overlay tools (+ git)
-#   EROFS_TOOLCHAIN    /dev/fuse plus erofs and overlay tools (+ git)
-#   KILL_VIEW          pgrep is available for kill_view
+#   LINUX              uname -s is Linux (current mount stack)
+#   MACOS              uname -s is Darwin (future macOS mount stack)
+#   FUSE_TOOLCHAIN     Linux + /dev/fuse + squashfs/overlay tools (+ git)
+#   EROFS_TOOLCHAIN    Linux + /dev/fuse + erofs/overlay tools (+ git)
+#   KILL_VIEW          Linux pgrep + /proc for kill_view
 #   kill_view <mp>     SIGKILL FUSE daemons serving one mountpoint
 
 # Prefer the repository build; fall back to a tiler found on PATH.
@@ -22,11 +24,24 @@ then
 	test_set_prereq TILER
 fi
 
-# A real squashfs mount needs the FUSE device and the squashfs/overlay
-# toolchain (the same set `tiler doctor` reports as fail-level). git is
-# included because doctor always probes it. Lazy: only evaluated when a
-# test_expect_success lists FUSE_TOOLCHAIN.
+# OS gates for the current Linux mount stack and the coming macOS
+# image-format mounts. Cases that need a real mount list LINUX (or
+# later MACOS) so make e2e skips the wrong host instead of failing.
+case "$(uname -s)" in
+Linux)
+	test_set_prereq LINUX
+	;;
+Darwin)
+	test_set_prereq MACOS
+	;;
+esac
+
+# A real squashfs mount needs Linux, the FUSE device, and the
+# squashfs/overlay toolchain (the same set `tiler doctor` reports as
+# fail-level). git is included because doctor always probes it. Lazy:
+# only evaluated when a test_expect_success lists FUSE_TOOLCHAIN.
 test_lazy_prereq FUSE_TOOLCHAIN '
+	test_have_prereq LINUX &&
 	test -e /dev/fuse &&
 	command -v squashfuse_ll >/dev/null 2>&1 &&
 	command -v fuse-overlayfs >/dev/null 2>&1 &&
@@ -35,9 +50,11 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 	command -v git >/dev/null 2>&1
 '
 
-# erofs packing and mounting need the erofs stack plus the shared FUSE
-# tools. A squashfs-only host leaves this prereq unmet and the case skips.
+# erofs packing and mounting need Linux plus the erofs stack and the
+# shared FUSE tools. A squashfs-only or non-Linux host leaves this
+# prereq unmet and the case skips.
 test_lazy_prereq EROFS_TOOLCHAIN '
+	test_have_prereq LINUX &&
 	test -e /dev/fuse &&
 	command -v mkfs.erofs >/dev/null 2>&1 &&
 	command -v erofsfuse >/dev/null 2>&1 &&
@@ -46,10 +63,13 @@ test_lazy_prereq EROFS_TOOLCHAIN '
 	command -v git >/dev/null 2>&1
 '
 
-# kill_view needs pgrep. Gate crash/stale assertions on this alone so
-# mount cases without a kill still run when pgrep is missing.
+# kill_view needs pgrep and /proc/<pid>/cmdline. Gate crash/stale
+# assertions on this alone so mount cases without a kill still run
+# when pgrep is missing; require LINUX because /proc is Linux-only.
 test_lazy_prereq KILL_VIEW '
-	command -v pgrep >/dev/null 2>&1
+	test_have_prereq LINUX &&
+	command -v pgrep >/dev/null 2>&1 &&
+	test -d /proc
 '
 
 # kill_view SIGKILLs the FUSE daemon(s) serving one mountpoint, so a

@@ -39,7 +39,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -74,7 +74,7 @@ fi
 
 # One active image with a single increment exercises every ls form: the
 # all-images line, the per-name chain expansion, and the --json document.
-test_expect_success TILER,FUSE_TOOLCHAIN 'images list and show render the active image, its chain, and json' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the active image, its chain, and json' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -100,7 +100,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'images list and show render the active
 # the live view pins. Umounting drops the pin, so the next gc promotes the
 # unreferenced hold into an archive (demo S13 "rebuild ... to create an
 # archive"). A changed source tree guarantees a distinct new full id.
-test_expect_success TILER,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into an archive' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into an archive' '
 	echo "v2" >"$src_dir/version.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build2.out 2>build2.err &&
 	grep -Eq "^full alice/app [0-9a-f]+" build2.out &&
@@ -117,7 +117,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into 
 # newer. --keep-versions 1 is a root persistent flag injected into the
 # resolved config, so gc ranks the archives newest first and expires every
 # rank at or past the limit: id2 (rank 0) is kept and id1 (rank 1) removed.
-test_expect_success TILER,FUSE_TOOLCHAIN 'gc --keep-versions expires the older archive' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc --keep-versions expires the older archive' '
 	"$tiler_bin" mount alice/app "$work_dir" >mount3.out 2>mount3.err &&
 	grep -Eq "^mounted " mount3.out &&
 	echo "v3" >"$src_dir/version.txt" &&
@@ -136,7 +136,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gc --keep-versions expires the older a
 # A never-mounted image carries no session pin, so the two-phase rm runs
 # straight through: the first call flags it deprecated, the second removes
 # it, and the all-images listing no longer names it.
-test_expect_success TILER,FUSE_TOOLCHAIN 'rm deprecates then removes an unreferenced image' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm deprecates then removes an unreferenced image' '
 	"$tiler_bin" build --image tmp/rmtest "$src_dir" >build4.out 2>build4.err &&
 	grep -Eq "^full tmp/rmtest [0-9a-f]+" build4.out &&
 	"$tiler_bin" images rm tmp/rmtest >rm1.out 2>rm1.err &&
@@ -151,7 +151,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'rm deprecates then removes an unrefere
 # image. While that view is live, rm must be refused with a non-zero
 # exit naming the pinning session. Umounting releases the pin, after
 # which the two-phase rm succeeds.
-test_expect_success TILER,FUSE_TOOLCHAIN 'rm is refused while an active session references it' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm is refused while an active session references it' '
 	"$tiler_bin" build --image life/app "$src_dir" >build5.out 2>build5.err &&
 	grep -Eq "^full life/app [0-9a-f]+" build5.out &&
 	mkdir -p "$work2_dir" &&

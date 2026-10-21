@@ -42,7 +42,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -81,7 +81,7 @@ fi
 # layerB/id2 captured below persist across the later test_expect_success
 # blocks (and the .out files persist in the trash working dir too).
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'build a base full image' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a base full image' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -96,7 +96,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build a base full image' '
 # the two increments differ: layerA holds {a.txt} and layerB holds
 # {a.txt,b.txt}. Different content means a different digest, so the two
 # layer ids must differ (cf. TestBuildIncrAppendsLayerToChain).
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount and append two distinct increments' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct increments' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
@@ -113,7 +113,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount and append two distinct incremen
 	test "$layerA" != "$layerB"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
 	grep -Eq "^  chain +2$" ls.out &&
 	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
@@ -121,7 +121,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml
 	grep -Eq "^id: \"?$id1\"?$" "$meta_file"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the full plus both increments' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the full plus both increments' '
 	"$tiler_bin" umount "$work_dir" &&
 	mkdir -p "$verify_dir" &&
 	"$tiler_bin" mount alice/app "$verify_dir" >remount.out 2>remount.err &&
@@ -135,7 +135,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the full plus b
 # into a new full image; the name is inferred from the active mount
 # (decide.go fullInView sets SrcDir to the mount point). The merged full
 # folds README + both increments, so its id differs from the base full.
-test_expect_success TILER,FUSE_TOOLCHAIN 'build --full merges the view into a new full' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --full merges the view into a new full' '
 	( cd "$verify_dir" && "$tiler_bin" build --full ) >merge.out 2>merge.err &&
 	grep -Eq "^full alice/app [0-9a-f]+" merge.out &&
 	id2=$(cut -d" " -f3 merge.out) &&
@@ -143,7 +143,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build --full merges the view into a ne
 	test "$id2" != "$id1"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
 	grep -Eq "^id: \"?$id2\"?$" "$meta_file" &&
 	! grep -q "^chain:" "$meta_file" &&
 	"$tiler_bin" images show alice/app >ls2.out 2>ls2.err &&
@@ -153,13 +153,13 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged fu
 # The merge retires the old full + chain. verify_dir is still live, so its
 # implicit session pins the retired chain: it lands in hold/<old-id> (still
 # serving the live view through open fds) rather than being freed at once.
-test_expect_success TILER,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
 	"$tiler_bin" images show alice/app >ls3.out 2>ls3.err &&
 	grep -Eq "^    $id1$" ls3.out &&
 	test -f "$img_dir/hold/$id1/image.sqsh"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '
 	"$tiler_bin" umount "$verify_dir" &&
 	"$tiler_bin" mount alice/app "$verify_dir" >remount2.out 2>remount2.err &&
 	grep -Eq "^mounted " remount2.out &&

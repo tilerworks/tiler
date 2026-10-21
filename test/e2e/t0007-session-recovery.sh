@@ -41,8 +41,8 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view come from
-# sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view
+# come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -76,7 +76,7 @@ fi
 # upper layer, then SIGKILL the daemon. The view goes stale (any access
 # returns ENOTCONN, so `ls` fails) but the write-ahead record survives
 # untouched and still reports its pre-crash mounts= count.
-test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a daemon crash' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a daemon crash' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -99,7 +99,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a daemon
 # and writes the action back to mounted. The upper layer is keyed by the
 # mountpoint inode, so the remount reuses it and the file written before
 # the crash is still there.
-test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays the view and the upper survives' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays the view and the upper survives' '
 	"$tiler_bin" session open rec >open1.out 2>open1.err &&
 	grep -Eq "^opened rec$" open1.out &&
 	grep -q hello "$rec_dir/README.txt" &&
@@ -112,7 +112,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays the vie
 # A second open over the now-healthy view is a pure no-op: the health
 # check skips the remount, so the confirmation still prints and the
 # upper-layer file is untouched.
-test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open is idempotent' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open is idempotent' '
 	"$tiler_bin" session open rec >open2.out 2>open2.err &&
 	grep -Eq "^opened rec$" open2.out &&
 	grep -q hello "$rec_dir/README.txt" &&
@@ -122,7 +122,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open is ide
 # close tears the healthy view down and flips the record to closed; open
 # then revives it -- reopen sets the state back to active and the replay
 # remounts the view, reusing the same upper so the file survives again.
-test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'a closed session revives through open' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a closed session revives through open' '
 	"$tiler_bin" session close rec >close.out 2>close.err &&
 	grep -Eq "^closed rec$" close.out &&
 	"$tiler_bin" session list >list4a.out 2>list4a.err &&

@@ -46,7 +46,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -84,7 +84,7 @@ fi
 # A fresh named session starts active with no mounts. A second `new` of
 # the same name is a runtime error (exit 1); an invalid name containing a
 # path separator is a usage error (exit 2).
-test_expect_success TILER,FUSE_TOOLCHAIN 'session new creates an active record and rejects duplicates' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new creates an active record and rejects duplicates' '
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	grep -Eq "^created dev$" new.out &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
@@ -103,7 +103,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new creates an active record a
 # TILER_SESSION_ID environment variable binds a mount the same way. Three
 # views (rw, ro, rw) land under `dev`, and the lower-layer content is
 # served through each mountpoint.
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount --session and TILER_SESSION_ID group views' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --session and TILER_SESSION_ID group views' '
 	mkdir -p "$src_dir" "$src2_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "tools" >"$src2_dir/TOOLS.txt" &&
@@ -126,7 +126,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --session and TILER_SESSION_ID g
 # record plus one indented action line per mount, in seq order. Both
 # have a --json form. The mountpoint is an absolute path that may
 # contain spaces, so the action regex wildcards it with `.*`.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session list and show render the record' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session list and show render the record' '
 	"$tiler_bin" session list >list3.out 2>list3.err &&
 	grep -Eq "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list3.out &&
 	"$tiler_bin" session show dev >show3.out 2>show3.err &&
@@ -146,7 +146,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session list and show render the recor
 
 # A record that never existed is refused by both show and open with a
 # non-zero exit naming the miss.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session show and open refuse a missing record' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show and open refuse a missing record' '
 	status=0 &&
 	{ "$tiler_bin" session show nosuch >showns.out 2>showns.err || status=$?; } &&
 	test "$status" -ne 0 &&
@@ -159,7 +159,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session show and open refuse a missing
 
 # An active record still holds mounts, so remove refuses it and the
 # record survives unchanged.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session remove refuses an active record' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove refuses an active record' '
 	status=0 &&
 	{ "$tiler_bin" session remove dev >rmact.out 2>rmact.err || status=$?; } &&
 	test "$status" -ne 0 &&
@@ -172,7 +172,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session remove refuses an active recor
 # write that action back to unmounted, so mounts= drops from 3 to 2 and
 # the record stays active. The live s1 view still serves its lower-layer
 # content.
-test_expect_success TILER,FUSE_TOOLCHAIN 'umount of one view keeps a named session active' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount of one view keeps a named session active' '
 	"$tiler_bin" umount "$s2_dir" >um2.out 2>um2.err &&
 	grep -Eq "^unmounted " um2.out &&
 	"$tiler_bin" session list >list6.out 2>list6.err &&
@@ -184,7 +184,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'umount of one view keeps a named sessi
 # closed (mounts=0, every action written back to unmounted), and keeps it
 # for audit. Closing an already-closed record is an idempotent no-op that
 # still prints the confirmation.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session close tears down views and is idempotent' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session close tears down views and is idempotent' '
 	"$tiler_bin" session close dev >close.out 2>close.err &&
 	grep -Eq "^closed dev$" close.out &&
 	test ! -e "$s1_dir/README.txt" &&
@@ -196,7 +196,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session close tears down views and is 
 
 # A closed record never accepts a new mount; the caller must create a
 # fresh session. The record is left untouched.
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount into a closed session is refused' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount into a closed session is refused' '
 	status=0 &&
 	{ "$tiler_bin" mount --session dev alice/app "$s1_dir" >mclosed.out 2>mclosed.err || status=$?; } &&
 	test "$status" -ne 0 &&
@@ -207,7 +207,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount into a closed session is refused
 
 # A closed record removes cleanly and drops out of the listing; removing
 # it again is refused as a miss.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session remove deletes a closed record' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove deletes a closed record' '
 	"$tiler_bin" session remove dev >rmdev.out 2>rmdev.err &&
 	grep -Eq "^removed dev$" rmdev.out &&
 	"$tiler_bin" session list >list9.out 2>list9.err &&

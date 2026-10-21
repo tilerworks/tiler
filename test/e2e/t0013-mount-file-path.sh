@@ -36,7 +36,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed.
@@ -64,7 +64,7 @@ fi
 
 # Pack with mksquashfs directly so the payload never enters the library
 # and never grows a meta.yaml. The path must stay outside images_dir.
-test_expect_success TILER,FUSE_TOOLCHAIN 'pack a bare squashfs outside images_dir without meta' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'pack a bare squashfs outside images_dir without meta' '
 	mkdir -p "$src_dir/docs" "$nas_dir" &&
 	echo "hello vendor" >"$src_dir/README.txt" &&
 	echo "# guide" >"$src_dir/docs/guide.md" &&
@@ -81,7 +81,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'pack a bare squashfs outside images_di
 	! find "$nas_dir" -name meta.yaml | grep -q .
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount the absolute path and serve the content' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the absolute path and serve the content' '
 	"$tiler_bin" session new ext >new.out 2>new.err &&
 	grep -Eq "^created ext$" new.out &&
 	mkdir -p "$work_dir" &&
@@ -94,7 +94,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount the absolute path and serve the 
 # The session action stores the reference as given (here the absolute
 # path) and leaves library identity empty. session show --json and the
 # on-disk record both omit owner/repo/full_id for this form.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session records the image path with empty library identity' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session records the image path with empty library identity' '
 	"$tiler_bin" session show ext >show.out 2>show.err &&
 	grep -qF "mount  $img  " show.out &&
 	grep -Eq "mode=rw  status=mounted" show.out &&
@@ -110,7 +110,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session records the image path with em
 	! grep -q "\"full_id\"" "$session_json"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'umount tears the view down' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	grep -Eq "^unmounted " umount.out
 '

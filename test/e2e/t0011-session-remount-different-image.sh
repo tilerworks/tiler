@@ -33,7 +33,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 src1_dir=$HOME/src/one
 src2_dir=$HOME/src/two
@@ -49,7 +49,7 @@ then
 	'
 fi
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'build two distinguishable images' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build two distinguishable images' '
 	mkdir -p "$src1_dir" "$src2_dir" &&
 	echo one >"$src1_dir/who.txt" &&
 	echo two >"$src2_dir/who.txt" &&
@@ -59,7 +59,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build two distinguishable images' '
 	grep -Eq "^full alice/two [0-9a-f]+" b2.out
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount image one, write a marker, then umount' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image one, write a marker, then umount' '
 	mkdir -p "$workdir" &&
 	"$tiler_bin" mount alice/one "$workdir" >m1.out 2>m1.err &&
 	grep -Eq "^mounted " m1.out &&
@@ -75,7 +75,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount image one, write a marker, then 
 	echo "$auto1" >auto1.name
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount image two at the same workdir with a fresh upper' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image two at the same workdir with a fresh upper' '
 	auto1=$(cat auto1.name) &&
 	"$tiler_bin" mount alice/two "$workdir" >m2.out 2>m2.err &&
 	grep -Eq "^mounted " m2.out &&

@@ -45,7 +45,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -81,7 +81,7 @@ fi
 
 # One full image backs every scenario; a writable view of it lands the
 # user data in the runtime upper directory that --rm purges.
-test_expect_success TILER,FUSE_TOOLCHAIN 'build a full image for the --rm scenarios' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image for the --rm scenarios' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/auto "$src_dir" >build.out 2>build.err &&
@@ -91,7 +91,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build a full image for the --rm scenar
 # A named --rm session shows the rm marker, and closing it deletes the
 # record and purges the runtime directory of the view -- upper data and
 # all -- instead of keeping the record closed for audit.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the record and purges the runtime' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new --rm: close deletes the record and purges the runtime' '
 	"$tiler_bin" session new --rm dev >new1.out 2>new1.err &&
 	grep -Eq "^created dev$" new1.out &&
 	"$tiler_bin" session show dev >show1.out 2>show1.err &&
@@ -119,7 +119,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session new --rm: close deletes the re
 # mount --rm marks the generated session it creates; umounting its
 # last view auto-closes it, and the --rm marker turns that close into a
 # record deletion plus a runtime purge.
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm: umounting the last view deletes the record and purges the runtime' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm: umounting the last view deletes the record and purges the runtime' '
 	mkdir -p "$impl_dir" &&
 	"$tiler_bin" mount --rm tmp/auto "$impl_dir" >m2.out 2>m2.err &&
 	grep -Eq "^mounted " m2.out &&
@@ -142,7 +142,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm: umounting the last view de
 # --rm applies only to the implicit session mount creates. Naming one
 # with --session or TILER_SESSION_ID is a usage error (exit 2) that
 # points at the named-session route, and it records no mount.
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm refuses a session named by --session or the environment' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm refuses a session named by --session or the environment' '
 	"$tiler_bin" session new target >new3.out 2>new3.err &&
 	mkdir -p "$usage_dir" &&
 	status=0 &&
@@ -165,7 +165,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount --rm refuses a session named by 
 # The contrast that proves --rm is opt-in: a plain session close keeps
 # the record in the closed state and leaves the runtime upper data on
 # disk, exactly as before --rm existed.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a plain session close keeps the record and its runtime upper data' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a plain session close keeps the record and its runtime upper data' '
 	"$tiler_bin" session new ctrl >new4.out 2>new4.err &&
 	mkdir -p "$ctrl_dir" &&
 	"$tiler_bin" mount --session ctrl tmp/auto "$ctrl_dir" >m4.out 2>m4.err &&

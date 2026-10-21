@@ -175,10 +175,14 @@ same way `t0000-doctor.sh` does (preset `TEST_LIB_DIRECTORY` and
 time.
 
 Shared helpers load automatically from `e2e/sharness.d/*.sh` (see
-`e2e/sharness.d/tiler.sh`): `tiler_bin`, the `TILER` prereq, lazy
-prereqs `FUSE_TOOLCHAIN`, `EROFS_TOOLCHAIN`, and `KILL_VIEW`, plus
-`kill_view`. Case scripts keep their own path variables and
-`test_atexit` teardown lists.
+`e2e/sharness.d/tiler.sh`): `tiler_bin`, the `TILER` prereq, OS
+prereqs `LINUX` and `MACOS`, lazy prereqs `FUSE_TOOLCHAIN`,
+`EROFS_TOOLCHAIN`, and `KILL_VIEW`, plus `kill_view`. Mount cases
+list `LINUX` with the toolchain so `make e2e` on macOS skips them
+instead of failing; later macOS mount cases will list `MACOS`.
+Config-only cases stay on `TILER` alone and run on both hosts.
+Case scripts keep their own path variables and `test_atexit`
+teardown lists.
 
 ## Run artifacts
 

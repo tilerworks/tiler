@@ -42,7 +42,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -69,7 +69,7 @@ then
 	'
 fi
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'build a full image from a source tree' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image from a source tree' '
 	mkdir -p "$src_dir/docs" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
@@ -78,7 +78,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'build a full image from a source tree'
 	find "$HOME/.tiler/images" -name "*.sqsh" | grep -q .
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount the image read-write with an upper layer' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the image read-write with an upper layer' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
@@ -88,12 +88,12 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount the image read-write with an upp
 	test -f "$work_dir/NEW.txt"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'repeat mount of the same view is idempotent' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount of the same view is idempotent' '
 	"$tiler_bin" mount alice/app "$work_dir" >remount.out 2>remount.err &&
 	grep -Eq "^already mounted " remount.out
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'a second image builds with a distinct id' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a second image builds with a distinct id' '
 	mkdir -p "$src2_dir" &&
 	echo "#!/bin/sh" >"$src2_dir/run.sh" &&
 	"$tiler_bin" build --image bob/tools "$src2_dir" >build2.out 2>build2.err &&
@@ -104,7 +104,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a second image builds with a distinct 
 	test "$id1" != "$id2"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'the second image mounts at its own target' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the second image mounts at its own target' '
 	mkdir -p "$work2_dir" &&
 	"$tiler_bin" mount bob/tools "$work2_dir" >mount2.out 2>mount2.err &&
 	grep -Eq "^mounted " mount2.out &&
@@ -116,7 +116,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the second image mounts at its own tar
 # there must be refused as a conflict, not silently restacked: the exit
 # is non-zero, the error names the refusal, and the live view still
 # serves alice/app (README.txt present, run.sh absent).
-test_expect_success TILER,FUSE_TOOLCHAIN 'a different image on a live view is refused' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a different image on a live view is refused' '
 	status=0 &&
 	{ "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err || status=$?; } &&
 	test "$status" -ne 0 &&
@@ -126,7 +126,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a different image on a live view is re
 	test ! -e "$work_dir/run.sh"
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'umount tears both views down' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears both views down' '
 	"$tiler_bin" umount "$work_dir" &&
 	"$tiler_bin" umount "$work2_dir"
 '

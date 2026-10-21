@@ -32,7 +32,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
@@ -68,7 +68,7 @@ fi
 
 # gzip is on the squashfs whitelist and is not the format default
 # (zstd). The active payload stays image.sqsh.
-test_expect_success TILER,FUSE_TOOLCHAIN 'gzip full build records squashfs/gzip' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gzip full build records squashfs/gzip' '
 	mkdir -p "$src_dir" &&
 	echo "hello gzip" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --format squashfs --compression gzip --image alice/gzip "$src_dir" >build.out 2>build.err &&
@@ -87,7 +87,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'gzip full build records squashfs/gzip'
 # The incremental build passes neither --format nor --compression, so
 # the layer has to inherit the active squashfs/gzip pair. A conflicting
 # flag would be a usage error; this path is the same-format append.
-test_expect_success TILER,FUSE_TOOLCHAIN 'writable mount and same-format incr inherit gzip' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable mount and same-format incr inherit gzip' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/gzip "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
@@ -108,7 +108,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'writable mount and same-format incr in
 	grep -Eq "^  chain +1$" show-incr.out
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the gzip incr' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the gzip incr' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	grep -Eq "^unmounted " umount.out &&
 	mkdir -p "$verify_dir" &&
@@ -123,7 +123,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the gzip incr' 
 # Packed with mksquashfs directly, so the payload never enters the
 # library and never grows a meta.yaml. xz is another non-default
 # compressor; squashfuse_ll mounts the file by magic.
-test_expect_success TILER,FUSE_TOOLCHAIN 'an external xz squashfs mounts read-write' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'an external xz squashfs mounts read-write' '
 	mkdir -p "$ext_src" "$nas_dir" "$ext_dir" &&
 	echo "hello xz" >"$ext_src/README.txt" &&
 	mksquashfs "$ext_src" "$ext_img" -comp xz -noappend >/dev/null &&

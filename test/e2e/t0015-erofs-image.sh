@@ -37,7 +37,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and EROFS_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and EROFS_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # An omitted erofs compression prefers zstd, then lz4, then gzip,
 # matching the compressors this mkfs.erofs was built with.
@@ -87,7 +87,7 @@ fi
 
 # xz is a squashfs compressor and is rejected for erofs before any
 # image is published. The check is a usage error (exit 2).
-test_expect_success TILER,EROFS_TOOLCHAIN 'erofs with xz is a usage error' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'erofs with xz is a usage error' '
 	mkdir -p "$HOME/src/bad" &&
 	echo nope >"$HOME/src/bad/README.txt" &&
 	status=0 &&
@@ -100,7 +100,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'erofs with xz is a usage error' '
 # The project file sets the format. The build omits --format and
 # --compression, so the image is erofs at the format default (zstd).
 # The active file name stays image.sqsh.
-test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs packs a full image' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs packs a full image' '
 	mkdir -p "$src_dir/sub" &&
 	printf "%s\n" "image_format: erofs" >"$proj/.tiler.yaml" &&
 	echo "hello erofs" >"$src_dir/README.txt" &&
@@ -122,7 +122,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs packs a fu
 	grep -Eq "^  form +single$" show.out
 '
 
-test_expect_success TILER,EROFS_TOOLCHAIN 'writable mount and incr inherit the erofs compression' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit the erofs compression' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/erofs "$work_dir" >mount.out 2>mount.err &&
 	grep -Eq "^mounted " mount.out &&
@@ -143,7 +143,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'writable mount and incr inherit the e
 	grep -Eq "^  chain +1$" show-incr.out
 '
 
-test_expect_success TILER,EROFS_TOOLCHAIN 'a fresh remount serves the erofs incr' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'a fresh remount serves the erofs incr' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	grep -Eq "^unmounted " umount.out &&
 	mkdir -p "$verify_dir" &&
@@ -159,7 +159,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'a fresh remount serves the erofs incr
 # block. The project config still selects erofs; --split does not
 # change the container. The payload lives in blocks/<id>/, not
 # image.sqsh.
-test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs --split publishes blocks' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --split publishes blocks' '
 	mkdir -p "$blk_src" &&
 	echo "hello blocks" >"$blk_src/README.txt" &&
 	dd if=/dev/urandom of="$blk_src/bulk.bin" bs=1024 count=300 status=none &&
@@ -191,7 +191,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'project image_format erofs --split pu
 
 # --subdir makes sub/ the mount root. The image-root README must not
 # leak through, and a read-only view rejects an upper write.
-test_expect_success TILER,EROFS_TOOLCHAIN 'subdir mount exposes only that directory' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'subdir mount exposes only that directory' '
 	mkdir -p "$sub_dir" &&
 	"$tiler_bin" mount --read-only --subdir sub alice/erofs "$sub_dir" >sub.out 2>sub.err &&
 	grep -Eq "^mounted " sub.out &&
@@ -208,7 +208,7 @@ test_expect_success TILER,EROFS_TOOLCHAIN 'subdir mount exposes only that direct
 # Hide the squashfs stack. One complete erofs stack is enough for
 # doctor to exit 0: image_toolchain warns, and squashfuse_subdir
 # warns because squashfuse_ll is not on this PATH.
-test_expect_success TILER,EROFS_TOOLCHAIN 'doctor passes with only the erofs stack' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'doctor passes with only the erofs stack' '
 	only=$HOME/erofs-only &&
 	mkdir -p "$only" &&
 	ln -s "$(command -v mkfs.erofs)" "$only/mkfs.erofs" &&

@@ -36,7 +36,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
+# tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
@@ -73,7 +73,7 @@ fi
 # 300 KiB of incompressible bytes plus a couple of small files. zstd
 # cannot shrink the bulk, so a 64k block size spans more than one
 # blk.NNN (the same idea as the in-package split fixtures).
-test_expect_success TILER,FUSE_TOOLCHAIN 'full --split 64k publishes more than one block' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'full --split 64k publishes more than one block' '
 	mkdir -p "$src_dir/docs" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# guide" >"$src_dir/docs/guide.md" &&
@@ -94,7 +94,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'full --split 64k publishes more than o
 	echo "$id1" >full.id
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with the same --split' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with the same --split' '
 	id1=$(cat full.id) &&
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/split "$work_dir" >mount.out 2>mount.err &&
@@ -120,7 +120,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'mount, edit the upper, and incr with t
 	echo "$layer" >layer.id
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the split full plus the incr' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the split full plus the incr' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	grep -Eq "^unmounted " umount.out &&
 	mkdir -p "$verify_dir" &&
@@ -137,7 +137,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a fresh remount serves the split full 
 # verify_dir stays mounted across this case so its session pins the
 # retired full id. An unpinned replace would archive the chain instead
 # of leaving it in hold/.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a new full retires the split chain into a pinned hold' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split chain into a pinned hold' '
 	id1=$(cat full.id) &&
 	layer=$(cat layer.id) &&
 	"$tiler_bin" mount alice/split "$verify_dir" >pin.out 2>pin.err &&
@@ -170,7 +170,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a new full retires the split chain int
 	grep -Eq "^unmounted " unpin.out
 '
 
-test_expect_success TILER,FUSE_TOOLCHAIN 'a build with no --split stays a single file' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a build with no --split stays a single file' '
 	mkdir -p "$plain_src" &&
 	echo plain >"$plain_src/README.txt" &&
 	"$tiler_bin" build --image bob/plain "$plain_src" >plain.out 2>plain.err &&
@@ -186,7 +186,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a build with no --split stays a single
 # Project split_size: 0 is an explicit off, same as omitting the key.
 # The file sits in the working directory so the upward walk applies it
 # without a command-line --split.
-test_expect_success TILER,FUSE_TOOLCHAIN 'project split_size 0 stays a single file' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'project split_size 0 stays a single file' '
 	mkdir -p "$zero_root/src" &&
 	printf "%s\n" "split_size: 0" >"$zero_root/.tiler.yaml" &&
 	echo zero >"$zero_root/src/README.txt" &&
