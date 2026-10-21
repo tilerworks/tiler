@@ -20,9 +20,10 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 )
 
-// ErrUnavailable means mounting cannot work here: the OS is not
-// Linux, or /dev/fuse and the FUSE tools cannot be used. Callers
-// treat it as a skip.
+// ErrUnavailable means mounting cannot work here: the host is not
+// Linux or macOS, or Linux is missing /dev/fuse or a FUSE tool.
+// Callers treat it as a skip. A macOS disk image does not use it
+// when hdiutil is selected.
 var ErrUnavailable = errors.New("workspace: mounting requires linux and a usable /dev/fuse")
 
 // maxStackDepth is one full image plus at most seven increments.
@@ -109,6 +110,10 @@ type Request struct {
 	Concat *ConcatSource
 	// Run executes external tools. Nil runs them through exec.
 	Run func(name string, args ...string) error
+	// Hdiutil runs hdiutil for a dmg mount and returns stdout. Nil
+	// selects the platform exec: /usr/bin/hdiutil on darwin, and
+	// ErrUnavailable on every other host. FUSE mounts ignore it.
+	Hdiutil func(argv []string, consErr error) ([]byte, error)
 }
 
 // ConcatSource describes the concat view of a byte-block payload
@@ -137,6 +142,10 @@ type Workspace struct {
 	mounts     []string
 	created    []string
 	run        runFunc
+	// dmg selects hdiutil detach instead of fusermount3.
+	dmg bool
+	// hdiutil runs the disk-image tool for a dmg view.
+	hdiutil hdiutilRun
 }
 
 // hooks are test seams. The zero value polls the real mount state on
@@ -183,8 +192,10 @@ type member struct {
 // Both FUSE tools daemonize, so every exec is followed by a poll
 // that confirms the point is a live mount. A failing or vanished
 // mount tears down every point and directory this call created and
-// reports the primary error. Non-Linux hosts, a missing /dev/fuse,
-// and missing tools return ErrUnavailable.
+// reports the primary error. A dmg request attaches with hdiutil
+// and does not build this FUSE stack. Hosts other than Linux and
+// macOS, a missing /dev/fuse, and missing FUSE tools return
+// ErrUnavailable.
 func Mount(req Request) (*Workspace, error) {
 	run := req.Run
 	if run == nil {
@@ -194,6 +205,9 @@ func Mount(req Request) (*Workspace, error) {
 }
 
 func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
+	if req.Format == container.DMG().Type() {
+		return mountDMG(req, seam)
+	}
 	if err := preflight(req); err != nil {
 		return nil, err
 	}
@@ -1057,8 +1071,13 @@ func (w *Workspace) cleanup() error {
 	return errors.Join(errs...)
 }
 
-// Unmount detaches every mount in reverse order with fusermount3.
+// Unmount detaches every mount in reverse order. A disk image uses
+// hdiutil detach with no -force and stays mounted when detach fails
+// or info still lists the mountpoint. FUSE views use fusermount3.
 func (w *Workspace) Unmount() error {
+	if w.dmg {
+		return w.detachDMG()
+	}
 	var errs []error
 	for i := len(w.mounts) - 1; i >= 0; i-- {
 		if err := w.run("fusermount3", "-u", w.mounts[i]); err != nil {
