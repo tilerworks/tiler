@@ -94,16 +94,32 @@ func TestDoctorWarnAndInfoProbesExitZero(t *testing.T) {
 }
 
 func TestDoctorCancelledContextExitsOne(t *testing.T) {
-	withWorkspace(t)
+	home, _ := withWorkspace(t)
 	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
 		return nil, context.Canceled
 	})
-	_, stderr, err := runDoctorCmd(context.Background(), t)
+	stdout, stderr, err := runDoctorCmd(context.Background(), t)
 	if ExitCode(err) != 1 {
 		t.Fatalf("ExitCode(%v) = %d, want 1\n%s", err, ExitCode(err), stderr)
 	}
 	if strings.Contains(stderr, "Usage:") {
 		t.Fatalf("cancelled doctor printed usage\n%s", stderr)
+	}
+	// The config section is rendered before the probe-set error, so a
+	// host that cannot start probes still reports where tiler will
+	// read and write.
+	configPath := filepath.Join(home, ".tiler.yaml")
+	flat := unwrapReport(stdout)
+	if !strings.Contains(stdout, "📋 Config") || !strings.Contains(stdout, "🔧 Checks") ||
+		!strings.Contains(flat, configPath) {
+		t.Fatalf("stdout missing the config section\n%s", stdout)
+	}
+	stdout, stderr, err = runDoctorCmd(context.Background(), t, "--json")
+	if ExitCode(err) != 1 {
+		t.Fatalf("json ExitCode(%v) = %d, want 1\n%s", err, ExitCode(err), stderr)
+	}
+	if !strings.Contains(stdout, configPath) {
+		t.Fatalf("json stdout missing the config path\n%s", stdout)
 	}
 }
 

@@ -73,16 +73,17 @@ func newDoctorCmd() *cobra.Command {
 }
 
 // writeDoctor renders the config section and the probe report first,
-// human-readable or JSON, then applies the verdict: any failed probe
-// becomes a runtime error listing the failed names, so doctor exits 1,
-// while warn and info results never affect the exit code. The config
-// section never affects the verdict.
+// human-readable or JSON, then applies the verdict. A failure to
+// produce the probe set — including a platform with no host probes —
+// is reported only after that rendering, so the resolved
+// configuration stays visible. Any failed probe becomes a runtime
+// error listing the failed names, so doctor exits 1, while warn and
+// info results never affect the exit code. The config section never
+// affects the verdict.
 func writeDoctor(ctx context.Context, w io.Writer, cfg config.Config, asJSON bool) error {
-	results, err := runDoctor(ctx, cfg)
-	if err != nil {
-		return err
-	}
+	results, probeErr := runDoctor(ctx, cfg)
 	summary := configSummary(cfg)
+	var err error
 	if asJSON {
 		err = writeJSON(w, doctorDocument{Config: &summary, Results: results})
 	} else {
@@ -93,6 +94,9 @@ func writeDoctor(ctx context.Context, w io.Writer, cfg config.Config, asJSON boo
 	}
 	if err != nil {
 		return err
+	}
+	if probeErr != nil {
+		return probeErr
 	}
 	if failed := doctor.Failed(results); len(failed) > 0 {
 		return fmt.Errorf("doctor: failing probes: %s", strings.Join(failed, ", "))
