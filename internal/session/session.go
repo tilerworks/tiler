@@ -78,6 +78,26 @@ type Engine struct {
 	// the combination. Empty disables the runtime branch of the
 	// reverse lookup. It is the same tree Store.Dir points at.
 	SessionsDir string
+	// ImagesDir is the image library root. Disk-image reconciliation
+	// matches a library record to images/<owner>/<repo>/image.dmg
+	// and treats an attached image under this tree as a tiler
+	// volume. Empty disables that half of orphan detection. The
+	// Linux mount-table path does not read it.
+	ImagesDir string
+	// CacheDir is the content-addressed cache. When CacheEnabled is
+	// set, hdiutil attach opens <CacheDir>/<sha256>.sqsh instead of
+	// the library payload, and reconciliation accepts that copy.
+	CacheDir string
+	// CacheEnabled reports that attach copied the payload into
+	// CacheDir. A library mount with this off still matches
+	// image.dmg. A file-path mount still matches the absolute path
+	// attach opened.
+	CacheEnabled bool
+	// LoadDiskImages snapshots hdiutil info. Nil keeps the
+	// mount-table reconciliation Linux uses. When it is set and
+	// Health is not overridden, status and session open reconcile
+	// through this snapshot instead of the host mount table.
+	LoadDiskImages func() ([]DiskImage, error)
 	// LockTimeout bounds the exclusive-lock wait. Zero uses
 	// DefaultLockTimeout.
 	LockTimeout time.Duration
@@ -190,6 +210,9 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 	rec, err := e.Load(name)
 	if err != nil {
 		return err
+	}
+	if e.useDiskImages() {
+		return e.openFromDisk(name, rec, mount)
 	}
 	health, err := e.healthFunc()
 	if err != nil {

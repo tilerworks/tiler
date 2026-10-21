@@ -134,8 +134,8 @@ func HdiutilDetachArgv(mountpoint string) ([]string, error) {
 	return []string{hdiutilName, "detach", mountpoint}, nil
 }
 
-// HdiutilInfoArgv builds hdiutil info -plist. Parsing the plist is
-// a later step; this function only returns the argument vector.
+// HdiutilInfoArgv builds hdiutil info -plist. ParseHdiutilInfo reads
+// the document; this function only returns the argument vector.
 func HdiutilInfoArgv() []string {
 	return []string{hdiutilName, "info", "-plist"}
 }

@@ -7,6 +7,12 @@ import (
 	"fmt"
 )
 
+// ReadHdiutilInfo reports that the real disk-image tool is
+// macOS-only. It does not look up or execute hdiutil.
+func ReadHdiutilInfo() ([]byte, error) {
+	return nil, fmt.Errorf("%w: hdiutil", ErrUnavailable)
+}
+
 // execHdiutil reports that the real disk-image tool is macOS-only.
 // Callers on other hosts pass a fake runner. This function does not
 // look up or execute hdiutil.

@@ -375,6 +375,59 @@ func TestDMGUnmountPathKeepsShadow(t *testing.T) {
 	}
 }
 
+func TestDMGReplayAttachUsesOriginalShadow(t *testing.T) {
+	req, shadow := dmgFixture(t, false)
+	fake := &fakeHdiutil{}
+	req.Hdiutil = fake.run
+	first, err := mount(req, nil, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Reused || first.UpperDir != shadow {
+		t.Fatalf("first upper = %q reused=%v", first.UpperDir, first.Reused)
+	}
+	if err := os.WriteFile(shadow, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The mount point is gone, so attach runs again. It must pass the
+	// same shadow path and must not create a second shadow file.
+	req.Table = nil
+	again, err := mount(req, nil, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Reused || again.UpperDir != shadow {
+		t.Fatalf("replay upper = %q reused=%v", again.UpperDir, again.Reused)
+	}
+	want, err := container.HdiutilAttachWritableArgv(req.Full, req.MergedDir, shadow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.calls) != 2 || !slices.Equal(fake.calls[0], want) || !slices.Equal(fake.calls[1], want) {
+		t.Fatalf("calls = %q, want two attaches of %q", fake.calls, want)
+	}
+	got, err := os.ReadFile(shadow)
+	if err != nil || string(got) != "keep" {
+		t.Fatalf("shadow = %q, %v", got, err)
+	}
+	n := 0
+	err = filepath.WalkDir(filepath.Dir(filepath.Dir(shadow)), func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && entry.Name() == "upper.shadow" {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("upper.shadow files = %d, want 1", n)
+	}
+}
+
 func TestDMGMountUnavailableOffDarwin(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("darwin workspace calls /usr/bin/hdiutil")

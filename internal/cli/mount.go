@@ -36,6 +36,19 @@ var (
 	unmountEngine = workspace.UnmountPath
 )
 
+// mountTableOrEmpty reads the host mount table. A host that cannot
+// read one has no rows that would show an existing view, so replay
+// and mount see an empty snapshot instead of failing before attach.
+// Status uses the same rule for an empty store. Detach does not:
+// a missing table falls through to hdiutil info.
+func mountTableOrEmpty() ([]mountinfo.Mount, error) {
+	table, err := loadMountTable()
+	if errors.Is(err, mountinfo.ErrUnavailable) {
+		return nil, nil
+	}
+	return table, err
+}
+
 // mountFlags carries the local flags of one mount invocation.
 type mountFlags struct {
 	readOnly bool
@@ -448,7 +461,7 @@ func blocksRequest(
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
-	table, err := loadMountTable()
+	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
@@ -608,7 +621,7 @@ func mountRequest(
 		}
 		mounted = append(mounted, path)
 	}
-	table, err := loadMountTable()
+	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}

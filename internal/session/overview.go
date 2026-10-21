@@ -69,6 +69,9 @@ type Orphan struct {
 // marked locked without expanding its actions. Orphan detection
 // needs the configured sessions root: an empty SessionsDir skips it.
 func (e *Engine) Overview(current string) (Overview, error) {
+	if e.useDiskImages() {
+		return e.overviewFromDisk(current)
+	}
 	names, err := e.names()
 	if err != nil {
 		return Overview{}, err

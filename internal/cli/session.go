@@ -251,13 +251,23 @@ func sessionCommandEngine(cmd *cobra.Command, label, name string) (
 // is a variable so command tests can no-op the advisory lock, the
 // same seam discipline the engines follow.
 var sessionEngine = func(cfg config.Config) *session.Engine {
-	return &session.Engine{
+	engine := &session.Engine{
 		Store: session.Store{Dir: cfg.SessionsDir},
 		LoadTable: func() ([]mountinfo.Mount, error) {
 			return loadMountTable()
 		},
-		SessionsDir: cfg.SessionsDir,
+		SessionsDir:  cfg.SessionsDir,
+		ImagesDir:    cfg.ImagesDir,
+		CacheDir:     cfg.CacheDir,
+		CacheEnabled: cfg.CacheEnabled,
 	}
+	if readHdiutilInfo != nil {
+		reader := readHdiutilInfo
+		engine.LoadDiskImages = func() ([]session.DiskImage, error) {
+			return diskImagesFromInfo(reader)
+		}
+	}
+	return engine
 }
 
 // sessionMount resolves one recorded action back into an engine
@@ -285,6 +295,9 @@ func sessionMount(cfg config.Config, name string) session.MountFunc {
 func sessionUmount(cfg config.Config) session.UmountFunc {
 	return func(mountpoint string) error {
 		table, err := loadMountTable()
+		if errors.Is(err, mountinfo.ErrUnavailable) && readHdiutilInfo != nil {
+			return detachDiskMount(mountpoint)
+		}
 		if err != nil {
 			return fmt.Errorf("session: %w", err)
 		}
@@ -296,6 +309,7 @@ func sessionUmount(cfg config.Config) session.UmountFunc {
 			Owned:      ownedLibrarySource(cfg.ImagesDir),
 			Reload:     reloadEntries,
 			Run:        mountRun,
+			Hdiutil:    runHdiutil,
 		})
 		return err
 	}

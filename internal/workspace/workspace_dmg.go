@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -195,29 +197,50 @@ func detachDMGPoint(point string, run hdiutilRun) error {
 }
 
 // dmgInfoLists reports whether an hdiutil info plist still names
-// point as one complete string value. The plist is XML, so "&" is
-// written "&amp;". A longer path, image path, shadow path, or
-// sibling that only contains point is not that value.
+// point as one complete string value. encoding/xml decodes "&amp;",
+// so a path that contains "&" matches the escaped document. A longer
+// path, image path, shadow path, or sibling that only contains
+// point is a different string and does not match.
 func dmgInfoLists(out []byte, point string) bool {
 	if point == "" {
 		return false
 	}
-	var b bytes.Buffer
-	b.WriteString("<string>")
-	for i := 0; i < len(point); i++ {
-		switch point[i] {
-		case '&':
-			b.WriteString("&amp;")
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		default:
-			b.WriteByte(point[i])
+	values, err := plistStringValues(out)
+	if err != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == point {
+			return true
 		}
 	}
-	b.WriteString("</string>")
-	return bytes.Contains(out, b.Bytes())
+	return false
+}
+
+// plistStringValues lists every <string> element's decoded text.
+// A fragment of sibling string elements is enough; detach checks
+// the mount point before status parses the image dictionary.
+func plistStringValues(data []byte) ([]string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	var values []string
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return values, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name.Local != "string" {
+			continue
+		}
+		var text string
+		if err := dec.DecodeElement(&text, &start); err != nil {
+			return nil, err
+		}
+		values = append(values, text)
+	}
 }
 
 func (w *Workspace) detachDMG() error {

@@ -72,6 +72,12 @@ func newHdiutil(argv []string, consErr error) (*exec.Cmd, error) {
 	return container.NewHdiutilCommand(argv, consErr)
 }
 
+// ReadHdiutilInfo runs hdiutil info -plist and returns stdout.
+// Callers parse the document with container.ParseHdiutilInfo.
+func ReadHdiutilInfo() ([]byte, error) {
+	return execHdiutil(container.HdiutilInfoArgv(), nil)
+}
+
 // execHdiutil runs /usr/bin/hdiutil. A constructor error is returned
 // without starting the process.
 func execHdiutil(argv []string, consErr error) ([]byte, error) {
