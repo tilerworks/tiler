@@ -174,6 +174,12 @@ same way `t0000-doctor.sh` does (preset `TEST_LIB_DIRECTORY` and
 `../tiler-e2e` s00-s08 scenario suite will be migrated, one case at a
 time.
 
+Shared helpers load automatically from `e2e/sharness.d/*.sh` (see
+`e2e/sharness.d/tiler.sh`): `tiler_bin`, the `TILER` prereq, lazy
+prereqs `FUSE_TOOLCHAIN`, `EROFS_TOOLCHAIN`, and `KILL_VIEW`, plus
+`kill_view`. Case scripts keep their own path variables and
+`test_atexit` teardown lists.
+
 ## Run artifacts
 
 The framework writes `test-results/` and `trash directory.*` into

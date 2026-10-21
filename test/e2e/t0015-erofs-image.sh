@@ -20,9 +20,9 @@
 #      missing squashfs stack warns and does not fail the run).
 #
 # A real erofs build needs /dev/fuse, mkfs.erofs, erofsfuse, and the
-# shared overlay tools. The EROFS_TOOLCHAIN prereq below models exactly
-# that, so the case skips cleanly -- rather than false-fails -- on a
-# host without the erofs stack, including a squashfs-only host.
+# shared overlay tools. EROFS_TOOLCHAIN from sharness.d/tiler.sh models
+# exactly that, so the case skips cleanly -- rather than false-fails --
+# on a host without the erofs stack, including a squashfs-only host.
 
 test_description='tiler builds, mounts, and checks an erofs image'
 
@@ -36,6 +36,8 @@ TEST_DIRECTORY=$tiler_case_dir
 export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
+
+# tiler_bin, TILER, and EROFS_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # An omitted erofs compression prefers zstd, then lz4, then gzip,
 # matching the compressors this mkfs.erofs was built with.
@@ -52,31 +54,6 @@ elif erofs_has lz4; then
 elif erofs_has deflate || erofs_has libdeflate; then
 	erofs_comp=gzip
 fi
-
-# Prefer the repository build; fall back to a tiler found on PATH.
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
-
-# erofs packing and mounting need the erofs stack plus the shared FUSE
-# tools doctor still treats as fail-level. git is included because the
-# single-stack doctor assertion expects that shared probe to pass.
-# A squashfs-only host leaves this prereq unmet and the case skips.
-test_lazy_prereq EROFS_TOOLCHAIN '
-	test -e /dev/fuse &&
-	command -v mkfs.erofs >/dev/null 2>&1 &&
-	command -v erofsfuse >/dev/null 2>&1 &&
-	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
-	command -v git >/dev/null 2>&1
-'
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed.

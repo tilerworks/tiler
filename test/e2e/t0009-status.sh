@@ -22,8 +22,8 @@
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
 # toolchain that `tiler doctor` treats as fail-level, and the stale case
-# needs pgrep to find the daemon it kills. The FUSE_TOOLCHAIN and
-# KILL_VIEW prereqs below model exactly that, so the case skips cleanly
+# needs pgrep to find the daemon it kills. FUSE_TOOLCHAIN and KILL_VIEW from
+# sharness.d/tiler.sh model exactly that, so the case skips cleanly
 # -- rather than false-fails -- on a host without them. The two opening
 # assertions (empty overview, uncovered path) need only the binary.
 #
@@ -46,37 +46,8 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# Prefer the repository build; fall back to a tiler found on PATH.
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
-
-# A real mount needs the FUSE device and the squashfs/overlay toolchain
-# (the same set `tiler doctor` reports as fail-level). Model it here so
-# the assertions stay real checks when the tools are present and skip
-# cleanly when they are not.
-test_lazy_prereq FUSE_TOOLCHAIN '
-	test -e /dev/fuse &&
-	command -v squashfuse_ll >/dev/null 2>&1 &&
-	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
-	command -v mksquashfs >/dev/null 2>&1 &&
-	command -v git >/dev/null 2>&1
-'
-
-# The stale case SIGKILLs the daemon behind a view, which needs pgrep to
-# find it. Gate only that assertion on pgrep so the rest of the mount
-# cases still run on a host without it.
-test_lazy_prereq KILL_VIEW '
-	command -v pgrep >/dev/null 2>&1
-'
+# tiler_bin, TILER, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view come from
+# sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
@@ -90,32 +61,6 @@ s_dir=$HOME/work/status
 s2_dir=$HOME/work/status2
 orph_dir=$HOME/work/orph
 uncov_dir=$HOME/work/uncovered
-
-# kill_view SIGKILLs the FUSE daemon(s) serving one mountpoint, so the
-# stale case can simulate a daemon death while the mount table entry
-# stays behind (exactly the state `status` must report stale). It matches
-# the mountpoint against the full command line (pgrep -f), skips this
-# shell, and re-confirms each candidate against /proc/<pid>/cmdline with
-# a fixed-string match, so a regex over-match or a path with spaces never
-# kills the wrong process. It returns success only when it actually
-# killed a daemon. Same helper as t0007.
-kill_view() {
-	_mp=${1:-}
-	if test -z "$_mp"
-	then
-		echo "usage: kill_view mountpoint" >&2
-		return 2
-	fi
-	_found=0
-	for _pid in $(pgrep -f "$_mp" 2>/dev/null)
-	do
-		test "$_pid" = "$$" && continue
-		tr "\0" " " <"/proc/$_pid/cmdline" 2>/dev/null |
-			grep -qF "$_mp" || continue
-		kill -9 "$_pid" 2>/dev/null && _found=1
-	done
-	test "$_found" -eq 1
-}
 
 # Guarantee every FUSE mount is torn down before the framework removes
 # the trash directory, even if an assertion fails, a daemon was killed,

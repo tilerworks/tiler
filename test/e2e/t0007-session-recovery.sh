@@ -19,9 +19,9 @@
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
 # toolchain that `tiler doctor` treats as fail-level, and the crash needs
-# pgrep to find the daemon. The FUSE_TOOLCHAIN prereq below models
-# exactly that, so the case skips cleanly -- rather than false-fails --
-# on a host without the toolchain.
+# pgrep to find the daemon. FUSE_TOOLCHAIN and KILL_VIEW from
+# sharness.d/tiler.sh model exactly that, so the case skips cleanly --
+# rather than false-fails -- on a host without the toolchain.
 #
 # Scope guard: this case asserts crash recovery of one named session
 # over the default single-file storage only. It does not cover the named
@@ -41,32 +41,8 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# Prefer the repository build; fall back to a tiler found on PATH.
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
-
-# A real mount needs the FUSE device and the squashfs/overlay toolchain
-# (the same set `tiler doctor` reports as fail-level), and the crash
-# needs pgrep to locate the daemon. Model it here so the assertions stay
-# real checks when the tools are present and skip cleanly when they are
-# not.
-test_lazy_prereq FUSE_TOOLCHAIN '
-	test -e /dev/fuse &&
-	command -v squashfuse_ll >/dev/null 2>&1 &&
-	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
-	command -v mksquashfs >/dev/null 2>&1 &&
-	command -v git >/dev/null 2>&1 &&
-	command -v pgrep >/dev/null 2>&1
-'
+# tiler_bin, TILER, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view come from
+# sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
@@ -75,32 +51,6 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 # the single writable view whose daemon this case kills and recovers.
 src_dir=$HOME/src/app
 rec_dir=$HOME/work/rec
-
-# kill_view SIGKILLs the FUSE daemon(s) serving one mountpoint, so the
-# recovery cases can simulate a daemon death while the mount table entry
-# stays behind (exactly the stale state `session open` must repair). It
-# matches the mountpoint against the full command line (pgrep -f), skips
-# this shell, and re-confirms each candidate against /proc/<pid>/cmdline
-# with a fixed-string match, so a regex over-match or a path with spaces
-# never kills the wrong process. It returns success only when it actually
-# killed a daemon. Mirrors the out-of-repo tiler-e2e lib/bin/kill_view.
-kill_view() {
-	_mp=${1:-}
-	if test -z "$_mp"
-	then
-		echo "usage: kill_view mountpoint" >&2
-		return 2
-	fi
-	_found=0
-	for _pid in $(pgrep -f "$_mp" 2>/dev/null)
-	do
-		test "$_pid" = "$$" && continue
-		tr "\0" " " <"/proc/$_pid/cmdline" 2>/dev/null |
-			grep -qF "$_mp" || continue
-		kill -9 "$_pid" 2>/dev/null && _found=1
-	done
-	test "$_found" -eq 1
-}
 
 # Guarantee the view is torn down before the framework removes the trash
 # directory, even if an assertion fails, the daemon was killed, or the
@@ -126,7 +76,7 @@ fi
 # upper layer, then SIGKILL the daemon. The view goes stale (any access
 # returns ENOTCONN, so `ls` fails) but the write-ahead record survives
 # untouched and still reports its pre-crash mounts= count.
-test_expect_success TILER,FUSE_TOOLCHAIN 'the record survives a daemon crash' '
+test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a daemon crash' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -149,7 +99,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'the record survives a daemon crash' '
 # and writes the action back to mounted. The upper layer is keyed by the
 # mountpoint inode, so the remount reuses it and the file written before
 # the crash is still there.
-test_expect_success TILER,FUSE_TOOLCHAIN 'session open replays the view and the upper survives' '
+test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays the view and the upper survives' '
 	"$tiler_bin" session open rec >open1.out 2>open1.err &&
 	grep -Eq "^opened rec$" open1.out &&
 	grep -q hello "$rec_dir/README.txt" &&
@@ -162,7 +112,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'session open replays the view and the 
 # A second open over the now-healthy view is a pure no-op: the health
 # check skips the remount, so the confirmation still prints and the
 # upper-layer file is untouched.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a second session open is idempotent' '
+test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open is idempotent' '
 	"$tiler_bin" session open rec >open2.out 2>open2.err &&
 	grep -Eq "^opened rec$" open2.out &&
 	grep -q hello "$rec_dir/README.txt" &&
@@ -172,7 +122,7 @@ test_expect_success TILER,FUSE_TOOLCHAIN 'a second session open is idempotent' '
 # close tears the healthy view down and flips the record to closed; open
 # then revives it -- reopen sets the state back to active and the replay
 # remounts the view, reusing the same upper so the file survives again.
-test_expect_success TILER,FUSE_TOOLCHAIN 'a closed session revives through open' '
+test_expect_success TILER,FUSE_TOOLCHAIN,KILL_VIEW 'a closed session revives through open' '
 	"$tiler_bin" session close rec >close.out 2>close.err &&
 	grep -Eq "^closed rec$" close.out &&
 	"$tiler_bin" session list >list4a.out 2>list4a.err &&

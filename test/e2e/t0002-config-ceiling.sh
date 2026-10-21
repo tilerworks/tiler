@@ -28,16 +28,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
+# tiler_bin and TILER come from sharness.d/tiler.sh.
 
 test_expect_success TILER 'lay out a sandbox with a marker config above the ceiling' '
 	mkdir -p "$HOME/zone/sandbox/deep" &&

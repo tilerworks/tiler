@@ -20,9 +20,9 @@
 # git-test-lib framework so `make e2e` runs it.
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
-# toolchain that `tiler doctor` treats as fail-level. The FUSE_TOOLCHAIN
-# prereq below models exactly that, so the case skips cleanly -- rather
-# than false-fails -- on a host without the toolchain.
+# toolchain that `tiler doctor` treats as fail-level. FUSE_TOOLCHAIN from
+# sharness.d/tiler.sh models exactly that, so the case skips cleanly --
+# rather than false-fails -- on a host without the toolchain.
 #
 # Scope guard: this case asserts the incremental cascade, the full
 # merge, and the meta.yaml/hold side effects only. It does not cover
@@ -42,30 +42,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# Prefer the repository build; fall back to a tiler found on PATH.
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
-
-# A real mount needs the FUSE device and the squashfs/overlay toolchain
-# (the same set `tiler doctor` reports as fail-level). Model it here so
-# the assertions stay real checks when the tools are present and skip
-# cleanly when they are not.
-test_lazy_prereq FUSE_TOOLCHAIN '
-	test -e /dev/fuse &&
-	command -v squashfuse_ll >/dev/null 2>&1 &&
-	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
-	command -v mksquashfs >/dev/null 2>&1 &&
-	command -v git >/dev/null 2>&1
-'
+# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and

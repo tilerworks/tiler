@@ -39,38 +39,7 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# Prefer the repository build; fall back to a tiler found on PATH.
-tiler_repo_root=$(cd "$tiler_case_dir/../.." && pwd)
-tiler_bin=$tiler_repo_root/bin/tiler
-if ! test -x "$tiler_bin"
-then
-	tiler_bin=$(command -v tiler) || tiler_bin=
-fi
-
-# Skip cleanly when no tiler binary is available instead of failing:
-# a missing build is an environment gap, not a regression.
-if test -n "$tiler_bin"
-then
-	test_set_prereq TILER
-fi
-
-# `tiler doctor` reports "fail" only for the FUSE device and the
-# external FUSE/squashfs toolchain (its storage, perf, and contrib
-# probes degrade to warn/info; see internal/doctor). Model exactly that
-# environment here -- rather than doctor's own exit status -- so the
-# assertion below stays a real check: when the device and tools are
-# present, `tiler doctor` MUST exit 0 and a genuine regression fails the
-# case; when they are absent, this prereq is unmet and the framework
-# skips cleanly instead of reporting a false failure.
-test_lazy_prereq FUSE_TOOLCHAIN '
-	test -e /dev/fuse &&
-	command -v squashfuse_ll >/dev/null 2>&1 &&
-	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
-	command -v mksquashfs >/dev/null 2>&1 &&
-	command -v git >/dev/null 2>&1
-'
-
+# tiler_bin, TILER, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 # The single assertion: with a tiler binary and the FUSE toolchain
 # present, `tiler doctor` exits 0. If either prereq is missing the
 # framework reports "ok # skip ... (missing ...)" and the case still
