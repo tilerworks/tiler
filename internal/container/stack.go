@@ -18,9 +18,11 @@ type Stack struct {
 func (s Stack) Complete() bool { return len(s.Missing) == 0 }
 
 // Stacks reports each selectable image format in registration order.
-// dmg stays registered so Tools can list hdiutil, and is omitted
-// here until it can pack and mount. look resolves a binary name the
-// way exec.LookPath does. A nil look treats every tool as missing.
+// dmg stays out of this list. Darwin doctor passes image_toolchain
+// from /usr/bin/hdiutil itself, and InferType keeps the FUSE stacks
+// so Linux does not start requiring hdiutil. look resolves a binary
+// name the way exec.LookPath does. A nil look treats every tool as
+// missing.
 func Stacks(look func(string) (string, error)) []Stack {
 	formats := All()
 	out := make([]Stack, 0, len(formats))
@@ -37,8 +39,8 @@ func Stacks(look func(string) (string, error)) []Stack {
 }
 
 // selectableStack reports whether format may be inferred or treated
-// as a ready image toolchain. dmg lists hdiutil, but pack and mount
-// are not implemented, so that one binary is not a finished stack.
+// as a Linux image toolchain. dmg is omitted so a working hdiutil
+// is not a FUSE stack. Darwin doctor probes that binary on its own.
 func selectableStack(format Format) bool {
 	return format.Type() != dmgType
 }

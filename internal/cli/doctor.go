@@ -58,7 +58,7 @@ func newDoctorCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Probe the local FUSE device and external tools",
+		Short: "Probe the local image toolchain and host tools",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)

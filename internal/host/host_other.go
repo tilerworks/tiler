@@ -1,8 +1,8 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 // Package host executes and stats the local machine for doctor.
-// This file keeps non-Linux builds compiling by returning a clear
-// error from every seam.
+// This file keeps hosts other than Linux and macOS compiling by
+// returning a clear error from every seam.
 package host
 
 import (

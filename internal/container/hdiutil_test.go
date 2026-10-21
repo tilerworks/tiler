@@ -265,6 +265,26 @@ func TestDMGShadowPathRejectsBadIdentity(t *testing.T) {
 	}
 }
 
+func TestHdiutilCreateUsesHFSWhenShadowCannotAttachAPFS(t *testing.T) {
+	restore := SetDMGCreateFilesystem(func() string { return "HFS+" })
+	t.Cleanup(restore)
+	argv, err := HdiutilCreateArgv("/src", "ulfo", "app", "t.dmg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, "HFS+") || slices.Contains(argv, "APFS") {
+		t.Fatalf("argv = %q, want HFS+", argv)
+	}
+	restore()
+	argv, err = HdiutilCreateArgv("/src", "ulfo", "app", "t.dmg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, "APFS") || slices.Contains(argv, "HFS+") {
+		t.Fatalf("argv = %q, want APFS again", argv)
+	}
+}
+
 func TestRunHdiutilRejectsNilRunner(t *testing.T) {
 	argv, err := HdiutilDetachArgv("/mnt")
 	if err != nil {

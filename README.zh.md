@@ -33,6 +33,23 @@ tiler 把目录快照打成只读容器镜像，再用 overlay 提供可写工�
 许可与构建命令。场景需要而工具缺失时 tiler 会提示安装；tiler 从不
 自动安装它们。
 
+## macOS
+
+macOS 上的镜像是单个 `image.dmg`。压缩是 `ulfo`（默认）、`ulmo`
+和 `udro`。可写挂载把改动写进
+`sessions/<name>/runtime/m<seq>/upper.shadow`。`tiler umount`
+留下这个影子文件，同时把挂载点清空。
+
+`tiler doctor` 在 `/usr/bin/hdiutil` 能运行时让 `image_toolchain`
+通过；不能运行时失败，并说明要恢复系统自带的 hdiutil。它不再把
+`fuse_device`、`fuse_overlayfs`、`fusermount3`、`squashfuse_subdir`
+当成失败项。缺少 `git` 时建议执行 `xcode-select --install`。
+单文件大小探测仍然保留，因为 `image.dmg` 是一个文件。冷读、
+`concatfs` 和 `slowfs` 是 info，因为热路径不走 FUSE。
+
+若当前系统上 `attach -shadow` 不能用于 APFS 镜像，新建的每张镜像
+都使用 HFS+，doctor 会写明这个原因。该选择不是配置项。
+
 ## 使用
 
 目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速
@@ -148,7 +165,9 @@ tiler session close feature                # 逆序卸载，记录保留
   兜底，随后对该视图的 `runtime/m<seq>/` 树扫表，清理表内已
   不再关联目标的 lower 残留。命令幂等：未挂载的 `<dir>` 静默
   成功。upper 与 work 数据从不删除，同一目录之后再次挂载时
-  复用先前的改动。
+  复用先前的改动。在 macOS 上，可写文件是
+  `sessions/<name>/runtime/m<seq>/upper.shadow`；卸载后该文件
+  仍在，挂载点被清空。
 - `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
   new [name]` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
   省略名字时生成 `形容词-动物` 名字并打印 `created <name>`。

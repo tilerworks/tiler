@@ -35,7 +35,10 @@ func DMGShadowPath(sessionsDir, name string, seq int) (string, error) {
 // HdiutilCreateArgv builds hdiutil create for a directory source.
 // compression ulfo, ulmo, and udro become ULFO, ULMO, and UDRO.
 // An empty compression is ULFO. volname is the repo segment of an
-// owner/repo name, because a slash cannot be an APFS label.
+// owner/repo name, because a slash cannot be a volume label. The
+// filesystem is APFS, or HFS+ for every new image when this OS
+// cannot use attach -shadow on an APFS image. That choice is not
+// a configuration key.
 func HdiutilCreateArgv(src, compression, repo, temp string) ([]string, error) {
 	if err := requireDMGPath("source", src); err != nil {
 		return nil, err
@@ -55,7 +58,7 @@ func HdiutilCreateArgv(src, compression, repo, temp string) ([]string, error) {
 		hdiutilName, "create",
 		"-srcfolder", src,
 		"-format", format,
-		"-fs", "APFS",
+		"-fs", DMGCreateFilesystem(),
 		"-volname", label,
 		temp,
 	}, nil

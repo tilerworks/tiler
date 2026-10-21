@@ -342,7 +342,7 @@ func TestDefaultSeamsListsEveryProbe(t *testing.T) {
 	if err := Write(&buf, results); err != nil {
 		t.Fatal(err)
 	}
-	assertProbeNames(t, results, buf.String())
+	assertProbeNames(t, results, buf.String(), seams.listedProbeCount())
 }
 
 func assertResults(t *testing.T, results []Result, status, details map[string]string) {
@@ -360,10 +360,10 @@ func assertResults(t *testing.T, results []Result, status, details map[string]st
 	}
 }
 
-func assertProbeNames(t *testing.T, results []Result, rendered string) {
+func assertProbeNames(t *testing.T, results []Result, rendered string, want int) {
 	t.Helper()
-	if len(results) != probeCount() {
-		t.Fatalf("probe count = %d, want %d", len(results), probeCount())
+	if len(results) != want {
+		t.Fatalf("probe count = %d, want %d", len(results), want)
 	}
 	for _, result := range results {
 		switch result.Status {

@@ -1,4 +1,4 @@
-// Package doctor probes the local FUSE device and external tools.
+// Package doctor probes the local image toolchain and external tools.
 // Command execution and stat go through seams so unit tests never
 // touch host binaries. A failing probe is a diagnostic result. The
 // only error is when the result set itself cannot be produced.
@@ -26,11 +26,20 @@ const (
 	statusInfo         = "info"
 	fuseDevicePath     = "/dev/fuse"
 	subdirBaselineText = "0.5.0"
+	// profileDarwin selects the macOS probe set. The empty profile
+	// stays the Linux FUSE set, including in unit tests.
+	profileDarwin = "darwin"
+	// darwinProbeCount is git, the hdiutil toolchain, two file-limit
+	// probes, three storage probes, and two contrib probes.
+	darwinProbeCount = 9
+	hdiutilMissing   = "/usr/bin/hdiutil cannot run; restore the system hdiutil"
+	dmgHFSDetail     = "dmg; filesystem HFS+ because attach -shadow cannot use an APFS image on this system"
+	gitDarwinInstall = "xcode-select --install"
 )
 
 // Seams are the host operations a probe is allowed to perform.
-// Tests replace them. Production fills them from the linux host
-// package plus the stdlib truncate probe.
+// Tests replace them. Production fills them from the host package
+// plus the stdlib truncate probe.
 type Seams struct {
 	LookPath func(name string) (string, error)
 	Stat     func(name string) error
@@ -41,6 +50,14 @@ type Seams struct {
 	// Measure times cold sequential and random reads of a probe
 	// file in dir.
 	Measure func(ctx context.Context, dir string) (PerfNumbers, error)
+	// Profile selects the probe set. Empty is the Linux FUSE set.
+	// profileDarwin checks /usr/bin/hdiutil and does not fail the
+	// FUSE probes.
+	Profile string
+	// Hdiutil reports whether /usr/bin/hdiutil can run. The darwin
+	// profile requires it. Production stats the path and does not
+	// execute it. Tests inject present and missing.
+	Hdiutil func() error
 }
 
 // Result is one probe line: a stable name, a status (pass, fail,
@@ -102,23 +119,34 @@ var toolSpecs = []toolSpec{
 	{name: nameGit, binary: "git", hints: []string{"git"}},
 }
 
-// probeCount is the number of results Probe returns: the FUSE
-// device, each shared tool, the image toolchain aggregate, the
-// squashfuse subdir baseline, two file-limit probes, three storage
-// performance probes, and two contrib probes.
+// probeCount is the number of results the Linux FUSE profile
+// returns: the FUSE device, each shared tool, the image toolchain
+// aggregate, the squashfuse subdir baseline, two file-limit probes,
+// three storage performance probes, and two contrib probes.
 func probeCount() int {
 	return 1 + len(toolSpecs) + 1 + 1 + 2 + 3 + 2
 }
 
-// Probe runs every environment probe. A missing shared tool, an
-// unparsable banner, or an unavailable FUSE device becomes a fail
-// result. Image container tools are one aggregate: at least one
-// complete stack passes, a missing stack warns, and no complete
-// stack fails image_toolchain. The storage probes degrade to warn
-// or info. The options carry the configured storage directories and
-// split settings. An error is returned only when the set cannot be
-// built, including a cancelled context or seams that were not
-// supplied.
+// listedProbeCount is the number of results Probe returns for these
+// seams. The Linux set stays probeCount so tests that inject a fake
+// host still expect the FUSE probes.
+func (s Seams) listedProbeCount() int {
+	if s.Profile == profileDarwin {
+		return darwinProbeCount
+	}
+	return probeCount()
+}
+
+// Probe runs every environment probe. The empty profile is the
+// Linux FUSE set: a missing shared tool, an unparsable banner, or
+// an unavailable FUSE device becomes a fail result. Image container
+// tools are one aggregate: at least one complete stack passes, a
+// missing stack warns, and no complete stack fails image_toolchain.
+// The darwin profile checks /usr/bin/hdiutil instead of those FUSE
+// failures. The storage probes degrade to warn or info. The options
+// carry the configured storage directories and split settings. An
+// error is returned only when the set cannot be built, including a
+// cancelled context or seams that were not supplied.
 func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err := contextErr(ctx, nil); err != nil {
 		return nil, err
@@ -126,6 +154,13 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	if err := seams.ready(); err != nil {
 		return nil, err
 	}
+	if seams.Profile == profileDarwin {
+		return probeDarwin(ctx, seams, opts)
+	}
+	return probeFUSE(ctx, seams, opts)
+}
+
+func probeFUSE(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 	device, err := probeDevice(ctx, seams)
 	if err != nil {
 		return nil, err
@@ -174,6 +209,9 @@ func Failed(results []Result) []string {
 func (s Seams) ready() error {
 	if s.LookPath == nil || s.Stat == nil || s.Run == nil ||
 		s.TruncateProbe == nil || s.Measure == nil {
+		return errors.New("doctor seams are incomplete")
+	}
+	if s.Profile == profileDarwin && s.Hdiutil == nil {
 		return errors.New("doctor seams are incomplete")
 	}
 	return nil

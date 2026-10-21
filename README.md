@@ -39,6 +39,25 @@ upstream origin, license, and build command. tiler prompts when a
 scenario needs one and it is missing; it never installs them
 automatically. tiler does not select concatfs as a mount route.
 
+## macOS
+
+macOS images are one `image.dmg` file. Compressions are `ulfo`
+(the default), `ulmo`, and `udro`. A writable mount stores changes
+in `sessions/<name>/runtime/m<seq>/upper.shadow`. `tiler umount`
+leaves that file in place and leaves the mountpoint empty.
+
+`tiler doctor` passes `image_toolchain` when `/usr/bin/hdiutil` can
+run, and fails with a note to restore the system hdiutil when it
+cannot. It does not report `fuse_device`, `fuse_overlayfs`,
+`fusermount3`, or `squashfuse_subdir` as failures. A missing `git`
+suggests `xcode-select --install`. The single-file size probe stays,
+because `image.dmg` is one file. Cold-read measurements, `concatfs`,
+and `slowfs` are info: the hot path does not use FUSE.
+
+When `attach -shadow` cannot use an APFS image on this system, every
+new image is created as HFS+ and doctor states that reason. The
+choice is not a configuration key.
+
 ## Usage
 
 The target workflow is: build an image, mount it, develop, finish the
@@ -186,6 +205,9 @@ Available now:
   connects to the target. It is idempotent: an unmounted `<dir>`
   succeeds silently. Upper and work data is never deleted, so a
   later mount of the same directory reuses the earlier changes.
+  On macOS the writable file is
+  `sessions/<name>/runtime/m<seq>/upper.shadow`; unmount leaves
+  that file and leaves the mountpoint empty.
 - `tiler session` manages the mount sessions that crash recovery
   replays. `session new [name]` creates an empty record under
   `~/.tiler/sessions/` and refuses a duplicate name; omitting the
