@@ -46,6 +46,14 @@ func (m Meta) checkPayload(list *issueList) {
 // type allows. An empty compression is not a stored default; meta
 // records the concrete name.
 func checkContainer(format Format, list *issueList) {
+	// dmg metadata is readable on a host that did not register the
+	// format, so a library copied to Linux can still be shown.
+	if format.Type == FormatDMG {
+		if !container.StoredDMGCompression(format.Compression) {
+			list.add("format.compression: dmg does not allow %q", format.Compression)
+		}
+		return
+	}
 	f, err := container.Lookup(format.Type)
 	if err != nil {
 		list.add("format.type: %v", err)

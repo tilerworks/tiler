@@ -15,6 +15,9 @@ const (
 	FormatSquashfs = "squashfs"
 	// FormatErofs is the erofs image container type.
 	FormatErofs = "erofs"
+	// FormatDMG is the macOS disk-image container type. Metadata may
+	// name it on a host where the format is not registered.
+	FormatDMG = "dmg"
 	// CompressionZstd is the default container compression.
 	CompressionZstd = "zstd"
 

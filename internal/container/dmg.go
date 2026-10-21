@@ -35,8 +35,16 @@ func (dmg) DefaultCompression() string { return dmgComp }
 // AllowsCompression accepts ulfo, ulmo, and udro. An empty name
 // means the format default.
 func (dmg) AllowsCompression(compression string) bool {
+	return compression == "" || StoredDMGCompression(compression)
+}
+
+// StoredDMGCompression reports whether compression is a dmg value
+// recorded in metadata. An empty name is the build default, not a
+// stored value. Callers use this without Lookup so a library can be
+// shown where dmg is not registered.
+func StoredDMGCompression(compression string) bool {
 	switch compression {
-	case "", "ulfo", "ulmo", "udro":
+	case "ulfo", "ulmo", "udro":
 		return true
 	default:
 		return false

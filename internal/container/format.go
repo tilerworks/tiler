@@ -103,6 +103,12 @@ func Lookup(typ string) (Format, error) {
 	defer mu.RUnlock()
 	f, ok := byType[typ]
 	if !ok {
+		// dmg is registered on darwin only. Mount and build
+		// elsewhere say the format mounts only on macOS.
+		if typ == dmgType {
+			return nil, fmt.Errorf("%w: %q: the format mounts only on macOS",
+				ErrUnknownType, typ)
+		}
 		return nil, fmt.Errorf("%w: %q", ErrUnknownType, typ)
 	}
 	return f, nil

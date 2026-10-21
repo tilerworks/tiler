@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -165,5 +166,19 @@ func TestDmgRegistryOmitsHdiutilOffDarwin(t *testing.T) {
 	}
 	if found || !errors.Is(err, ErrUnknownType) {
 		t.Fatalf("registry err=%v found=%v", err, found)
+	}
+	if !strings.Contains(err.Error(), "the format mounts only on macOS") {
+		t.Fatalf("registry err=%v", err)
+	}
+}
+
+func TestLookupUnregisteredDMGMountsOnlyOnMacOS(t *testing.T) {
+	isolate(t)
+	_, err := Lookup(dmgType)
+	if !errors.Is(err, ErrUnknownType) {
+		t.Fatalf("Lookup err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "the format mounts only on macOS") {
+		t.Fatalf("Lookup err = %v", err)
 	}
 }

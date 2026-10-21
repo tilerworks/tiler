@@ -11,7 +11,11 @@ import (
 // Layout names shared with packages that match library paths.
 const (
 	// ImageFile is the active full image name in a repository dir.
+	// Squashfs and erofs keep this name.
 	ImageFile = "image.sqsh"
+	// ImageDMG is the active full image name when meta format type
+	// is dmg. It does not replace ImageFile.
+	ImageDMG = "image.dmg"
 	// IncrDir is the subdirectory holding incremental layer files.
 	IncrDir = "incr"
 	// SquashExt is the file extension of every packed image file.
@@ -80,6 +84,16 @@ func OpenRepo(imagesDir, name string) (Repo, error) {
 // ImagePath is the active squashfs file.
 func (repo Repo) ImagePath() string {
 	return filepath.Join(repo.Dir, fileImage)
+}
+
+// activeImageName is the single-file payload name for typ.
+// dmg uses image.dmg. Squashfs, erofs, and any other type keep
+// image.sqsh.
+func activeImageName(typ string) string {
+	if typ == FormatDMG {
+		return ImageDMG
+	}
+	return fileImage
 }
 
 // MetaPath is the active metadata file.
