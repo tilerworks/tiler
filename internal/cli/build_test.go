@@ -328,6 +328,51 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 	}
 }
 
+func TestBuildCoveringSourceIsUsage(t *testing.T) {
+	home, _ := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	packTool = func(string, []string, ...string) error {
+		t.Fatal("packer ran on a covering source")
+		return nil
+	}
+	cover := filepath.Dir(imagesDir)
+	if err := os.MkdirAll(cover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", cover)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "would cover reserved") {
+		t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("usage failure printed %q", stdout)
+	}
+}
+
+func TestBuildSymlinkIntoReservedIsUsage(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	packTool = func(string, []string, ...string) error {
+		t.Fatal("packer ran on a symlink into reserved")
+		return nil
+	}
+	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(work, "via-images")
+	if err := os.Symlink(imagesDir, link); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", link)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "inside reserved") {
+		t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("usage failure printed %q", stdout)
+	}
+}
+
 func TestBuildPackerFailureExitsOne(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)

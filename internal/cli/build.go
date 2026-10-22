@@ -47,7 +47,9 @@ func newBuildCmd() *cobra.Command {
 		Short: "Build a full or incremental image",
 		Long: "Build packs dir into a new full image. Omitting dir uses the\n" +
 			"working directory. \".\" and the absolute path of that directory\n" +
-			"select the same source.\n" +
+			"select the same source. The source must stay outside every\n" +
+			"reserved tree and must not cover images_dir, sessions_dir,\n" +
+			"cache_dir, or $HOME/.tiler (real paths, including symlinks).\n" +
 			"Inside a merged mount view the default is an incremental build\n" +
 			"that appends the writable upper as one layer. When the recorded\n" +
 			"incremental layers plus that upper already exceed half the base\n" +
@@ -387,9 +389,18 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Run:         packTool,
 	})
 	if err != nil {
-		return err
+		return mapBuildPathError(err)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
+	return err
+}
+
+// mapBuildPathError turns a reserved-tree refusal into a usage error
+// so packing a library or session ancestor exits 2 like mount.
+func mapBuildPathError(err error) error {
+	if errors.Is(err, config.ErrReservedPath) {
+		return usageError{err}
+	}
 	return err
 }
 
@@ -451,7 +462,7 @@ func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Run:         hdiutilTool,
 	})
 	if err != nil {
-		return err
+		return mapBuildPathError(err)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err

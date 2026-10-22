@@ -171,11 +171,76 @@ func TestBuildFullRefusesReservedSource(t *testing.T) {
 	_, err := BuildFull(FullRequest{
 		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
 	})
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
+	if err == nil || !errors.Is(err, config.ErrReservedPath) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("packer ran on a reserved source: %v", runner.calls)
+	}
+}
+
+func TestBuildFullRefusesCoveringSource(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Defaults(home)
+	if err := os.MkdirAll(cfg.ImagesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("never-packed")}
+	_, err := BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: home, Builder: "test", Run: runner.run,
+	})
+	if err == nil || !errors.Is(err, config.ErrReservedPath) ||
+		!strings.Contains(err.Error(), "would cover reserved") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on a covering source: %v", runner.calls)
+	}
+}
+
+func TestBuildFullRefusesSymlinkIntoReserved(t *testing.T) {
+	cfg := buildConfig(t)
+	if err := os.MkdirAll(cfg.ImagesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	link := filepath.Join(work, "via-images")
+	if err := os.Symlink(cfg.ImagesDir, link); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("never-packed")}
+	_, err := BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: link, Builder: "test", Run: runner.run,
+	})
+	if err == nil || !errors.Is(err, config.ErrReservedPath) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on a symlink into reserved: %v", runner.calls)
+	}
+}
+
+func TestBuildFullRefusesSymlinkCoveringReserved(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Defaults(home)
+	if err := os.MkdirAll(cfg.ImagesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := t.TempDir()
+	link := filepath.Join(aliasRoot, "cover")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("never-packed")}
+	_, err := BuildFull(FullRequest{
+		Config: cfg, Name: "alice/app", SrcDir: link, Builder: "test", Run: runner.run,
+	})
+	if err == nil || !errors.Is(err, config.ErrReservedPath) ||
+		!strings.Contains(err.Error(), "would cover reserved") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on a covering symlink: %v", runner.calls)
 	}
 }
 

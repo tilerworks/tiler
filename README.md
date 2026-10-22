@@ -119,7 +119,10 @@ Available now:
   the name from the mounted image. If the recorded incremental layers
   plus the live upper already exceed half the base image, that default
   becomes a full rebuild and a warning names `--incremental` to keep appending.
-  Success prints one line:
+  The packed directory must stay outside every reserved tree and must
+  not cover `images_dir`, `sessions_dir`, `cache_dir`, or
+  `$HOME/.tiler`; comparison uses real paths, so a symlink into or
+  over those trees is refused the same way. Success prints one line:
   `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`. With
   `split_size` (or `tiler build --split <size>`) greater than zero,
   full and incremental builds store verified byte blocks instead of

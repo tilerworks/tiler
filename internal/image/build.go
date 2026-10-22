@@ -213,8 +213,8 @@ func acceptCompression(f container.Format, compression string) error {
 }
 
 // checkSourceDir requires an existing directory outside every
-// reserved tree, so the library never packs one of its own
-// directories.
+// reserved tree and not covering one, so the library never packs
+// its own images, sessions, or cache into a new image.
 func checkSourceDir(src string, cfg config.Config) error {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -224,6 +224,9 @@ func checkSourceDir(src string, cfg config.Config) error {
 		return fmt.Errorf("build: source %s is not a directory", src)
 	}
 	if err := config.OutsideReserved(src, cfg); err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	if err := config.CoversReserved(src, cfg); err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
 	return nil

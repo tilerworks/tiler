@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,6 +54,9 @@ func TestOutsideReserved(t *testing.T) {
 			if !tc.reject && err != nil {
 				t.Fatal(err)
 			}
+			if tc.reject && !errors.Is(err, ErrReservedPath) {
+				t.Fatalf("err = %v, want ErrReservedPath", err)
+			}
 		})
 	}
 }
@@ -97,6 +103,109 @@ func TestCoversReserved(t *testing.T) {
 			if tc.reject && !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want substring %q", err, tc.want)
 			}
+			if tc.reject && !errors.Is(err, ErrReservedPath) {
+				t.Fatalf("err = %v, want ErrReservedPath", err)
+			}
 		})
+	}
+}
+
+func TestOutsideReservedSymlinkIntoImages(t *testing.T) {
+	home := t.TempDir()
+	data := t.TempDir()
+	images := filepath.Join(data, "images")
+	sessions := filepath.Join(data, "sessions")
+	cache := filepath.Join(data, "cache")
+	if err := os.MkdirAll(images, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home, home, home, "", Patch{
+		ImagesDir:   &images,
+		SessionsDir: &sessions,
+		CacheDir:    &cache,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(data, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(work, "via-images")
+	if err := os.Symlink(images, link); err != nil {
+		t.Fatal(err)
+	}
+	err = OutsideReserved(link, cfg)
+	if err == nil || !errors.Is(err, ErrReservedPath) {
+		t.Fatalf("err = %v, want ErrReservedPath", err)
+	}
+	if !strings.Contains(err.Error(), "inside reserved") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReservedPathErrorsQuoteSpaces(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "trash directory.case")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home, home, home, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(cfg.ImagesDir, "alice", "app")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refuse := OutsideReserved(inside, cfg)
+	if refuse == nil {
+		t.Fatal("path was accepted")
+	}
+	resolvedInside, err := resolveComparePath(inside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedLayout, err := resolveComparePath(filepath.Join(home, ".tiler"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := refuse.Error()
+	for _, path := range []string{resolvedInside, resolvedLayout} {
+		quoted := fmt.Sprintf("%q", path)
+		if !strings.Contains(text, quoted) {
+			t.Fatalf("err = %q, want quoted path %s", text, quoted)
+		}
+	}
+}
+
+func TestCoversReservedSymlinkToAncestor(t *testing.T) {
+	home := t.TempDir()
+	data := t.TempDir()
+	images := filepath.Join(data, "images")
+	sessions := filepath.Join(data, "sessions")
+	cache := filepath.Join(data, "cache")
+	if err := os.MkdirAll(images, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home, home, home, "", Patch{
+		ImagesDir:   &images,
+		SessionsDir: &sessions,
+		CacheDir:    &cache,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := t.TempDir()
+	link := filepath.Join(aliasRoot, "cover")
+	if err := os.Symlink(data, link); err != nil {
+		t.Fatal(err)
+	}
+	err = CoversReserved(link, cfg)
+	if err == nil || !errors.Is(err, ErrReservedPath) {
+		t.Fatalf("err = %v, want ErrReservedPath", err)
+	}
+	if !strings.Contains(err.Error(), "would cover reserved") {
+		t.Fatalf("err = %v", err)
 	}
 }
