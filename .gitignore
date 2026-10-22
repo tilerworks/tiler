@@ -10,3 +10,22 @@
 /test/e2e/.prove
 /test/e2e/chainlinttmp/
 /test/e2e/out/
+
+# macOS Finder metadata and AppleDouble resource forks.
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# vim swap and undo files, emacs autosave and lock files, and
+# editor backup files (trailing ~).
+*~
+*.swp
+*.swo
+*.swn
+*.un~
+.netrwhist
+\#*#
+.\#*
