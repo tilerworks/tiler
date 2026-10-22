@@ -51,8 +51,10 @@ run, and fails with a note to restore the system hdiutil when it
 cannot. It does not report `fuse_device`, `fuse_overlayfs`,
 `fusermount3`, or `squashfuse_subdir` as failures. A missing `git`
 suggests `xcode-select --install`. The single-file size probe stays,
-because `image.dmg` is one file. Cold-read measurements, `concatfs`,
-and `slowfs` are info: the hot path does not use FUSE.
+because `image.dmg` is one file. Cold-read measurements are info.
+`concatfs` and `slowfs` stay in the report as info and state that
+they are unused on macOS, because the dmg path does not use FUSE
+helpers. The detail does not repeat the Linux build guidance.
 
 When `attach -shadow` cannot use an APFS image on this system, every
 new image is created as HFS+ and doctor states that reason. The

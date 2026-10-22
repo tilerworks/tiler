@@ -44,8 +44,10 @@ macOS 上的镜像是单个 `image.dmg`。压缩是 `ulfo`（默认）、`ulmo`
 通过；不能运行时失败，并说明要恢复系统自带的 hdiutil。它不再把
 `fuse_device`、`fuse_overlayfs`、`fusermount3`、`squashfuse_subdir`
 当成失败项。缺少 `git` 时建议执行 `xcode-select --install`。
-单文件大小探测仍然保留，因为 `image.dmg` 是一个文件。冷读、
-`concatfs` 和 `slowfs` 是 info，因为热路径不走 FUSE。
+单文件大小探测仍然保留，因为 `image.dmg` 是一个文件。冷读是
+info。`concatfs` 和 `slowfs` 仍出现在报告里，状态为 info，并写明
+在 macOS 上用不上，因为 dmg 路径不使用这些 FUSE 辅助工具。说明
+文字不再重复 Linux 的构建指引。
 
 若当前系统上 `attach -shadow` 不能用于 APFS 镜像，新建的每张镜像
 都使用 HFS+，doctor 会写明这个原因。该选择不是配置项。

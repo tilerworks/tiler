@@ -125,11 +125,24 @@ func assertDarwinInfo(t *testing.T, got map[string]Result) {
 			t.Fatalf("%s = %s, want info (%s)", name, got[name].Status, got[name].Detail)
 		}
 	}
-	if got[nameContribConcatfs].ToolPath != "/usr/bin/concatfs" {
-		t.Fatalf("concatfs path = %q", got[nameContribConcatfs].ToolPath)
+	concatfs := got[nameContribConcatfs]
+	if concatfs.ToolPath != "/usr/bin/concatfs" {
+		t.Fatalf("concatfs path = %q", concatfs.ToolPath)
 	}
-	if !strings.Contains(got[nameContribSlowfs].Detail, "contrib/") {
-		t.Fatalf("slowfs detail = %q", got[nameContribSlowfs].Detail)
+	if concatfs.Detail != darwinContribUnused+"; /usr/bin/concatfs" {
+		t.Fatalf("concatfs detail = %q", concatfs.Detail)
+	}
+	slowfs := got[nameContribSlowfs]
+	if slowfs.Detail != darwinContribUnused {
+		t.Fatalf("slowfs detail = %q", slowfs.Detail)
+	}
+	for _, name := range []string{nameContribConcatfs, nameContribSlowfs} {
+		detail := got[name].Detail
+		for _, banned := range []string{"contrib/", "libfuse3", "gcc"} {
+			if strings.Contains(detail, banned) {
+				t.Fatalf("%s detail suggests a build: %q", name, detail)
+			}
+		}
 	}
 }
 
