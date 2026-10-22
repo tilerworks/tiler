@@ -384,19 +384,67 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	}
 }
 
-func TestBuildIncrementalRejectsSourceArgument(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	merged := filepath.Join(work, "merged")
-	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
-	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-	if err := os.MkdirAll(merged, 0o755); err != nil {
-		t.Fatal(err)
+func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
+	// Each form starts from an empty chain. A second build of the
+	// same upper can cross the half-base rule and publish a full
+	// image, which is a size decision, not a path decision.
+	forms := []struct {
+		name   string
+		dot    bool
+		abs    bool
+		parent bool
+		child  bool
+	}{
+		{name: "omitted"},
+		{name: "dot", dot: true},
+		{name: "absolute", abs: true},
+		{name: "absolute from parent", abs: true, parent: true},
+		{name: "child path", child: true},
 	}
-	t.Chdir(merged)
-	_, _, _, err := runCmd(t, append(lib, "build", "sub")...)
-	if ExitCode(err) != 2 {
-		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	for _, form := range forms {
+		t.Run(form.name, func(t *testing.T) {
+			home, work := withWorkspace(t)
+			imagesDir, lib := libFlags(home)
+			merged := filepath.Join(work, "merged")
+			upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+			src := filepath.Join(work, "src")
+			writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+			withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+			fullID := buildImage(t, lib, "alice/app", src)
+			writeTestFile(t, filepath.Join(upper, "new.txt"), "layer change")
+			if err := os.MkdirAll(merged, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dir := merged
+			if form.parent {
+				dir = home
+			}
+			t.Chdir(dir)
+			args := append(append([]string{}, lib...), "build")
+			switch {
+			case form.dot:
+				args = append(args, ".")
+			case form.abs:
+				args = append(args, merged)
+			case form.child:
+				args = append(args, "sub")
+			}
+			stdout, stderr, _, err := runCmd(t, args...)
+			if err != nil {
+				t.Fatalf("build: %v\n%s", err, stderr)
+			}
+			fields := strings.Fields(stdout)
+			if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+				t.Fatalf("stdout = %q", stdout)
+			}
+			meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.ID != fullID || len(meta.Chain) != 1 || meta.Chain[0].ID != fields[2] {
+				t.Fatalf("meta = %+v, stdout id = %s", meta, fields[2])
+			}
+		})
 	}
 }
 

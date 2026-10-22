@@ -603,6 +603,71 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 	}
 }
 
+func TestDMGViewBakeAcceptsEquivalentDirs(t *testing.T) {
+	forms := []struct {
+		name   string
+		arg    string
+		parent bool
+	}{
+		{name: "omitted"},
+		{name: "dot", arg: "."},
+		{name: "absolute", arg: "abs"},
+		{name: "absolute from parent", arg: "abs", parent: true},
+	}
+	for _, form := range forms {
+		t.Run(form.name, func(t *testing.T) {
+			home, work := withWorkspace(t)
+			imagesDir, lib := libFlags(home)
+			old := []byte("old-dmg")
+			meta := writeHashedDMGFixture(t, imagesDir, old)
+			shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+			if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(shadow, []byte("live-shadow"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			withBuildSeams(t, []mountinfo.Mount{{
+				Point:  work,
+				FSType: "fuse.dmg",
+				Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+				Upper:  shadow,
+			}})
+			useDarwinHost(t)
+			calls := installHdiutil(t, []byte("baked-dmg"))
+			action := libraryAction("alice/app", work, session.ModeRW)
+			action.FullID = meta.ID
+			writeSessionRecord(t, sessionsDir(home), "dev", action)
+			if form.parent {
+				t.Chdir(home)
+			}
+			args := append(lib, "build", "--image", "alice/app")
+			switch form.arg {
+			case ".":
+				args = append(args, ".")
+			case "abs":
+				args = append(args, work)
+			}
+			stdout, stderr, _, err := runCmd(t, args...)
+			if err != nil {
+				t.Fatalf("build: %v\n%s", err, stderr)
+			}
+			if !strings.HasPrefix(stdout, "full alice/app ") || strings.Contains(stdout, "incr ") {
+				t.Fatalf("stdout = %q", stdout)
+			}
+			if !strings.Contains(stderr, "dmg has no incremental layer") {
+				t.Fatalf("stderr = %q", stderr)
+			}
+			joined := strings.Join((*calls)[0], " ")
+			if len(*calls) != 1 || !strings.Contains(joined, "-shadow "+shadow) {
+				t.Fatalf("calls = %q", *calls)
+			}
+			assertFileText(t, shadow, "live-shadow")
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
+		})
+	}
+}
+
 func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)

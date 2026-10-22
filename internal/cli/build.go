@@ -45,13 +45,18 @@ func newBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
 		Short: "Build a full or incremental image",
-		Long: "Build packs dir, or the working directory when omitted, into a\n" +
-			"new full image. Inside a merged mount view the default is an\n" +
-			"incremental build that appends the writable upper as one layer.\n" +
-			"When the recorded incremental layers plus that upper already\n" +
-			"exceed half the base image, the default switches to a full\n" +
-			"rebuild and a warning is printed; --incremental keeps the layer.\n" +
-			"--full always packs the whole view.\n" +
+		Long: "Build packs dir into a new full image. Omitting dir uses the\n" +
+			"working directory. \".\" and the absolute path of that directory\n" +
+			"select the same source.\n" +
+			"Inside a merged mount view the default is an incremental build\n" +
+			"that appends the writable upper as one layer. When the recorded\n" +
+			"incremental layers plus that upper already exceed half the base\n" +
+			"image, the default switches to a full rebuild and a warning is\n" +
+			"printed; --incremental keeps the layer. --full always packs the\n" +
+			"whole view.\n" +
+			"A writable dmg view has no incremental layer. The build bakes\n" +
+			"the shadow into a new full image for the default, --incremental,\n" +
+			"and --full.\n" +
 			"\n" +
 			"--format and --compression select the container. An omitted\n" +
 			"format uses image_format, then the host default (dmg on macOS),\n" +
@@ -111,10 +116,9 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 		RuntimeDir: cfg.SessionsDir,
 		ImagesDir:  cfg.ImagesDir,
 	}, mountinfo.Explicit{
-		Full:   full,
-		Incr:   incr,
-		Image:  imageName,
-		HasDir: len(args) == 1,
+		Full:  full,
+		Incr:  incr,
+		Image: imageName,
 		// The table paths answer while the view is listed; the
 		// session record answers when a killed daemon left the
 		// entry anonymous or it vanished entirely.

@@ -46,8 +46,6 @@ type Explicit struct {
 	// Stale marks a path the caller declares was a mount point that
 	// the table no longer lists.
 	Stale bool
-	// HasDir marks an explicit source directory argument.
-	HasDir bool
 	// Identity replaces the default path lookup. Nil keeps it.
 	Identity IdentitySource
 }
@@ -115,11 +113,12 @@ func decideView(view Mount, table []Mount, prefixes Prefixes, explicit Explicit)
 	if view.Upper == "" {
 		return decideReadOnlyView(view, table, prefixes, explicit)
 	}
-	if explicit.Full {
+	// A dmg shadow has no incremental slot. The build is a new full
+	// image at the mount point, and --incremental selects that full
+	// image. Omitting dir, ".", and the absolute path share this
+	// decision: only the cleaned path is consulted.
+	if explicit.Full || dmgShadowView(view) {
 		return fullInView(view, table, prefixes, explicit)
-	}
-	if explicit.HasDir {
-		return Decision{}, errors.New("build mode: incremental mode takes no source directory")
 	}
 	name, err := resolveName(view.Point, table, prefixes, explicit)
 	if err != nil {
@@ -145,6 +144,12 @@ func decideReadOnlyView(view Mount, table []Mount, prefixes Prefixes, explicit E
 			view.Point)
 	}
 	return fullInView(view, table, prefixes, explicit)
+}
+
+// dmgShadowView reports a writable disk image whose upper is the
+// live shadow file. That form publishes a new full image.
+func dmgShadowView(view Mount) bool {
+	return filepath.Base(view.Upper) == "upper.shadow"
 }
 
 // fullInView packs the whole merged view. The deeper path is

@@ -279,10 +279,26 @@ func TestDecideIncrOutsideViewRefused(t *testing.T) {
 	}
 }
 
-func TestDecideIncrementalRejectsDirArgument(t *testing.T) {
-	_, err := Decide("/ws/view/x", testTable(), testPrefixes(), Explicit{HasDir: true})
-	if err == nil || !strings.Contains(err.Error(), "no source directory") {
-		t.Fatalf("err = %v", err)
+func TestDecideDMGShadowViewIsFull(t *testing.T) {
+	table := append(testTable(), Mount{
+		Point:  "/ws/dmg",
+		FSType: "fuse.dmg",
+		Source: testImages + "/alice/app/image.dmg",
+		Upper:  testRuntime + "/m1/upper.shadow",
+	})
+	got, err := Decide("/ws/dmg/deep", table, testPrefixes(),
+		Explicit{Incr: true, Image: "alice/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Decision{
+		Mode:       ModeFull,
+		Name:       Name{Owner: "alice", Repo: "app"},
+		SrcDir:     "/ws/dmg",
+		MountPoint: "/ws/dmg",
+	}
+	if got != want {
+		t.Fatalf("decision = %+v", got)
 	}
 }
 
