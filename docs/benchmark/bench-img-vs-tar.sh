@@ -3,7 +3,9 @@
 # the expanded tree with reads of the same bytes through the image mount.
 #
 # Image create and read, including tar.gz, go through bench-img-path.py.
-# On macOS the image type is dmg. squashfs and erofs are not wired in yet.
+# The image type is dmg on macOS and squashfs plus erofs on Linux. Linux
+# mounts use squashfuse_ll and erofsfuse, the same FUSE clients tiler
+# mounts with, so a rootless run works wherever /dev/fuse is available.
 #
 # Payload bytes are os.urandom so the result measures compressor and
 # reader cost, not a trivially compressible run of zeros.
@@ -12,20 +14,28 @@
 #   BENCH_FILE_MIB    size of each file (default: 4)
 #   BENCH_ROOT        scratch directory (default: mktemp under $TMPDIR)
 #
-# macOS only until a Linux image type is implemented. Tries `sudo -n
-# purge` before the expanded-tree read. The image read purges again
-# inside bench-img-path.py.
+# Tries a passwordless cache drop before the expanded-tree read
+# (sudo -n purge on macOS, drop_caches on Linux). The image read purges
+# again inside bench-img-path.py.
 
 set -eu
 
 here=$(CDPATH= cd "$(dirname "$0")" && pwd)
 img_py=$here/bench-img-path.py
 
-if test "$(uname -s)" != Darwin
-then
-	echo "bench-img-vs-tar: dmg comparison requires macOS" >&2
+os=$(uname -s)
+case $os in
+Darwin)
+	TYPES="dmg"
+	;;
+Linux)
+	TYPES="squashfs erofs"
+	;;
+*)
+	echo "bench-img-vs-tar: unsupported OS $os" >&2
 	exit 1
-fi
+	;;
+esac
 
 for cmd in tar python3
 do
@@ -35,6 +45,30 @@ do
 		exit 1
 	fi
 done
+
+if test "$os" = Darwin
+then
+	image_cmds="hdiutil"
+else
+	image_cmds="mksquashfs squashfuse_ll mkfs.erofs erofsfuse"
+fi
+for cmd in $image_cmds
+do
+	if ! command -v "$cmd" >/dev/null 2>&1
+	then
+		echo "bench-img-vs-tar: missing $cmd" >&2
+		exit 1
+	fi
+done
+if test "$os" = Linux
+then
+	if ! command -v fusermount3 >/dev/null 2>&1 &&
+		! command -v fusermount >/dev/null 2>&1
+	then
+		echo "bench-img-vs-tar: missing fusermount3" >&2
+		exit 1
+	fi
+fi
 
 SIZES=${BENCH_SIZES_MIB:-32 128 256 512}
 FILE_MIB=${BENCH_FILE_MIB:-4}
@@ -55,6 +89,23 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT INT TERM
+
+# image_for prints the image bench-img-path.py wrote for a type. hdiutil
+# may add a .dmg suffix of its own, so dmg checks both names.
+image_for() {
+	case $1 in
+	dmg)
+		if test -f "$2/image.dmg"
+		then
+			echo "$2/image.dmg"
+		else
+			echo "$2/image.dmg.dmg"
+		fi
+		;;
+	squashfs) echo "$2/image.sqsh" ;;
+	erofs) echo "$2/image.erofs" ;;
+	esac
+}
 
 # read_tree prints "<seconds> <bytes>".
 read_tree() {
@@ -94,7 +145,15 @@ PY
 }
 
 try_purge() {
-	if sudo -n purge >/dev/null 2>&1
+	if test "$os" = Linux
+	then
+		if sudo -n sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' >/dev/null 2>&1
+		then
+			echo yes
+		else
+			echo no
+		fi
+	elif sudo -n purge >/dev/null 2>&1
 	then
 		echo yes
 	else
@@ -119,7 +178,7 @@ echo "scratch: $ROOT"
 echo "sizes_mib: $SIZES"
 echo "file_mib: $FILE_MIB"
 echo "payload: urandom"
-echo "image: dmg and tar.gz via bench-img-path.py"
+echo "image: $TYPES and tar.gz via bench-img-path.py"
 echo
 
 print_row "MiB" "step" "seconds" "out_bytes" "MiB/s" "notes"
@@ -129,23 +188,29 @@ for size in $SIZES
 do
 	work=$ROOT/s$size
 	rm -rf "$work"
-	mkdir -p "$work/mnt"
-	python3 "$img_py" \
-		--path "$work" \
-		--type dmg \
-		--mode write \
-		--size-mib "$size" \
-		--file-mib "$FILE_MIB" \
-		--no-probe \
-		--keep \
-		--tsv >"$work/create.tsv"
+	mkdir -p "$work"
 	bench=$work/tiler-img-bench
-	image=$bench/image.dmg
-	if test ! -f "$image" && test -f "$image.dmg"
-	then
-		image=$image.dmg
-	fi
-	print_tsv "dmg/" "$work/create.tsv"
+
+	# The first image type generates the payload; later types pack the
+	# same tree with --src so every format sees identical bytes.
+	src_arg=
+	for type in $TYPES
+	do
+		mkdir -p "$work/mnt-$type"
+		# shellcheck disable=SC2086
+		python3 "$img_py" \
+			--path "$work" \
+			--type "$type" \
+			--mode write \
+			--size-mib "$size" \
+			--file-mib "$FILE_MIB" \
+			$src_arg \
+			--no-probe \
+			--keep \
+			--tsv >"$work/create-$type.tsv"
+		print_tsv "$type/" "$work/create-$type.tsv"
+		src_arg="--src $bench/data"
+	done
 
 	python3 "$img_py" \
 		--path "$work" \
@@ -167,16 +232,19 @@ do
 	set -- $(read_tree "$bench/data")
 	print_row "$size" "read_expanded_2" "$1" "$2" "$(mib_s "$1" "$2")" "warm"
 
-	python3 "$img_py" \
-		--path "$work" \
-		--type dmg \
-		--mode read \
-		--image "$image" \
-		--mountpoint "$work/mnt" \
-		--no-probe \
-		--keep \
-		--tsv >"$work/read.tsv"
-	print_tsv "dmg/" "$work/read.tsv"
+	for type in $TYPES
+	do
+		python3 "$img_py" \
+			--path "$work" \
+			--type "$type" \
+			--mode read \
+			--image "$(image_for "$type" "$bench")" \
+			--mountpoint "$work/mnt-$type" \
+			--no-probe \
+			--keep \
+			--tsv >"$work/read-$type.tsv"
+		print_tsv "$type/" "$work/read-$type.tsv"
+	done
 
 	python3 "$img_py" \
 		--path "$work" \
@@ -193,6 +261,6 @@ do
 done
 
 echo "MiB/s is input size over wall time for pack steps, and bytes read over wall time for read steps."
-echo "dmg/* and tar/* rows come from bench-img-path.py. read_expanded_* reads the unpacked tree."
+echo "Image and tar rows come from bench-img-path.py. read_expanded_* reads the unpacked tree."
 echo "read_expanded_1 is cold only when purge=yes. read_*_2 is a second pass on a warm cache."
 echo "tar/read_image_* streams member bytes out of image.tar.gz and does not extract onto --path."

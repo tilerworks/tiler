@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Time image create and read on a chosen directory.
 
-macOS dmg is implemented. Linux squashfs and erofs are recognized and
-refused until their pack and mount commands are wired in.
+macOS dmg packs with hdiutil. Linux squashfs packs with mksquashfs and
+erofs with mkfs.erofs, mirroring the argv tiler uses. Read runs attach
+the image read-only: squashfuse_ll and erofsfuse on Linux (the FUSE
+clients tiler mounts with; a kernel loop mount when running as root
+without them), hdiutil on macOS.
 
 Writable volumes: create and the optional device probe write only
 under --path/tiler-img-bench/. The attach mountpoint defaults to a
@@ -29,6 +32,15 @@ from pathlib import Path
 MIB = 1024 * 1024
 PROBE_BLOCK = 4096
 WORK_NAME = "tiler-img-bench"
+IMAGE_NAMES = {
+    "dmg": "image.dmg",
+    "tar": "image.tar.gz",
+    "squashfs": "image.sqsh",
+    "erofs": "image.erofs",
+}
+# mkfs.erofs records a random superblock UUID without -U. tiler pins
+# the nil UUID so the same tree packs to the same bytes.
+EROFS_NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def detect_os():
@@ -107,13 +119,18 @@ def read_tree(root):
 
 
 def try_purge():
-    if detect_os() != "darwin":
+    """Best-effort cache drop; yes only with passwordless sudo."""
+    host = detect_os()
+    if host == "darwin":
+        argv = ["sudo", "-n", "purge"]
+    elif host == "linux":
+        argv = [
+            "sudo", "-n", "sh", "-c",
+            "sync; echo 3 > /proc/sys/vm/drop_caches",
+        ]
+    else:
         return "no"
-    result = subprocess.run(
-        ["sudo", "-n", "purge"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    result = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return "yes" if result.returncode == 0 else "no"
 
 
@@ -237,7 +254,8 @@ def check_kind(kind, host):
     if kind in ("squashfs", "erofs"):
         if host != "linux":
             die(f"{kind} images require Linux")
-        die(f"{kind} benchmark is not implemented yet")
+        require_tools(["mksquashfs"] if kind == "squashfs" else ["mkfs.erofs"])
+        return
     die(f"unknown image type {kind}")
 
 
@@ -278,6 +296,71 @@ def create_dmg(work, data, image, compression, filesystem, log_path):
         fail_log("hdiutil create failed", log_path)
     if not image.is_file() and Path(str(image) + ".dmg").is_file():
         image = Path(str(image) + ".dmg")
+    return elapsed, image
+
+
+def create_squashfs(data, image, comp, log_path):
+    """Pack data with mksquashfs, the argv shape tiler uses."""
+    if image.exists():
+        image.unlink()
+    argv = ["mksquashfs", str(data), str(image), "-comp", comp, "-noappend"]
+    elapsed, status = run_timed(argv, log_path)
+    if status != 0:
+        fail_log("mksquashfs failed", log_path)
+    if not image.is_file():
+        die(f"mksquashfs did not write {image}", 1)
+    return elapsed, image
+
+
+def erofs_comp_flag(comp):
+    """gzip stays gzip in metadata and becomes -zdeflate on the argv."""
+    return "-zdeflate" if comp == "gzip" else "-z" + comp
+
+
+def default_erofs_comp():
+    """Pick the erofs compressor like tiler: zstd, then lz4, then gzip.
+
+    mkfs.erofs --help prints "Available compressors are: ...". Builds
+    without libzstd (Ubuntu 24.04) fall back to lz4. lz4hc does not
+    satisfy lz4. A help text without the marker predates compressor
+    choice, where lz4 is the only sane default.
+    """
+    require_tools(["mkfs.erofs"])
+    result = subprocess.run(
+        ["mkfs.erofs", "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    names = set()
+    marker = "Available compressors are:"
+    for line in (result.stdout or "").splitlines():
+        if marker in line:
+            names = {n.strip() for n in line.split(marker, 1)[1].split(",")}
+            break
+    if not names:
+        return "lz4"
+    for comp in ("zstd", "lz4"):
+        if comp in names:
+            return comp
+    if "deflate" in names or "libdeflate" in names:
+        return "gzip"
+    die("mkfs.erofs has no usable compressor (zstd, lz4, or gzip)", 1)
+
+
+def create_erofs(data, image, comp, log_path):
+    """Pack data with mkfs.erofs, the argv shape tiler uses."""
+    if image.exists():
+        image.unlink()
+    argv = [
+        "mkfs.erofs", "-U", EROFS_NIL_UUID, erofs_comp_flag(comp),
+        str(image), str(data),
+    ]
+    elapsed, status = run_timed(argv, log_path)
+    if status != 0:
+        fail_log("mkfs.erofs failed", log_path)
+    if not image.is_file():
+        die(f"mkfs.erofs did not write {image}", 1)
     return elapsed, image
 
 
@@ -334,6 +417,56 @@ def attach_dmg(image, mount, log_path):
     return elapsed
 
 
+def fuse_umount_tool():
+    for tool in ("fusermount3", "fusermount"):
+        if shutil.which(tool) is not None:
+            return tool
+    return None
+
+
+def linux_mount_argv(kind, image, mount):
+    """Mount argv, unmount argv, and a note for a read-only attach.
+
+    tiler mounts squashfs with squashfuse_ll and erofs with erofsfuse,
+    so the benchmark prefers those FUSE clients and measures the same
+    read path. A root run without a usable FUSE setup falls back to a
+    kernel loop mount.
+    """
+    tool = "squashfuse_ll" if kind == "squashfs" else "erofsfuse"
+    umount = fuse_umount_tool()
+    if (
+        shutil.which(tool) is not None
+        and umount is not None
+        and os.path.exists("/dev/fuse")
+    ):
+        if tool == "squashfuse_ll":
+            argv = [tool, "-o", f"fsname={image}", str(image), str(mount)]
+        else:
+            argv = [tool, "-o", "ro", str(image), str(mount)]
+        return argv, [umount, "-u", str(mount)], f"{tool} ro"
+    if os.geteuid() == 0:
+        argv = ["mount", "-t", kind, "-o", "ro,loop", str(image), str(mount)]
+        return argv, ["umount", str(mount)], f"kernel {kind} ro"
+    if shutil.which(tool) is None:
+        die(f"missing {tool} (or run as root for a kernel {kind} mount)", 1)
+    if umount is None:
+        die(f"{tool} needs fusermount3 or fusermount to unmount", 1)
+    die("/dev/fuse is missing (or run as root for a kernel mount)", 1)
+
+
+def attach_linux(kind, image, mount, log_path):
+    argv, umount_argv, note = linux_mount_argv(kind, image, mount)
+    elapsed, status = run_timed(argv, log_path)
+    if status != 0:
+        fail_log(f"{argv[0]} attach failed", log_path)
+    return elapsed, note, umount_argv
+
+
+def run_umount(argv):
+    """Best-effort unmount; a failure leaves the mountpoint busy."""
+    subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def parse_args(argv):
     host = detect_os()
     parser = argparse.ArgumentParser(prog="bench-img-path")
@@ -346,7 +479,7 @@ def parse_args(argv):
         "--type",
         choices=("dmg", "tar", "squashfs", "erofs"),
         default="dmg" if host == "darwin" else None,
-        help="image type (default: dmg on macOS; tar on either OS)",
+        help="image type (default: dmg on macOS; required on Linux)",
     )
     parser.add_argument(
         "--compression",
@@ -354,6 +487,11 @@ def parse_args(argv):
         help="dmg compression: ULFO, ULMO, or UDRO",
     )
     parser.add_argument("--fs", default="APFS", help="dmg filesystem: APFS or HFS+")
+    parser.add_argument(
+        "--comp",
+        help="squashfs/erofs compressor (default: zstd for squashfs; "
+        "the best mkfs.erofs on this host supports for erofs)",
+    )
     parser.add_argument("--image", help="existing image for --mode read")
     parser.add_argument(
         "--src",
@@ -380,6 +518,20 @@ def parse_args(argv):
         die("--fs must be APFS or HFS+")
     args.compression = compression
     args.fs = filesystem
+    comp = (args.comp or "").lower() or None
+    if args.type == "squashfs":
+        if comp is None:
+            comp = "zstd"
+        if comp not in ("zstd", "gzip", "lz4", "xz"):
+            die("--comp must be zstd, gzip, lz4, or xz for squashfs")
+    elif args.type == "erofs":
+        if comp is None:
+            comp = default_erofs_comp()
+        if comp not in ("zstd", "lz4", "gzip"):
+            die("--comp must be zstd, lz4, or gzip for erofs")
+    elif comp is not None:
+        die("--comp applies to squashfs and erofs only")
+    args.comp = comp
     if args.mode == "read" and args.image and not Path(args.image).is_file():
         die(f"--image is not a file: {args.image}")
     if args.src:
@@ -477,6 +629,7 @@ def main(argv):
 
     mount = None
     owned_mount = None
+    unmounter = None
     try:
         if not args.tsv:
             print(f"os: {host}")
@@ -487,8 +640,11 @@ def main(argv):
             print(f"mode: {args.mode}")
             print(f"size_mib: {args.size_mib}")
             print(f"file_mib: {args.file_mib}")
-            print(f"compression: {args.compression}")
-            print(f"fs: {args.fs}")
+            if args.type == "dmg":
+                print(f"compression: {args.compression}")
+                print(f"fs: {args.fs}")
+            elif args.comp:
+                print(f"comp: {args.comp}")
             print(f"probe: {'yes' if do_probe else 'no'}")
             if do_probe:
                 print(f"probe_ops: {args.probe_ops}")
@@ -512,7 +668,7 @@ def main(argv):
             if not args.tsv:
                 print()
 
-        image_file = "image.tar.gz" if args.type == "tar" else "image.dmg"
+        image_file = IMAGE_NAMES[args.type]
         image = Path(args.image).expanduser().resolve() if given_image else work / image_file
         if given_image and not image.is_file():
             die(f"--image is not a file: {image}")
@@ -536,14 +692,28 @@ def main(argv):
                 data = work / "data"
                 files = write_tree(data, args.size_mib * MIB, args.file_mib * MIB)
             if args.type == "tar":
-                elapsed, image = create_tar(data, work / "image.tar.gz", work / "tar-create.log")
+                elapsed, image = create_tar(
+                    data, work / IMAGE_NAMES["tar"], work / "tar-create.log"
+                )
                 note = f"tar.gz {files} files"
-            else:
+            elif args.type == "dmg":
                 elapsed, image = create_dmg(
-                    work, data, work / "image.dmg", args.compression, args.fs,
+                    work, data, work / IMAGE_NAMES["dmg"], args.compression, args.fs,
                     work / "hdiutil-create.log",
                 )
                 note = f"dmg {files} files"
+            elif args.type == "squashfs":
+                elapsed, image = create_squashfs(
+                    data, work / IMAGE_NAMES["squashfs"], args.comp,
+                    work / "mksquashfs.log",
+                )
+                note = f"squashfs {args.comp} {files} files"
+            else:
+                elapsed, image = create_erofs(
+                    data, work / IMAGE_NAMES["erofs"], args.comp,
+                    work / "mkfs-erofs.log",
+                )
+                note = f"erofs {args.comp} {files} files"
             if args.mode == "read":
                 note += " setup"
             report.row("image_create", elapsed, image.stat().st_size, note)
@@ -561,14 +731,23 @@ def main(argv):
             mount, owned = prepare_mountpoint(args.mountpoint)
             if owned:
                 owned_mount = mount
-            elapsed = attach_dmg(image, mount, work / "hdiutil-attach.log")
-            report.row("image_attach", elapsed, "-", "readonly")
+            if args.type == "dmg":
+                elapsed = attach_dmg(image, mount, work / "hdiutil-attach.log")
+                note = "readonly"
+                unmounter = lambda: detach(mount)  # noqa: E731
+            else:
+                elapsed, note, umount_argv = attach_linux(
+                    args.type, image, mount, work / f"{args.type}-attach.log"
+                )
+                unmounter = lambda: run_umount(umount_argv)  # noqa: E731
+            report.row("image_attach", elapsed, "-", note)
             seconds, nbytes = read_tree(mount)
             report.row("read_image_1", seconds, nbytes, f"purge={purged}")
             seconds, nbytes = read_tree(mount)
             report.row("read_image_2", seconds, nbytes, "warm")
-            detach(mount)
+            unmounter()
             mount = None
+            unmounter = None
 
         if not args.tsv:
             print()
@@ -590,8 +769,8 @@ def main(argv):
                 "The attach mountpoint is --mountpoint or a local temp dir."
             )
     finally:
-        if mount is not None:
-            detach(mount)
+        if unmounter is not None:
+            unmounter()
         if owned_mount is not None:
             shutil.rmtree(owned_mount, ignore_errors=True)
         if owned_work:
