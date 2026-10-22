@@ -1061,3 +1061,42 @@ func TestBuildIncrRefusesIllegalActiveFormat(t *testing.T) {
 		t.Fatalf("packer ran: %v", runner.calls)
 	}
 }
+
+func TestBuildIncrStopsWhenSpaceIsShort(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedActive(t, repo, []byte("base-full"), false)
+	stubSpace(t, 0, nil)
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran: %v", runner.calls)
+	}
+}
+
+func TestBuildIncrBlocksStopsWhenSpaceIsShort(t *testing.T) {
+	cfg := buildConfig(t)
+	cfg.SplitSize = 24
+	seedBlocksActive(t, cfg, []byte("base-blocks-image-bytes!!"), 24)
+	stubSpace(t, 0, nil)
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err := BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran: %v", runner.calls)
+	}
+}

@@ -491,3 +491,16 @@ func TestBuildBlocksPacksRequestedFormat(t *testing.T) {
 		t.Fatalf("meta = %+v", loaded)
 	}
 }
+
+func TestBuildBlocksStopsWhenSpaceIsShort(t *testing.T) {
+	stubSpace(t, 0, nil)
+	cfg := blocksConfig(t)
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err := BuildFull(blocksRequest(cfg, sourceDir(t), runner.run, 24))
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran: %v", runner.calls)
+	}
+}

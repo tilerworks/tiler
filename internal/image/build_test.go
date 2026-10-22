@@ -764,3 +764,18 @@ func TestBuildFullRejectsBadContainer(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildFullStopsWhenSpaceIsShort(t *testing.T) {
+	stubSpace(t, 0, nil)
+	runner := &fakeRunner{body: []byte("should-not-pack")}
+	_, err := BuildFull(FullRequest{
+		Config: buildConfig(t), Name: "alice/app", SrcDir: sourceDir(t),
+		Builder: "test", Run: runner.run,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran: %v", runner.calls)
+	}
+}

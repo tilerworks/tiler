@@ -108,6 +108,9 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 	if now == nil {
 		now = time.Now
 	}
+	if err := ensureIncrSpace(req, repo, src); err != nil {
+		return IncrResult{}, err
+	}
 	var tmp string
 	typ := active.Format.Type
 	compression := active.Format.Compression
@@ -243,6 +246,26 @@ func stageUpper(upper, subdir string) (string, func() error, error) {
 		_ = os.RemoveAll(root)
 		return nil
 	}, nil
+}
+
+// ensureIncrSpace requires room for the packed layer. A blocks layer
+// also keeps a full copy in the cache while the repository receives
+// the split. An empty cache dir is left to the staging helper.
+func ensureIncrSpace(req IncrRequest, repo Repo, src string) error {
+	need, err := estimateTree(src)
+	if err != nil {
+		return err
+	}
+	if req.Config.SplitSize > 0 {
+		if strings.TrimSpace(req.Config.CacheDir) == "" {
+			return nil
+		}
+		return ensureSpace(
+			spaceWrite{path: req.Config.CacheDir, bytes: need},
+			spaceWrite{path: repo.Dir, bytes: need},
+		)
+	}
+	return ensureSpace(spaceWrite{path: filepath.Join(repo.Dir, dirIncr), bytes: need})
 }
 
 // packIncrTemp packs the staged upper into a synced temporary file

@@ -89,6 +89,13 @@ func createDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
 		return idle, err
 	}
+	need, err := estimateTree(req.SrcDir)
+	if err != nil {
+		return FullResult{}, err
+	}
+	if err := ensureSpace(spaceWrite{path: repo.Dir, bytes: need}); err != nil {
+		return FullResult{}, err
+	}
 	tmp, err := dmgTemp(repo)
 	if err != nil {
 		return FullResult{}, err
@@ -125,6 +132,13 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	}
 	if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
 		return idle, err
+	}
+	need, err := estimateFiles(base, req.Shadow)
+	if err != nil {
+		return FullResult{}, err
+	}
+	if err := ensureSpace(spaceWrite{path: repo.Dir, bytes: need}); err != nil {
+		return FullResult{}, err
 	}
 	tmp, err := dmgTemp(repo)
 	if err != nil {

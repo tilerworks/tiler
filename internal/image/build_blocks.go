@@ -27,6 +27,9 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	if err := prepareScene(req); err != nil {
 		return FullResult{}, err
 	}
+	if err := ensureBlocksSpace(req.Config.CacheDir, repo.Dir, req.SrcDir); err != nil {
+		return FullResult{}, err
+	}
 	blockSize := req.BlockSize
 	if blockSize <= 0 {
 		return FullResult{}, errors.New("build: positive block size is required")
@@ -87,6 +90,23 @@ func publishBlocks(
 		return FullResult{}, err
 	}
 	return FullResult{ID: meta.ID, Path: finalDir, SHA256: meta.SHA256}, nil
+}
+
+// ensureBlocksSpace requires room for the staging file and for the
+// block copy. An empty cache dir is left to makeStagingDir, which
+// already reports that blocks builds need cache_dir.
+func ensureBlocksSpace(cacheDir, repoDir, src string) error {
+	if strings.TrimSpace(cacheDir) == "" {
+		return nil
+	}
+	need, err := estimateTree(src)
+	if err != nil {
+		return err
+	}
+	return ensureSpace(
+		spaceWrite{path: cacheDir, bytes: need},
+		spaceWrite{path: repoDir, bytes: need},
+	)
 }
 
 // makeStagingDir creates the scratch directory under cacheDir that

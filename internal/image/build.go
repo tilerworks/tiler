@@ -108,6 +108,13 @@ func BuildFull(req FullRequest) (FullResult, error) {
 	if err := prepareScene(req); err != nil {
 		return FullResult{}, err
 	}
+	need, err := estimateTree(req.SrcDir)
+	if err != nil {
+		return FullResult{}, err
+	}
+	if err := ensureSpace(spaceWrite{path: repo.Dir, bytes: need}); err != nil {
+		return FullResult{}, err
+	}
 	imgTmp, err := packTemp(repo, req.SrcDir, toolRunner(req), req.Format, req.Compression)
 	if err != nil {
 		return FullResult{}, err

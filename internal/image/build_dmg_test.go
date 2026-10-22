@@ -582,6 +582,63 @@ func TestRemoveSquashfsDoesNotAskAttach(t *testing.T) {
 	}
 }
 
+func TestBuildDMGCreateStopsWhenSpaceIsShort(t *testing.T) {
+	cfg := buildConfig(t)
+	stubSpace(t, 0, nil)
+	runner := &dmgRunner{body: []byte("should-not-pack")}
+	_, err := BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", SrcDir: sourceDir(t),
+		Builder: "test", Run: runner.run,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("hdiutil ran: %v", runner.calls)
+	}
+}
+
+func TestBuildDMGBakeStopsWhenSpaceIsShort(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedDMGActive(t, repo, []byte("old-base"))
+	shadow := writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("shadow-bytes"))
+	stubSpace(t, 0, nil)
+	runner := &dmgRunner{body: []byte("should-not-bake")}
+	_, err = BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", Shadow: shadow, Builder: "test", Run: runner.run,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("hdiutil ran: %v", runner.calls)
+	}
+}
+
+func TestBuildDMGIdleSkipsSpaceCheck(t *testing.T) {
+	cfg := buildConfig(t)
+	src := sourceDir(t)
+	runner := &dmgRunner{body: []byte("first-create")}
+	if _, err := BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubSpace(t, 0, nil)
+	if _, err := BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("idle create ran hdiutil: %d calls", len(runner.calls))
+	}
+}
+
 func assertNoDMGTemp(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
