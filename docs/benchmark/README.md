@@ -11,54 +11,91 @@ with reads through a mounted image. They are not part of `make test`.
 
 `bench-img-path.py` detects the host OS. macOS defaults to `--type dmg`.
 `--type tar` (gzip tar) runs on macOS and Linux. `--type squashfs` and
-`--type erofs` are accepted on Linux and are not implemented yet.
+`--type erofs` run on Linux: they pack with `mksquashfs` and
+`mkfs.erofs` (the same argv tiler uses) and attach read-only with
+`squashfuse_ll` and `erofsfuse`, the FUSE clients tiler mounts with. A
+root run without the FUSE clients falls back to kernel loop mounts.
 Image create and read always go through that program, including tar.gz.
-`bench-img-vs-tar.sh` calls it for the dmg and tar pack/read steps, and
-times the expanded-tree reads itself.
+`bench-img-vs-tar.sh` calls it for the image and tar pack/read steps —
+dmg on macOS, squashfs and erofs on Linux — and times the expanded-tree
+reads itself.
 
 ---
 
-## Linux: squashfs vs tar+gzip
+## Linux: squashfs and erofs vs tar+gzip
 
-Placeholder. When `bench-img-path.py --type squashfs` is implemented,
-this section will record pack and read comparisons against `tar+gzip`
-the same way as the dmg section below.
+```sh
+docs/benchmark/bench-img-vs-tar.sh
+```
 
-Expected tools once wired:
-
-- Pack: `mksquashfs` (tiler's squashfs default)
-- Mount: `squashfuse_ll`
-- Driver: `docs/benchmark/bench-img-vs-tar.sh` with a Linux image type,
-  or a dedicated invocation of `bench-img-path.py`
-
-### Method
-
-_TBD_
-
-### Result
-
-_TBD — no Linux squashfs numbers checked in yet._
-
----
-
-## Linux: erofs vs tar+gzip
-
-Placeholder. When `bench-img-path.py --type erofs` is implemented,
-this section will record pack and read comparisons against `tar+gzip`.
-
-Expected tools once wired:
-
-- Pack: `mkfs.erofs`
-- Mount: `erofsfuse`
-- Driver: same comparison script shape as squashfs
+Same defaults and overrides as the macOS section (`BENCH_SIZES_MIB`,
+`BENCH_FILE_MIB`, `BENCH_ROOT`). Needs `python3`, `tar`, `mksquashfs`,
+`mkfs.erofs`, and — for a rootless mount — `squashfuse_ll`,
+`erofsfuse`, and `fusermount3`. Every size packs one payload tree as
+squashfs, as erofs, and as tar.gz, then reads each artifact back.
 
 ### Method
 
-_TBD_
+- Payload bytes are `os.urandom`, so no packer can collapse the tree
+  into a tiny archive of zeros.
+- Packing goes through `bench-img-path.py` with the argv tiler uses:
+  `mksquashfs -comp zstd -noappend` and `mkfs.erofs -U <nil-uuid>
+  -zlz4`. The erofs compressor defaults to the best one the host's
+  `mkfs.erofs` offers (zstd, then lz4, then gzip/deflate); Ubuntu
+  24.04's build has no zstd, so the run below packed with lz4. tar
+  packs the same tree with `tar -czf`.
+- Reads attach the image read-only with `squashfuse_ll` / `erofsfuse`
+  and walk the mount twice. Attach took 3–8 ms for both formats and is
+  reported separately from the read rates.
+- Before each cold pass the benchmark drops caches when passwordless
+  sudo is available (`sync; echo 3 > /proc/sys/vm/drop_caches`;
+  `purge=yes` in the notes). The `*_2` passes repeat the walk with no
+  purge in between and hit the page cache.
+- MiB/s for a pack step is input size over wall time; for a read step,
+  bytes read over wall time. Reading the tar.gz streams member bytes
+  and does not extract onto the volume under test.
 
 ### Result
 
-_TBD — no Linux erofs numbers checked in yet._
+Host: Lima VM (Linux on macOS, Apple Virtualization framework) on an
+Apple silicon host, aarch64, 6 vCPU, 11 GiB RAM, Ubuntu 24.04.5 LTS,
+kernel 6.8.0-147-generic, ext4 scratch on virtio. squashfs-tools
+4.6.1, squashfuse 0.5.0, erofs-utils 1.7.1, GNU tar 1.35, gzip 1.12.
+Date: 2026-10-22. `purge=yes` for every size.
+
+#### Pack
+
+| MiB | mksquashfs zstd | mkfs.erofs lz4 | tar+gzip | sqsh out | erofs out | tar.gz out |
+|-----|-----------------|----------------|----------|----------|-----------|------------|
+| 32 | 0.247 s (129.7 MiB/s) | 0.284 s (112.8 MiB/s) | 0.665 s (48.1 MiB/s) | 33558528 | 33558528 | 33560812 |
+| 128 | 1.014 s (126.3 MiB/s) | 1.114 s (114.9 MiB/s) | 2.679 s (47.8 MiB/s) | 134221824 | 134221824 | 134244190 |
+| 256 | 1.882 s (136.1 MiB/s) | 2.260 s (113.3 MiB/s) | 5.266 s (48.6 MiB/s) | 268439552 | 268443648 | 268487106 |
+| 512 | 3.943 s (129.8 MiB/s) | 4.764 s (107.5 MiB/s) | 10.621 s (48.2 MiB/s) | 536875008 | 536883200 | 536974754 |
+
+Both image packers thread their compressors and stay 2.2–2.8x ahead of
+single-threaded gzip at every size; mksquashfs zstd leads mkfs.erofs
+lz4 by roughly 10–20%. All three outputs stay near the input size
+because the payload is incompressible.
+
+#### Read
+
+| MiB | expanded, first | squashfs, first | erofs, first | tar.gz, first | expanded, warm | squashfs, warm | erofs, warm | tar.gz, warm |
+|-----|-----------------|-----------------|--------------|---------------|----------------|----------------|-------------|--------------|
+| 32 | 0.012 s (2666.7 MiB/s) | 0.024 s (1309.6 MiB/s) | 0.019 s (1670.0 MiB/s) | 0.028 s (1125.3 MiB/s) | 0.009 s | 0.010 s | 0.018 s | 0.027 s |
+| 128 | 0.048 s (2666.7 MiB/s) | 0.107 s (1200.7 MiB/s) | 0.090 s (1419.7 MiB/s) | 0.110 s (1166.4 MiB/s) | 0.036 s | 0.042 s | 0.084 s | 0.098 s |
+| 256 | 0.105 s (2438.1 MiB/s) | 0.198 s (1295.3 MiB/s) | 0.173 s (1475.6 MiB/s) | 0.236 s (1084.0 MiB/s) | 0.067 s | 0.082 s | 0.140 s | 0.204 s |
+| 512 | 0.267 s (1917.6 MiB/s) | 0.423 s (1210.8 MiB/s) | 0.366 s (1398.3 MiB/s) | 0.476 s (1076.3 MiB/s) | 0.153 s | 0.157 s | 0.266 s | 0.432 s |
+
+The cold read through either FUSE mount lands at 1200–1670 MiB/s,
+roughly half to two thirds of the cold walk of the expanded tree and
+still ahead of the tar.gz stream, which inflates every byte on one
+thread. Warm squashfs nearly matches the expanded tree at
+3020–3270 MiB/s: after the first pass the kernel page cache serves the
+mount, so zstd decompression happens once. Warm erofsfuse shows no
+comparable lift and stays at 1529–1922 MiB/s, and warm tar.gz stays at
+1177–1303 MiB/s; both redo their decompression on every pass. Unlike
+the ~3 s dmg attach on macOS, both FUSE attaches finish in
+single-digit milliseconds.
 
 ---
 
@@ -207,10 +244,33 @@ docs/benchmark/bench-img-path.py \
 packs with `tar -czf` and reads by streaming member bytes; it does not
 mount. `--src DIR` packs an existing tree instead of generating a new
 one. For dmg, `--compression` is `ULFO`, `ULMO`, or `UDRO`, and `--fs`
-is `APFS` or `HFS+`. `--probe-ops` defaults to 2000. `--keep` leaves
+is `APFS` or `HFS+`. For squashfs, `--comp` is `zstd` (default),
+`gzip`, `lz4`, or `xz`; for erofs it is `zstd`, `lz4`, or `gzip`,
+defaulting to the best compressor the host's `mkfs.erofs` lists.
+`--probe-ops` defaults to 2000. `--keep` leaves
 `tiler-img-bench/` under `--path`. `--tsv` prints only step rows for
 scripts that build a larger table. Payload bytes are `os.urandom`.
 
-On Linux the same `--path` pattern will apply once squashfs and erofs
-are implemented; until then those `--type` values exit with "not
-implemented yet".
+On Linux the same `--path` pattern works with `--type squashfs` and
+`--type erofs`:
+
+```sh
+# squashfs on a NAS share, create and both read passes
+docs/benchmark/bench-img-path.py \
+  --path /mnt/share/bench \
+  --type squashfs \
+  --mode both \
+  --size-mib 512
+
+# read an existing erofs image back without writing under --path
+docs/benchmark/bench-img-path.py \
+  --path /mnt/share/bench \
+  --type erofs \
+  --mode read \
+  --image /mnt/share/bench/tiler-img-bench/image.erofs \
+  --no-probe
+```
+
+Cold passes try a passwordless cache drop first (`sudo -n purge` on
+macOS, `drop_caches` on Linux); the `purge=` note says whether it
+worked.
