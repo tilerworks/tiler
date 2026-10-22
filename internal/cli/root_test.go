@@ -249,9 +249,9 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 	}
 	for _, want := range []string{
 		"version: 1",
-		"images_dir: ~/.tiler/images",
-		"sessions_dir: ~/.tiler/sessions",
-		"cache_dir: ~/.tiler/cache",
+		"images_dir: .tiler/images",
+		"sessions_dir: .tiler/sessions",
+		"cache_dir: .tiler/cache",
 		"# split_size: 2G",
 	} {
 		if !strings.Contains(string(data), want) {

@@ -22,9 +22,9 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	for _, want := range []string{
 		"version: 1",
-		"images_dir: ~/.tiler/images",
-		"sessions_dir: ~/.tiler/sessions",
-		"cache_dir: ~/.tiler/cache",
+		"images_dir: .tiler/images",
+		"sessions_dir: .tiler/sessions",
+		"cache_dir: .tiler/cache",
 		"log_level: info",
 		"merged root",
 		"# image_format: squashfs",
@@ -68,6 +68,23 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if cfg.UserFile() != path {
 		t.Fatalf("UserFile() = %q, want %q", cfg.UserFile(), path)
+	}
+
+	// The same file, read while the process home is elsewhere, must
+	// keep directories beside the config rather than following HOME.
+	otherHome := t.TempDir()
+	cfg, err = Load(home, otherHome, home, "", Patch{})
+	if err != nil {
+		t.Fatalf("load under a different home: %v", err)
+	}
+	if cfg.ImagesDir != filepath.Join(home, ".tiler", "images") {
+		t.Fatalf("images = %q, want the config directory", cfg.ImagesDir)
+	}
+	if cfg.SessionsDir != filepath.Join(home, ".tiler", "sessions") {
+		t.Fatalf("sessions = %q, want the config directory", cfg.SessionsDir)
+	}
+	if cfg.CacheDir != filepath.Join(home, ".tiler", "cache") {
+		t.Fatalf("cache = %q, want the config directory", cfg.CacheDir)
 	}
 }
 

@@ -335,9 +335,9 @@ fails loudly when incompatible.
 
 ```yaml
 version: 1
-images_dir: ~/.tiler/images
-sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
-cache_dir: ~/.tiler/cache
+images_dir: .tiler/images
+sessions_dir: .tiler/sessions      # merged root: records + per-session runtime
+cache_dir: .tiler/cache
 log_level: info
 # image_format: squashfs        # squashfs or erofs; omit to infer
 # image_compression: zstd       # omit to use the format default

@@ -10,16 +10,18 @@ import (
 // userFileTemplate is written to $HOME/.tiler.yaml the first time
 // tiler runs and the file is missing. Every value matches the
 // built-in defaults, so creating the file does not change behavior;
-// it only gives the user a documented, editable starting point. The
-// ~/ prefix expands with the home directory (see resolvePath),
-// which keeps the file portable if the home path changes.
+// it only gives the user a documented, editable starting point.
+// Directory values are relative to this file. A ~/ prefix expands
+// with the process home (see resolvePath) and points at the wrong
+// tree when that home is not the directory holding the file, such
+// as an e2e run whose HOME differs from the config location.
 const userFileTemplate = `# tiler user configuration (auto-generated on first run).
 # Edit or comment out keys to override built-in defaults.
 # Relative paths resolve against this file's directory; ~/ expands to $HOME.
 version: 1
-images_dir: ~/.tiler/images
-sessions_dir: ~/.tiler/sessions      # merged root: records + per-session runtime
-cache_dir: ~/.tiler/cache
+images_dir: .tiler/images
+sessions_dir: .tiler/sessions      # merged root: records + per-session runtime
+cache_dir: .tiler/cache
 log_level: info
 # image_format: squashfs        # squashfs or erofs; omit to infer from tools
 # image_compression: zstd       # omit to use the format default

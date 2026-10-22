@@ -273,9 +273,9 @@ tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释�
 
 ```yaml
 version: 1
-images_dir: ~/.tiler/images
-sessions_dir: ~/.tiler/sessions      # 合并根：记录 + 每会话 runtime
-cache_dir: ~/.tiler/cache
+images_dir: .tiler/images
+sessions_dir: .tiler/sessions      # 合并根：记录 + 每会话 runtime
+cache_dir: .tiler/cache
 log_level: info
 # image_format: squashfs        # squashfs 或 erofs；省略则按工具推断
 # image_compression: zstd       # 省略则用该格式的默认压缩
