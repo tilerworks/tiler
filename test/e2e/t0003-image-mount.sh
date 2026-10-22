@@ -52,6 +52,7 @@ src_dir=$HOME/src/app
 work_dir=$HOME/work/app
 src2_dir=$HOME/src/tools
 work2_dir=$HOME/work/tools
+image=$HOME/.tiler/images/alice/app/image.sqsh
 
 # Guarantee every FUSE mount is torn down before the framework removes
 # the trash directory, even if an assertion fails or the run is
@@ -75,7 +76,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image from a source
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
 	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
-	find "$HOME/.tiler/images" -name "*.sqsh" | grep -q .
+	test -f "$image" &&
+	test ! -e "${image%.sqsh}.dmg"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the image read-write with an upper layer' '

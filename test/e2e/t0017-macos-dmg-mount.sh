@@ -64,7 +64,7 @@ test_expect_success TILER,MACOS 'build image.dmg from a directory' '
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
 	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
 	test -f "$image" &&
-	test ! -e "$HOME/.tiler/images/alice/app/image.sqsh"
+	test ! -e "${image%.dmg}.sqsh"
 '
 
 test_expect_success TILER,MACOS 'a writable mount writes through upper.shadow' '

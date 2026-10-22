@@ -80,7 +80,7 @@ test_expect_success TILER,MACOS 'baking publishes a new image and leaves the sha
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
 	test -f "$image" &&
-	test ! -e "$HOME/.tiler/images/alice/app/image.sqsh" &&
+	test ! -e "${image%.dmg}.sqsh" &&
 	test -f "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
 	test -f "$HOME/.tiler/images/alice/app/hold/$old_id/image.dmg"
