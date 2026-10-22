@@ -3,6 +3,7 @@
 package container
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -27,12 +28,12 @@ func TestNewHdiutilCommandNamesSystemBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Path != HdiutilPath {
-		t.Fatalf("path = %q", cmd.Path)
+	if filepath.Base(cmd.Path) != HdiutilPath || cmd.Args[0] != HdiutilPath {
+		t.Fatalf("path = %q args = %q", cmd.Path, cmd.Args)
 	}
 	want := append([]string{HdiutilPath}, argv[1:]...)
 	if !slices.Equal(cmd.Args, want) {
 		t.Fatalf("args = %q", cmd.Args)
 	}
-	// Do not start cmd. Tests must not exec /usr/bin/hdiutil.
+	// Do not start cmd. Tests must not exec hdiutil.
 }

@@ -6,12 +6,9 @@ package host
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 )
-
-const systemHdiutilPath = "/usr/bin/hdiutil"
 
 // Available reports that real host probes can be constructed on
 // macOS. It does not check whether hdiutil is installed.
@@ -35,15 +32,9 @@ func Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// SystemHdiutil reports whether the system disk-image tool can run.
-// The check is a stat of /usr/bin/hdiutil. It does not execute it.
+// SystemHdiutil reports whether hdiutil can be resolved on PATH.
+// The check does not execute it.
 func SystemHdiutil() error {
-	info, err := os.Stat(systemHdiutilPath)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return fmt.Errorf("%s is not executable", systemHdiutilPath)
-	}
-	return nil
+	_, err := exec.LookPath("hdiutil")
+	return err
 }

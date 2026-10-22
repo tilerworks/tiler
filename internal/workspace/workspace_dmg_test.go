@@ -430,7 +430,7 @@ func TestDMGReplayAttachUsesOriginalShadow(t *testing.T) {
 
 func TestDMGMountUnavailableOffDarwin(t *testing.T) {
 	if runtime.GOOS == "darwin" {
-		t.Skip("darwin workspace calls /usr/bin/hdiutil")
+		t.Skip("darwin workspace calls hdiutil")
 	}
 	req, _ := dmgFixture(t, false)
 	_, err := mount(req, nil, testHooks())

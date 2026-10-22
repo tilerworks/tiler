@@ -57,7 +57,7 @@ func TestDarwinDoctorHdiutilMissing(t *testing.T) {
 	if tool.Status != statusFail {
 		t.Fatalf("status = %s, want fail (%s)", tool.Status, tool.Detail)
 	}
-	if !strings.Contains(tool.Detail, "restore the system hdiutil") {
+	if !strings.Contains(tool.Detail, "not found on PATH") {
 		t.Fatalf("detail = %q", tool.Detail)
 	}
 	for _, absent := range []string{"brew", "apt", "dnf"} {

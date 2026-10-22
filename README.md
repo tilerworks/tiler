@@ -46,9 +46,9 @@ macOS images are one `image.dmg` file. Compressions are `ulfo`
 in `sessions/<name>/runtime/m<seq>/upper.shadow`. `tiler umount`
 leaves that file in place and leaves the mountpoint empty.
 
-`tiler doctor` passes `image_toolchain` when `/usr/bin/hdiutil` can
-run, and fails with a note to restore the system hdiutil when it
-cannot. It does not report `fuse_device`, `fuse_overlayfs`,
+`tiler doctor` passes `image_toolchain` when `hdiutil` is on
+`PATH`, and fails with a note that it was not found when it is
+missing. It does not report `fuse_device`, `fuse_overlayfs`,
 `fusermount3`, or `squashfuse_subdir` as failures. A missing `git`
 suggests `xcode-select --install`. The single-file size probe stays,
 because `image.dmg` is one file. Cold-read measurements are info.

@@ -19,7 +19,7 @@ func (s Stack) Complete() bool { return len(s.Missing) == 0 }
 
 // Stacks reports each selectable image format in registration order.
 // dmg stays out of this list. Darwin doctor passes image_toolchain
-// from /usr/bin/hdiutil itself, and InferType keeps the FUSE stacks
+// when hdiutil is on PATH, and InferType keeps the FUSE stacks
 // so Linux does not start requiring hdiutil. look resolves a binary
 // name the way exec.LookPath does. A nil look treats every tool as
 // missing.

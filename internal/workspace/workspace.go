@@ -111,7 +111,7 @@ type Request struct {
 	// Run executes external tools. Nil runs them through exec.
 	Run func(name string, args ...string) error
 	// Hdiutil runs hdiutil for a dmg mount and returns stdout. Nil
-	// selects the platform exec: /usr/bin/hdiutil on darwin, and
+	// selects the platform exec: hdiutil on PATH on darwin, and
 	// ErrUnavailable on every other host. FUSE mounts ignore it.
 	Hdiutil func(argv []string, consErr error) ([]byte, error)
 }

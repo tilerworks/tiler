@@ -26,7 +26,7 @@ var (
 	// packTool runs mksquashfs. Nil keeps the image package default.
 	packTool image.ToolRunner
 	// hdiutilTool runs hdiutil create and convert. Nil keeps the
-	// platform default, which executes /usr/bin/hdiutil only on
+	// platform default, which executes hdiutil from PATH only on
 	// darwin. Tests install a recorder and do not exec hdiutil.
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.

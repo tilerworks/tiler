@@ -15,7 +15,7 @@ import (
 // readHdiutilInfo runs hdiutil info -plist. Nil means this host
 // reconciles sessions through the mount table. The darwin file sets
 // the real reader. Tests replace it with a plist fixture and must
-// not execute /usr/bin/hdiutil.
+// not execute hdiutil.
 var readHdiutilInfo func() ([]byte, error)
 
 // runHdiutil executes one hdiutil vector and returns stdout. Nil

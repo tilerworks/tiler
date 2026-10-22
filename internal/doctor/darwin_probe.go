@@ -56,9 +56,9 @@ func probeDarwinGit(ctx context.Context, seams Seams) (Result, error) {
 	return pass(nameGit, ver.raw), nil
 }
 
-// probeDarwinToolchain passes when /usr/bin/hdiutil can run. A
-// missing binary tells the user to restore the system tool and does
-// not suggest a package install. HFS+ is named when every new image
+// probeDarwinToolchain passes when hdiutil is on PATH. A missing
+// binary says so and does not suggest a package install. HFS+ is
+// named when every new image
 // uses that filesystem because shadow cannot attach an APFS image.
 func probeDarwinToolchain(ctx context.Context, seams Seams) (Result, error) {
 	if err := contextErr(ctx, nil); err != nil {

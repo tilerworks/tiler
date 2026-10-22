@@ -67,7 +67,7 @@ func fileUID(info os.FileInfo) uint32 {
 	return uint32(os.Geteuid())
 }
 
-// newHdiutil builds an unstarted command for /usr/bin/hdiutil.
+// newHdiutil builds an unstarted command for hdiutil on PATH.
 func newHdiutil(argv []string, consErr error) (*exec.Cmd, error) {
 	return container.NewHdiutilCommand(argv, consErr)
 }
@@ -78,7 +78,7 @@ func ReadHdiutilInfo() ([]byte, error) {
 	return execHdiutil(container.HdiutilInfoArgv(), nil)
 }
 
-// execHdiutil runs /usr/bin/hdiutil. A constructor error is returned
+// execHdiutil runs hdiutil from PATH. A constructor error is returned
 // without starting the process.
 func execHdiutil(argv []string, consErr error) ([]byte, error) {
 	cmd, err := newHdiutil(argv, consErr)

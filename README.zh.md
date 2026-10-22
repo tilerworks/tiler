@@ -40,8 +40,8 @@ macOS 上的镜像是单个 `image.dmg`。压缩是 `ulfo`（默认）、`ulmo`
 `sessions/<name>/runtime/m<seq>/upper.shadow`。`tiler umount`
 留下这个影子文件，同时把挂载点清空。
 
-`tiler doctor` 在 `/usr/bin/hdiutil` 能运行时让 `image_toolchain`
-通过；不能运行时失败，并说明要恢复系统自带的 hdiutil。它不再把
+`tiler doctor` 在 `PATH` 上能找到 `hdiutil` 时让 `image_toolchain`
+通过；找不到时失败，并说明它不在 `PATH` 上。它不再把
 `fuse_device`、`fuse_overlayfs`、`fusermount3`、`squashfuse_subdir`
 当成失败项。缺少 `git` 时建议执行 `xcode-select --install`。
 单文件大小探测仍然保留，因为 `image.dmg` 是一个文件。冷读是

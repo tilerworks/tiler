@@ -146,7 +146,7 @@ func HdiutilInfoArgv() []string {
 // RunHdiutil invokes run with a constructor vector. consErr is
 // returned unchanged and run is not called, so a failed constructor
 // is never executed. The runner name is hdiutil. The darwin file
-// names /usr/bin/hdiutil for a later exec; tests pass a recorder.
+// execs that name through PATH; tests pass a recorder.
 func RunHdiutil(run ToolRunner, argv []string, consErr error) error {
 	args, err := hdiutilArgs(argv, consErr)
 	if err != nil {

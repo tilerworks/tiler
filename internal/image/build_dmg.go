@@ -41,7 +41,7 @@ type DMGRequest struct {
 	// Now returns the creation time. Nil means time.Now.
 	Now func() time.Time
 	// Run executes hdiutil. Nil uses the platform default, which
-	// calls /usr/bin/hdiutil only on darwin. A failed constructor
+	// calls hdiutil from PATH only on darwin. A failed constructor
 	// is not executed.
 	Run ToolRunner
 }

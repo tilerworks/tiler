@@ -33,7 +33,7 @@ const (
 	// darwinProbeCount is git, the hdiutil toolchain, two file-limit
 	// probes, three storage probes, and two contrib probes.
 	darwinProbeCount = 9
-	hdiutilMissing   = "/usr/bin/hdiutil cannot run; restore the system hdiutil"
+	hdiutilMissing   = "hdiutil cannot run; it was not found on PATH"
 	dmgHFSDetail     = "dmg; filesystem HFS+ because attach -shadow cannot use an APFS image on this system"
 	gitDarwinInstall = "xcode-select --install"
 )
@@ -52,10 +52,10 @@ type Seams struct {
 	// file in dir.
 	Measure func(ctx context.Context, dir string) (PerfNumbers, error)
 	// Profile selects the probe set. Empty is the Linux FUSE set.
-	// profileDarwin checks /usr/bin/hdiutil and does not fail the
+	// profileDarwin checks hdiutil on PATH and does not fail the
 	// FUSE probes.
 	Profile string
-	// Hdiutil reports whether /usr/bin/hdiutil can run. The darwin
+	// Hdiutil reports whether hdiutil is on PATH. The darwin
 	// profile requires it. Production stats the path and does not
 	// execute it. Tests inject present and missing.
 	Hdiutil func() error
@@ -149,7 +149,7 @@ func (s Seams) listedProbeCount() int {
 // an unavailable FUSE device becomes a fail result. Image container
 // tools are one aggregate: at least one complete stack passes, a
 // missing stack warns, and no complete stack fails image_toolchain.
-// The darwin profile checks /usr/bin/hdiutil instead of those FUSE
+// The darwin profile checks hdiutil on PATH instead of those FUSE
 // failures. The storage probes degrade to warn or info. The options
 // carry the configured storage directories and split settings. An
 // error is returned only when the set cannot be built, including a

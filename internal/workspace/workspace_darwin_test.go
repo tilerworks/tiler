@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/container"
@@ -23,8 +24,8 @@ func TestDarwinWorkspaceUsesSystemHdiutil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Path != container.HdiutilPath {
-		t.Fatalf("path = %q", cmd.Path)
+	if filepath.Base(cmd.Path) != container.HdiutilPath || cmd.Args[0] != container.HdiutilPath {
+		t.Fatalf("path = %q args = %q", cmd.Path, cmd.Args)
 	}
 	if cmd.Process != nil {
 		t.Fatal("command was started")
