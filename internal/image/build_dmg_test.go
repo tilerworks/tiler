@@ -17,6 +17,10 @@ type dmgRunner struct {
 	body  []byte
 	err   error
 	calls [][]string
+	// afterConvertShadow, when set, is written to the -shadow path
+	// after a successful convert, mimicking hdiutil rewriting the
+	// live shadow.
+	afterConvertShadow []byte
 }
 
 func (d *dmgRunner) run(name string, _ []string, args ...string) error {
@@ -24,6 +28,13 @@ func (d *dmgRunner) run(name string, _ []string, args ...string) error {
 	if d.body != nil {
 		if err := os.WriteFile(dmgArgOut(args), d.body, 0o644); err != nil {
 			return err
+		}
+	}
+	if d.err == nil && d.afterConvertShadow != nil {
+		if shadow := dmgArgShadow(args); shadow != "" {
+			if err := os.WriteFile(shadow, d.afterConvertShadow, 0o644); err != nil {
+				return err
+			}
 		}
 	}
 	return d.err
@@ -39,6 +50,15 @@ func dmgArgOut(args []string) string {
 		return ""
 	}
 	return args[len(args)-1]
+}
+
+func dmgArgShadow(args []string) string {
+	for i, arg := range args {
+		if arg == "-shadow" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func writeShadow(t *testing.T, sessions, name string, seq int, body []byte) string {
@@ -220,13 +240,17 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 		t.Fatalf("first argv = %q, want image %s", runner.calls, active)
 	}
 	// A newer session can pin the image the first bake published.
-	// This shadow still belongs to the held base. Without ViewDir
-	// there is no content fingerprint, so convert runs again.
+	// This shadow still belongs to the held base. Change the shadow
+	// so the idle fingerprint misses and convert runs again.
 	published, err := Load(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	pins[published.ID] = true
+	shadowBody = []byte("live-shadow-again")
+	if err := os.WriteFile(shadow, shadowBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runner.body = []byte("second-bake")
 	if _, err := BuildDMG(first); err != nil {
 		t.Fatal(err)
@@ -251,21 +275,18 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 	assertBytes(t, held, oldBody)
 }
 
-func TestBakeDMGIdleSkipsConvertWhenViewUnchanged(t *testing.T) {
+func TestBakeDMGIdleSkipsConvertWhenShadowUnchanged(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := seedDMGActive(t, repo, []byte("old-base"))
-	shadow := writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("shadow"))
-	view := t.TempDir()
-	if err := os.WriteFile(filepath.Join(view, "KEEP.txt"), []byte("baked"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runner := &dmgRunner{body: []byte("first-bake")}
+	shadow := writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("pre-shadow"))
+	postShadow := []byte("post-shadow")
+	runner := &dmgRunner{body: []byte("first-bake"), afterConvertShadow: postShadow}
 	req := DMGRequest{
-		Config: cfg, Name: "alice/app", Shadow: shadow, ViewDir: view,
+		Config: cfg, Name: "alice/app", Shadow: shadow,
 		MountedID: old.ID, Builder: "test",
 		Refs: holdSet{ids: map[string]bool{old.ID: true}}, Run: runner.run,
 	}
@@ -273,7 +294,20 @@ func TestBakeDMGIdleSkipsConvertWhenViewUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	meta, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContent, err := shadowContentSHA256(shadow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ContentSHA256 != wantContent {
+		t.Fatalf("content_sha256 = %s, want post-convert %s", meta.ContentSHA256, wantContent)
+	}
+	assertBytes(t, shadow, postShadow)
 	runner.body = []byte("must-not-publish")
+	runner.afterConvertShadow = []byte("must-not-rewrite")
 	second, err := BuildDMG(req)
 	if err != nil {
 		t.Fatal(err)
@@ -285,9 +319,28 @@ func TestBakeDMGIdleSkipsConvertWhenViewUnchanged(t *testing.T) {
 		t.Fatalf("idle id = %s, want %s", second.ID, first.ID)
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("first-bake"))
+	assertBytes(t, shadow, postShadow)
 	if _, err := os.Stat(filepath.Join(repo.Dir, "archives")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("idle bake archived: %v", err)
 	}
+	// A write into the live shadow must miss the idle fingerprint.
+	if err := os.WriteFile(shadow, []byte("user-write"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner.body = []byte("second-bake")
+	runner.afterConvertShadow = []byte("post-second")
+	third, err := BuildDMG(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("changed shadow skipped convert: calls = %q", runner.calls)
+	}
+	if third.ID == first.ID {
+		t.Fatal("changed shadow reused the idle id")
+	}
+	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("second-bake"))
+	assertBytes(t, shadow, []byte("post-second"))
 }
 
 func TestBuildDMGCreateIdleSkipsNonDeterministicPacker(t *testing.T) {

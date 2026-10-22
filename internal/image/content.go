@@ -66,6 +66,18 @@ func contentEntry(path, rel string, entry fs.DirEntry) (string, error) {
 	}
 }
 
+// shadowContentSHA256 is the bake fingerprint: sha256 of the session
+// upper.shadow file. Idle bakes compare this digest to
+// Meta.ContentSHA256. Callers hash after a successful convert,
+// because hdiutil rewrites the shadow bytes.
+func shadowContentSHA256(path string) (string, error) {
+	sum, err := fileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum[:]), nil
+}
+
 // dmgContentIdle reports an active dmg that already records the same
 // logical content and compression, with no incremental chain.
 func dmgContentIdle(active Meta, contentSHA256, compression string) bool {

@@ -24,12 +24,8 @@ type DMGRequest struct {
 	SrcDir string
 	// Shadow is sessions/<name>/runtime/m<seq>/upper.shadow. Empty
 	// for a directory create. The file is not renamed or removed.
+	// Its post-convert digest is the bake content fingerprint.
 	Shadow string
-	// ViewDir is the live mountpoint of a shadow bake. Its tree
-	// digest is the content fingerprint: hdiutil convert rewrites
-	// the shadow file, so the shadow bytes cannot mark an idle bake.
-	// Empty skips the fingerprint (tests that only convert).
-	ViewDir string
 	// MountedID is the full id this shadow was attached to. When
 	// hold/<id>/image.dmg exists, convert reads that file instead of
 	// the active image.dmg. Empty selects a held copy Refs still
@@ -120,16 +116,15 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err := requireDMGCompression(comp); err != nil {
 		return FullResult{}, err
 	}
-	var content string
-	if req.ViewDir != "" {
-		sum, err := dirContentSHA256(req.ViewDir)
-		if err != nil {
-			return FullResult{}, fmt.Errorf("build: %w", err)
-		}
-		content = sum
-		if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
-			return idle, err
-		}
+	// Idle compares the live shadow to the digest stored after the
+	// last successful convert. Walking the mount view is unnecessary:
+	// only the shadow carries bake deltas.
+	content, err := shadowContentSHA256(req.Shadow)
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
+		return idle, err
 	}
 	tmp, err := dmgTemp(repo)
 	if err != nil {
@@ -141,6 +136,12 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 		base, req.Compression, baseComp, req.Shadow, tmp)
 	if err := runDMG(req, argv, consErr, tmp); err != nil {
 		return FullResult{}, err
+	}
+	// convert may rewrite the shadow; record the post-convert bytes.
+	content, err = shadowContentSHA256(req.Shadow)
+	if err != nil {
+		removeFile(tmp)
+		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
 	return finishDMG(repo, req, tmp, comp, content)
 }

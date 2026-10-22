@@ -101,12 +101,13 @@ type Meta struct {
 	Builder    string    `yaml:"builder"`
 	Deprecated bool      `yaml:"deprecated"`
 	// ContentSHA256 is the logical content fingerprint for a dmg
-	// publish. Directory creates and shadow bakes hash the packed
-	// directory tree (the bake uses the live mountpoint, not the
-	// shadow file, because convert rewrites shadow bytes). Empty on
-	// squashfs and erofs, where the packed payload is already
-	// deterministic. An identical fingerprint is an idle rebuild
-	// that skips hdiutil, because real disk images embed timestamps.
+	// publish. Directory creates hash the packed source tree. Shadow
+	// bakes hash the session upper.shadow after convert (hdiutil
+	// rewrites that file, so the pre-convert bytes cannot mark an
+	// idle bake). Empty on squashfs and erofs, where the packed
+	// payload is already deterministic. An identical fingerprint is
+	// an idle rebuild that skips hdiutil, because real disk images
+	// embed timestamps.
 	ContentSHA256 string       `yaml:"content_sha256,omitempty"`
 	Chain         []ChainEntry `yaml:"chain,omitempty"`
 	// Blocks is the byte-block manifest of a split payload. It stays

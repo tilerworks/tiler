@@ -4,9 +4,10 @@
 #
 # Real hdiutil embeds timestamps, so packing the same tree twice
 # yields different image.dmg bytes. Build records a content_sha256
-# of the source tree (or of the bake inputs) and skips hdiutil when
-# that fingerprint matches the active image, so a repeat is idle:
-# same id, unchanged meta.yaml, no archives or hold.
+# of the source tree (create) or of the session upper.shadow after
+# convert (bake) and skips hdiutil when that fingerprint matches the
+# active image, so a repeat is idle: same id, unchanged meta.yaml,
+# no archives or hold.
 #
 # The case covers three CLI shapes:
 #

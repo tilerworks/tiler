@@ -124,9 +124,11 @@ Available now:
   `$HOME/.tiler`; comparison uses real paths, so a symlink into or
   over those trees is refused the same way. An identical full or
   incremental payload is a no-op that reprints the same id. A dmg
-  pack is not byte-stable under real hdiutil, so a create or bake
-  records `content_sha256` of the packed directory tree and skips
-  hdiutil when that fingerprint already matches the active image.
+  pack is not byte-stable under real hdiutil, so a create records
+  `content_sha256` of the packed directory tree, a bake records the
+  sha256 of the session `upper.shadow` after convert, and either
+  skips hdiutil when that fingerprint already matches the active
+  image.
   With `--image` naming a different library image, a path under a
   live view (often a subdirectory) packs as that image's full source.
   Success prints one line:
