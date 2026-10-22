@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -43,6 +44,32 @@ func TestIdentityLookupFromActiveRecord(t *testing.T) {
 	}
 	if _, ok, err := ident.Lookup(view); ok || err != nil {
 		t.Fatalf("closed record = %v %v", ok, err)
+	}
+}
+
+func TestIdentityLookupMatchesResolvedMountPoint(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	concrete := filepath.Join(dir, "concrete")
+	if err := os.Mkdir(concrete, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(concrete, link); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := filepath.Abs(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(recorded)
+	if err != nil || resolved == recorded {
+		t.Fatalf("resolved = %s, recorded = %s, %v", resolved, recorded, err)
+	}
+	seedMounted(t, e, "dev", recorded)
+	name, ok, err := Identity{Store: Store{Dir: dir}}.Lookup(resolved)
+	if err != nil || !ok || name.String() != "alice/app" {
+		t.Fatalf("lookup = %v %v %v", name, ok, err)
 	}
 }
 

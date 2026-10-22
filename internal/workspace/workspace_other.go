@@ -1,11 +1,12 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package workspace
 
 import "os"
 
-// available reports that mounting never works off Linux. The host
-// mount table and /dev/fuse are never touched here.
+// available reports that mounting never works off Linux and macOS.
+// Those hosts have their own files. The mount table and /dev/fuse
+// are never touched here.
 func available() error {
 	return ErrUnavailable
 }

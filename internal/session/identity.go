@@ -13,9 +13,11 @@ type Identity struct {
 	Store
 }
 
-// Lookup returns the image identity behind a mount point. A record
-// another process holds is skipped this round, which reads as an
-// unresolved identity.
+// Lookup returns the image identity behind a mount point. The
+// point is compared with SameMountPoint: hdiutil info resolves a
+// symlink such as /tmp, and the record stores filepath.Abs. A
+// record another process holds is skipped this round, which reads
+// as an unresolved identity.
 func (i Identity) Lookup(mountPoint string) (mountinfo.Name, bool, error) {
 	var (
 		found mountinfo.Name
@@ -27,7 +29,7 @@ func (i Identity) Lookup(mountPoint string) (mountinfo.Name, bool, error) {
 		}
 		for _, action := range rec.Actions {
 			if action.Type != TypeMount || action.Status == StatusUnmounted ||
-				action.Mountpoint != mountPoint {
+				!SameMountPoint(action.Mountpoint, mountPoint) {
 				continue
 			}
 			if action.Owner != "" && action.Repo != "" {

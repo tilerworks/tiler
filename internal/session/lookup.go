@@ -41,6 +41,9 @@ func (e *Engine) SessionForPath(path string) (PathSession, error) {
 	if err != nil {
 		return PathSession{}, err
 	}
+	if e.useDiskImages() {
+		return e.resolveDiskPath(path, normalized)
+	}
 	hit, err := e.resolveNormalizedPath(path, normalized)
 	if err != nil {
 		return PathSession{}, err

@@ -72,12 +72,27 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	if err := commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam); err != nil {
+	dst, err := singlePublishPath(repo, meta)
+	if err != nil {
+		removeFile(imgTmp)
+		removeFile(metaTmp)
+		return err
+	}
+	if err := commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam); err != nil {
 		removeFile(imgTmp)
 		removeFile(metaTmp)
 		return err
 	}
 	return nil
+}
+
+// singlePublishPath is the active file a single-file publish renames
+// onto. dmg lands on image.dmg. Squashfs and erofs keep image.sqsh.
+func singlePublishPath(repo Repo, meta Meta) (string, error) {
+	if meta.Format.Type != FormatDMG {
+		return repo.ImagePath(), nil
+	}
+	return activePayloadPath(repo, meta)
 }
 
 // publishStaged publishes a temporary image and meta pair that
@@ -105,7 +120,11 @@ func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam
 	if !match {
 		return errors.New("publish: payload does not match meta")
 	}
-	return commit(repo, existing, exists, meta, imgTmp, repo.ImagePath(), metaTmp, refs, seam)
+	dst, err := singlePublishPath(repo, meta)
+	if err != nil {
+		return err
+	}
+	return commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam)
 }
 
 // publishStagedPayload publishes a temporary split payload directory
@@ -248,22 +267,46 @@ func missingPayloadError(meta Meta) error {
 	return errors.New("publish: active payload missing")
 }
 
+// singleFileNames lists the single-file payload names that count in
+// a directory. dmg meta names image.dmg. Squashfs, erofs, and any
+// other recorded type keep image.sqsh. An empty type means the meta
+// that would name the file is missing, so both names count.
+func singleFileNames(formatType string) []string {
+	if formatType == "" {
+		return []string{fileImage, ImageDMG}
+	}
+	return []string{activeImageName(formatType)}
+}
+
 // payloadFormPaths lists the payload shapes as they rest in a
 // directory that preserves the active layout: the repository
-// directory, a hold, or an archive.
-func payloadFormPaths(dir string) []string {
-	return []string{
-		filepath.Join(dir, fileImage),
+// directory, a hold, or an archive. formatType selects the
+// single-file name. Blocks and members stay in every list; repair
+// still recognizes those leftovers.
+func payloadFormPaths(dir, formatType string) []string {
+	names := singleFileNames(formatType)
+	paths := make([]string, 0, len(names)+2)
+	for _, name := range names {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return append(paths,
 		filepath.Join(dir, dirBlocks),
 		filepath.Join(dir, dirMembers),
-	}
+	)
 }
 
 // anyPayloadExists reports whether any payload form rests in a
 // directory. Presence decides the shape when the meta that would
-// name the kind is missing.
+// name the kind is missing, so both single-file names count.
 func anyPayloadExists(dir string) (bool, error) {
-	for _, path := range payloadFormPaths(dir) {
+	return payloadPresent(dir, "")
+}
+
+// payloadPresent reports whether the payload forms for formatType
+// rest in dir. dmg looks for image.dmg. Every other type looks for
+// image.sqsh. An empty formatType accepts either single-file name.
+func payloadPresent(dir, formatType string) (bool, error) {
+	for _, path := range payloadFormPaths(dir, formatType) {
 		there, err := pathExists(path)
 		if err != nil {
 			return false, err
@@ -281,19 +324,20 @@ func activePayloadPath(repo Repo, meta Meta) (string, error) {
 	if PayloadKind(meta) == PayloadBlocks {
 		return repo.BlocksDirPath(meta.ID)
 	}
-	return repo.ImagePath(), nil
+	return filepath.Join(repo.Dir, activeImageName(meta.Format.Type)), nil
 }
 
 // payloadRoot is the outermost file or directory that carries the
 // payload of the kind of meta inside a directory preserving the
 // active layout. Moving the root as a whole keeps the layout
 // identical on both sides: the blocks wrapper travels with its
-// nested id directory.
+// nested id directory. The single-file name follows the format, so
+// dmg moves image.dmg and squashfs and erofs move image.sqsh.
 func payloadRoot(dir string, meta Meta) string {
 	if PayloadKind(meta) == PayloadBlocks {
 		return filepath.Join(dir, dirBlocks)
 	}
-	return filepath.Join(dir, fileImage)
+	return filepath.Join(dir, activeImageName(meta.Format.Type))
 }
 
 func activePayloadExists(repo Repo, meta Meta) (bool, error) {
@@ -305,12 +349,14 @@ func activePayloadExists(repo Repo, meta Meta) (bool, error) {
 }
 
 // holdPayloadPath is where the payload of the kind of meta rests
-// inside a hold directory; holds preserve the active layout.
+// inside a hold directory; holds preserve the active layout. The
+// single-file name follows the format, so a dmg hold keeps
+// image.dmg.
 func holdPayloadPath(hold string, meta Meta) string {
 	if PayloadKind(meta) == PayloadBlocks {
 		return filepath.Join(hold, dirBlocks, meta.ID)
 	}
-	return filepath.Join(hold, fileImage)
+	return filepath.Join(hold, activeImageName(meta.Format.Type))
 }
 
 func stage(dir string, data []byte, meta Meta, seam hooks) (string, string, error) {
@@ -1068,11 +1114,22 @@ func repairTornActive(repo Repo, seam hooks, keep string) error {
 	if err := sweepStrayPayloadTemps(repo, seam, keep); err != nil {
 		return err
 	}
-	payloadExists, err := anyPayloadExists(repo.Dir)
+	metaExists, err := pathExists(repo.MetaPath())
 	if err != nil {
 		return err
 	}
-	metaExists, err := pathExists(repo.MetaPath())
+	// The single-file name follows the meta. A dmg record plus
+	// image.dmg is a live payload; image.sqsh is not that file.
+	// With no meta, either single-file name is still a payload.
+	formatType := ""
+	if metaExists {
+		meta, err := Load(repo.MetaPath())
+		if err != nil {
+			return err
+		}
+		formatType = meta.Format.Type
+	}
+	payloadExists, err := payloadPresent(repo.Dir, formatType)
 	if err != nil {
 		return err
 	}
@@ -1174,7 +1231,7 @@ func repairMissingMeta(repo Repo, seam hooks) error {
 // directory that preserves the active layout. The meta that would
 // name the kind is missing in the repair paths, so presence decides.
 func removeActivePayload(dir string) error {
-	for _, path := range payloadFormPaths(dir) {
+	for _, path := range payloadFormPaths(dir, "") {
 		if err := os.RemoveAll(path); err != nil {
 			return err
 		}
@@ -1222,20 +1279,23 @@ func partialHoldIDs(repo Repo) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		payloadThere, err := anyPayloadExists(hold)
+		metaPath := filepath.Join(hold, fileMeta)
+		meta, loadErr := Load(metaPath)
+		if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+			return nil, loadErr
+		}
+		formatType := ""
+		if loadErr == nil {
+			formatType = meta.Format.Type
+		}
+		payloadThere, err := payloadPresent(hold, formatType)
 		if err != nil {
 			return nil, err
 		}
-		if payloadThere {
+		if payloadThere || loadErr != nil {
 			continue
 		}
-		metaThere, err := pathExists(filepath.Join(hold, fileMeta))
-		if err != nil {
-			return nil, err
-		}
-		if metaThere {
-			partial = append(partial, id)
-		}
+		partial = append(partial, id)
 	}
 	return partial, nil
 }
@@ -1284,7 +1344,11 @@ func restoreLeftoverIncr(repo Repo, id string) error {
 	if err != nil {
 		return err
 	}
-	imageThere, err := pathExists(filepath.Join(hold, fileImage))
+	name, err := restoreSingleName(repo, hold)
+	if err != nil {
+		return err
+	}
+	imageThere, err := pathExists(filepath.Join(hold, name))
 	if err != nil || imageThere {
 		return err
 	}
@@ -1354,9 +1418,11 @@ func pathExists(path string) (bool, error) {
 
 // payloadMatchesMeta reports whether the payload resting in the
 // active slot matches meta: the whole-file digest for the single
-// form, or per-block digests for blocks. A payload that is absent or
-// incomplete is a mismatch rather than an error, so repair keeps
-// going; only genuine IO failures propagate.
+// form, or per-block digests for blocks. The single file is
+// image.dmg when the format is dmg, and image.sqsh for squashfs and
+// erofs. A payload that is absent or incomplete is a mismatch rather
+// than an error, so repair keeps going; only genuine IO failures
+// propagate.
 func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
 	if PayloadKind(meta) == PayloadBlocks {
 		dir, err := repo.BlocksDirPath(meta.ID)
@@ -1365,11 +1431,15 @@ func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
 		}
 		return dirMatchesBlocks(dir, meta.Blocks)
 	}
-	there, err := pathExists(repo.ImagePath())
+	path, err := activePayloadPath(repo, meta)
+	if err != nil {
+		return false, err
+	}
+	there, err := pathExists(path)
 	if err != nil || !there {
 		return false, err
 	}
-	return fileMatchesMeta(repo.ImagePath(), meta)
+	return fileMatchesMeta(path, meta)
 }
 
 // dirMatchesBlocks re-hashes every manifest block under dir. The
@@ -1416,11 +1486,35 @@ func fileMatches(path string, size int64, want string) (bool, error) {
 	return got == want && n == size, nil
 }
 
+// restoreSingleName is the single-file payload a restore moves. The
+// hold meta names the file when it is present; otherwise the active
+// meta does. dmg uses image.dmg. Squashfs, erofs, and a restore with
+// no readable meta keep image.sqsh.
+func restoreSingleName(repo Repo, hold string) (string, error) {
+	paths := []string{
+		filepath.Join(hold, fileMeta),
+		repo.MetaPath(),
+	}
+	for _, path := range paths {
+		meta, err := Load(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return activeImageName(meta.Format.Type), nil
+	}
+	return fileImage, nil
+}
+
 // restoreHold moves a hold back onto the active slot. The hold
 // preserves the active layout, so every payload shape it owns moves
 // back symmetrically: the single file tolerates a missing source,
 // and a directory shape moves only when it rests in the hold and the
-// active slot lacks it.
+// active slot lacks it. The single-file name follows the meta, so a
+// dmg hold returns image.dmg and a squashfs or erofs hold returns
+// image.sqsh.
 func restoreHold(repo Repo, id string, seam hooks) error {
 	hold, err := repo.HoldPath(id)
 	if err != nil {
@@ -1431,8 +1525,12 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 	} else if err != nil {
 		return err
 	}
+	name, err := restoreSingleName(repo, hold)
+	if err != nil {
+		return err
+	}
 	moves := [][2]string{
-		{filepath.Join(hold, fileImage), repo.ImagePath()},
+		{filepath.Join(hold, name), filepath.Join(repo.Dir, name)},
 		{filepath.Join(hold, fileMeta), repo.MetaPath()},
 	}
 	moves, err = appendBlocksRestore(moves, hold, repo.Dir)

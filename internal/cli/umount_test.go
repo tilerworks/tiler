@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,4 +242,195 @@ func TestUmountKeepsNamedSessionAndLiveRemovableViewsActive(t *testing.T) {
 	if rec.State != session.StateActive {
 		t.Errorf("--rm record with a live view = %+v", rec)
 	}
+}
+
+func TestUmountDiskClosesRemovableSession(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	view := filepath.Join(work, "view")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessions := sessionsDir(home)
+	shadow := filepath.Join(sessions, "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("shadow-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeRemovableSessionRecord(t, sessions, "dev",
+		libraryAction("alice/app", view, session.ModeRW))
+	volumes := []statusVolume{{
+		image:  "/images/alice/app/image.dmg",
+		shadow: shadow,
+		point:  view,
+	}}
+	installDiskUmount(t, &volumes, nil)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "umount", view)...)
+	if err != nil {
+		t.Fatalf("umount: %v\n%s", err, stderr)
+	}
+	if stdout != "unmounted "+view+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if strings.Contains(stderr, "mount table") || strings.Contains(stderr, "removable session close") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(sessions, "dev")); !os.IsNotExist(err) {
+		t.Fatalf("--rm session dir survived: %v", err)
+	}
+	if _, err := os.Stat(shadow); !os.IsNotExist(err) {
+		t.Fatalf("--rm left the shadow: %v", err)
+	}
+}
+
+func TestUmountDiskDetachFailureLeavesSessionMounted(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	view := filepath.Join(work, "view")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessions := sessionsDir(home)
+	shadow := filepath.Join(sessions, "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("shadow-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeRemovableSessionRecord(t, sessions, "dev",
+		libraryAction("alice/app", view, session.ModeRW))
+	volumes := []statusVolume{{
+		image:  "/images/alice/app/image.dmg",
+		shadow: shadow,
+		point:  view,
+	}}
+	installDiskUmount(t, &volumes, errors.New("hdiutil: detach failed"))
+
+	_, stderr, _, err := runCmd(t, append(lib, "umount", view)...)
+	if err == nil || !strings.Contains(err.Error()+"\n"+stderr, "detach failed") {
+		t.Fatalf("err = %v\n%s", err, stderr)
+	}
+	if strings.Contains(stderr, "mount table") || strings.Contains(err.Error(), "mount table") {
+		t.Fatalf("detach failure blamed the mount table: %v\n%s", err, stderr)
+	}
+	rec := loadSessionRecord(t, sessions, "dev")
+	if rec.State != session.StateActive || !rec.RemoveOnClose {
+		t.Fatalf("record = %+v, want active --rm", rec)
+	}
+	if len(rec.Actions) != 1 || rec.Actions[0].Status != session.StatusMounted {
+		t.Fatalf("detach failure marked the view unmounted: %+v", rec.Actions)
+	}
+	if body, err := os.ReadFile(shadow); err != nil || string(body) != "shadow-bytes" {
+		t.Fatalf("shadow = %q, %v", body, err)
+	}
+}
+
+func TestUmountDiskKeepsRemovableSessionWhileAnotherVolumeIsAttached(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	view := filepath.Join(work, "view")
+	other := filepath.Join(work, "other")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessions := sessionsDir(home)
+	shadow := filepath.Join(sessions, "dev", "runtime", "m1", "upper.shadow")
+	otherShadow := filepath.Join(sessions, "dev", "runtime", "m2", "upper.shadow")
+	for _, path := range []string{shadow, otherShadow} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("shadow-bytes"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRemovableSessionRecord(t, sessions, "dev",
+		libraryAction("alice/app", view, session.ModeRW),
+		libraryAction("alice/app", other, session.ModeRW))
+	volumes := []statusVolume{
+		{image: "/images/alice/app/image.dmg", shadow: shadow, point: view},
+		{image: "/images/alice/app/image.dmg", shadow: otherShadow, point: other},
+	}
+	installDiskUmount(t, &volumes, nil)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "umount", view)...)
+	if err != nil {
+		t.Fatalf("umount: %v\n%s", err, stderr)
+	}
+	if stdout != "unmounted "+view+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if strings.Contains(stderr, "mount table") || strings.Contains(stderr, "removable session close") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	rec := loadSessionRecord(t, sessions, "dev")
+	if rec.State != session.StateActive || !rec.RemoveOnClose {
+		t.Fatalf("record = %+v, want active --rm", rec)
+	}
+	if status := mountStatus(rec, view); status != session.StatusUnmounted {
+		t.Fatalf("detached view status = %q", status)
+	}
+	if status := mountStatus(rec, other); status != session.StatusMounted {
+		t.Fatalf("live view status = %q", status)
+	}
+	if _, err := os.Stat(otherShadow); err != nil {
+		t.Fatalf("live shadow: %v", err)
+	}
+}
+
+func mountStatus(rec session.Record, point string) string {
+	for _, action := range rec.Actions {
+		if action.Type == session.TypeMount && action.Mountpoint == point {
+			return action.Status
+		}
+	}
+	return ""
+}
+
+// installDiskUmount makes umount take the hdiutil path. detachErr
+// fails the detach and leaves the listing unchanged. A nil error
+// drops the detached point from later info snapshots, which is what
+// hdiutil info reports after a successful detach.
+func installDiskUmount(t *testing.T, volumes *[]statusVolume, detachErr error) {
+	t.Helper()
+	restoreDiskSeams(t)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return nil, mountinfo.ErrUnavailable
+	}
+	readHdiutilInfo = func() ([]byte, error) {
+		return hdiutilStatusPlist(*volumes), nil
+	}
+	runHdiutil = func(argv []string, _ error) ([]byte, error) {
+		if len(argv) > 1 && argv[1] == "detach" {
+			if detachErr != nil {
+				return nil, detachErr
+			}
+			point := argv[len(argv)-1]
+			next := make([]statusVolume, 0, len(*volumes))
+			for _, vol := range *volumes {
+				if vol.point == point {
+					continue
+				}
+				next = append(next, vol)
+			}
+			*volumes = next
+			return nil, nil
+		}
+		if len(argv) > 1 && argv[1] == "info" {
+			return hdiutilStatusPlist(*volumes), nil
+		}
+		return nil, nil
+	}
+	withSessionSeams(t, func(engine *session.Engine) {
+		engine.LoadDiskImages = func() ([]session.DiskImage, error) {
+			return diskImagesFromInfo(readHdiutilInfo)
+		}
+	})
 }

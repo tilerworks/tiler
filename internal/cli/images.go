@@ -214,7 +214,7 @@ func newImageTableRow(named namedState) imageTableRow {
 			meta.ID,
 			meta.CreatedAt.UTC().Format("2006-01-02"),
 			formatSize(meta.Size),
-			strconv.Itoa(len(meta.Chain)),
+			strconv.Itoa(shownChainLength(meta)),
 			image.PayloadKind(meta),
 			strconv.Itoa(len(named.state.Archives)),
 			strconv.Itoa(len(named.state.Holds)),
@@ -283,7 +283,7 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 	if meta.Deprecated {
 		fields = append(fields, [2]string{"deprecated", "true"})
 	}
-	fields = append(fields, [2]string{"chain", strconv.Itoa(len(meta.Chain))})
+	fields = append(fields, [2]string{"chain", strconv.Itoa(shownChainLength(meta))})
 	for _, field := range fields {
 		if err := writeDetailField(w, field[0], field[1]); err != nil {
 			return err
@@ -337,6 +337,18 @@ func detailSource(src image.Source) string {
 		parts = append(parts, "commit="+src.Commit)
 	}
 	return strings.Join(parts, " ")
+}
+
+// shownChainLength is the chain length images list and show print.
+// A dmg records an empty chain and still counts as one payload, so
+// the length is the base image plus any entries. Other formats keep
+// the incremental-entry count.
+func shownChainLength(meta image.Meta) int {
+	n := len(meta.Chain)
+	if meta.Format.Type == image.FormatDMG {
+		return 1 + n
+	}
+	return n
 }
 
 // formatDetail is the images show container line, type/compression.
@@ -534,7 +546,8 @@ func newImagesRemoveCmd() *cobra.Command {
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
 			"physically removes it. Both calls refuse while a session still\n" +
-			"references the target.",
+			"references the target, and while hdiutil info shows a dmg\n" +
+			"target is attached. Only image files and archives are deleted.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -542,8 +555,8 @@ func newImagesRemoveCmd() *cobra.Command {
 				return errors.New("images remove: configuration is not loaded")
 			}
 			target := args[0]
-			outcome, err := image.RemoveTarget(cfg, target,
-				session.Refs{Dir: cfg.SessionsDir})
+			outcome, err := image.RemoveChecked(cfg, target,
+				session.Refs{Dir: cfg.SessionsDir}, attachedDMG)
 			if err != nil {
 				if isTargetUsage(err) {
 					return usageError{err}

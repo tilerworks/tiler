@@ -26,15 +26,31 @@ type rmTarget struct {
 	dir     string
 }
 
+// Attached reports whether dir holds a disk image that is currently
+// attached. dir is the repository directory or one archive directory.
+// A nil Attached does not consult a disk-image table.
+type Attached func(dir string) (bool, error)
+
 // RemoveTarget runs the two-phase rm and reports which phase ran.
 // The first call flags the target deprecated; the second physically
 // removes it. Both calls refuse while a reference pins the target.
 func RemoveTarget(cfg config.Config, target string, refs Refs) (string, error) {
+	return RemoveChecked(cfg, target, refs, nil)
+}
+
+// RemoveChecked is RemoveTarget plus an attach check. A dmg target
+// is refused while attached reports the target directory. Other
+// formats do not call attached. Image files and archives are the
+// only paths this removes.
+func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attached) (string, error) {
 	rt, meta, err := resolveRemoveTarget(cfg, target)
 	if err != nil {
 		return "", err
 	}
 	if err := rt.rejectReferenced(refs); err != nil {
+		return "", err
+	}
+	if err := rt.rejectAttached(meta, attached); err != nil {
 		return "", err
 	}
 	if !meta.Deprecated {
@@ -120,6 +136,24 @@ func (t rmTarget) rejectReferenced(refs Refs) error {
 	return errors.New(
 		"remove: target is still referenced by another live chain; " +
 			"remove that chain first")
+}
+
+// rejectAttached refuses both rm stages while a dmg in the target
+// directory is attached. A nil checker or a non-dmg meta skips the
+// question. The checker sees the repository or archive directory,
+// never a session runtime.
+func (t rmTarget) rejectAttached(meta Meta, attached Attached) error {
+	if attached == nil || meta.Format.Type != FormatDMG {
+		return nil
+	}
+	hit, err := attached(t.dir)
+	if err != nil {
+		return fmt.Errorf("remove: %w", err)
+	}
+	if !hit {
+		return nil
+	}
+	return errors.New("remove: target is still attached; detach it before removing")
 }
 
 // sessionHolder names one active session pinning any full image the

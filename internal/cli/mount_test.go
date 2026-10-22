@@ -147,6 +147,9 @@ func withSessionSeams(t *testing.T, tune func(*session.Engine)) {
 		engine.Lock = func(string, time.Duration) (func(), error) {
 			return func() {}, nil
 		}
+		// Command tests drive the mount table. The darwin reader
+		// would otherwise reconcile through a live hdiutil info.
+		engine.LoadDiskImages = nil
 		if tune != nil {
 			tune(engine)
 		}

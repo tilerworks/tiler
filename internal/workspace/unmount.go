@@ -31,6 +31,10 @@ type UnmountRequest struct {
 	Reload func() ([]Entry, error)
 	// Run executes external tools. Nil runs them through exec.
 	Run func(name string, args ...string) error
+	// Hdiutil runs hdiutil and returns stdout when the view is a
+	// disk image. Nil selects the platform exec. FUSE teardown
+	// ignores it.
+	Hdiutil func(argv []string, consErr error) ([]byte, error)
 }
 
 // UnmountPath tears down whatever the path holds and reports how
@@ -58,6 +62,12 @@ func unmountPath(req UnmountRequest, run runFunc, seam hooks) (int, error) {
 	}
 	removed := 0
 	entry, listed := findEntry(req.Table, req.Dir)
+	if listed && dmgMountEntry(entry) {
+		if err := detachDMGPoint(req.Dir, req.Hdiutil); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
 	if listed {
 		n, err := teardownListed(req, entry, run, seam)
 		if err != nil {

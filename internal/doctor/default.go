@@ -10,11 +10,13 @@ func DefaultSeams() (Seams, error) {
 	if err := host.Available(); err != nil {
 		return Seams{}, err
 	}
-	return Seams{
+	seams := Seams{
 		LookPath:      host.LookPath,
 		Stat:          host.Stat,
 		Run:           host.Run,
 		TruncateProbe: truncateProbe,
 		Measure:       measurePerf,
-	}, nil
+	}
+	applyHostProfile(&seams)
+	return seams, nil
 }

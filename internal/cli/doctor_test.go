@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,21 +28,7 @@ func TestDoctorPrintsEveryProbeName(t *testing.T) {
 			t.Fatalf("doctor: %v\n%s", err, stderr)
 		}
 	}
-	for _, name := range []string{
-		"fuse_device",
-		"fuse_overlayfs",
-		"fusermount3",
-		"git",
-		"image_toolchain",
-		"squashfuse_subdir",
-		"file_limit_images",
-		"file_limit_cache",
-		"storage_perf_images",
-		"storage_perf_cache",
-		"cache_advice",
-		"contrib_concatfs",
-		"contrib_slowfs",
-	} {
+	for _, name := range expectedDoctorProbes() {
 		if !strings.Contains(stdout, name) {
 			t.Fatalf("stdout missing %s\n%s", name, stdout)
 		}
@@ -364,6 +351,39 @@ func TestUnwrapReportJoinsValueContinuations(t *testing.T) {
 	}
 	if !strings.Contains(flat, "log_level     info") {
 		t.Fatalf("flat = %q, want the next row preserved", flat)
+	}
+}
+
+// expectedDoctorProbes is the real doctor report for this host.
+// macOS checks hdiutil and omits the Linux FUSE failure probes.
+func expectedDoctorProbes() []string {
+	if runtime.GOOS == "darwin" {
+		return []string{
+			"git",
+			"image_toolchain",
+			"file_limit_images",
+			"file_limit_cache",
+			"storage_perf_images",
+			"storage_perf_cache",
+			"cache_advice",
+			"contrib_concatfs",
+			"contrib_slowfs",
+		}
+	}
+	return []string{
+		"fuse_device",
+		"fuse_overlayfs",
+		"fusermount3",
+		"git",
+		"image_toolchain",
+		"squashfuse_subdir",
+		"file_limit_images",
+		"file_limit_cache",
+		"storage_perf_images",
+		"storage_perf_cache",
+		"cache_advice",
+		"contrib_concatfs",
+		"contrib_slowfs",
 	}
 }
 

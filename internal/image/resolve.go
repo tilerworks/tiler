@@ -236,8 +236,12 @@ func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile
 // stackMembers pairs every file of the active stack with its
 // recorded facts. Every member file must exist.
 func stackMembers(repo Repo, meta Meta) ([]Member, error) {
+	full, err := activePayloadPath(repo, meta)
+	if err != nil {
+		return nil, err
+	}
 	members := []Member{{
-		Path:      repo.ImagePath(),
+		Path:      full,
 		Size:      meta.Size,
 		MtimeUnix: meta.MtimeUnix,
 		SHA256:    meta.SHA256,

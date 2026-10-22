@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package session
 
@@ -15,7 +15,8 @@ import (
 const lockPollInterval = 20 * time.Millisecond
 
 // lockSession takes the exclusive advisory lock of one session
-// through a non-blocking flock. A positive timeout polls until the
+// through a non-blocking flock. Linux and Darwin both provide
+// flock. A positive timeout polls until the
 // deadline and reports ErrLockTimeout when it expires; a zero or
 // negative timeout makes a single attempt and reports ErrLockHeld
 // when the lock is busy, so scan callers skip this round instead of

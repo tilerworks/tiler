@@ -36,6 +36,19 @@ var (
 	unmountEngine = workspace.UnmountPath
 )
 
+// mountTableOrEmpty reads the host mount table. A host that cannot
+// read one has no rows that would show an existing view, so replay
+// and mount see an empty snapshot instead of failing before attach.
+// Status uses the same rule for an empty store. Detach does not:
+// a missing table falls through to hdiutil info.
+func mountTableOrEmpty() ([]mountinfo.Mount, error) {
+	table, err := loadMountTable()
+	if errors.Is(err, mountinfo.ErrUnavailable) {
+		return nil, nil
+	}
+	return table, err
+}
+
 // mountFlags carries the local flags of one mount invocation.
 type mountFlags struct {
 	readOnly bool
@@ -94,8 +107,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if !ok {
 		return errors.New("mount: configuration is not loaded")
 	}
-	if err := gateAnyStack("mount"); err != nil {
-		return err
+	// A missing FUSE stack blocks every format except dmg, which
+	// attaches with hdiutil. A non-dmg host still refuses before
+	// resolve, so a missing image reports the toolchain gap.
+	stackErr := gateAnyStack("mount")
+	if stackErr != nil && !darwinHost() {
+		return stackErr
 	}
 	dir, err := filepath.Abs(args[1])
 	if err != nil {
@@ -127,6 +144,19 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err := verifyTarget(target, flags.verify); err != nil {
 		return err
 	}
+	// A file path records no format. Detect it before --subdir is
+	// judged, so a koly file is a dmg usage error. A library image
+	// already names its type, and formatForGate returns that without
+	// reading the file. The magic guard stays after this check: a
+	// dmg --subdir is a usage error even when the bytes would also
+	// fail the magic match.
+	format, err := formatForGate(target, nil)
+	if err != nil {
+		return err
+	}
+	if err := refuseDMGSubdir(flags.subdir, format); err != nil {
+		return err
+	}
 	// Unknown magic and a meta/magic mismatch cannot succeed on
 	// replay. Refuse them before the write-ahead action is appended,
 	// or session open retries the bad mount and stops restoring
@@ -135,9 +165,12 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err != nil {
 		return err
 	}
-	format, err := formatForGate(target, blockPaths)
+	format, err = formatForGate(target, blockPaths)
 	if err != nil {
 		return err
+	}
+	if stackErr != nil && format != image.FormatDMG {
+		return stackErr
 	}
 	if err := gateFormatTools("mount", format); err != nil {
 		return err
@@ -384,8 +417,10 @@ func runMountEngine(
 	if err != nil {
 		return session.Result{}, err
 	}
-	if err := gateAnyStack("mount"); err != nil {
-		return session.Result{}, err
+	if format != image.FormatDMG {
+		if err := gateAnyStack("mount"); err != nil {
+			return session.Result{}, err
+		}
 	}
 	if err := gateFormatTools("mount", format); err != nil {
 		return session.Result{}, err
@@ -435,7 +470,7 @@ func blocksRequest(
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
-	table, err := loadMountTable()
+	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
@@ -595,7 +630,7 @@ func mountRequest(
 		}
 		mounted = append(mounted, path)
 	}
-	table, err := loadMountTable()
+	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
