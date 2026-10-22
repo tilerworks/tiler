@@ -294,7 +294,7 @@ func TestReadOnlyDMGViewRefusesPublish(t *testing.T) {
 	}
 }
 
-func TestReadOnlyDMGSourceRefusesDifferentImage(t *testing.T) {
+func TestReadOnlyDMGViewDivertsDifferentImage(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	writeDMGFixture(t, imagesDir, "ulfo")
@@ -302,23 +302,31 @@ func TestReadOnlyDMGSourceRefusesDifferentImage(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeTestFile(t, filepath.Join(merged, "f.txt"), "x")
 	withBuildSeams(t, []mountinfo.Mount{{
 		Point:  merged,
 		FSType: "fuse",
 		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
 	}})
+	useDarwinHost(t)
+	calls := installHdiutil(t, []byte("diverted-dmg"))
 	t.Chdir(merged)
-	_, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "bob/other")...)
-	if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "read-only dmg") {
-		t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "bob/other")...)
+	if err != nil {
+		t.Fatalf("divert: %v\n%s", err, stderr)
 	}
-	published := filepath.Join(imagesDir, "bob", "other", image.ImageFile)
-	if _, statErr := os.Stat(published); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("different image was published: %v", statErr)
+	if !strings.HasPrefix(stdout, "full bob/other ") {
+		t.Fatalf("stdout = %q", stdout)
 	}
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder") {
+		t.Fatalf("calls = %q", *calls)
+	}
+	assertFileText(t, filepath.Join(imagesDir, "bob", "other", image.ImageDMG), "diverted-dmg")
 }
 
 func TestReadOnlyKolySourceRefusesDifferentImage(t *testing.T) {
+	// A koly file path is not a library identity, so --image cannot
+	// divert: the read-only dmg refusal still owns the path.
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	merged := filepath.Join(work, "merged")
@@ -802,21 +810,23 @@ func TestBuildFromDiskInfoInfersUnresolvedSession(t *testing.T) {
 		}
 		assertFileText(t, shadow, "info-shadow")
 	})
-	t.Run("conflicting image", func(t *testing.T) {
+	t.Run("different image packs the path", func(t *testing.T) {
 		imagesDir, lib, shadow, resolved := diskInfoSession(t)
-		prev := hdiutilTool
-		hdiutilTool = func(string, []string, ...string) error {
-			t.Fatal("conflicting image ran hdiutil")
-			return nil
-		}
-		t.Cleanup(func() { hdiutilTool = prev })
+		calls := installHdiutil(t, []byte("diverted-from-view"))
 		t.Chdir(resolved)
-		_, stderr, _, err := runCmd(t, append(lib, "build", "--image", "bob/other")...)
-		if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "conflicts") {
-			t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "bob/other")...)
+		if err != nil {
+			t.Fatalf("divert: %v\n%s", err, stderr)
+		}
+		if !strings.HasPrefix(stdout, "full bob/other ") {
+			t.Fatalf("stdout = %q", stdout)
+		}
+		if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder") {
+			t.Fatalf("calls = %q", *calls)
 		}
 		assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "info-base")
 		assertFileText(t, shadow, "info-shadow")
+		assertFileText(t, filepath.Join(imagesDir, "bob", "other", image.ImageDMG), "diverted-from-view")
 	})
 }
 

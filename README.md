@@ -122,7 +122,11 @@ Available now:
   The packed directory must stay outside every reserved tree and must
   not cover `images_dir`, `sessions_dir`, `cache_dir`, or
   `$HOME/.tiler`; comparison uses real paths, so a symlink into or
-  over those trees is refused the same way. Success prints one line:
+  over those trees is refused the same way. An identical full or
+  incremental payload is a no-op that reprints the same id. With
+  `--image` naming a different library image, a path under a live
+  view (often a subdirectory) packs as that image's full source.
+  Success prints one line:
   `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`. With
   `split_size` (or `tiler build --split <size>`) greater than zero,
   full and incremental builds store verified byte blocks instead of

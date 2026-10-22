@@ -328,6 +328,122 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 	}
 }
 
+func TestBuildFullIdempotentOnSameSource(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	first := buildImage(t, lib, "alice/app", src)
+	metaPath := filepath.Join(imagesDir, "alice", "app", "meta.yaml")
+	before, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("second build: %v\n%s", err, stderr)
+	}
+	second := buildOutput(t, stdout)
+	if second != first {
+		t.Fatalf("second id = %s, want %s", second, first)
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("idle rebuild rewrote meta:\n%s\n%s", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("idle rebuild archived the image: %v", err)
+	}
+}
+
+func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	buildImage(t, lib, "alice/app", src)
+	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(merged)
+	// --incremental keeps the layer even when the upper is large
+	// enough that the default would promote to a full rebuild.
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
+	if err != nil {
+		t.Fatalf("first incr: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "incr" || !isHex16(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	layer := fields[2]
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--incremental")...)
+	if err != nil {
+		t.Fatalf("second incr: %v\n%s", err, stderr)
+	}
+	fields = strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "incr" || fields[2] != layer {
+		t.Fatalf("second stdout = %q, want incr id %s", stdout, layer)
+	}
+	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Chain) != 1 || meta.Chain[0].ID != layer {
+		t.Fatalf("chain = %+v", meta.Chain)
+	}
+}
+
+func TestBuildDivertedSubdirIdempotent(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "README.txt"), "base")
+	writeTestFile(t, filepath.Join(src, "docs", "guide.md"), "guide")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	buildImage(t, lib, "alice/app", src)
+	if err := os.MkdirAll(filepath.Join(merged, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(merged, "docs", "guide.md"), "guide")
+	docs := filepath.Join(merged, "docs")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "bob/docs", docs)...)
+	if err != nil {
+		t.Fatalf("first divert: %v\n%s", err, stderr)
+	}
+	first := buildOutput(t, stdout)
+	metaPath := filepath.Join(imagesDir, "bob", "docs", "meta.yaml")
+	before, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--image", "bob/docs", docs)...)
+	if err != nil {
+		t.Fatalf("second divert: %v\n%s", err, stderr)
+	}
+	second := buildOutput(t, stdout)
+	if second != first {
+		t.Fatalf("second id = %s, want %s", second, first)
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("idle diverted rebuild rewrote meta")
+	}
+}
+
 func TestBuildCoveringSourceIsUsage(t *testing.T) {
 	home, _ := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -520,11 +636,15 @@ func TestBuildIdentityFallsBackToSessionRecord(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
-	// The recorded identity still refuses a conflicting explicit
-	// name and accepts a consistent one.
-	_, _, _, err = runCmd(t, append(lib, "build", "--full", "--image", "bob/other")...)
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("conflict: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
+	// A different --image packs this path as that image's full
+	// source instead of conflicting with the session record.
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--full", "--image", "bob/other")...)
+	if err != nil {
+		t.Fatalf("diverted build: %v\n%s", err, stderr)
+	}
+	fields = strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "bob/other" || !isHex16(fields[2]) {
+		t.Fatalf("diverted stdout = %q", stdout)
 	}
 	if _, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...); err != nil {
 		t.Fatalf("consistent build: %v\n%s", err, stderr)

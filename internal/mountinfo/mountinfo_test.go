@@ -232,18 +232,38 @@ func TestDecideReadOnlyViewFullPacksMountPoint(t *testing.T) {
 	}
 }
 
-func TestDecideImageConflictRefused(t *testing.T) {
-	_, err := Decide("/ws/view/x", testTable(), testPrefixes(), Explicit{Image: "carol/other"})
+func TestDecideDifferentImagePacksPathAsFull(t *testing.T) {
+	got, err := Decide("/ws/view/docs", testTable(), testPrefixes(), Explicit{Image: "carol/docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Decision{
+		Mode: ModeFull, Name: Name{Owner: "carol", Repo: "docs"}, SrcDir: "/ws/view/docs",
+	}
+	if got != want {
+		t.Fatalf("decision = %+v", got)
+	}
+}
+
+func TestDecideDifferentImageIncrStillConflicts(t *testing.T) {
+	_, err := Decide("/ws/view/docs", testTable(), testPrefixes(),
+		Explicit{Incr: true, Image: "carol/docs"})
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestDecideReadOnlyViewConflictRefused(t *testing.T) {
-	_, err := Decide("/ws/ro/x", testTable(), testPrefixes(),
-		Explicit{Full: true, Image: "alice/app"})
-	if err == nil || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("err = %v", err)
+func TestDecideReadOnlyViewDifferentImagePacksPath(t *testing.T) {
+	got, err := Decide("/ws/ro/docs", testTable(), testPrefixes(),
+		Explicit{Full: true, Image: "alice/docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Decision{
+		Mode: ModeFull, Name: Name{Owner: "alice", Repo: "docs"}, SrcDir: "/ws/ro/docs",
+	}
+	if got != want {
+		t.Fatalf("decision = %+v", got)
 	}
 }
 
@@ -349,10 +369,21 @@ func TestDecideUsesInjectedIdentitySource(t *testing.T) {
 	if len(stub.seen) != 1 || stub.seen[0] != "/ws/opaque" {
 		t.Fatalf("lookup calls = %v", stub.seen)
 	}
-	_, err = Decide("/ws/opaque/x", testTable(), testPrefixes(),
+	got, err = Decide("/ws/opaque/x", testTable(), testPrefixes(),
 		Explicit{Identity: stub, Image: "alice/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDivert := Decision{
+		Mode: ModeFull, Name: Name{Owner: "alice", Repo: "app"}, SrcDir: "/ws/opaque/x",
+	}
+	if got != wantDivert {
+		t.Fatalf("diverted decision = %+v", got)
+	}
+	_, err = Decide("/ws/opaque/x", testTable(), testPrefixes(),
+		Explicit{Identity: stub, Incr: true, Image: "alice/app"})
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("err = %v", err)
+		t.Fatalf("incr conflict err = %v", err)
 	}
 }
 
@@ -362,6 +393,7 @@ func TestLibraryNameMapping(t *testing.T) {
 		want Name
 	}{
 		{testImages + "/alice/app/image.sqsh", Name{"alice", "app"}},
+		{testImages + "/alice/app/image.dmg", Name{"alice", "app"}},
 		{testImages + "/alice/app/incr/fedcba9876543210.sqsh", Name{"alice", "app"}},
 	}
 	for _, tc := range good {

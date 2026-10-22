@@ -57,9 +57,13 @@ type Decision struct {
 	// Name is the resolved image identity.
 	Name Name
 	// SrcDir is the directory a full build packs. Inside a view it
-	// is the mount point, never a deeper path.
+	// is usually the mount point. When --image names a different
+	// library image, SrcDir is the cleaned path (often a subdirectory
+	// of the mount) so that path packs as its own full image.
 	SrcDir string
 	// MountPoint is the view mount point the path resolved to.
+	// Empty when the build packs a plain directory, including a
+	// diverted subdirectory under a view.
 	MountPoint string
 	// Upper is the writable upper directory of an incremental build.
 	Upper string
@@ -92,7 +96,7 @@ func Decide(cwd string, table []Mount, prefixes Prefixes, explicit Explicit) (De
 			"build mode: %s is a stale mount point missing from the mount table", cwd)
 	}
 	if view, ok := LongestView(table, cwd); ok {
-		return decideView(view, table, prefixes, explicit)
+		return decideView(cwd, view, table, prefixes, explicit)
 	}
 	return decidePlain(cwd, prefixes, explicit)
 }
@@ -109,7 +113,17 @@ func decidePlain(cwd string, prefixes Prefixes, explicit Explicit) (Decision, er
 	return Decision{Mode: ModeFull, Name: name, SrcDir: cwd}, nil
 }
 
-func decideView(view Mount, table []Mount, prefixes Prefixes, explicit Explicit) (Decision, error) {
+func decideView(cwd string, view Mount, table []Mount, prefixes Prefixes, explicit Explicit) (Decision, error) {
+	// --image naming a different library image packs the cleaned
+	// path as that image's full source. It is not an increment of
+	// the live view and does not bake a dmg shadow.
+	diverted, ok, err := divertDifferentImage(cwd, view, table, prefixes, explicit)
+	if err != nil {
+		return Decision{}, err
+	}
+	if ok {
+		return diverted, nil
+	}
 	if view.Upper == "" {
 		return decideReadOnlyView(view, table, prefixes, explicit)
 	}
@@ -130,6 +144,44 @@ func decideView(view Mount, table []Mount, prefixes Prefixes, explicit Explicit)
 		MountPoint: view.Point,
 		Upper:      view.Upper,
 	}, nil
+}
+
+// divertDifferentImage reports a full build of cwd into an explicit
+// --image that is not the mounted view. --incremental with a
+// mismatched name stays a conflict.
+func divertDifferentImage(
+	cwd string, view Mount, table []Mount, prefixes Prefixes, explicit Explicit,
+) (Decision, bool, error) {
+	if explicit.Image == "" {
+		return Decision{}, false, nil
+	}
+	owner, repo, err := image.ParseName(explicit.Image)
+	if err != nil {
+		return Decision{}, false, err
+	}
+	given := Name{Owner: owner, Repo: repo}
+	looked, found, err := lookupViewName(view.Point, table, prefixes, explicit)
+	if err != nil {
+		return Decision{}, false, err
+	}
+	if !found || given == looked {
+		return Decision{}, false, nil
+	}
+	if explicit.Incr {
+		return Decision{}, false, fmt.Errorf(
+			"build identity: --image %s conflicts with the mounted image %s", given, looked)
+	}
+	return Decision{Mode: ModeFull, Name: given, SrcDir: cwd}, true, nil
+}
+
+func lookupViewName(
+	viewPoint string, table []Mount, prefixes Prefixes, explicit Explicit,
+) (Name, bool, error) {
+	identity := explicit.Identity
+	if identity == nil {
+		identity = PathIdentity{Table: table, ImagesDir: prefixes.ImagesDir}
+	}
+	return identity.Lookup(viewPoint)
 }
 
 func decideReadOnlyView(view Mount, table []Mount, prefixes Prefixes, explicit Explicit) (Decision, error) {
@@ -268,7 +320,8 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 }
 
 // LibraryName maps a library file path to its image identity. Only
-// <images_dir>/<owner>/<repo>/image.sqsh and
+// <images_dir>/<owner>/<repo>/image.sqsh,
+// <images_dir>/<owner>/<repo>/image.dmg, and
 // <images_dir>/<owner>/<repo>/incr/<id>.sqsh count; archives, holds,
 // blocks, and metadata never carry an identity. Blocks-form mounts
 // publish the canonical three-segment image.sqsh path, so they
@@ -280,7 +333,7 @@ func LibraryName(imagesDir, path string) (Name, bool) {
 	parts := strings.Split(path[len(imagesDir)+1:], "/")
 	switch len(parts) {
 	case 3:
-		if parts[2] != image.ImageFile {
+		if parts[2] != image.ImageFile && parts[2] != image.ImageDMG {
 			return Name{}, false
 		}
 	case 4:

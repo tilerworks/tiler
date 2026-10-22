@@ -55,10 +55,12 @@ func newBuildCmd() *cobra.Command {
 			"incremental layers plus that upper already exceed half the base\n" +
 			"image, the default switches to a full rebuild and a warning is\n" +
 			"printed; --incremental keeps the layer. --full always packs the\n" +
-			"whole view.\n" +
+			"whole view. An identical full or incremental payload is a no-op.\n" +
+			"With --image naming a different library image, a path under the\n" +
+			"view (often a subdirectory) packs as that image's full source.\n" +
 			"A writable dmg view has no incremental layer. The build bakes\n" +
 			"the shadow into a new full image for the default, --incremental,\n" +
-			"and --full.\n" +
+			"and --full when --image matches the mounted image.\n" +
 			"\n" +
 			"--format and --compression select the container. An omitted\n" +
 			"format uses image_format, then the host default (dmg on macOS),\n" +

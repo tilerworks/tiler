@@ -193,9 +193,18 @@ func TestCombinedIdentityCoversStaleViewInDecide(t *testing.T) {
 		t.Fatalf("decision = %+v", decision)
 	}
 
-	_, err = mountinfo.Decide(view+"/deep", table, prefixes,
+	diverted, err := mountinfo.Decide(view+"/deep", table, prefixes,
 		mountinfo.Explicit{Full: true, Identity: combined, Image: "bob/other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diverted.Mode != mountinfo.ModeFull || diverted.Name.String() != "bob/other" ||
+		diverted.SrcDir != view+"/deep" || diverted.MountPoint != "" {
+		t.Fatalf("diverted decision = %+v", diverted)
+	}
+	_, err = mountinfo.Decide(view+"/deep", table, prefixes,
+		mountinfo.Explicit{Incr: true, Identity: combined, Image: "bob/other"})
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("explicit conflict error = %v", err)
+		t.Fatalf("incr conflict error = %v", err)
 	}
 }
