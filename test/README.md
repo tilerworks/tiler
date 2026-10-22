@@ -50,6 +50,10 @@ cannot support them:
 - **No EROFS toolchain** — `t0015-erofs-image.sh` needs `/dev/fuse`,
   `mkfs.erofs`, `erofsfuse`, `fuse-overlayfs`, `fusermount3`, and
   `git`. It skips cleanly on a squashfs-only host.
+- **Wrong OS / no hdiutil** — `t0020-build-idempotent.sh` lists
+  `LINUX` with the FUSE toolchain so Darwin `make e2e` skips it.
+  `t0021-macos-build-idempotent.sh` lists `MACOS` and skips when
+  `hdiutil` is missing.
 
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
@@ -164,6 +168,18 @@ equipped host, so a genuine regression is never masked by a skip.
   still mounts. `--subdir` exposes one image directory as the mount
   root. `tiler doctor` exits 0 when `PATH` offers only the erofs
   stack. Needs the EROFS toolchain; skips cleanly without it.
+- `e2e/t0020-build-idempotent.sh` — packs the same bytes twice and
+  asserts the active id and `meta.yaml` stay put for a plain-directory
+  full, an incremental upper after a writable mount, and a subdirectory
+  of that mount published under a different `--image` as its own full.
+  Needs the FUSE toolchain; Linux-only (`LINUX`); skips on macOS.
+- `e2e/t0021-macos-build-idempotent.sh` — drives the three macOS dmg
+  shapes twice: plain-directory create, writable-mount shadow bake,
+  and a subdirectory of that mount under a different `--image`
+  (directory create, not a bake). When hdiutil yields a stable digest
+  the meta must stay put; otherwise the previous id must rest in
+  `archives/` or `hold/`. Needs `hdiutil`; macOS-only (`MACOS`);
+  skips on Linux and when `hdiutil` is missing.
 
 ## Adding cases in later phases
 
