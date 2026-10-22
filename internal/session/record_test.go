@@ -177,6 +177,10 @@ func TestValidateNameMatrix(t *testing.T) {
 		"my-session_1",
 		"auto-20261017T031500Z-deadbeef",
 		"x",
+		"my.name",
+		".hidden",
+		"console",
+		"COM10",
 	}
 	for _, name := range valid {
 		if err := ValidateName(name); err != nil {
@@ -196,6 +200,23 @@ func TestValidateNameMatrix(t *testing.T) {
 		"bad\x1bname",
 		" trail",
 		"trail ",
+		"a:b",
+		"a*b",
+		"a?b",
+		`a"b`,
+		"a<b",
+		"a>b",
+		"a|b",
+		"name.",
+		"con",
+		"CON",
+		"nul.txt",
+		"aux",
+		"prn",
+		"com1",
+		"COM9",
+		"lpt0",
+		strings.Repeat("a", sessionNameMax+1),
 	}
 	for _, name := range invalid {
 		err := ValidateName(name)

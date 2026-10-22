@@ -119,12 +119,27 @@ type Record struct {
 // segment.
 var ErrInvalidName = errors.New("invalid session name")
 
-// ValidateName accepts a non-empty single segment: no path
-// separator, not "." or "..", and no whitespace or control
-// characters. Session names never carry structure.
+// sessionNameMax is the longest directory component Linux, macOS,
+// and Windows all accept.
+const sessionNameMax = 255
+
+// windowsDirReserved lists the characters a Windows directory name
+// cannot contain. Slash and backslash are the separators on the
+// three hosts; the rest are reserved on Windows.
+const windowsDirReserved = `<>:"/\|?*`
+
+// ValidateName accepts a name that can be the session directory on
+// Linux, macOS, and Windows. It is one non-empty component: not "."
+// or "..", no separator or other character those hosts refuse, no
+// trailing dot, no whitespace or control character, within
+// sessionNameMax bytes, and not a Windows device name such as CON
+// or COM1. Session names never carry structure.
 func ValidateName(name string) error {
 	if name == "" || name == "." || name == ".." ||
-		strings.ContainsAny(name, `/\`) || badNameRune(name) {
+		len(name) > sessionNameMax ||
+		strings.HasSuffix(name, ".") ||
+		strings.ContainsAny(name, windowsDirReserved) ||
+		badNameRune(name) || windowsDeviceName(name) {
 		return fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
 	return nil
@@ -138,6 +153,27 @@ func badNameRune(name string) bool {
 		}
 	}
 	return false
+}
+
+// windowsDeviceName reports a Windows reserved device name. The
+// comparison is case-insensitive and uses the stem before the first
+// dot, so "nul.txt" is reserved the same way "NUL" is.
+func windowsDeviceName(name string) bool {
+	stem := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		stem = name[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(stem) != 4 {
+		return false
+	}
+	upper := strings.ToUpper(stem)
+	port := upper[:3]
+	digit := upper[3]
+	return (port == "COM" || port == "LPT") && digit >= '0' && digit <= '9'
 }
 
 // runtimeIDOf names the per-mount runtime directory of a mount
