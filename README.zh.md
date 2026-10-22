@@ -52,6 +52,60 @@ info。`concatfs` 和 `slowfs` 仍出现在报告里，状态为 info，并写�
 若当前系统上 `attach -shadow` 不能用于 APFS 镜像，新建的每张镜像
 都使用 HFS+，doctor 会写明这个原因。该选择不是配置项。
 
+## 在 Windows 上通过 WSL2 使用
+
+WSL2 里跑的是真正的 Linux 内核。发行版内部 `runtime.GOOS` 为
+`linux`，tiler 走与裸机 Linux 相同的 squashfs/erofs 与 FUSE 路径。
+没有 Windows 原生挂载栈，也不走 dmg。请在 WSL shell 里构建并运行
+Linux 二进制。为 Windows 交叉编译的 `tiler.exe` 不能挂载。
+
+把仓库、`$HOME/.tiler`（images、sessions、cache）以及挂载点放在
+发行版自己的文件系统上（一般在 `/home/<user>` 下）。不要放在
+`/mnt/c`、`/mnt/d`：那是经 9p（WSL2）或 drvfs（WSL1）看到的
+Windows 卷。那里的原子 rename、xattr、whiteout 和 FUSE 不稳定，
+增量层容易坏。在 Windows 上用
+`\\wsl.localhost\<发行版>\home\<user>\...`（或 `\\wsl$\...`）打开
+同一棵目录树。
+
+### 安装
+
+1. 安装 WSL2 的 Ubuntu 类发行版（`wsl --install`）。
+2. 在发行版内安装 Go 1.25 或更新版本，以及镜像工具：
+
+   ```bash
+   sudo apt update
+   sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
+   # 可选 erofs 栈：
+   sudo apt install erofs-utils
+   ```
+
+3. 确认 `/dev/fuse` 存在且可用。`tiler doctor` 用 `fuse_device`
+   报告它；缺少 FUSE 时挂载路径会失败。
+4. 在 `$HOME` 下克隆本仓库，然后执行 `make build` 与 `make test`。
+
+### 闭环
+
+每条命令都在 WSL shell 里执行（不要用 Windows 构建的二进制）：
+
+```bash
+tiler doctor
+tiler build --image alice/app dir
+tiler mount alice/app work
+# 在 work 下编辑；Windows IDE 可用 \\wsl$\...
+tiler status work
+tiler build          # 当前目录是合并视图时默认增量
+tiler umount work
+```
+
+从 PowerShell 只能调用 WSL 里的二进制，例如：
+
+```powershell
+wsl -d Ubuntu -- tiler doctor
+```
+
+不要增加 Windows 包装脚本。需要真挂载的特权 e2e 也在 WSL 内跑；
+缺少 `/dev/fuse` 或权限时现有测试继续 `t.Skip`，不要改成失败。
+
 ## 使用
 
 目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速

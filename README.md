@@ -60,6 +60,64 @@ When `attach -shadow` cannot use an APFS image on this system, every
 new image is created as HFS+ and doctor states that reason. The
 choice is not a configuration key.
 
+## Windows via WSL2
+
+WSL2 runs a real Linux kernel. Inside the distro, `runtime.GOOS` is
+`linux`, so tiler uses the same squashfs/erofs and FUSE path as bare
+metal Linux. There is no Windows-native mount stack and no dmg path.
+Build and run the Linux binary in a WSL shell. A `tiler.exe` built
+for Windows cannot mount.
+
+Keep the repository, `$HOME/.tiler` (images, sessions, cache), and
+mountpoints on the distro's own filesystem (typically under
+`/home/<user>`). Do not put them under `/mnt/c` or `/mnt/d`: those
+are Windows volumes seen through 9p (WSL2) or drvfs (WSL1). Atomic
+renames, xattrs, whiteouts, and FUSE are unreliable there, and
+incremental layers can break. From Windows, open the same trees with
+`\\wsl.localhost\<Distro>\home\<user>\...` (or `\\wsl$\...`).
+
+### Setup
+
+1. Install a WSL2 Ubuntu-class distro (`wsl --install`).
+2. Inside the distro, install Go 1.25 or newer and the image tools:
+
+   ```bash
+   sudo apt update
+   sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
+   # optional erofs stack:
+   sudo apt install erofs-utils
+   ```
+
+3. Confirm `/dev/fuse` exists and is usable. `tiler doctor` reports
+   that as `fuse_device`; missing FUSE fails the mount path.
+4. Clone this repository under `$HOME`, then `make build` and
+   `make test`.
+
+### Loop
+
+Run every command in the WSL shell (not from a Windows-built binary):
+
+```bash
+tiler doctor
+tiler build --image alice/app dir
+tiler mount alice/app work
+# edit under work; a Windows IDE may use \\wsl$\...
+tiler status work
+tiler build          # incremental when the cwd is the merged view
+tiler umount work
+```
+
+From PowerShell you can only invoke the WSL binary, for example:
+
+```powershell
+wsl -d Ubuntu -- tiler doctor
+```
+
+Do not add a Windows wrapper script. Privileged e2e tests that need a
+real mount also run inside WSL; when `/dev/fuse` or permission is
+missing they keep calling `t.Skip` and must not be turned into
+failures.
+
 ## Usage
 
 The target workflow is: build an image, mount it, develop, finish the
