@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,7 +84,7 @@ func seedEmptyStatusSeams(t *testing.T, _ string) {
 // seedFailingDoctor replaces the probe set with one failing result.
 func seedFailingDoctor(t *testing.T, _ string) {
 	t.Helper()
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{{Name: "git", Status: "fail", Detail: "missing"}}, nil
 	})
 }

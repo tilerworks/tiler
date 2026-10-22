@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -37,7 +39,7 @@ func TestDoctorPrintsEveryProbeName(t *testing.T) {
 
 func TestDoctorFailingProbeExitsOne(t *testing.T) {
 	withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{{Name: "git", Status: "fail", Detail: "missing"}}, nil
 	})
 	stdout, stderr, err := runDoctorCmd(context.Background(), t)
@@ -60,7 +62,7 @@ func TestDoctorFailingProbeExitsOne(t *testing.T) {
 
 func TestDoctorWarnAndInfoProbesExitZero(t *testing.T) {
 	withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{
 			{Name: "file_limit_images", Status: "warn", Detail: "limit found"},
 			{Name: "storage_perf_cache", Status: "info", Detail: "measured"},
@@ -82,7 +84,7 @@ func TestDoctorWarnAndInfoProbesExitZero(t *testing.T) {
 
 func TestDoctorCancelledContextExitsOne(t *testing.T) {
 	home, _ := withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return nil, context.Canceled
 	})
 	stdout, stderr, err := runDoctorCmd(context.Background(), t)
@@ -118,7 +120,7 @@ func TestDoctorJSONMatchesGolden(t *testing.T) {
 	t.Setenv("HOME", goldenHome)
 	t.Chdir(t.TempDir())
 	fixture := goldenDoctorResults()
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return fixture, nil
 	})
 	stdout, stderr, err := runDoctorCmd(context.Background(), t, "--json")
@@ -143,7 +145,7 @@ func TestDoctorJSONMatchesGolden(t *testing.T) {
 
 func TestDoctorJSONFailingProbeExitsOne(t *testing.T) {
 	withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{{Name: "git", Status: "fail", Detail: "missing"}}, nil
 	})
 	stdout, stderr, err := runDoctorCmd(context.Background(), t, "--json")
@@ -164,7 +166,7 @@ func TestDoctorContribWarningsKeepExitZero(t *testing.T) {
 	withWorkspace(t)
 	guidance := "optional tool; C sources ship in the contrib/ directory of " +
 		"the tiler source tree; tiler never installs it automatically"
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{
 			{Name: "contrib_concatfs", Status: "warn", Detail: guidance},
 			{Name: "contrib_slowfs", Status: "warn", Detail: guidance},
@@ -207,7 +209,7 @@ func TestDoctorContribWarningsKeepExitZero(t *testing.T) {
 // directories resolved from the injected home.
 func TestDoctorReportsConfigSection(t *testing.T) {
 	home, _ := withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{{Name: "git", Status: "pass", Detail: "2.43.0"}}, nil
 	})
 	stdout, _, err := runDoctorCmd(context.Background(), t)
@@ -244,7 +246,7 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 // resolved config summary alongside the probe results.
 func TestDoctorJSONIncludesConfig(t *testing.T) {
 	home, _ := withWorkspace(t)
-	restoreDoctor(t, func(context.Context, config.Config) ([]doctor.Result, error) {
+	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return []doctor.Result{{Name: "git", Status: "pass", Detail: "2.43.0"}}, nil
 	})
 	stdout, _, err := runDoctorCmd(context.Background(), t, "--json")
@@ -387,7 +389,28 @@ func expectedDoctorProbes() []string {
 	}
 }
 
-func restoreDoctor(t *testing.T, fn func(context.Context, config.Config) ([]doctor.Result, error)) {
+func TestDoctorProgressStaysOffTheReport(t *testing.T) {
+	withWorkspace(t)
+	restoreDoctor(t, func(_ context.Context, _ config.Config, progress io.Writer) ([]doctor.Result, error) {
+		_, _ = fmt.Fprint(progress, "probing\n\n  git ...\n  git ... done\n")
+		return []doctor.Result{{Name: "git", Status: "pass", Detail: "2.43.0"}}, nil
+	})
+	stdout, stderr, err := runDoctorCmd(context.Background(), t)
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stdout, "probing") {
+		t.Fatalf("stdout contains probe progress\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "📋 Config") || !strings.Contains(stdout, "git  pass  2.43.0") {
+		t.Fatalf("stdout missing the finished report\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "probing\n\n  git ...\n") || !strings.Contains(stderr, "  git ... done\n") {
+		t.Fatalf("stderr = %q, want the probe progress", stderr)
+	}
+}
+
+func restoreDoctor(t *testing.T, fn func(context.Context, config.Config, io.Writer) ([]doctor.Result, error)) {
 	t.Helper()
 	previous := runDoctor
 	runDoctor = fn

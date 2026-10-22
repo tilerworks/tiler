@@ -15,12 +15,14 @@ import (
 // runDoctor produces the probe set from the loaded configuration.
 // Tests replace it to cover exit codes without executing host
 // binaries. The default uses the real seams.
-var runDoctor = func(ctx context.Context, cfg config.Config) ([]doctor.Result, error) {
+var runDoctor = func(ctx context.Context, cfg config.Config, progress io.Writer) ([]doctor.Result, error) {
 	seams, err := doctor.DefaultSeams()
 	if err != nil {
 		return nil, err
 	}
-	return doctor.Probe(ctx, seams, doctorOptions(cfg))
+	opts := doctorOptions(cfg)
+	opts.Progress = progress
+	return doctor.Probe(ctx, seams, opts)
 }
 
 // doctorOptions maps the loaded configuration onto the probe
@@ -65,23 +67,24 @@ func newDoctorCmd() *cobra.Command {
 			if !ok {
 				return errors.New("doctor: configuration is not loaded")
 			}
-			return writeDoctor(cmd.Context(), cmd.OutOrStdout(), cfg, asJSON)
+			return writeDoctor(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render probe results as a JSON document")
 	return cmd
 }
 
-// writeDoctor renders the config section and the probe report first,
-// human-readable or JSON, then applies the verdict. A failure to
+// writeDoctor runs the probes, then renders the config section and
+// the probe report. Progress lines go to progress while the probes
+// run, so the writer receives only the finished report. A failure to
 // produce the probe set — including a platform with no host probes —
 // is reported only after that rendering, so the resolved
 // configuration stays visible. Any failed probe becomes a runtime
 // error listing the failed names, so doctor exits 1, while warn and
 // info results never affect the exit code. The config section never
 // affects the verdict.
-func writeDoctor(ctx context.Context, w io.Writer, cfg config.Config, asJSON bool) error {
-	results, probeErr := runDoctor(ctx, cfg)
+func writeDoctor(ctx context.Context, w, progress io.Writer, cfg config.Config, asJSON bool) error {
+	results, probeErr := runDoctor(ctx, cfg, progress)
 	summary := configSummary(cfg)
 	var err error
 	if asJSON {
