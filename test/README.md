@@ -176,8 +176,8 @@ equipped host, so a genuine regression is never masked by a skip.
 - `e2e/t0021-macos-build-idempotent.sh` — drives the three macOS dmg
   shapes twice: plain-directory create, writable-mount shadow bake,
   and a subdirectory of that mount under a different `--image`
-  (directory create, not a bake). When hdiutil yields a stable digest
-  the meta must stay put; otherwise the previous id must rest in
+  (directory create, not a bake). Each repeat must keep the same id
+  and `meta.yaml` (content fingerprint idle), with no new
   `archives/` or `hold/`. Needs `hdiutil`; macOS-only (`MACOS`);
   skips on Linux and when `hdiutil` is missing.
 

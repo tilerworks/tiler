@@ -499,6 +499,7 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 		Config:      cfg,
 		Name:        decision.Name.String(),
 		Shadow:      shadow,
+		ViewDir:     decision.MountPoint,
 		MountedID:   mounted,
 		Compression: comp,
 		Builder:     Version,

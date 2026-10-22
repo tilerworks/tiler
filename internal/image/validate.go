@@ -40,6 +40,9 @@ func (m Meta) checkPayload(list *issueList) {
 	checkSize("size", m.Size, list)
 	checkMtime("mtime_unix", m.MtimeUnix, list)
 	checkTime("created_at", m.CreatedAt, list)
+	if m.ContentSHA256 != "" {
+		checkSum("content_sha256", m.ContentSHA256, list)
+	}
 }
 
 // checkContainer accepts a registered type and a compression that

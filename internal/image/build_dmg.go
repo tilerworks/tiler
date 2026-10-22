@@ -25,6 +25,11 @@ type DMGRequest struct {
 	// Shadow is sessions/<name>/runtime/m<seq>/upper.shadow. Empty
 	// for a directory create. The file is not renamed or removed.
 	Shadow string
+	// ViewDir is the live mountpoint of a shadow bake. Its tree
+	// digest is the content fingerprint: hdiutil convert rewrites
+	// the shadow file, so the shadow bytes cannot mark an idle bake.
+	// Empty skips the fingerprint (tests that only convert).
+	ViewDir string
 	// MountedID is the full id this shadow was attached to. When
 	// hold/<id>/image.dmg exists, convert reads that file instead of
 	// the active image.dmg. Empty selects a held copy Refs still
@@ -81,6 +86,13 @@ func createDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err := requireDMGCompression(comp); err != nil {
 		return FullResult{}, err
 	}
+	content, err := dirContentSHA256(req.SrcDir)
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
+		return idle, err
+	}
 	tmp, err := dmgTemp(repo)
 	if err != nil {
 		return FullResult{}, err
@@ -89,7 +101,7 @@ func createDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err := runDMG(req, argv, consErr, tmp); err != nil {
 		return FullResult{}, err
 	}
-	return finishDMG(repo, req, tmp, comp)
+	return finishDMG(repo, req, tmp, comp, content)
 }
 
 func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
@@ -108,6 +120,17 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err := requireDMGCompression(comp); err != nil {
 		return FullResult{}, err
 	}
+	var content string
+	if req.ViewDir != "" {
+		sum, err := dirContentSHA256(req.ViewDir)
+		if err != nil {
+			return FullResult{}, fmt.Errorf("build: %w", err)
+		}
+		content = sum
+		if idle, err := idleDMG(repo, req, content, comp); err != nil || idle.ID != "" {
+			return idle, err
+		}
+	}
 	tmp, err := dmgTemp(repo)
 	if err != nil {
 		return FullResult{}, err
@@ -119,7 +142,27 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err := runDMG(req, argv, consErr, tmp); err != nil {
 		return FullResult{}, err
 	}
-	return finishDMG(repo, req, tmp, comp)
+	return finishDMG(repo, req, tmp, comp, content)
+}
+
+// idleDMG returns the active image when its logical content already
+// matches. preparePublish still runs so unreferenced holds archive.
+func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult, error) {
+	active, exists, err := loadActive(repo)
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	if !exists || !dmgContentIdle(active, content, compression) {
+		return FullResult{}, nil
+	}
+	if _, _, err := preparePublish(repo, req.Refs, hooks{}, ""); err != nil {
+		return FullResult{}, err
+	}
+	return FullResult{
+		ID:     active.ID,
+		Path:   filepath.Join(repo.Dir, ImageDMG),
+		SHA256: active.SHA256,
+	}, nil
 }
 
 // bakeSource is the disk image the live shadow belongs to. Publish
@@ -258,7 +301,7 @@ func runDMG(req DMGRequest, argv []string, consErr error, tmp string) error {
 	return nil
 }
 
-func finishDMG(repo Repo, req DMGRequest, tmp, compression string) (FullResult, error) {
+func finishDMG(repo Repo, req DMGRequest, tmp, compression, content string) (FullResult, error) {
 	if err := syncFile(tmp); err != nil {
 		removeFile(tmp)
 		return FullResult{}, failWrite(tmp, err)
@@ -267,7 +310,7 @@ func finishDMG(repo Repo, req DMGRequest, tmp, compression string) (FullResult, 
 		removeFile(tmp)
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	meta, err := dmgMeta(repo, req, tmp, compression)
+	meta, err := dmgMeta(repo, req, tmp, compression, content)
 	if err != nil {
 		removeFile(tmp)
 		return FullResult{}, err
@@ -292,7 +335,7 @@ func finishDMG(repo Repo, req DMGRequest, tmp, compression string) (FullResult, 
 	return FullResult{ID: meta.ID, Path: path, SHA256: meta.SHA256}, nil
 }
 
-func dmgMeta(repo Repo, req DMGRequest, tmp, compression string) (Meta, error) {
+func dmgMeta(repo Repo, req DMGRequest, tmp, compression, content string) (Meta, error) {
 	sum, err := fileSHA256(tmp)
 	if err != nil {
 		return Meta{}, fmt.Errorf("build: %w", err)
@@ -306,16 +349,17 @@ func dmgMeta(repo Repo, req DMGRequest, tmp, compression string) (Meta, error) {
 		now = time.Now
 	}
 	meta := Meta{
-		Owner:     repo.Owner,
-		Repo:      repo.Repo,
-		ID:        ID(sum),
-		Kind:      KindFull,
-		Format:    Format{Type: FormatDMG, Compression: compression},
-		Size:      info.Size(),
-		SHA256:    hexDigest(sum),
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: now().UTC(),
-		Builder:   req.Builder,
+		Owner:         repo.Owner,
+		Repo:          repo.Repo,
+		ID:            ID(sum),
+		Kind:          KindFull,
+		Format:        Format{Type: FormatDMG, Compression: compression},
+		Size:          info.Size(),
+		SHA256:        hexDigest(sum),
+		MtimeUnix:     info.ModTime().Unix(),
+		CreatedAt:     now().UTC(),
+		Builder:       req.Builder,
+		ContentSHA256: content,
 	}
 	if err := meta.Validate(); err != nil {
 		return Meta{}, fmt.Errorf("build: %w", err)

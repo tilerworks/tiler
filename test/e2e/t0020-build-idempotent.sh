@@ -38,7 +38,7 @@ then
 	'
 fi
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempotent' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build publishes alice/app' '
 	mkdir -p "$src_dir/docs" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
@@ -47,7 +47,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempot
 	id1=$(cut -d" " -f3 full1.out) &&
 	test -n "$id1" &&
 	test_path_is_file "$alice_img" &&
-	cp "$alice_meta" full1.meta &&
+	cp "$alice_meta" full1.meta
+'
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempotent' '
+	id1=$(cut -d" " -f3 full1.out) &&
+	test -n "$id1" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >full2.out 2>full2.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&

@@ -1,26 +1,24 @@
 #!/bin/sh
 #
-# tiler end-to-end test: build repeatability on macOS dmg.
+# tiler end-to-end test: build idempotency on macOS dmg.
 #
-# Squashfs pins SOURCE_DATE_EPOCH so an identical tree packs to the
-# same bytes and publish is idle (see t0020). Real hdiutil embeds
-# timestamps, so a second create or bake of the same inputs often
-# gets a new digest and archives the previous image. Deterministic
-# idle publish for dmg is covered by unit tests that inject a stable
-# hdiutil. This case still drives the three CLI shapes twice:
+# Real hdiutil embeds timestamps, so packing the same tree twice
+# yields different image.dmg bytes. Build records a content_sha256
+# of the source tree (or of the bake inputs) and skips hdiutil when
+# that fingerprint matches the active image, so a repeat is idle:
+# same id, unchanged meta.yaml, no archives or hold.
+#
+# The case covers three CLI shapes:
 #
 #   1. plain directory create,
 #   2. writable-mount shadow bake,
 #   3. subdirectory of that mount under a different --image
 #      (directory create, not a shadow bake).
 #
-# When the digest is stable the meta must stay put. When hdiutil
-# changes the bytes, the previous id must rest in archives or hold.
-#
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
 # host without hdiutil_bin skips the file instead of failing.
 
-test_description='macOS dmg build repeats create, bake, and diverted subdir'
+test_description='macOS dmg build is idempotent for create, bake, and divert'
 
 tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
 TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
@@ -46,23 +44,6 @@ alice_img=$alice_dir/image.dmg
 bob_img=$bob_dir/image.dmg
 shadow=$HOME/.tiler/sessions/dev/runtime/m1/upper.shadow
 
-# assert_idle_or_archived META_COPY ID REPO_DIR
-# Idle: same id and unchanged meta, no new parking required.
-# Republish: previous id rests under archives/ or hold/.
-assert_idle_or_archived() {
-	_meta_copy=$1
-	_old_id=$2
-	_repo=$3
-	_new_id=$4
-	if test "$_old_id" = "$_new_id"
-	then
-		test_cmp "$_meta_copy" "$_repo/meta.yaml"
-	else
-		test_path_is_dir "$_repo/archives/$_old_id" ||
-		test_path_is_dir "$_repo/hold/$_old_id"
-	fi
-}
-
 if test -n "$tiler_bin"
 then
 	test_atexit '
@@ -72,7 +53,7 @@ then
 	'
 fi
 
-test_expect_success TILER,MACOS 'plain directory dmg create repeats cleanly' '
+test_expect_success TILER,MACOS 'plain directory dmg create publishes alice/app' '
 	mkdir -p "$src_dir/docs" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
@@ -82,15 +63,23 @@ test_expect_success TILER,MACOS 'plain directory dmg create repeats cleanly' '
 	test -n "$id1" &&
 	test_path_is_file "$alice_img" &&
 	test_path_is_missing "${alice_img%.dmg}.sqsh" &&
-	cp "$alice_meta" full1.meta &&
+	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
+	cp "$alice_meta" full1.meta
+'
+
+test_expect_success TILER,MACOS 'plain directory dmg create is idempotent' '
+	id1=$(cut -d" " -f3 full1.out) &&
+	test -n "$id1" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >full2.out 2>full2.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&
-	test -n "$id2" &&
-	assert_idle_or_archived full1.meta "$id1" "$alice_dir" "$id2"
+	test "$id1" = "$id2" &&
+	test_cmp full1.meta "$alice_meta" &&
+	test_path_is_missing "$alice_dir/archives" &&
+	test_path_is_missing "$alice_dir/hold"
 '
 
-test_expect_success TILER,MACOS 'shadow bake repeats without dropping the live shadow' '
+test_expect_success TILER,MACOS 'shadow bake publishes a new full from the live view' '
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	test_grep -E "^created dev$" new.out &&
 	mkdir -p "$work_dir" &&
@@ -99,6 +88,7 @@ test_expect_success TILER,MACOS 'shadow bake repeats without dropping the live s
 	echo baked >"$work_dir/KEEP.txt" &&
 	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
+	echo "$shadow_ino" >shadow.ino &&
 	(
 		cd "$work_dir" &&
 		"$tiler_bin" build --image alice/app
@@ -107,15 +97,22 @@ test_expect_success TILER,MACOS 'shadow bake repeats without dropping the live s
 	test_grep -E "^full alice/app [0-9a-f]+" bake1.out &&
 	bake_id=$(cut -d" " -f3 bake1.out) &&
 	test -n "$bake_id" &&
-	cp "$alice_meta" bake1.meta &&
+	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
+	cp "$alice_meta" bake1.meta
+'
+
+test_expect_success TILER,MACOS 'shadow bake is idempotent without dropping the live shadow' '
+	bake_id=$(cut -d" " -f3 bake1.out) &&
+	test -n "$bake_id" &&
+	shadow_ino=$(cat shadow.ino) &&
 	(
 		cd "$work_dir" &&
 		"$tiler_bin" build --image alice/app
 	) >bake2.out 2>bake2.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" bake2.out &&
 	bake_id2=$(cut -d" " -f3 bake2.out) &&
-	test -n "$bake_id2" &&
-	assert_idle_or_archived bake1.meta "$bake_id" "$alice_dir" "$bake_id2" &&
+	test "$bake_id" = "$bake_id2" &&
+	test_cmp bake1.meta "$alice_meta" &&
 	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
@@ -129,12 +126,19 @@ test_expect_success TILER,MACOS 'subdir of a mount packs a different dmg without
 	test -n "$bob_id" &&
 	test_path_is_file "$bob_img" &&
 	test_path_is_missing "${bob_img%.dmg}.sqsh" &&
-	cp "$bob_meta" div1.meta &&
+	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$bob_meta" &&
+	cp "$bob_meta" div1.meta
+'
+
+test_expect_success TILER,MACOS 'subdir divert build is idempotent' '
+	bob_id=$(cut -d" " -f3 div1.out) &&
+	test -n "$bob_id" &&
 	"$tiler_bin" build --image bob/docs "$work_dir/docs" >div2.out 2>div2.err &&
 	test_grep -E "^full bob/docs [0-9a-f]+" div2.out &&
 	bob_id2=$(cut -d" " -f3 div2.out) &&
-	test -n "$bob_id2" &&
-	assert_idle_or_archived div1.meta "$bob_id" "$bob_dir" "$bob_id2" &&
+	test "$bob_id" = "$bob_id2" &&
+	test_cmp div1.meta "$bob_meta" &&
+	test_path_is_missing "$bob_dir/archives" &&
 	test_path_is_file "$shadow"
 '
 

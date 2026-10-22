@@ -220,7 +220,8 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 		t.Fatalf("first argv = %q, want image %s", runner.calls, active)
 	}
 	// A newer session can pin the image the first bake published.
-	// This shadow still belongs to the held base.
+	// This shadow still belongs to the held base. Without ViewDir
+	// there is no content fingerprint, so convert runs again.
 	published, err := Load(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +249,96 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 	}
 	assertBytes(t, shadow, shadowBody)
 	assertBytes(t, held, oldBody)
+}
+
+func TestBakeDMGIdleSkipsConvertWhenViewUnchanged(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := seedDMGActive(t, repo, []byte("old-base"))
+	shadow := writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("shadow"))
+	view := t.TempDir()
+	if err := os.WriteFile(filepath.Join(view, "KEEP.txt"), []byte("baked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &dmgRunner{body: []byte("first-bake")}
+	req := DMGRequest{
+		Config: cfg, Name: "alice/app", Shadow: shadow, ViewDir: view,
+		MountedID: old.ID, Builder: "test",
+		Refs: holdSet{ids: map[string]bool{old.ID: true}}, Run: runner.run,
+	}
+	first, err := BuildDMG(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.body = []byte("must-not-publish")
+	second, err := BuildDMG(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("idle bake ran hdiutil again: calls = %q", runner.calls)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("idle id = %s, want %s", second.ID, first.ID)
+	}
+	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("first-bake"))
+	if _, err := os.Stat(filepath.Join(repo.Dir, "archives")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("idle bake archived: %v", err)
+	}
+}
+
+func TestBuildDMGCreateIdleSkipsNonDeterministicPacker(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := sourceDir(t)
+	runner := &dmgRunner{body: []byte("first-create")}
+	first, err := BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ContentSHA256 == "" {
+		t.Fatal("create left content_sha256 empty")
+	}
+	before, err := os.ReadFile(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.body = []byte("different-bytes-each-time")
+	second, err := BuildDMG(DMGRequest{
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("idle create ran hdiutil again: calls = %q", runner.calls)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("idle id = %s, want %s", second.ID, first.ID)
+	}
+	after, err := os.ReadFile(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("idle create rewrote meta")
+	}
+	if _, err := os.Stat(filepath.Join(repo.Dir, "archives")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("idle create archived: %v", err)
+	}
+	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("first-create"))
 }
 
 func TestBakeDMGFailureLeavesImageAndShadow(t *testing.T) {
