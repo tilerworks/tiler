@@ -61,7 +61,7 @@ then
 		for _m in "$work_dir" "$work2_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			fusermount3 -uz "$_m" >/dev/null 2>&1 ||
+			"$fusermount3_bin" -uz "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'

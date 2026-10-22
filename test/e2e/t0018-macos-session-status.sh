@@ -9,7 +9,7 @@
 # the mountpoint, the image path, and the shadow path agree.
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without /usr/bin/hdiutil skips the file instead of failing.
+# host without hdiutil_bin skips the file instead of failing.
 
 test_description='macOS session open reattaches a shadow and status is healthy'
 
@@ -21,11 +21,11 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and MACOS come from sharness.d/tiler.sh.
+# tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
 
-if test "$(uname -s)" = Darwin && ! test -x /usr/bin/hdiutil
+if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
 then
-	skip_all='skipping macOS session status; /usr/bin/hdiutil is missing'
+	skip_all="skipping macOS session status; $hdiutil_bin is missing"
 	test_done
 fi
 
@@ -40,7 +40,7 @@ then
 		for _m in "$work_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			/usr/bin/hdiutil detach "$_m" >/dev/null 2>&1 ||
+			"$hdiutil_bin" detach "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'
@@ -65,10 +65,10 @@ test_expect_success TILER,MACOS 'a writable session mounts and status is healthy
 '
 
 test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow stays' '
-	if ! /usr/bin/hdiutil detach "$work_dir" >detach.out 2>detach.err
+	if ! "$hdiutil_bin" detach "$work_dir" >detach.out 2>detach.err
 	then
 		phys=$(cd "$work_dir" && pwd -P) &&
-		/usr/bin/hdiutil detach "$phys" >detach.out 2>detach.err
+		"$hdiutil_bin" detach "$phys" >detach.out 2>detach.err
 	fi &&
 	test -d "$work_dir" &&
 	test ! -e "$work_dir/KEEP.txt" &&
@@ -91,7 +91,7 @@ test_expect_success TILER,MACOS 'session open reattaches the same shadow' '
 test_expect_success TILER,MACOS 'status is healthy when mountpoint, image, and shadow match' '
 	"$tiler_bin" status >healthy.out 2>healthy.err &&
 	grep -F "$work_dir" healthy.out | grep -q "health=healthy" &&
-	/usr/bin/hdiutil info -plist >info.plist 2>info.err &&
+	"$hdiutil_bin" info -plist >info.plist 2>info.err &&
 	grep -F "$shadow" info.plist &&
 	image_phys=$(cd "$(dirname "$image")" && pwd -P)/image.dmg &&
 	{ grep -F "$image" info.plist || grep -F "$image_phys" info.plist; } &&

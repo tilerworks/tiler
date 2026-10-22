@@ -14,7 +14,7 @@
 # not fail on that difference.
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without /usr/bin/hdiutil skips the file instead of failing.
+# host without hdiutil_bin skips the file instead of failing.
 
 test_description='macOS dmg build, shadow write, umount, and read-only mount'
 
@@ -26,11 +26,11 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and MACOS come from sharness.d/tiler.sh.
+# tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
 
-if test "$(uname -s)" = Darwin && ! test -x /usr/bin/hdiutil
+if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
 then
-	skip_all='skipping macOS dmg mount; /usr/bin/hdiutil is missing'
+	skip_all="skipping macOS dmg mount; $hdiutil_bin is missing"
 	test_done
 fi
 
@@ -50,7 +50,7 @@ then
 		for _m in "$work_dir" "$ro_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			/usr/bin/hdiutil detach "$_m" >/dev/null 2>&1 ||
+			"$hdiutil_bin" detach "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'

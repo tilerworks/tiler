@@ -70,7 +70,7 @@ then
 		for _m in "$s1_dir" "$s2_dir" "$s3_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			fusermount3 -uz "$_m" >/dev/null 2>&1 ||
+			"$fusermount3_bin" -uz "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'

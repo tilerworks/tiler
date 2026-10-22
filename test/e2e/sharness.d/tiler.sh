@@ -3,6 +3,8 @@
 #
 # Provides:
 #   tiler_bin          repository bin/tiler, else a tiler on PATH
+#   hdiutil_bin        hdiutil on PATH, the macOS disk-image tool
+#   fusermount3_bin    fusermount3 on PATH, the FUSE unmount helper
 #   TILER              set when tiler_bin is non-empty
 #   LINUX              uname -s is Linux (current mount stack)
 #   MACOS              uname -s is Darwin (future macOS mount stack)
@@ -23,6 +25,15 @@ if test -n "$tiler_bin"
 then
 	test_set_prereq TILER
 fi
+
+# hdiutil_bin is the hdiutil program name. tiler resolves it on
+# PATH. Cases call this variable instead of spelling a path.
+hdiutil_bin=hdiutil
+
+# fusermount3_bin is the program name of the FUSE unmount helper.
+# Cases call it when tiler umount cannot detach a view. PATH resolves
+# the name at the call.
+fusermount3_bin=fusermount3
 
 # OS gates for the current Linux mount stack and the coming macOS
 # image-format mounts. Cases that need a real mount list LINUX (or
@@ -45,7 +56,7 @@ test_lazy_prereq FUSE_TOOLCHAIN '
 	test -e /dev/fuse &&
 	command -v squashfuse_ll >/dev/null 2>&1 &&
 	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
+	command -v "$fusermount3_bin" >/dev/null 2>&1 &&
 	command -v mksquashfs >/dev/null 2>&1 &&
 	command -v git >/dev/null 2>&1
 '
@@ -59,7 +70,7 @@ test_lazy_prereq EROFS_TOOLCHAIN '
 	command -v mkfs.erofs >/dev/null 2>&1 &&
 	command -v erofsfuse >/dev/null 2>&1 &&
 	command -v fuse-overlayfs >/dev/null 2>&1 &&
-	command -v fusermount3 >/dev/null 2>&1 &&
+	command -v "$fusermount3_bin" >/dev/null 2>&1 &&
 	command -v git >/dev/null 2>&1
 '
 

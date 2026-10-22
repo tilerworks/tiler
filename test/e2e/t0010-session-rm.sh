@@ -69,7 +69,7 @@ then
 		for _m in "$named_dir" "$impl_dir" "$usage_dir" "$ctrl_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			fusermount3 -uz "$_m" >/dev/null 2>&1 ||
+			"$fusermount3_bin" -uz "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'

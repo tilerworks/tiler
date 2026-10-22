@@ -44,7 +44,7 @@ if test -n "$tiler_bin"
 then
 	test_atexit '
 		"$tiler_bin" umount "$workdir" >/dev/null 2>&1 ||
-		fusermount3 -uz "$workdir" >/dev/null 2>&1 ||
+		"$fusermount3_bin" -uz "$workdir" >/dev/null 2>&1 ||
 		true
 	'
 fi

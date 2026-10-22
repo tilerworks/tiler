@@ -2,14 +2,14 @@
 #
 # tiler end-to-end test: macOS doctor probes hdiutil, not FUSE.
 #
-# On Darwin, doctor must exit 0 when /usr/bin/hdiutil can run, and the
+# On Darwin, doctor must exit 0 when hdiutil_bin can run, and the
 # FUSE probes that fail a Linux host (fuse_device, fuse_overlayfs,
 # fusermount3, squashfuse_subdir) must not be failures. A host whose
 # shadow cannot attach an APFS image still passes, and the toolchain
 # detail names HFS+ for that reason.
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without /usr/bin/hdiutil skips the file instead of failing.
+# host without hdiutil_bin skips the file instead of failing.
 
 test_description='macOS doctor passes on hdiutil and ignores missing FUSE tools'
 
@@ -21,11 +21,11 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and MACOS come from sharness.d/tiler.sh.
+# tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
 
-if test "$(uname -s)" = Darwin && ! test -x /usr/bin/hdiutil
+if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
 then
-	skip_all='skipping macOS doctor; /usr/bin/hdiutil is missing'
+	skip_all="skipping macOS doctor; $hdiutil_bin is missing"
 	test_done
 fi
 

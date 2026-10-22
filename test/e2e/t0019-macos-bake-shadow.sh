@@ -9,7 +9,7 @@
 # payload and chain length 1.
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without /usr/bin/hdiutil skips the file instead of failing.
+# host without hdiutil_bin skips the file instead of failing.
 
 test_description='macOS bake keeps the live shadow and publishes one dmg'
 
@@ -21,11 +21,11 @@ export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
-# tiler_bin, TILER, and MACOS come from sharness.d/tiler.sh.
+# tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
 
-if test "$(uname -s)" = Darwin && ! test -x /usr/bin/hdiutil
+if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
 then
-	skip_all='skipping macOS bake; /usr/bin/hdiutil is missing'
+	skip_all="skipping macOS bake; $hdiutil_bin is missing"
 	test_done
 fi
 
@@ -41,7 +41,7 @@ then
 		for _m in "$work_dir" "$pub_dir"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			/usr/bin/hdiutil detach "$_m" >/dev/null 2>&1 ||
+			"$hdiutil_bin" detach "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'
@@ -64,7 +64,7 @@ test_expect_success TILER,MACOS 'a writable view is ready to bake' '
 	test -n "$shadow_ino" &&
 	"$tiler_bin" session show dev --json >before.json 2>before.err &&
 	grep -F "\"full_id\": \"$old_id\"" before.json &&
-	/usr/bin/hdiutil info -plist >before.plist 2>before-info.err &&
+	"$hdiutil_bin" info -plist >before.plist 2>before-info.err &&
 	grep -F "$shadow" before.plist
 '
 
@@ -103,7 +103,7 @@ test_expect_success TILER,MACOS 'the live attach stays on the original shadow' '
 	"$tiler_bin" session show dev --json >after.json 2>after.err &&
 	grep -F "\"full_id\": \"$old_id\"" after.json &&
 	! grep -F "\"full_id\": \"$new_id\"" after.json &&
-	/usr/bin/hdiutil info -plist >after.plist 2>after-info.err &&
+	"$hdiutil_bin" info -plist >after.plist 2>after-info.err &&
 	grep -F "$shadow" after.plist &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&
 	{ grep -F "$work_dir" after.plist || grep -F "$work_phys" after.plist; }

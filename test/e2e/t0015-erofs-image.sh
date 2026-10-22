@@ -79,7 +79,7 @@ then
 		for _m in "$work_dir" "$verify_dir" "$sub_dir" "$blk_work"
 		do
 			"$tiler_bin" umount "$_m" >/dev/null 2>&1 ||
-			fusermount3 -uz "$_m" >/dev/null 2>&1 ||
+			"$fusermount3_bin" -uz "$_m" >/dev/null 2>&1 ||
 			true
 		done
 	'
@@ -214,7 +214,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'doctor passes with only the ero
 	ln -s "$(command -v mkfs.erofs)" "$only/mkfs.erofs" &&
 	ln -s "$(command -v erofsfuse)" "$only/erofsfuse" &&
 	ln -s "$(command -v fuse-overlayfs)" "$only/fuse-overlayfs" &&
-	ln -s "$(command -v fusermount3)" "$only/fusermount3" &&
+	ln -s "$(command -v "$fusermount3_bin")" "$only/fusermount3" &&
 	ln -s "$(command -v git)" "$only/git" &&
 	PATH="$only" "$tiler_bin" doctor >doctor-stack.out 2>doctor-stack.err &&
 	grep -Eq "^  image_toolchain +warn " doctor-stack.out &&
