@@ -51,21 +51,21 @@ test_expect_success TILER,MACOS 'a writable view is ready to bake' '
 	mkdir -p "$src_dir" "$work_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	old_id=$(cut -d" " -f3 build.out) &&
 	test -n "$old_id" &&
-	test -f "$image" &&
+	test_path_is_file "$image" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	"$tiler_bin" mount --session dev alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
+	test_grep -E "^mounted " mount.out &&
 	echo baked >"$work_dir/KEEP.txt" &&
-	test -f "$shadow" &&
+	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino" &&
 	"$tiler_bin" session show dev --json >before.json 2>before.err &&
-	grep -F "\"full_id\": \"$old_id\"" before.json &&
+	test_grep -F "\"full_id\": \"$old_id\"" before.json &&
 	"$hdiutil_bin" info -plist >before.plist 2>before-info.err &&
-	grep -F "$shadow" before.plist
+	test_grep -F "$shadow" before.plist
 '
 
 test_expect_success TILER,MACOS 'baking publishes a new image and leaves the shadow' '
@@ -74,47 +74,47 @@ test_expect_success TILER,MACOS 'baking publishes a new image and leaves the sha
 		cd "$work_dir" &&
 		"$tiler_bin" build --image alice/app
 	) >bake.out 2>bake.err &&
-	grep -F "dmg has no incremental layer" bake.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" bake.out &&
+	test_grep -F "dmg has no incremental layer" bake.err &&
+	test_grep -E "^full alice/app [0-9a-f]+" bake.out &&
 	new_id=$(cut -d" " -f3 bake.out) &&
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
-	test -f "$image" &&
-	test ! -e "${image%.dmg}.sqsh" &&
-	test -f "$shadow" &&
+	test_path_is_file "$image" &&
+	test_path_is_missing "${image%.dmg}.sqsh" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
-	test -f "$HOME/.tiler/images/alice/app/hold/$old_id/image.dmg"
+	test_path_is_file "$HOME/.tiler/images/alice/app/hold/$old_id/image.dmg"
 '
 
 test_expect_success TILER,MACOS 'the published image contains the write from just before bake' '
 	mkdir -p "$pub_dir" &&
 	"$tiler_bin" session new reader >reader-new.out 2>reader-new.err &&
-	grep -Eq "^created reader$" reader-new.out &&
+	test_grep -E "^created reader$" reader-new.out &&
 	"$tiler_bin" mount --read-only --session reader alice/app "$pub_dir" >pub.out 2>pub.err &&
-	grep -Eq "^mounted " pub.out &&
-	grep -q immediate "$pub_dir/NOW.txt" &&
-	grep -q baked "$pub_dir/KEEP.txt" &&
-	test ! -e "$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow"
+	test_grep -E "^mounted " pub.out &&
+	test_grep immediate "$pub_dir/NOW.txt" &&
+	test_grep baked "$pub_dir/KEEP.txt" &&
+	test_path_is_missing "$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow"
 '
 
 test_expect_success TILER,MACOS 'the live attach stays on the original shadow' '
-	grep -q "hello tiler" "$work_dir/README.txt" &&
-	grep -q baked "$work_dir/KEEP.txt" &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_grep baked "$work_dir/KEEP.txt" &&
 	"$tiler_bin" session show dev --json >after.json 2>after.err &&
-	grep -F "\"full_id\": \"$old_id\"" after.json &&
-	! grep -F "\"full_id\": \"$new_id\"" after.json &&
+	test_grep -F "\"full_id\": \"$old_id\"" after.json &&
+	test_grep ! -F "\"full_id\": \"$new_id\"" after.json &&
 	"$hdiutil_bin" info -plist >after.plist 2>after-info.err &&
-	grep -F "$shadow" after.plist &&
+	test_grep -F "$shadow" after.plist &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&
 	{ grep -F "$work_dir" after.plist || grep -F "$work_phys" after.plist; }
 '
 
 test_expect_success TILER,MACOS 'images show reports a single file and chain length 1' '
 	"$tiler_bin" images show alice/app >show.out 2>show.err &&
-	grep -F "$new_id" show.out &&
-	grep -F "  form        single" show.out &&
-	grep -F "  chain       1" show.out &&
-	test -f "$image"
+	test_grep -F "$new_id" show.out &&
+	test_grep -F "  form        single" show.out &&
+	test_grep -F "  chain       1" show.out &&
+	test_path_is_file "$image"
 '
 
 test_done

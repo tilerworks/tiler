@@ -88,25 +88,21 @@ fi
 # json document carries empty arrays. Needs only the binary.
 test_expect_success TILER 'status with no sessions reports none in text and json' '
 	"$tiler_bin" status >empty.out 2>empty.err &&
-	grep -Eq "^no sessions recorded$" empty.out &&
+	test_grep -E "^no sessions recorded$" empty.out &&
 	"$tiler_bin" status --json >emptyj.out 2>emptyj.err &&
-	grep -qF "\"current_session\": \"\"" emptyj.out &&
-	grep -qF "\"sessions\": []" emptyj.out &&
-	grep -qF "\"orphan_views\": []" emptyj.out
+	test_grep -F "\"current_session\": \"\"" emptyj.out &&
+	test_grep -F "\"sessions\": []" emptyj.out &&
+	test_grep -F "\"orphan_views\": []" emptyj.out
 '
 
 # A path no mounted view covers is an error, not an empty result, in both
 # forms. Needs only the binary: nothing is mounted to query.
 test_expect_success TILER 'status of an uncovered path is an error in text and json' '
 	mkdir -p "$uncov_dir" &&
-	status=0 &&
-	{ "$tiler_bin" status "$uncov_dir" >uncov.out 2>uncov.err || status=$?; } &&
-	test "$status" -eq 1 &&
-	grep -q "no session covers" uncov.err &&
-	status=0 &&
-	{ "$tiler_bin" status "$uncov_dir" --json >uncovj.out 2>uncovj.err || status=$?; } &&
-	test "$status" -eq 1 &&
-	grep -q "no session covers" uncovj.err
+	test_expect_code 1 "$tiler_bin" status "$uncov_dir" >uncov.out 2>uncov.err &&
+	test_grep "no session covers" uncov.err &&
+	test_expect_code 1 "$tiler_bin" status "$uncov_dir" --json >uncovj.out 2>uncovj.err &&
+	test_grep "no session covers" uncovj.err
 '
 
 # Build one image and mount it at two views under a named session. With
@@ -116,21 +112,21 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status overview marks a healthy 
 	mkdir -p "$src_dir/sub/deep" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/status "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full tmp/status [0-9a-f]+" build.out &&
+	test_grep -E "^full tmp/status [0-9a-f]+" build.out &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
-	grep -Eq "^created dev$" new.out &&
+	test_grep -E "^created dev$" new.out &&
 	mkdir -p "$s_dir" "$s2_dir" &&
 	"$tiler_bin" mount --session dev tmp/status "$s_dir" >m1.out 2>m1.err &&
-	grep -Eq "^mounted " m1.out &&
+	test_grep -E "^mounted " m1.out &&
 	"$tiler_bin" mount --session dev tmp/status "$s2_dir" >m2.out 2>m2.err &&
-	grep -Eq "^mounted " m2.out &&
+	test_grep -E "^mounted " m2.out &&
 	TILER_SESSION_ID=dev "$tiler_bin" status >ov.out 2>ov.err &&
-	grep -Eq "^dev active created=.* current$" ov.out &&
-	grep -Eq "^  1 mount tmp/status .* mode=rw status=mounted health=healthy$" ov.out &&
-	grep -Eq "^  2 mount tmp/status .* mode=rw status=mounted health=healthy$" ov.out &&
+	test_grep -E "^dev active created=.* current$" ov.out &&
+	test_grep -E "^  1 mount tmp/status .* mode=rw status=mounted health=healthy$" ov.out &&
+	test_grep -E "^  2 mount tmp/status .* mode=rw status=mounted health=healthy$" ov.out &&
 	TILER_SESSION_ID=dev "$tiler_bin" status --json >ovj.out 2>ovj.err &&
-	grep -qF "\"current_session\": \"dev\"" ovj.out &&
-	grep -qF "\"current\": true" ovj.out &&
+	test_grep -F "\"current_session\": \"dev\"" ovj.out &&
+	test_grep -F "\"current\": true" ovj.out &&
 	test "$(grep -cF "\"health\": \"healthy\"" ovj.out)" -eq 2
 '
 
@@ -139,11 +135,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status overview marks a healthy 
 # current_session still echoes the marker.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a current marker matching no record is not an error' '
 	TILER_SESSION_ID=bogus "$tiler_bin" status >nc.out 2>nc.err &&
-	grep -Eq "^dev active created=" nc.out &&
-	! grep -Eq " current$" nc.out &&
+	test_grep -E "^dev active created=" nc.out &&
+	test_grep ! -E " current$" nc.out &&
 	TILER_SESSION_ID=bogus "$tiler_bin" status --json >ncj.out 2>ncj.err &&
-	grep -qF "\"current_session\": \"bogus\"" ncj.out &&
-	grep -qF "\"current\": false" ncj.out
+	test_grep -F "\"current_session\": \"bogus\"" ncj.out &&
+	test_grep -F "\"current\": false" ncj.out
 '
 
 # The path form resolves a deep path inside the merged view and the
@@ -152,18 +148,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a current marker matching no rec
 # healthy view is not stale.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status of a path resolves the covering session' '
 	"$tiler_bin" status "$s_dir/sub/deep/x.txt" >p1.out 2>p1.err &&
-	grep -Eq "^dev active mountpoint=" p1.out &&
-	grep -qF "$s_dir" p1.out &&
-	! grep -q " stale" p1.out &&
-	grep -Eq "^  1 mount tmp/status .* mode=rw status=mounted$" p1.out &&
+	test_grep -E "^dev active mountpoint=" p1.out &&
+	test_grep -F "$s_dir" p1.out &&
+	test_grep ! " stale" p1.out &&
+	test_grep -E "^  1 mount tmp/status .* mode=rw status=mounted$" p1.out &&
 	"$tiler_bin" status "$s_dir" >p2.out 2>p2.err &&
-	grep -Eq "^dev active mountpoint=" p2.out &&
-	grep -qF "$s_dir" p2.out &&
+	test_grep -E "^dev active mountpoint=" p2.out &&
+	test_grep -F "$s_dir" p2.out &&
 	"$tiler_bin" status "$s_dir/sub/deep/x.txt" --json >p3.out 2>p3.err &&
-	grep -qF "\"stale\": false" p3.out &&
-	grep -qF "\"session\": \"dev\"" p3.out &&
-	grep -qF "\"health\": \"healthy\"" p3.out &&
-	grep -qF "$s_dir" p3.out
+	test_grep -F "\"stale\": false" p3.out &&
+	test_grep -F "\"session\": \"dev\"" p3.out &&
+	test_grep -F "\"health\": \"healthy\"" p3.out &&
+	test_grep -F "$s_dir" p3.out
 '
 
 # SIGKILL the daemon behind the second view: it goes stale (any access
@@ -175,15 +171,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'status reports a kille
 	sleep 1 &&
 	! ls "$s2_dir" >/dev/null 2>&1 &&
 	"$tiler_bin" status >ov6.out 2>ov6.err &&
-	grep -Eq "^  1 mount tmp/status .* mode=rw status=mounted health=healthy$" ov6.out &&
-	grep -Eq "^  2 mount tmp/status .* mode=rw status=mounted health=stale$" ov6.out &&
+	test_grep -E "^  1 mount tmp/status .* mode=rw status=mounted health=healthy$" ov6.out &&
+	test_grep -E "^  2 mount tmp/status .* mode=rw status=mounted health=stale$" ov6.out &&
 	"$tiler_bin" status "$s2_dir" >ps6.out 2>ps6.err &&
-	grep -Eq " stale$" ps6.out &&
-	grep -qF "$s2_dir" ps6.out &&
-	grep -Eq "^  2 mount tmp/status .* mode=rw status=mounted$" ps6.out &&
+	test_grep -E " stale$" ps6.out &&
+	test_grep -F "$s2_dir" ps6.out &&
+	test_grep -E "^  2 mount tmp/status .* mode=rw status=mounted$" ps6.out &&
 	"$tiler_bin" status "$s2_dir" --json >pj6.out 2>pj6.err &&
-	grep -qF "\"stale\": true" pj6.out &&
-	grep -qF "\"health\": \"stale\"" pj6.out
+	test_grep -F "\"stale\": true" pj6.out &&
+	test_grep -F "\"health\": \"stale\"" pj6.out
 '
 
 # close tears both views down (the killed one included) and flips the
@@ -192,15 +188,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'status reports a kille
 # list.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a closed session shows no live views or orphans' '
 	"$tiler_bin" session close dev >cl7.out 2>cl7.err &&
-	grep -Eq "^closed dev$" cl7.out &&
+	test_grep -E "^closed dev$" cl7.out &&
 	"$tiler_bin" status >ov7.out 2>ov7.err &&
-	grep -Eq "^dev closed created=" ov7.out &&
-	! grep -q "^  " ov7.out &&
-	! grep -q "^orphan " ov7.out &&
+	test_grep -E "^dev closed created=" ov7.out &&
+	test_grep ! "^  " ov7.out &&
+	test_grep ! "^orphan " ov7.out &&
 	"$tiler_bin" status --json >j7.out 2>j7.err &&
-	grep -qF "\"state\": \"closed\"" j7.out &&
-	grep -qF "\"actions\": []" j7.out &&
-	grep -qF "\"orphan_views\": []" j7.out
+	test_grep -F "\"state\": \"closed\"" j7.out &&
+	test_grep -F "\"actions\": []" j7.out &&
+	test_grep -F "\"orphan_views\": []" j7.out
 '
 
 # A plain mount with no --session mints a generated record. Delete
@@ -213,18 +209,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a closed session shows no live v
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'status lists a live view whose record was lost as an orphan' '
 	mkdir -p "$orph_dir" &&
 	"$tiler_bin" mount tmp/status "$orph_dir" >m8.out 2>m8.err &&
-	grep -Eq "^mounted " m8.out &&
+	test_grep -E "^mounted " m8.out &&
 	auto=$(sed -n "s/^new session created: //p" m8.out) &&
 	test -n "$auto" &&
 	rm -f "$HOME/.tiler/sessions/$auto/session.json" &&
 	"$tiler_bin" status >ov8.out 2>ov8.err &&
-	grep -Eq "^orphan " ov8.out &&
-	grep -qF "$orph_dir" ov8.out &&
-	grep -Eq "^orphan .* fuse\.fuse-overlayfs " ov8.out &&
+	test_grep -E "^orphan " ov8.out &&
+	test_grep -F "$orph_dir" ov8.out &&
+	test_grep -E "^orphan .* fuse\.fuse-overlayfs " ov8.out &&
 	"$tiler_bin" status --json >j8.out 2>j8.err &&
-	grep -qF "\"point\"" j8.out &&
-	grep -qF "$orph_dir" j8.out &&
-	grep -qF "\"fstype\": \"fuse.fuse-overlayfs\"" j8.out
+	test_grep -F "\"point\"" j8.out &&
+	test_grep -F "$orph_dir" j8.out &&
+	test_grep -F "\"fstype\": \"fuse.fuse-overlayfs\"" j8.out
 '
 
 test_done

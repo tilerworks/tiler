@@ -41,14 +41,14 @@ test_expect_success TILER 'lay out a sandbox with a marker config above the ceil
 test_expect_success TILER 'without a ceiling the walk applies the marker above' '
 	cd "$HOME/zone/sandbox/deep" &&
 	{ "$tiler_bin" doctor --json >"$HOME/no-ceiling.json" 2>"$HOME/no-ceiling.err" || true; } &&
-	grep -qF "\"cache_dir\": \"$HOME/zone/marker-cache\"" "$HOME/no-ceiling.json"
+	test_grep -F "\"cache_dir\": \"$HOME/zone/marker-cache\"" "$HOME/no-ceiling.json"
 '
 
 test_expect_success TILER 'TILER_CEILING_DIR stops the walk below the marker' '
 	cd "$HOME/zone/sandbox/deep" &&
 	{ TILER_CEILING_DIR="$HOME/zone/sandbox" "$tiler_bin" doctor --json >"$HOME/ceiling.json" 2>"$HOME/ceiling.err" || true; } &&
-	grep -qF "\"cache_dir\": \"$HOME/.tiler/cache\"" "$HOME/ceiling.json" &&
-	! grep -qF "marker-cache" "$HOME/ceiling.json"
+	test_grep -F "\"cache_dir\": \"$HOME/.tiler/cache\"" "$HOME/ceiling.json" &&
+	test_grep ! -F "marker-cache" "$HOME/ceiling.json"
 '
 
 test_done

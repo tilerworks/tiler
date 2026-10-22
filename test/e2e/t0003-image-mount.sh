@@ -75,31 +75,31 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image from a source
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
-	test -f "$image" &&
-	test ! -e "${image%.sqsh}.dmg"
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
+	test_path_is_file "$image" &&
+	test_path_is_missing "${image%.sqsh}.dmg"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the image read-write with an upper layer' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
-	test -f "$work_dir/docs/guide.md" &&
+	test_grep -E "^mounted " mount.out &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_path_is_file "$work_dir/docs/guide.md" &&
 	echo edited >"$work_dir/NEW.txt" &&
-	test -f "$work_dir/NEW.txt"
+	test_path_is_file "$work_dir/NEW.txt"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount of the same view is idempotent' '
 	"$tiler_bin" mount alice/app "$work_dir" >remount.out 2>remount.err &&
-	grep -Eq "^already mounted " remount.out
+	test_grep -E "^already mounted " remount.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a second image builds with a distinct id' '
 	mkdir -p "$src2_dir" &&
 	echo "#!/bin/sh" >"$src2_dir/run.sh" &&
 	"$tiler_bin" build --image bob/tools "$src2_dir" >build2.out 2>build2.err &&
-	grep -Eq "^full bob/tools [0-9a-f]+" build2.out &&
+	test_grep -E "^full bob/tools [0-9a-f]+" build2.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	id2=$(cut -d" " -f3 build2.out) &&
 	test -n "$id1" && test -n "$id2" &&
@@ -109,9 +109,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a second image builds with a dis
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the second image mounts at its own target' '
 	mkdir -p "$work2_dir" &&
 	"$tiler_bin" mount bob/tools "$work2_dir" >mount2.out 2>mount2.err &&
-	grep -Eq "^mounted " mount2.out &&
-	test -f "$work2_dir/run.sh" &&
-	test ! -e "$work2_dir/README.txt"
+	test_grep -E "^mounted " mount2.out &&
+	test_path_is_file "$work2_dir/run.sh" &&
+	test_path_is_missing "$work2_dir/README.txt"
 '
 
 # work_dir is still live serving alice/app. Mounting a different image
@@ -119,13 +119,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the second image mounts at its o
 # is non-zero, the error names the refusal, and the live view still
 # serves alice/app (README.txt present, run.sh absent).
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a different image on a live view is refused' '
-	status=0 &&
-	{ "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "already mounts a different view" conflict.err &&
-	grep -q "refusing to restack it silently" conflict.err &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
-	test ! -e "$work_dir/run.sh"
+	test_must_fail "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err &&
+	test_grep "already mounts a different view" conflict.err &&
+	test_grep "refusing to restack it silently" conflict.err &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_path_is_missing "$work_dir/run.sh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears both views down' '

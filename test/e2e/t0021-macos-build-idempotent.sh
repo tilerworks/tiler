@@ -56,10 +56,10 @@ assert_idle_or_archived() {
 	_new_id=$4
 	if test "$_old_id" = "$_new_id"
 	then
-		cmp -s "$_meta_copy" "$_repo/meta.yaml"
+		test_cmp "$_meta_copy" "$_repo/meta.yaml"
 	else
-		test -d "$_repo/archives/$_old_id" ||
-		test -d "$_repo/hold/$_old_id"
+		test_path_is_dir "$_repo/archives/$_old_id" ||
+		test_path_is_dir "$_repo/hold/$_old_id"
 	fi
 }
 
@@ -77,14 +77,14 @@ test_expect_success TILER,MACOS 'plain directory dmg create repeats cleanly' '
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >full1.out 2>full1.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" full1.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" full1.out &&
 	id1=$(cut -d" " -f3 full1.out) &&
 	test -n "$id1" &&
-	test -f "$alice_img" &&
-	test ! -e "${alice_img%.dmg}.sqsh" &&
+	test_path_is_file "$alice_img" &&
+	test_path_is_missing "${alice_img%.dmg}.sqsh" &&
 	cp "$alice_meta" full1.meta &&
 	"$tiler_bin" build --image alice/app "$src_dir" >full2.out 2>full2.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" full2.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&
 	test -n "$id2" &&
 	assert_idle_or_archived full1.meta "$id1" "$alice_dir" "$id2"
@@ -92,19 +92,19 @@ test_expect_success TILER,MACOS 'plain directory dmg create repeats cleanly' '
 
 test_expect_success TILER,MACOS 'shadow bake repeats without dropping the live shadow' '
 	"$tiler_bin" session new dev >new.out 2>new.err &&
-	grep -Eq "^created dev$" new.out &&
+	test_grep -E "^created dev$" new.out &&
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount --session dev alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
+	test_grep -E "^mounted " mount.out &&
 	echo baked >"$work_dir/KEEP.txt" &&
-	test -f "$shadow" &&
+	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	(
 		cd "$work_dir" &&
 		"$tiler_bin" build --image alice/app
 	) >bake1.out 2>bake1.err &&
-	grep -F "dmg has no incremental layer" bake1.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" bake1.out &&
+	test_grep -F "dmg has no incremental layer" bake1.err &&
+	test_grep -E "^full alice/app [0-9a-f]+" bake1.out &&
 	bake_id=$(cut -d" " -f3 bake1.out) &&
 	test -n "$bake_id" &&
 	cp "$alice_meta" bake1.meta &&
@@ -112,30 +112,30 @@ test_expect_success TILER,MACOS 'shadow bake repeats without dropping the live s
 		cd "$work_dir" &&
 		"$tiler_bin" build --image alice/app
 	) >bake2.out 2>bake2.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" bake2.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" bake2.out &&
 	bake_id2=$(cut -d" " -f3 bake2.out) &&
 	test -n "$bake_id2" &&
 	assert_idle_or_archived bake1.meta "$bake_id" "$alice_dir" "$bake_id2" &&
-	test -f "$shadow" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
 
 test_expect_success TILER,MACOS 'subdir of a mount packs a different dmg without baking' '
-	test -f "$work_dir/docs/guide.md" &&
+	test_path_is_file "$work_dir/docs/guide.md" &&
 	"$tiler_bin" build --image bob/docs "$work_dir/docs" >div1.out 2>div1.err &&
-	grep -Eq "^full bob/docs [0-9a-f]+" div1.out &&
-	! grep -F "dmg has no incremental layer" div1.err &&
+	test_grep -E "^full bob/docs [0-9a-f]+" div1.out &&
+	test_grep ! -F "dmg has no incremental layer" div1.err &&
 	bob_id=$(cut -d" " -f3 div1.out) &&
 	test -n "$bob_id" &&
-	test -f "$bob_img" &&
-	test ! -e "${bob_img%.dmg}.sqsh" &&
+	test_path_is_file "$bob_img" &&
+	test_path_is_missing "${bob_img%.dmg}.sqsh" &&
 	cp "$bob_meta" div1.meta &&
 	"$tiler_bin" build --image bob/docs "$work_dir/docs" >div2.out 2>div2.err &&
-	grep -Eq "^full bob/docs [0-9a-f]+" div2.out &&
+	test_grep -E "^full bob/docs [0-9a-f]+" div2.out &&
 	bob_id2=$(cut -d" " -f3 div2.out) &&
 	test -n "$bob_id2" &&
 	assert_idle_or_archived div1.meta "$bob_id" "$bob_dir" "$bob_id2" &&
-	test -f "$shadow"
+	test_path_is_file "$shadow"
 '
 
 test_done

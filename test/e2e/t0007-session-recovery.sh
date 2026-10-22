@@ -80,19 +80,19 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a 
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	"$tiler_bin" session new rec >new.out 2>new.err &&
-	grep -Eq "^created rec$" new.out &&
+	test_grep -E "^created rec$" new.out &&
 	mkdir -p "$rec_dir" &&
 	"$tiler_bin" mount --session rec alice/app "$rec_dir" >m1.out 2>m1.err &&
-	grep -Eq "^mounted " m1.out &&
-	grep -q hello "$rec_dir/README.txt" &&
+	test_grep -E "^mounted " m1.out &&
+	test_grep hello "$rec_dir/README.txt" &&
 	echo survived >"$rec_dir/KEEP.txt" &&
 	kill_view "$rec_dir" &&
 	sleep 1 &&
 	! ls "$rec_dir" >/dev/null 2>&1 &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
+	test_grep -E "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
 '
 
 # session open finds the stale view unhealthy, cleans and remounts it,
@@ -101,12 +101,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a 
 # the crash is still there.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays the view and the upper survives' '
 	"$tiler_bin" session open rec >open1.out 2>open1.err &&
-	grep -Eq "^opened rec$" open1.out &&
-	grep -q hello "$rec_dir/README.txt" &&
-	test -f "$rec_dir/KEEP.txt" &&
-	grep -q survived "$rec_dir/KEEP.txt" &&
+	test_grep -E "^opened rec$" open1.out &&
+	test_grep hello "$rec_dir/README.txt" &&
+	test_path_is_file "$rec_dir/KEEP.txt" &&
+	test_grep survived "$rec_dir/KEEP.txt" &&
 	"$tiler_bin" session list >list2.out 2>list2.err &&
-	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list2.out
+	test_grep -E "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list2.out
 '
 
 # A second open over the now-healthy view is a pure no-op: the health
@@ -114,9 +114,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'session open replays t
 # upper-layer file is untouched.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open is idempotent' '
 	"$tiler_bin" session open rec >open2.out 2>open2.err &&
-	grep -Eq "^opened rec$" open2.out &&
-	grep -q hello "$rec_dir/README.txt" &&
-	test -f "$rec_dir/KEEP.txt"
+	test_grep -E "^opened rec$" open2.out &&
+	test_grep hello "$rec_dir/README.txt" &&
+	test_path_is_file "$rec_dir/KEEP.txt"
 '
 
 # close tears the healthy view down and flips the record to closed; open
@@ -124,16 +124,16 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a second session open 
 # remounts the view, reusing the same upper so the file survives again.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a closed session revives through open' '
 	"$tiler_bin" session close rec >close.out 2>close.err &&
-	grep -Eq "^closed rec$" close.out &&
+	test_grep -E "^closed rec$" close.out &&
 	"$tiler_bin" session list >list4a.out 2>list4a.err &&
-	grep -Eq "^rec[[:space:]]+closed[[:space:]]+0[[:space:]]" list4a.out &&
-	test ! -e "$rec_dir/README.txt" &&
+	test_grep -E "^rec[[:space:]]+closed[[:space:]]+0[[:space:]]" list4a.out &&
+	test_path_is_missing "$rec_dir/README.txt" &&
 	"$tiler_bin" session open rec >open3.out 2>open3.err &&
-	grep -Eq "^opened rec$" open3.out &&
+	test_grep -E "^opened rec$" open3.out &&
 	"$tiler_bin" session list >list4b.out 2>list4b.err &&
-	grep -Eq "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list4b.out &&
-	grep -q hello "$rec_dir/README.txt" &&
-	test -f "$rec_dir/KEEP.txt"
+	test_grep -E "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list4b.out &&
+	test_grep hello "$rec_dir/README.txt" &&
+	test_path_is_file "$rec_dir/KEEP.txt"
 '
 
 test_done

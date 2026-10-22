@@ -69,26 +69,26 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'pack a bare squashfs outside ima
 	echo "hello vendor" >"$src_dir/README.txt" &&
 	echo "# guide" >"$src_dir/docs/guide.md" &&
 	mksquashfs "$src_dir" "$img" -comp zstd -noappend -xattrs >/dev/null &&
-	test -f "$img" &&
+	test_path_is_file "$img" &&
 	case "$img" in
 	"$images_dir"/*)
 		echo "image path must stay outside images_dir: $img" >&2
 		false
 		;;
 	esac &&
-	test ! -e "$nas_dir/meta.yaml" &&
-	test ! -e "$images_dir/meta.yaml" &&
+	test_path_is_missing "$nas_dir/meta.yaml" &&
+	test_path_is_missing "$images_dir/meta.yaml" &&
 	! find "$nas_dir" -name meta.yaml | grep -q .
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the absolute path and serve the content' '
 	"$tiler_bin" session new ext >new.out 2>new.err &&
-	grep -Eq "^created ext$" new.out &&
+	test_grep -E "^created ext$" new.out &&
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount --session ext "$img" "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
-	grep -q "hello vendor" "$work_dir/README.txt" &&
-	test -f "$work_dir/docs/guide.md"
+	test_grep -E "^mounted " mount.out &&
+	test_grep "hello vendor" "$work_dir/README.txt" &&
+	test_path_is_file "$work_dir/docs/guide.md"
 '
 
 # The session action stores the reference as given (here the absolute
@@ -96,23 +96,23 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the absolute path and serv
 # on-disk record both omit owner/repo/full_id for this form.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session records the image path with empty library identity' '
 	"$tiler_bin" session show ext >show.out 2>show.err &&
-	grep -qF "mount  $img  " show.out &&
-	grep -Eq "mode=rw  status=mounted" show.out &&
+	test_grep -F "mount  $img  " show.out &&
+	test_grep -E "mode=rw  status=mounted" show.out &&
 	"$tiler_bin" session show ext --json >showj.out 2>showj.err &&
-	grep -qF "\"image\": \"$img\"" showj.out &&
-	! grep -q "\"owner\"" showj.out &&
-	! grep -q "\"repo\"" showj.out &&
-	! grep -q "\"full_id\"" showj.out &&
-	test -f "$session_json" &&
-	grep -qF "\"image\": \"$img\"" "$session_json" &&
-	! grep -q "\"owner\"" "$session_json" &&
-	! grep -q "\"repo\"" "$session_json" &&
-	! grep -q "\"full_id\"" "$session_json"
+	test_grep -F "\"image\": \"$img\"" showj.out &&
+	test_grep ! "\"owner\"" showj.out &&
+	test_grep ! "\"repo\"" showj.out &&
+	test_grep ! "\"full_id\"" showj.out &&
+	test_path_is_file "$session_json" &&
+	test_grep -F "\"image\": \"$img\"" "$session_json" &&
+	test_grep ! "\"owner\"" "$session_json" &&
+	test_grep ! "\"repo\"" "$session_json" &&
+	test_grep ! "\"full_id\"" "$session_json"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
-	grep -Eq "^unmounted " umount.out
+	test_grep -E "^unmounted " umount.out
 '
 
 test_done

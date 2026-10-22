@@ -60,21 +60,21 @@ test_expect_success TILER,MACOS 'build image.dmg from a directory' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
-	grep -Eq "^created dev$" new.out &&
+	test_grep -E "^created dev$" new.out &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
-	test -f "$image" &&
-	test ! -e "${image%.dmg}.sqsh"
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
+	test_path_is_file "$image" &&
+	test_path_is_missing "${image%.dmg}.sqsh"
 '
 
 test_expect_success TILER,MACOS 'a writable mount writes through upper.shadow' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount --session dev alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
+	test_grep -E "^mounted " mount.out &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
 	echo edited >"$work_dir/NEW.txt" &&
-	grep -q edited "$work_dir/NEW.txt" &&
-	test -f "$shadow" &&
+	test_grep edited "$work_dir/NEW.txt" &&
+	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino"
 '
@@ -86,42 +86,42 @@ test_expect_success TILER,MACOS 'an HFS+ host is named by doctor' '
 	"$tiler_bin" doctor --json >fs.json 2>fs.err &&
 	if grep -q "HFS+" fs.json
 	then
-		grep -F "filesystem HFS+ because attach -shadow cannot use an APFS image" fs.json
+		test_grep -F "filesystem HFS+ because attach -shadow cannot use an APFS image" fs.json
 	else
-		grep -F "\"detail\": \"dmg\"" fs.json
+		test_grep -F "\"detail\": \"dmg\"" fs.json
 	fi
 '
 
 test_expect_success TILER,MACOS 'umount leaves the mountpoint empty and the shadow in place' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
-	grep -Eq "^unmounted " umount.out &&
-	test -d "$work_dir" &&
-	test ! -e "$work_dir/README.txt" &&
-	test ! -e "$work_dir/NEW.txt" &&
+	test_grep -E "^unmounted " umount.out &&
+	test_path_is_dir "$work_dir" &&
+	test_path_is_missing "$work_dir/README.txt" &&
+	test_path_is_missing "$work_dir/NEW.txt" &&
 	test -z "$(find "$work_dir" -mindepth 1 -print)" &&
-	test -f "$shadow" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
 
 test_expect_success TILER,MACOS 'a second attach of the same shadow still has the write' '
 	"$tiler_bin" session open dev >open.out 2>open.err &&
-	grep -Eq "^opened dev$" open.out &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
-	grep -q edited "$work_dir/NEW.txt" &&
-	test -f "$shadow" &&
+	test_grep -E "^opened dev$" open.out &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_grep edited "$work_dir/NEW.txt" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
 
 test_expect_success TILER,MACOS 'a read-only mount does not create upper.shadow' '
 	mkdir -p "$ro_dir" &&
 	"$tiler_bin" session new reader >ro-new.out 2>ro-new.err &&
-	grep -Eq "^created reader$" ro-new.out &&
+	test_grep -E "^created reader$" ro-new.out &&
 	"$tiler_bin" mount --session reader --read-only alice/app "$ro_dir" >ro.out 2>ro.err &&
-	grep -Eq "^mounted " ro.out &&
-	grep -q "hello tiler" "$ro_dir/README.txt" &&
-	test ! -e "$ro_dir/NEW.txt" &&
-	test ! -e "$ro_shadow" &&
-	test -f "$shadow"
+	test_grep -E "^mounted " ro.out &&
+	test_grep "hello tiler" "$ro_dir/README.txt" &&
+	test_path_is_missing "$ro_dir/NEW.txt" &&
+	test_path_is_missing "$ro_shadow" &&
+	test_path_is_file "$shadow"
 '
 
 test_done

@@ -50,14 +50,14 @@ test_expect_success TILER,MACOS 'a writable session mounts and status is healthy
 	mkdir -p "$src_dir" "$work_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
-	test -f "$image" &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
+	test_path_is_file "$image" &&
 	"$tiler_bin" session new rec >new.out 2>new.err &&
-	grep -Eq "^created rec$" new.out &&
+	test_grep -E "^created rec$" new.out &&
 	"$tiler_bin" mount --session rec alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
+	test_grep -E "^mounted " mount.out &&
 	echo kept >"$work_dir/KEEP.txt" &&
-	test -f "$shadow" &&
+	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino" &&
 	"$tiler_bin" status >live.out 2>live.err &&
@@ -70,10 +70,10 @@ test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow s
 		phys=$(cd "$work_dir" && pwd -P) &&
 		"$hdiutil_bin" detach "$phys" >detach.out 2>detach.err
 	fi &&
-	test -d "$work_dir" &&
-	test ! -e "$work_dir/KEEP.txt" &&
-	test ! -e "$work_dir/README.txt" &&
-	test -f "$shadow" &&
+	test_path_is_dir "$work_dir" &&
+	test_path_is_missing "$work_dir/KEEP.txt" &&
+	test_path_is_missing "$work_dir/README.txt" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
 	"$tiler_bin" status >stale.out 2>stale.err &&
 	grep -F "$work_dir" stale.out | grep -q "health=stale"
@@ -81,10 +81,10 @@ test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow s
 
 test_expect_success TILER,MACOS 'session open reattaches the same shadow' '
 	"$tiler_bin" session open rec >open.out 2>open.err &&
-	grep -Eq "^opened rec$" open.out &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
-	grep -q kept "$work_dir/KEEP.txt" &&
-	test -f "$shadow" &&
+	test_grep -E "^opened rec$" open.out &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_grep kept "$work_dir/KEEP.txt" &&
+	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
 
@@ -92,7 +92,7 @@ test_expect_success TILER,MACOS 'status is healthy when mountpoint, image, and s
 	"$tiler_bin" status >healthy.out 2>healthy.err &&
 	grep -F "$work_dir" healthy.out | grep -q "health=healthy" &&
 	"$hdiutil_bin" info -plist >info.plist 2>info.err &&
-	grep -F "$shadow" info.plist &&
+	test_grep -F "$shadow" info.plist &&
 	image_phys=$(cd "$(dirname "$image")" && pwd -P)/image.dmg &&
 	{ grep -F "$image" info.plist || grep -F "$image_phys" info.plist; } &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&

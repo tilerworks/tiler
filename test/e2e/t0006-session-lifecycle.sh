@@ -86,17 +86,13 @@ fi
 # path separator is a usage error (exit 2).
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new creates an active record and rejects duplicates' '
 	"$tiler_bin" session new dev >new.out 2>new.err &&
-	grep -Eq "^created dev$" new.out &&
+	test_grep -E "^created dev$" new.out &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^dev[[:space:]]+active[[:space:]]+0[[:space:]]" list1.out &&
-	status=0 &&
-	{ "$tiler_bin" session new dev >dup.out 2>dup.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "already exists" dup.err &&
-	status=0 &&
-	{ "$tiler_bin" session new a/b >bad.out 2>bad.err || status=$?; } &&
-	test "$status" -eq 2 &&
-	grep -q "invalid session name" bad.err
+	test_grep -E "^dev[[:space:]]+active[[:space:]]+0[[:space:]]" list1.out &&
+	test_must_fail "$tiler_bin" session new dev >dup.out 2>dup.err &&
+	test_grep "already exists" dup.err &&
+	test_expect_code 2 "$tiler_bin" session new a/b >bad.out 2>bad.err &&
+	test_grep "invalid session name" bad.err
 '
 
 # mount --session groups views under one named record, and the
@@ -108,18 +104,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --session and TILER_SESSIO
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "tools" >"$src2_dir/TOOLS.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	"$tiler_bin" build --image bob/tools "$src2_dir" >build2.out 2>build2.err &&
-	grep -Eq "^full bob/tools [0-9a-f]+" build2.out &&
+	test_grep -E "^full bob/tools [0-9a-f]+" build2.out &&
 	mkdir -p "$s1_dir" "$s2_dir" "$s3_dir" &&
 	"$tiler_bin" mount --session dev alice/app "$s1_dir" >m1.out 2>m1.err &&
-	grep -Eq "^mounted " m1.out &&
+	test_grep -E "^mounted " m1.out &&
 	"$tiler_bin" mount --session dev --read-only bob/tools "$s2_dir" >m2.out 2>m2.err &&
-	grep -Eq "^mounted " m2.out &&
+	test_grep -E "^mounted " m2.out &&
 	TILER_SESSION_ID=dev "$tiler_bin" mount alice/app "$s3_dir" >m3.out 2>m3.err &&
-	grep -Eq "^mounted " m3.out &&
-	test -e "$s1_dir/README.txt" &&
-	test -e "$s2_dir/TOOLS.txt"
+	test_grep -E "^mounted " m3.out &&
+	test_path_exists "$s1_dir/README.txt" &&
+	test_path_exists "$s2_dir/TOOLS.txt"
 '
 
 # list renders an aligned table row and show renders a multi-line
@@ -128,44 +124,38 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --session and TILER_SESSIO
 # contain spaces, so the action regex wildcards it with `.*`.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session list and show render the record' '
 	"$tiler_bin" session list >list3.out 2>list3.err &&
-	grep -Eq "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list3.out &&
+	test_grep -E "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list3.out &&
 	"$tiler_bin" session show dev >show3.out 2>show3.err &&
-	grep -Eq "^dev$" show3.out &&
-	grep -Eq "^  state +active$" show3.out &&
-	grep -Eq "^  created +" show3.out &&
-	grep -Eq "^    1  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
-	grep -Eq "^    2  mount  bob/tools  .*  mode=ro  status=mounted" show3.out &&
-	grep -Eq "^    3  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
+	test_grep -E "^dev$" show3.out &&
+	test_grep -E "^  state +active$" show3.out &&
+	test_grep -E "^  created +" show3.out &&
+	test_grep -E "^    1  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
+	test_grep -E "^    2  mount  bob/tools  .*  mode=ro  status=mounted" show3.out &&
+	test_grep -E "^    3  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
 	"$tiler_bin" session show dev --json >showj.out 2>showj.err &&
-	grep -q "\"actions\"" showj.out &&
-	grep -q "dev" showj.out &&
+	test_grep "\"actions\"" showj.out &&
+	test_grep "dev" showj.out &&
 	"$tiler_bin" session list --json >listj.out 2>listj.err &&
-	grep -q "\"sessions\"" listj.out &&
-	grep -Eq "\"mounts\": 3" listj.out
+	test_grep "\"sessions\"" listj.out &&
+	test_grep -E "\"mounts\": 3" listj.out
 '
 
 # A record that never existed is refused by both show and open with a
 # non-zero exit naming the miss.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show and open refuse a missing record' '
-	status=0 &&
-	{ "$tiler_bin" session show nosuch >showns.out 2>showns.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "not found" showns.err &&
-	status=0 &&
-	{ "$tiler_bin" session open nosuch >openns.out 2>openns.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "not found" openns.err
+	test_must_fail "$tiler_bin" session show nosuch >showns.out 2>showns.err &&
+	test_grep "not found" showns.err &&
+	test_must_fail "$tiler_bin" session open nosuch >openns.out 2>openns.err &&
+	test_grep "not found" openns.err
 '
 
 # An active record still holds mounts, so remove refuses it and the
 # record survives unchanged.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove refuses an active record' '
-	status=0 &&
-	{ "$tiler_bin" session remove dev >rmact.out 2>rmact.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "close it before removing" rmact.err &&
+	test_must_fail "$tiler_bin" session remove dev >rmact.out 2>rmact.err &&
+	test_grep "close it before removing" rmact.err &&
 	"$tiler_bin" session list >list5.out 2>list5.err &&
-	grep -Eq "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list5.out
+	test_grep -E "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list5.out
 '
 
 # A manual umount of one view does NOT close a named session. It does
@@ -174,10 +164,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove refuses an active
 # content.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount of one view keeps a named session active' '
 	"$tiler_bin" umount "$s2_dir" >um2.out 2>um2.err &&
-	grep -Eq "^unmounted " um2.out &&
+	test_grep -E "^unmounted " um2.out &&
 	"$tiler_bin" session list >list6.out 2>list6.err &&
-	grep -Eq "^dev[[:space:]]+active[[:space:]]+2[[:space:]]" list6.out &&
-	test -e "$s1_dir/README.txt"
+	test_grep -E "^dev[[:space:]]+active[[:space:]]+2[[:space:]]" list6.out &&
+	test_path_exists "$s1_dir/README.txt"
 '
 
 # close tears the views down in reverse seq order, flips the record to
@@ -186,36 +176,32 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount of one view keeps a named
 # still prints the confirmation.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session close tears down views and is idempotent' '
 	"$tiler_bin" session close dev >close.out 2>close.err &&
-	grep -Eq "^closed dev$" close.out &&
-	test ! -e "$s1_dir/README.txt" &&
+	test_grep -E "^closed dev$" close.out &&
+	test_path_is_missing "$s1_dir/README.txt" &&
 	"$tiler_bin" session list >list7.out 2>list7.err &&
-	grep -Eq "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list7.out &&
+	test_grep -E "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list7.out &&
 	"$tiler_bin" session close dev >close2.out 2>close2.err &&
-	grep -Eq "^closed dev$" close2.out
+	test_grep -E "^closed dev$" close2.out
 '
 
 # A closed record never accepts a new mount; the caller must create a
 # fresh session. The record is left untouched.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount into a closed session is refused' '
-	status=0 &&
-	{ "$tiler_bin" mount --session dev alice/app "$s1_dir" >mclosed.out 2>mclosed.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "is closed" mclosed.err &&
+	test_must_fail "$tiler_bin" mount --session dev alice/app "$s1_dir" >mclosed.out 2>mclosed.err &&
+	test_grep "is closed" mclosed.err &&
 	"$tiler_bin" session list >list8.out 2>list8.err &&
-	grep -Eq "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list8.out
+	test_grep -E "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list8.out
 '
 
 # A closed record removes cleanly and drops out of the listing; removing
 # it again is refused as a miss.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove deletes a closed record' '
 	"$tiler_bin" session remove dev >rmdev.out 2>rmdev.err &&
-	grep -Eq "^removed dev$" rmdev.out &&
+	test_grep -E "^removed dev$" rmdev.out &&
 	"$tiler_bin" session list >list9.out 2>list9.err &&
-	! grep -Eq "^dev " list9.out &&
-	status=0 &&
-	{ "$tiler_bin" session remove dev >rmdev2.out 2>rmdev2.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "not found" rmdev2.err
+	test_grep ! -E "^dev " list9.out &&
+	test_must_fail "$tiler_bin" session remove dev >rmdev2.out 2>rmdev2.err &&
+	test_grep "not found" rmdev2.err
 '
 
 test_done

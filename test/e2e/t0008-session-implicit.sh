@@ -77,38 +77,38 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount without --session creates 
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/auto "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full tmp/auto [0-9a-f]+" build.out &&
+	test_grep -E "^full tmp/auto [0-9a-f]+" build.out &&
 	mkdir -p "$a1_dir" &&
 	"$tiler_bin" mount tmp/auto "$a1_dir" >m1.out 2>m1.err &&
-	grep -Eq "^new session created: [a-z]+-[a-z]+[0-9]?$" m1.out &&
-	grep -Eq "^mounted " m1.out &&
+	test_grep -E "^new session created: [a-z]+-[a-z]+[0-9]?$" m1.out &&
+	test_grep -E "^mounted " m1.out &&
 	auto1=$(sed -n "s/^new session created: //p" m1.out) &&
 	test -n "$auto1" &&
-	test -e "$a1_dir/README.txt" &&
+	test_path_exists "$a1_dir/README.txt" &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	grep -Eq "^$auto1[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
+	test_grep -E "^$auto1[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out
 '
 
 # show renders the generated record with the same header + action shape
 # as a named one, and has a --json form.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show renders a generated record' '
 	"$tiler_bin" session show "$auto1" >show2.out 2>show2.err &&
-	grep -Eq "^$auto1$" show2.out &&
-	grep -Eq "^  state +active$" show2.out &&
-	grep -Eq "^  created +" show2.out &&
-	grep -Eq "^    1  mount  tmp/auto  .*  mode=rw  status=mounted" show2.out &&
+	test_grep -E "^$auto1$" show2.out &&
+	test_grep -E "^  state +active$" show2.out &&
+	test_grep -E "^  created +" show2.out &&
+	test_grep -E "^    1  mount  tmp/auto  .*  mode=rw  status=mounted" show2.out &&
 	"$tiler_bin" session show "$auto1" --json >showj.out 2>showj.err &&
-	grep -q "\"actions\"" showj.out &&
-	grep -q "tmp/auto" showj.out
+	test_grep "\"actions\"" showj.out &&
+	test_grep "tmp/auto" showj.out
 '
 
 # Umounting the last view of a non--rm session does not close it: the
 # record stays active with mounts=0.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umounting the last view keeps a non-rm session active' '
 	"$tiler_bin" umount "$a1_dir" >um1.out 2>um1.err &&
-	grep -Eq "^unmounted " um1.out &&
+	test_grep -E "^unmounted " um1.out &&
 	"$tiler_bin" session list >list3.out 2>list3.err &&
-	grep -Eq "^$auto1[[:space:]]+active[[:space:]]+0[[:space:]]" list3.out
+	test_grep -E "^$auto1[[:space:]]+active[[:space:]]+0[[:space:]]" list3.out
 '
 
 # A generated session is still an ordinary record: it can be closed and
@@ -116,17 +116,17 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umounting the last view keeps a 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a generated session can be closed and removed by name' '
 	mkdir -p "$a2_dir" &&
 	"$tiler_bin" mount tmp/auto "$a2_dir" >m2.out 2>m2.err &&
-	grep -Eq "^mounted " m2.out &&
+	test_grep -E "^mounted " m2.out &&
 	auto2=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto2" &&
 	test "$auto2" != "$auto1" &&
 	"$tiler_bin" session close "$auto2" >close4.out 2>close4.err &&
-	grep -Eq "^closed " close4.out &&
-	test ! -e "$a2_dir/README.txt" &&
+	test_grep -E "^closed " close4.out &&
+	test_path_is_missing "$a2_dir/README.txt" &&
 	"$tiler_bin" session remove "$auto2" >rm4.out 2>rm4.err &&
-	grep -Eq "^removed " rm4.out &&
+	test_grep -E "^removed " rm4.out &&
 	"$tiler_bin" session list >list4b.out 2>list4b.err &&
-	! grep -q "$auto2" list4b.out
+	test_grep ! "$auto2" list4b.out
 '
 
 test_done

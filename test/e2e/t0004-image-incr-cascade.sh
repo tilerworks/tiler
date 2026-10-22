@@ -85,11 +85,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a base full image' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	grep -Eq "^id: \"?$id1\"?$" "$meta_file" &&
-	! grep -q "^chain:" "$meta_file"
+	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
+	test_grep ! "^chain:" "$meta_file"
 '
 
 # build --incremental packs the live view upper as-is and leaves it in place, so
@@ -99,15 +99,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a base full image' '
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct increments' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
-	grep -q "hello tiler" "$work_dir/README.txt" &&
+	test_grep -E "^mounted " mount.out &&
+	test_grep "hello tiler" "$work_dir/README.txt" &&
 	echo a >"$work_dir/a.txt" &&
 	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incrA.out 2>incrA.err &&
-	grep -Eq "^incr alice/app [0-9a-f]+" incrA.out &&
+	test_grep -E "^incr alice/app [0-9a-f]+" incrA.out &&
 	layerA=$(cut -d" " -f3 incrA.out) &&
 	echo b >"$work_dir/b.txt" &&
 	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incrB.out 2>incrB.err &&
-	grep -Eq "^incr alice/app [0-9a-f]+" incrB.out &&
+	test_grep -E "^incr alice/app [0-9a-f]+" incrB.out &&
 	layerB=$(cut -d" " -f3 incrB.out) &&
 	test -n "$layerA" && test -n "$layerB" &&
 	test "$layerA" != "$layerB"
@@ -115,20 +115,20 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct in
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
-	grep -Eq "^  chain +2$" ls.out &&
+	test_grep -E "^  chain +2$" ls.out &&
 	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 2 &&
-	grep -Eq "^id: \"?$id1\"?$" "$meta_file"
+	test_grep -E "^id: \"?$id1\"?$" "$meta_file"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the full plus both increments' '
 	"$tiler_bin" umount "$work_dir" &&
 	mkdir -p "$verify_dir" &&
 	"$tiler_bin" mount alice/app "$verify_dir" >remount.out 2>remount.err &&
-	grep -Eq "^mounted " remount.out &&
-	grep -q "hello tiler" "$verify_dir/README.txt" &&
-	test -f "$verify_dir/a.txt" &&
-	test -f "$verify_dir/b.txt"
+	test_grep -E "^mounted " remount.out &&
+	test_grep "hello tiler" "$verify_dir/README.txt" &&
+	test_path_is_file "$verify_dir/a.txt" &&
+	test_path_is_file "$verify_dir/b.txt"
 '
 
 # build --full inside the live view packs the whole merged mount point
@@ -137,17 +137,17 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the full 
 # folds README + both increments, so its id differs from the base full.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --full merges the view into a new full' '
 	( cd "$verify_dir" && "$tiler_bin" build --full ) >merge.out 2>merge.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" merge.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" merge.out &&
 	id2=$(cut -d" " -f3 merge.out) &&
 	test -n "$id2" &&
 	test "$id2" != "$id1"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
-	grep -Eq "^id: \"?$id2\"?$" "$meta_file" &&
-	! grep -q "^chain:" "$meta_file" &&
+	test_grep -E "^id: \"?$id2\"?$" "$meta_file" &&
+	test_grep ! "^chain:" "$meta_file" &&
 	"$tiler_bin" images show alice/app >ls2.out 2>ls2.err &&
-	grep -Eq "^  chain +0$" ls2.out
+	test_grep -E "^  chain +0$" ls2.out
 '
 
 # The merge retires the old full + chain. verify_dir is still live, so its
@@ -155,19 +155,19 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the mer
 # serving the live view through open fds) rather than being freed at once.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
 	"$tiler_bin" images show alice/app >ls3.out 2>ls3.err &&
-	grep -Eq "^    $id1$" ls3.out &&
-	test -f "$img_dir/hold/$id1/image.sqsh"
+	test_grep -E "^    $id1$" ls3.out &&
+	test_path_is_file "$img_dir/hold/$id1/image.sqsh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '
 	"$tiler_bin" umount "$verify_dir" &&
 	"$tiler_bin" mount alice/app "$verify_dir" >remount2.out 2>remount2.err &&
-	grep -Eq "^mounted " remount2.out &&
-	grep -q "hello tiler" "$verify_dir/README.txt" &&
-	test -f "$verify_dir/a.txt" &&
-	test -f "$verify_dir/b.txt" &&
+	test_grep -E "^mounted " remount2.out &&
+	test_grep "hello tiler" "$verify_dir/README.txt" &&
+	test_path_is_file "$verify_dir/a.txt" &&
+	test_path_is_file "$verify_dir/b.txt" &&
 	"$tiler_bin" images show alice/app >ls4.out 2>ls4.err &&
-	grep -Eq "^  chain +0$" ls4.out
+	test_grep -E "^  chain +0$" ls4.out
 '
 
 test_done

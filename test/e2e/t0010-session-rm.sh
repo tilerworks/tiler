@@ -85,7 +85,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image for the --rm 
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image tmp/auto "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full tmp/auto [0-9a-f]+" build.out
+	test_grep -E "^full tmp/auto [0-9a-f]+" build.out
 '
 
 # A named --rm session shows the rm marker, and closing it deletes the
@@ -93,27 +93,25 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a full image for the --rm 
 # all -- instead of keeping the record closed for audit.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new --rm: close deletes the record and purges the runtime' '
 	"$tiler_bin" session new --rm dev >new1.out 2>new1.err &&
-	grep -Eq "^created dev$" new1.out &&
+	test_grep -E "^created dev$" new1.out &&
 	"$tiler_bin" session show dev >show1.out 2>show1.err &&
-	grep -Eq "^dev$" show1.out &&
-	grep -Eq "^  state +active$" show1.out &&
-	grep -Eq "^  rm +true$" show1.out &&
+	test_grep -E "^dev$" show1.out &&
+	test_grep -E "^  state +active$" show1.out &&
+	test_grep -E "^  rm +true$" show1.out &&
 	mkdir -p "$named_dir" &&
 	"$tiler_bin" mount --session dev tmp/auto "$named_dir" >m1.out 2>m1.err &&
-	grep -Eq "^mounted " m1.out &&
+	test_grep -E "^mounted " m1.out &&
 	echo "precious" >"$named_dir/UPPER.txt" &&
-	test -d "$sessions_root/dev/runtime/m1" &&
-	test -f "$sessions_root/dev/runtime/m1/upper/UPPER.txt" &&
+	test_path_is_dir "$sessions_root/dev/runtime/m1" &&
+	test_path_is_file "$sessions_root/dev/runtime/m1/upper/UPPER.txt" &&
 	"$tiler_bin" session close dev >close1.out 2>close1.err &&
-	grep -Eq "^removed dev$" close1.out &&
-	test ! -e "$sessions_root/dev" &&
-	test ! -e "$named_dir/UPPER.txt" &&
-	status=0 &&
-	{ "$tiler_bin" session show dev >show1b.out 2>show1b.err || status=$?; } &&
-	test "$status" -eq 1 &&
-	grep -q "not found" show1b.err &&
+	test_grep -E "^removed dev$" close1.out &&
+	test_path_is_missing "$sessions_root/dev" &&
+	test_path_is_missing "$named_dir/UPPER.txt" &&
+	test_expect_code 1 "$tiler_bin" session show dev >show1b.out 2>show1b.err &&
+	test_grep "not found" show1b.err &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	! grep -Eq "^dev " list1.out
+	test_grep ! -E "^dev " list1.out
 '
 
 # mount --rm marks the generated session it creates; umounting its
@@ -122,21 +120,21 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new --rm: close deletes 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm: umounting the last view deletes the record and purges the runtime' '
 	mkdir -p "$impl_dir" &&
 	"$tiler_bin" mount --rm tmp/auto "$impl_dir" >m2.out 2>m2.err &&
-	grep -Eq "^mounted " m2.out &&
+	test_grep -E "^mounted " m2.out &&
 	auto_rm=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto_rm" &&
 	echo "scratch" >"$impl_dir/SCRATCH.txt" &&
-	test -d "$sessions_root/$auto_rm/runtime/m1" &&
-	test -f "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
+	test_path_is_dir "$sessions_root/$auto_rm/runtime/m1" &&
+	test_path_is_file "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
 	"$tiler_bin" session show "$auto_rm" >show2.out 2>show2.err &&
-	grep -Eq "^$auto_rm$" show2.out &&
-	grep -Eq "^  state +active$" show2.out &&
-	grep -Eq "^  rm +true$" show2.out &&
+	test_grep -E "^$auto_rm$" show2.out &&
+	test_grep -E "^  state +active$" show2.out &&
+	test_grep -E "^  rm +true$" show2.out &&
 	"$tiler_bin" umount "$impl_dir" >um2.out 2>um2.err &&
-	grep -Eq "^unmounted " um2.out &&
-	test ! -e "$sessions_root/$auto_rm" &&
+	test_grep -E "^unmounted " um2.out &&
+	test_path_is_missing "$sessions_root/$auto_rm" &&
 	"$tiler_bin" session list >list2b.out 2>list2b.err &&
-	! grep -q "$auto_rm" list2b.out
+	test_grep ! "$auto_rm" list2b.out
 '
 
 # --rm applies only to the implicit session mount creates. Naming one
@@ -145,21 +143,17 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm: umounting the last v
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm refuses a session named by --session or the environment' '
 	"$tiler_bin" session new target >new3.out 2>new3.err &&
 	mkdir -p "$usage_dir" &&
-	status=0 &&
-	{ "$tiler_bin" mount --rm --session target tmp/auto "$usage_dir" >u1.out 2>u1.err || status=$?; } &&
-	test "$status" -eq 2 &&
-	grep -q "session new --rm" u1.err &&
-	grep -q "TILER_SESSION_ID" u1.err &&
-	status=0 &&
-	{ TILER_SESSION_ID=target "$tiler_bin" mount --rm tmp/auto "$usage_dir" >u2.out 2>u2.err || status=$?; } &&
-	test "$status" -eq 2 &&
-	grep -q "session new --rm" u2.err &&
-	test ! -e "$usage_dir/README.txt" &&
+	test_expect_code 2 "$tiler_bin" mount --rm --session target tmp/auto "$usage_dir" >u1.out 2>u1.err &&
+	test_grep "session new --rm" u1.err &&
+	test_grep "TILER_SESSION_ID" u1.err &&
+	test_expect_code 2 env TILER_SESSION_ID=target "$tiler_bin" mount --rm tmp/auto "$usage_dir" >u2.out 2>u2.err &&
+	test_grep "session new --rm" u2.err &&
+	test_path_is_missing "$usage_dir/README.txt" &&
 	"$tiler_bin" session show target >show3.out 2>show3.err &&
-	grep -Eq "^target$" show3.out &&
-	grep -Eq "^  state +active$" show3.out &&
-	! grep -Eq "^  rm " show3.out &&
-	! grep -Eq "^    1  mount" show3.out
+	test_grep -E "^target$" show3.out &&
+	test_grep -E "^  state +active$" show3.out &&
+	test_grep ! -E "^  rm " show3.out &&
+	test_grep ! -E "^    1  mount" show3.out
 '
 
 # The contrast that proves --rm is opt-in: a plain session close keeps
@@ -169,19 +163,19 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a plain session close keeps the 
 	"$tiler_bin" session new ctrl >new4.out 2>new4.err &&
 	mkdir -p "$ctrl_dir" &&
 	"$tiler_bin" mount --session ctrl tmp/auto "$ctrl_dir" >m4.out 2>m4.err &&
-	grep -Eq "^mounted " m4.out &&
+	test_grep -E "^mounted " m4.out &&
 	echo "keep me" >"$ctrl_dir/KEEP.txt" &&
-	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt" &&
+	test_path_is_file "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt" &&
 	"$tiler_bin" session show ctrl >show4.out 2>show4.err &&
-	grep -Eq "^ctrl$" show4.out &&
-	grep -Eq "^  state +active$" show4.out &&
-	! grep -Eq "^  rm " show4.out &&
+	test_grep -E "^ctrl$" show4.out &&
+	test_grep -E "^  state +active$" show4.out &&
+	test_grep ! -E "^  rm " show4.out &&
 	"$tiler_bin" session close ctrl >close4.out 2>close4.err &&
-	grep -Eq "^closed ctrl$" close4.out &&
+	test_grep -E "^closed ctrl$" close4.out &&
 	"$tiler_bin" session list >list4.out 2>list4.err &&
-	grep -Eq "^ctrl[[:space:]]+closed[[:space:]]+0[[:space:]]" list4.out &&
-	test -d "$sessions_root/ctrl/runtime/m1" &&
-	test -f "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt"
+	test_grep -E "^ctrl[[:space:]]+closed[[:space:]]+0[[:space:]]" list4.out &&
+	test_path_is_dir "$sessions_root/ctrl/runtime/m1" &&
+	test_path_is_file "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt"
 '
 
 test_done

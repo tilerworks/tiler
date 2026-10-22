@@ -32,24 +32,24 @@ export TEST_DIRECTORY
 # tiler_bin and TILER come from sharness.d/tiler.sh.
 
 test_expect_success TILER 'no user config exists before the first run' '
-	test ! -e "$HOME/.tiler.yaml"
+	test_path_is_missing "$HOME/.tiler.yaml"
 '
 
 test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
 	"$tiler_bin" version &&
-	test -f "$HOME/.tiler.yaml" &&
-	grep -q "^version: 1$" "$HOME/.tiler.yaml" &&
-	grep -q "^images_dir: .tiler/images$" "$HOME/.tiler.yaml" &&
-	grep -q "^sessions_dir: .tiler/sessions" "$HOME/.tiler.yaml" &&
-	grep -q "^cache_dir: .tiler/cache$" "$HOME/.tiler.yaml" &&
-	grep -q "^log_level: info$" "$HOME/.tiler.yaml" &&
-	! grep -q "runtime_dir" "$HOME/.tiler.yaml"
+	test_path_is_file "$HOME/.tiler.yaml" &&
+	test_grep "^version: 1$" "$HOME/.tiler.yaml" &&
+	test_grep "^images_dir: .tiler/images$" "$HOME/.tiler.yaml" &&
+	test_grep "^sessions_dir: .tiler/sessions" "$HOME/.tiler.yaml" &&
+	test_grep "^cache_dir: .tiler/cache$" "$HOME/.tiler.yaml" &&
+	test_grep "^log_level: info$" "$HOME/.tiler.yaml" &&
+	test_grep ! "runtime_dir" "$HOME/.tiler.yaml"
 '
 
 test_expect_success TILER 'a later run leaves an edited config untouched' '
 	echo "# user edit" >>"$HOME/.tiler.yaml" &&
 	"$tiler_bin" version &&
-	grep -q "^# user edit$" "$HOME/.tiler.yaml"
+	test_grep "^# user edit$" "$HOME/.tiler.yaml"
 '
 
 # Reset the sandboxed home config so the upgrade path starts from a
@@ -63,10 +63,10 @@ test_expect_success TILER 'legacy user config without version is upgraded' '
 		"log_level: info" >"$HOME/.tiler.yaml" &&
 	rm -f "$HOME/.tiler.yaml.bak" &&
 	"$tiler_bin" version &&
-	grep -q "^version: 1$" "$HOME/.tiler.yaml" &&
-	! grep -q "runtime_dir" "$HOME/.tiler.yaml" &&
-	test -f "$HOME/.tiler.yaml.bak" &&
-	grep -q "runtime_dir: ~/.tiler/runtime" "$HOME/.tiler.yaml.bak"
+	test_grep "^version: 1$" "$HOME/.tiler.yaml" &&
+	test_grep ! "runtime_dir" "$HOME/.tiler.yaml" &&
+	test_path_is_file "$HOME/.tiler.yaml.bak" &&
+	test_grep "runtime_dir: ~/.tiler/runtime" "$HOME/.tiler.yaml.bak"
 '
 
 # `tiler doctor` exits 1 when a FUSE probe fails on an unequipped host,
@@ -76,24 +76,24 @@ test_expect_success TILER 'doctor prints the config section as text' '
 	status=0 &&
 	{ "$tiler_bin" doctor >doctor.txt 2>doctor.txt.err || status=$?; } &&
 	{ test "$status" -eq 0 || test "$status" -eq 1; } &&
-	grep -qF "📋 Config" doctor.txt &&
-	grep -qF "🔧 Checks" doctor.txt &&
-	grep -qF "path" doctor.txt &&
-	grep -qF ".tiler.yaml" doctor.txt &&
-	grep -qF "images_dir" doctor.txt &&
-	grep -qF ".tiler/images" doctor.txt &&
-	! grep -q "$(printf "\t")" doctor.txt
+	test_grep -F "📋 Config" doctor.txt &&
+	test_grep -F "🔧 Checks" doctor.txt &&
+	test_grep -F "path" doctor.txt &&
+	test_grep -F ".tiler.yaml" doctor.txt &&
+	test_grep -F "images_dir" doctor.txt &&
+	test_grep -F ".tiler/images" doctor.txt &&
+	test_grep ! "$(printf "\t")" doctor.txt
 '
 
 test_expect_success TILER 'doctor --json reports the config location and dirs' '
 	status=0 &&
 	{ "$tiler_bin" doctor --json >doctor.json 2>doctor.json.err || status=$?; } &&
 	{ test "$status" -eq 0 || test "$status" -eq 1; } &&
-	grep -qF "\"path\": \"$HOME/.tiler.yaml\"" doctor.json &&
-	grep -qF "\"images_dir\": \"$HOME/.tiler/images\"" doctor.json &&
-	grep -qF "\"sessions_dir\": \"$HOME/.tiler/sessions\"" doctor.json &&
-	grep -qF "\"log_level\": \"info\"" doctor.json &&
-	! grep -qF "\"runtime_dir\"" doctor.json
+	test_grep -F "\"path\": \"$HOME/.tiler.yaml\"" doctor.json &&
+	test_grep -F "\"images_dir\": \"$HOME/.tiler/images\"" doctor.json &&
+	test_grep -F "\"sessions_dir\": \"$HOME/.tiler/sessions\"" doctor.json &&
+	test_grep -F "\"log_level\": \"info\"" doctor.json &&
+	test_grep ! -F "\"runtime_dir\"" doctor.json
 '
 
 test_done

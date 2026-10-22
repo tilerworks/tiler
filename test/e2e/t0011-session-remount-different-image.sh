@@ -55,22 +55,22 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build two distinguishable images
 	echo two >"$src2_dir/who.txt" &&
 	"$tiler_bin" build --image alice/one "$src1_dir" >b1.out 2>b1.err &&
 	"$tiler_bin" build --image alice/two "$src2_dir" >b2.out 2>b2.err &&
-	grep -Eq "^full alice/one [0-9a-f]+" b1.out &&
-	grep -Eq "^full alice/two [0-9a-f]+" b2.out
+	test_grep -E "^full alice/one [0-9a-f]+" b1.out &&
+	test_grep -E "^full alice/two [0-9a-f]+" b2.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image one, write a marker, then umount' '
 	mkdir -p "$workdir" &&
 	"$tiler_bin" mount alice/one "$workdir" >m1.out 2>m1.err &&
-	grep -Eq "^mounted " m1.out &&
-	grep -q one "$workdir/who.txt" &&
+	test_grep -E "^mounted " m1.out &&
+	test_grep one "$workdir/who.txt" &&
 	echo one >"$workdir/marker.txt" &&
-	test -f "$workdir/marker.txt" &&
+	test_path_is_file "$workdir/marker.txt" &&
 	auto1=$(sed -n "s/^new session created: //p" m1.out) &&
 	test -n "$auto1" &&
-	test -d "$sessions_root/$auto1/runtime/m1" &&
+	test_path_is_dir "$sessions_root/$auto1/runtime/m1" &&
 	"$tiler_bin" umount "$workdir" >u1.out 2>u1.err &&
-	grep -Eq "^unmounted " u1.out &&
+	test_grep -E "^unmounted " u1.out &&
 	# Persist the first session name for the isolation assertions.
 	echo "$auto1" >auto1.name
 '
@@ -78,20 +78,20 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image one, write a marker,
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image two at the same workdir with a fresh upper' '
 	auto1=$(cat auto1.name) &&
 	"$tiler_bin" mount alice/two "$workdir" >m2.out 2>m2.err &&
-	grep -Eq "^mounted " m2.out &&
-	grep -q two "$workdir/who.txt" &&
-	test ! -e "$workdir/marker.txt" &&
+	test_grep -E "^mounted " m2.out &&
+	test_grep two "$workdir/who.txt" &&
+	test_path_is_missing "$workdir/marker.txt" &&
 	auto2=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto2" &&
 	test "$auto1" != "$auto2" &&
 	"$tiler_bin" session list >list2.out 2>list2.err &&
-	grep -q "^$auto1 " list2.out &&
-	grep -q "^$auto2 " list2.out &&
-	test -d "$sessions_root/$auto1/runtime/m1" &&
-	test -d "$sessions_root/$auto2/runtime/m1" &&
+	test_grep "^$auto1 " list2.out &&
+	test_grep "^$auto2 " list2.out &&
+	test_path_is_dir "$sessions_root/$auto1/runtime/m1" &&
+	test_path_is_dir "$sessions_root/$auto2/runtime/m1" &&
 	test "$sessions_root/$auto1/runtime/m1" != "$sessions_root/$auto2/runtime/m1" &&
 	"$tiler_bin" umount "$workdir" >u2.out 2>u2.err &&
-	grep -Eq "^unmounted " u2.out
+	test_grep -E "^unmounted " u2.out
 '
 
 test_done

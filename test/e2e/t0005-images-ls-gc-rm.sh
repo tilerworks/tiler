@@ -78,22 +78,22 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the 
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
+	test_grep -E "^mounted " mount.out &&
 	echo edit >"$work_dir/NEW.txt" &&
 	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
-	grep -Eq "^incr alice/app [0-9a-f]+" incr.out &&
+	test_grep -E "^incr alice/app [0-9a-f]+" incr.out &&
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
-	grep -q "alice/app" lsall.out &&
+	test_grep "alice/app" lsall.out &&
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
-	grep -Eq "^  chain +1$" ls.out &&
-	grep -Eq "^    [0-9a-f][0-9a-f]*  parent=" ls.out &&
+	test_grep -E "^  chain +1$" ls.out &&
+	test_grep -E "^    [0-9a-f][0-9a-f]*  parent=" ls.out &&
 	"$tiler_bin" images ls --json >lsjson.out 2>lsjson.err &&
-	grep -q "\"images\"" lsjson.out
+	test_grep "\"images\"" lsjson.out
 '
 
 # Rebuilding a mounted image retires the old full + chain into a hold that
@@ -103,14 +103,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into an archive' '
 	echo "v2" >"$src_dir/version.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build2.out 2>build2.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build2.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build2.out &&
 	id2=$(cut -d" " -f3 build2.out) &&
 	test -n "$id2" && test "$id2" != "$id1" &&
 	"$tiler_bin" umount "$work_dir" &&
 	"$tiler_bin" images gc >gc.out 2>gc.err &&
-	grep -Eq "^archived alice/app $id1$" gc.out &&
+	test_grep -E "^archived alice/app $id1$" gc.out &&
 	"$tiler_bin" images show alice/app >lsa.out 2>lsa.err &&
-	grep -Eq "^    $id1$" lsa.out
+	test_grep -E "^    $id1$" lsa.out
 '
 
 # A second rebuild+umount+gc cycle leaves two archives, id1 older and id2
@@ -119,18 +119,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold
 # rank at or past the limit: id2 (rank 0) is kept and id1 (rank 1) removed.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc --keep-versions expires the older archive' '
 	"$tiler_bin" mount alice/app "$work_dir" >mount3.out 2>mount3.err &&
-	grep -Eq "^mounted " mount3.out &&
+	test_grep -E "^mounted " mount3.out &&
 	echo "v3" >"$src_dir/version.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build3.out 2>build3.err &&
-	grep -Eq "^full alice/app [0-9a-f]+" build3.out &&
+	test_grep -E "^full alice/app [0-9a-f]+" build3.out &&
 	"$tiler_bin" umount "$work_dir" &&
 	"$tiler_bin" images gc >gc2.out 2>gc2.err &&
-	grep -Eq "^archived alice/app $id2$" gc2.out &&
+	test_grep -E "^archived alice/app $id2$" gc2.out &&
 	"$tiler_bin" images gc --keep-versions 1 >gc3.out 2>gc3.err &&
-	grep -Eq "^removed alice/app $id1$" gc3.out &&
+	test_grep -E "^removed alice/app $id1$" gc3.out &&
 	"$tiler_bin" images show alice/app >lsb.out 2>lsb.err &&
-	grep -Eq "^    $id2$" lsb.out &&
-	! grep -Eq "^    $id1$" lsb.out
+	test_grep -E "^    $id2$" lsb.out &&
+	test_grep ! -E "^    $id1$" lsb.out
 '
 
 # A never-mounted image carries no session pin, so the two-phase rm runs
@@ -138,13 +138,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc --keep-versions expires the o
 # it, and the all-images listing no longer names it.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm deprecates then removes an unreferenced image' '
 	"$tiler_bin" build --image tmp/rmtest "$src_dir" >build4.out 2>build4.err &&
-	grep -Eq "^full tmp/rmtest [0-9a-f]+" build4.out &&
+	test_grep -E "^full tmp/rmtest [0-9a-f]+" build4.out &&
 	"$tiler_bin" images rm tmp/rmtest >rm1.out 2>rm1.err &&
-	grep -Eq "^deprecated tmp/rmtest$" rm1.out &&
+	test_grep -E "^deprecated tmp/rmtest$" rm1.out &&
 	"$tiler_bin" images rm tmp/rmtest >rm2.out 2>rm2.err &&
-	grep -Eq "^removed tmp/rmtest$" rm2.out &&
+	test_grep -E "^removed tmp/rmtest$" rm2.out &&
 	"$tiler_bin" images ls >lsall2.out 2>lsall2.err &&
-	! grep -q "tmp/rmtest" lsall2.out
+	test_grep ! "tmp/rmtest" lsall2.out
 '
 
 # Mounting without --session creates a generated session that pins the
@@ -153,21 +153,19 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm deprecates then removes an un
 # which the two-phase rm succeeds.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm is refused while an active session references it' '
 	"$tiler_bin" build --image life/app "$src_dir" >build5.out 2>build5.err &&
-	grep -Eq "^full life/app [0-9a-f]+" build5.out &&
+	test_grep -E "^full life/app [0-9a-f]+" build5.out &&
 	mkdir -p "$work2_dir" &&
 	"$tiler_bin" mount life/app "$work2_dir" >mount5.out 2>mount5.err &&
-	grep -Eq "^mounted " mount5.out &&
+	test_grep -E "^mounted " mount5.out &&
 	pin=$(sed -n "s/^new session created: //p" mount5.out) &&
 	test -n "$pin" &&
-	status=0 &&
-	{ "$tiler_bin" images rm life/app >rmref.out 2>rmref.err || status=$?; } &&
-	test "$status" -ne 0 &&
-	grep -q "still referenced by session $pin" rmref.err &&
+	test_must_fail "$tiler_bin" images rm life/app >rmref.out 2>rmref.err &&
+	test_grep "still referenced by session $pin" rmref.err &&
 	"$tiler_bin" umount "$work2_dir" &&
 	"$tiler_bin" images rm life/app >rm3.out 2>rm3.err &&
-	grep -Eq "^deprecated life/app$" rm3.out &&
+	test_grep -E "^deprecated life/app$" rm3.out &&
 	"$tiler_bin" images rm life/app >rm4.out 2>rm4.err &&
-	grep -Eq "^removed life/app$" rm4.out
+	test_grep -E "^removed life/app$" rm4.out
 '
 
 test_done

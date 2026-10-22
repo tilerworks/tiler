@@ -46,9 +46,9 @@ test_expect_success TILER,MACOS 'doctor exits 0 and does not fail on fuse tools'
 		grep -q "\"status\": \"fail\"" &&
 	if grep -q "HFS+" doctor.json
 	then
-		grep -F "filesystem HFS+ because attach -shadow cannot use an APFS image" doctor.json
+		test_grep -F "filesystem HFS+ because attach -shadow cannot use an APFS image" doctor.json
 	else
-		grep -F "\"detail\": \"dmg\"" doctor.json
+		test_grep -F "\"detail\": \"dmg\"" doctor.json
 	fi
 '
 

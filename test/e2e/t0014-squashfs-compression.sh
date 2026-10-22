@@ -72,16 +72,16 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gzip full build records squashfs
 	mkdir -p "$src_dir" &&
 	echo "hello gzip" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --format squashfs --compression gzip --image alice/gzip "$src_dir" >build.out 2>build.err &&
-	grep -Eq "^full alice/gzip [0-9a-f]+" build.out &&
+	test_grep -E "^full alice/gzip [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test -f "$img_dir/image.sqsh" &&
-	test ! -e "$img_dir/blocks" &&
-	grep -Eq "^id: \"?$id1\"?$" "$meta_file" &&
-	grep -q "^    type: squashfs$" "$meta_file" &&
-	grep -q "^    compression: gzip$" "$meta_file" &&
+	test_path_is_file "$img_dir/image.sqsh" &&
+	test_path_is_missing "$img_dir/blocks" &&
+	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
+	test_grep "^    type: squashfs$" "$meta_file" &&
+	test_grep "^    compression: gzip$" "$meta_file" &&
 	"$tiler_bin" images show alice/gzip >show.out 2>show.err &&
-	grep -Eq "^  format +squashfs/gzip$" show.out
+	test_grep -E "^  format +squashfs/gzip$" show.out
 '
 
 # The incremental build passes neither --format nor --compression, so
@@ -90,34 +90,34 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gzip full build records squashfs
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable mount and same-format incr inherit gzip' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/gzip "$work_dir" >mount.out 2>mount.err &&
-	grep -Eq "^mounted " mount.out &&
-	grep -q "hello gzip" "$work_dir/README.txt" &&
+	test_grep -E "^mounted " mount.out &&
+	test_grep "hello gzip" "$work_dir/README.txt" &&
 	echo from-incr >"$work_dir/extra.txt" &&
-	test -f "$work_dir/extra.txt" &&
+	test_path_is_file "$work_dir/extra.txt" &&
 	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
-	grep -Eq "^incr alice/gzip [0-9a-f]+" incr.out &&
+	test_grep -E "^incr alice/gzip [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
-	test -f "$img_dir/image.sqsh" &&
-	test -f "$img_dir/incr/$layer.sqsh" &&
-	grep -q "^    type: squashfs$" "$meta_file" &&
-	grep -q "^    compression: gzip$" "$meta_file" &&
+	test_path_is_file "$img_dir/image.sqsh" &&
+	test_path_is_file "$img_dir/incr/$layer.sqsh" &&
+	test_grep "^    type: squashfs$" "$meta_file" &&
+	test_grep "^    compression: gzip$" "$meta_file" &&
 	"$tiler_bin" images show alice/gzip >show-incr.out 2>show-incr.err &&
-	grep -Eq "^  format +squashfs/gzip$" show-incr.out &&
-	grep -Eq "^  chain +1$" show-incr.out
+	test_grep -E "^  format +squashfs/gzip$" show-incr.out &&
+	test_grep -E "^  chain +1$" show-incr.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the gzip incr' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
-	grep -Eq "^unmounted " umount.out &&
+	test_grep -E "^unmounted " umount.out &&
 	mkdir -p "$verify_dir" &&
 	"$tiler_bin" mount alice/gzip "$verify_dir" >remount.out 2>remount.err &&
-	grep -Eq "^mounted " remount.out &&
-	grep -q "hello gzip" "$verify_dir/README.txt" &&
-	grep -q from-incr "$verify_dir/extra.txt" &&
+	test_grep -E "^mounted " remount.out &&
+	test_grep "hello gzip" "$verify_dir/README.txt" &&
+	test_grep from-incr "$verify_dir/extra.txt" &&
 	"$tiler_bin" umount "$verify_dir" >umount2.out 2>umount2.err &&
-	grep -Eq "^unmounted " umount2.out
+	test_grep -E "^unmounted " umount2.out
 '
 
 # Packed with mksquashfs directly, so the payload never enters the
@@ -127,15 +127,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'an external xz squashfs mounts r
 	mkdir -p "$ext_src" "$nas_dir" "$ext_dir" &&
 	echo "hello xz" >"$ext_src/README.txt" &&
 	mksquashfs "$ext_src" "$ext_img" -comp xz -noappend >/dev/null &&
-	test -f "$ext_img" &&
-	test ! -e "$nas_dir/meta.yaml" &&
+	test_path_is_file "$ext_img" &&
+	test_path_is_missing "$nas_dir/meta.yaml" &&
 	"$tiler_bin" mount "$ext_img" "$ext_dir" >ext.out 2>ext.err &&
-	grep -Eq "^mounted " ext.out &&
-	grep -q "hello xz" "$ext_dir/README.txt" &&
+	test_grep -E "^mounted " ext.out &&
+	test_grep "hello xz" "$ext_dir/README.txt" &&
 	echo upper >"$ext_dir/UPPER.txt" &&
-	test -f "$ext_dir/UPPER.txt" &&
+	test_path_is_file "$ext_dir/UPPER.txt" &&
 	"$tiler_bin" umount "$ext_dir" >ext-umount.out 2>ext-umount.err &&
-	grep -Eq "^unmounted " ext-umount.out
+	test_grep -E "^unmounted " ext-umount.out
 '
 
 test_done
