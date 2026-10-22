@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/jiangxin/tiler/internal/container"
@@ -95,6 +96,12 @@ type Options struct {
 	// SplitSize is the configured block size in bytes. Zero means
 	// split storage is off; a positive value shapes probe advice.
 	SplitSize int64
+	// Progress receives a "probing" heading and one indented module
+	// row when a probe starts. On a terminal that row is rewritten
+	// with spaces so done lines up when the probe finishes. Nil
+	// stays silent. The caller prints the finished report after
+	// every module row is marked.
+	Progress io.Writer
 }
 
 type toolSpec struct {
@@ -161,35 +168,36 @@ func Probe(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
 }
 
 func probeFUSE(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
-	device, err := probeDevice(ctx, seams)
+	var images, cache *PerfNumbers
+	tasks := []probeTask{{
+		name: nameFuseDevice,
+		run:  func(ctx context.Context) (Result, error) { return probeDevice(ctx, seams) },
+	}}
+	for _, spec := range toolSpecs {
+		tasks = append(tasks, toolTask(seams, spec))
+	}
+	tasks = append(tasks,
+		probeTask{name: nameImageToolchain, run: func(ctx context.Context) (Result, error) {
+			return probeImageToolchain(ctx, seams)
+		}},
+		probeTask{name: nameSquashfuseSub, run: func(ctx context.Context) (Result, error) {
+			return probeSquashfuseSubdir(ctx, seams)
+		}},
+		fileLimitTask(nameFileLimitImages, opts.ImagesDir, opts, seams),
+		fileLimitTask(nameFileLimitCache, opts.CacheDir, opts, seams),
+		perfTask(namePerfImages, opts.ImagesDir, seams, &images),
+		perfTask(namePerfCache, opts.CacheDir, seams, &cache),
+	)
+	tasks = append(tasks, contribTasks(seams, false)...)
+	view := newProbeView(opts.Progress, probeNames(tasks))
+	results, err := runProbeTasks(ctx, view, tasks)
 	if err != nil {
+		view.close()
 		return nil, err
 	}
-	tools, err := probeTools(ctx, seams)
-	if err != nil {
-		return nil, err
-	}
-	toolchain, err := probeImageToolchain(ctx, seams)
-	if err != nil {
-		return nil, err
-	}
-	subdir, err := probeSquashfuseSubdir(ctx, seams)
-	if err != nil {
-		return nil, err
-	}
-	limits, err := probeFileLimits(ctx, seams, opts)
-	if err != nil {
-		return nil, err
-	}
-	perf, err := probePerf(ctx, seams, opts)
-	if err != nil {
-		return nil, err
-	}
-	results := append([]Result{device}, tools...)
-	results = append(results, toolchain, subdir)
-	results = append(results, limits...)
-	results = append(results, perf...)
-	return append(results, probeContrib(seams)...), nil
+	results, err = withAdvice(view, results, cacheAdvice(images, cache), false)
+	view.close()
+	return results, err
 }
 
 // Failed returns the names of the results whose status is fail, in
@@ -225,18 +233,6 @@ func probeDevice(ctx context.Context, seams Seams) (Result, error) {
 		return fail(nameFuseDevice, err.Error()), nil
 	}
 	return pass(nameFuseDevice, fuseDevicePath), nil
-}
-
-func probeTools(ctx context.Context, seams Seams) ([]Result, error) {
-	results := make([]Result, 0, len(toolSpecs))
-	for _, spec := range toolSpecs {
-		item, err := probeTool(ctx, seams, spec)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, item.result)
-	}
-	return results, nil
 }
 
 // probeImageToolchain aggregates Format.Tools. One complete stack is

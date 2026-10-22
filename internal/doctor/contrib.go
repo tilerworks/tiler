@@ -32,14 +32,19 @@ var contribTools = []struct {
 func probeContrib(seams Seams) []Result {
 	results := make([]Result, 0, len(contribTools))
 	for _, tool := range contribTools {
-		path, err := seams.LookPath(tool.binary)
-		if err != nil {
-			results = append(results, warn(tool.name, contribGuidanceText))
-			continue
-		}
-		result := pass(tool.name, path)
-		result.ToolPath = path
-		results = append(results, result)
+		results = append(results, probeContribTool(seams, tool.name, tool.binary))
 	}
 	return results
+}
+
+// probeContribTool reports one optional helper. A resolved path
+// passes. A missing binary warns and carries the install guidance.
+func probeContribTool(seams Seams, name, binary string) Result {
+	path, err := seams.LookPath(binary)
+	if err != nil {
+		return warn(name, contribGuidanceText)
+	}
+	result := pass(name, path)
+	result.ToolPath = path
+	return result
 }

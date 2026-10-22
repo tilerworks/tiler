@@ -11,26 +11,29 @@ import (
 // failures are omitted because the hot path uses hdiutil. Cold-read
 // measurements and the contrib tools stay informational.
 func probeDarwin(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
-	gitResult, err := probeDarwinGit(ctx, seams)
+	var images, cache *PerfNumbers
+	tasks := []probeTask{
+		{name: nameGit, run: func(ctx context.Context) (Result, error) {
+			return probeDarwinGit(ctx, seams)
+		}},
+		{name: nameImageToolchain, run: func(ctx context.Context) (Result, error) {
+			return probeDarwinToolchain(ctx, seams)
+		}},
+		fileLimitTask(nameFileLimitImages, opts.ImagesDir, opts, seams),
+		fileLimitTask(nameFileLimitCache, opts.CacheDir, opts, seams),
+		asInfo(perfTask(namePerfImages, opts.ImagesDir, seams, &images)),
+		asInfo(perfTask(namePerfCache, opts.CacheDir, seams, &cache)),
+	}
+	tasks = append(tasks, contribTasks(seams, true)...)
+	view := newProbeView(opts.Progress, probeNames(tasks))
+	results, err := runProbeTasks(ctx, view, tasks)
 	if err != nil {
+		view.close()
 		return nil, err
 	}
-	toolchain, err := probeDarwinToolchain(ctx, seams)
-	if err != nil {
-		return nil, err
-	}
-	limits, err := probeFileLimits(ctx, seams, opts)
-	if err != nil {
-		return nil, err
-	}
-	perf, err := probeDarwinPerf(ctx, seams, opts)
-	if err != nil {
-		return nil, err
-	}
-	results := []Result{gitResult, toolchain}
-	results = append(results, limits...)
-	results = append(results, perf...)
-	return append(results, probeDarwinContrib(seams)...), nil
+	results, err = withAdvice(view, results, cacheAdvice(images, cache), true)
+	view.close()
+	return results, err
 }
 
 func probeDarwinGit(ctx context.Context, seams Seams) (Result, error) {
@@ -69,33 +72,15 @@ func probeDarwinToolchain(ctx context.Context, seams Seams) (Result, error) {
 	return pass(nameImageToolchain, "dmg"), nil
 }
 
-// probeDarwinPerf keeps the cold-read results and forces them to
-// info. A measurement error must not fail doctor: the hot path does
-// not use FUSE.
-func probeDarwinPerf(ctx context.Context, seams Seams, opts Options) ([]Result, error) {
-	results, err := probePerf(ctx, seams, opts)
+// probeDarwinContribTool reports one optional helper as info. A
+// missing binary is not a failure: these tools are not on the mount
+// path.
+func probeDarwinContribTool(seams Seams, name, binary string) Result {
+	path, err := seams.LookPath(binary)
 	if err != nil {
-		return nil, err
+		return info(name, contribGuidanceText)
 	}
-	for i := range results {
-		results[i].Status = statusInfo
-	}
-	return results, nil
-}
-
-// probeDarwinContrib reports concatfs and slowfs as info whether or
-// not they are installed. They are not on the mount path.
-func probeDarwinContrib(seams Seams) []Result {
-	results := make([]Result, 0, len(contribTools))
-	for _, tool := range contribTools {
-		path, err := seams.LookPath(tool.binary)
-		if err != nil {
-			results = append(results, info(tool.name, contribGuidanceText))
-			continue
-		}
-		result := info(tool.name, path)
-		result.ToolPath = path
-		results = append(results, result)
-	}
-	return results
+	result := info(name, path)
+	result.ToolPath = path
+	return result
 }

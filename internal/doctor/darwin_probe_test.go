@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/container"
@@ -167,6 +168,7 @@ func mapResults(t *testing.T, results []Result) map[string]Result {
 }
 
 type darwinHost struct {
+	mu    sync.Mutex
 	seams Seams
 	runs  []string
 	trunc []string
@@ -190,14 +192,18 @@ func newDarwinHost(gitOK bool, hdiutil error) *darwinHost {
 		},
 		Stat: func(string) error { return fs.ErrNotExist },
 		Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			host.mu.Lock()
 			host.runs = append(host.runs, name+" "+strings.Join(args, " "))
+			host.mu.Unlock()
 			if strings.HasSuffix(name, "/git") {
 				return []byte("git version 2.43.0\n"), nil
 			}
 			return nil, errors.New("unexpected command " + name)
 		},
 		TruncateProbe: func(dir string, _ int64) error {
+			host.mu.Lock()
 			host.trunc = append(host.trunc, dir)
+			host.mu.Unlock()
 			return nil
 		},
 		Measure: func(context.Context, string) (PerfNumbers, error) {
@@ -208,6 +214,8 @@ func newDarwinHost(gitOK bool, hdiutil error) *darwinHost {
 }
 
 func (h *darwinHost) truncated(dir string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for _, call := range h.trunc {
 		if call == dir {
 			return true

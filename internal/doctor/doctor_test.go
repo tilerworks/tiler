@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -436,6 +437,7 @@ type runResult struct {
 }
 
 type fakeHost struct {
+	mu            sync.Mutex
 	missing       map[string]error
 	statErr       error
 	truncate      func(dir string, size int64) error
@@ -516,7 +518,9 @@ func (f *fakeHost) seams() Seams {
 		Stat:     f.stat,
 		Run:      f.run,
 		TruncateProbe: func(dir string, size int64) error {
+			f.mu.Lock()
 			f.truncateCalls = append(f.truncateCalls, dir)
+			f.mu.Unlock()
 			return truncate(dir, size)
 		},
 		Measure: measure,
@@ -524,6 +528,8 @@ func (f *fakeHost) seams() Seams {
 }
 
 func (f *fakeHost) truncateCalled(dir string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, call := range f.truncateCalls {
 		if call == dir {
 			return true
@@ -543,8 +549,10 @@ func (f *fakeHost) stat(string) error { return f.statErr }
 
 func (f *fakeHost) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	key := name + " " + strings.Join(args, " ")
+	f.mu.Lock()
 	f.calls = append(f.calls, key)
 	res, ok := f.runs[key]
+	f.mu.Unlock()
 	if !ok {
 		return nil, errors.New("unexpected command " + key)
 	}
@@ -552,6 +560,8 @@ func (f *fakeHost) run(_ context.Context, name string, args ...string) ([]byte, 
 }
 
 func (f *fakeHost) called(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, call := range f.calls {
 		if call == key {
 			return true
