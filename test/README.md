@@ -198,7 +198,9 @@ list `LINUX` with the toolchain so `make e2e` on macOS skips them
 instead of failing; later macOS mount cases will list `MACOS`.
 Config-only cases stay on `TILER` alone and run on both hosts.
 Case scripts keep their own path variables and `test_atexit`
-teardown lists.
+teardown lists. Assertions use the git-test-lib helpers listed in
+[`AGENTS.md`](AGENTS.md) (`test_path_is_file`, `test_cmp`,
+`test_grep`, `test_must_fail`, `test_expect_code`).
 
 ## Run artifacts
 
