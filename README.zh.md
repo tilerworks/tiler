@@ -196,8 +196,11 @@ tiler session close feature                # 逆序卸载，记录保留
   lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或 1 到 5
   段的库名：库名经活跃位 meta 解析为全量镜像加增量链，一个栈至多
   八个成员；清理后的路径若存在且是普通文件，则文件优先于库名。
-  库成员默认先做 size 加 mtime 快速校验；`--verify` 改为对每个
-  记录在案的 sha256 摘要整体重验（文件路径形态没有记录摘要）。
+  `--file <path> <library-name>` 先把外部镜像登记进库再按库名挂载
+  （见下文「外部镜像」）；不能与「第一位置参数已是存在的常规
+  文件」同用。库成员默认先做 size 加 mtime 快速校验；`--verify`
+  改为对每个记录在案的 sha256 摘要整体重验（裸文件路径形态没有
+  记录摘要）。
   `--subdir <path>` 把镜像内一个子目录暴露为挂载根：缺少该子目录
   的成员不进栈，全部缺失时挂载失败且不创建任何东西。子树内没有
   `.git` 时，工作区 git 命令会向上寻到挂载点之外，因此 subdir
@@ -254,6 +257,53 @@ tiler session close feature                # 逆序卸载，记录保留
   `orphan` 行。带路径时报告覆盖该路径的 session：合并视图内的
   深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
   覆盖 session；无 session 覆盖的路径报错。
+
+### 外部镜像
+
+NAS 共享或供应商目录里常有现成的 squashfs、erofs 或 dmg，但
+没有 tiler 库布局（`meta.yaml`、`image.sqsh` 或 `image.dmg`）。
+挂载有两种路径：
+
+| 路径 | 命令形态 | 入库 | session `Name`/`FullID` | 视图内 `build -i` |
+|------|----------|------|-------------------------|-------------------|
+| 裸文件 | `tiler mount /path/to/file.sqsh work` | 否 | 否 | 无法反查库名 |
+| 登记后挂载 | `tiler mount --file /path/to/file.sqsh alice/app work` | 库内 symlink + meta | 是 | Linux 可用 |
+
+`--file` 在库叶子上写指向外部文件的绝对 symlink、按目标内容写入
+`meta.yaml`，再与普通库名挂载走同一路径。相同目标与 digest 的
+第二次登记对叶子幂等。
+
+平台格式门禁与 `build` 对称（非法格式为 usage 错误，退出码 2）：
+
+| 主机 | 允许的源 | 库内文件名 | 拒绝 |
+|------|----------|------------|------|
+| Linux | squashfs、erofs | `image.sqsh` | dmg |
+| macOS | 仅 dmg | `image.dmg` | squashfs、erofs |
+
+已登记外部镜像的生命周期：
+
+- `tiler images remove` 与 `tiler images gc` 只删库内 meta、
+  symlink 与本地增量层，**不会**删除 NAS 或其他位置上的外部文件。
+- `tiler build --full`（macOS 上为 dmg bake）会在库内物化新的
+  active 载荷；先前的 active（含外部 symlink）进入 hold 或归档。
+- 可写视图产生的增量层落在库叶子下（Linux 为 `_incr/`）；active
+  载荷仍可保持为 symlink。
+- 开启 `--cache` 时，成员字节先拷入 `cache_dir` 再挂载，但挂载表
+  与 session 身份仍指向库路径（`images_dir/.../image.*`），而非
+  缓存文件。
+
+示例：
+
+```bash
+# Linux：登记 NAS 上的 squashfs，开发并追加本地增量层
+tiler mount --file /mnt/nas/vendor/app.sqsh vendor/app work
+# 在 work 内编辑
+tiler build -i
+tiler umount work
+
+# macOS：登记外部 dmg（可写 shadow；full bake 可物化 active）
+tiler mount --file /Volumes/share/base.dmg vendor/base work
+```
 
 ### 分块存储
 

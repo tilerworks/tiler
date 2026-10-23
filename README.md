@@ -246,9 +246,12 @@ Available now:
   library name that resolves through the active metadata into the
   full image plus its incremental chain, at most eight members in
   one stack; when the cleaned path exists as a regular file, that
-  file wins over a library name. Library members pass a quick size
-  and mtime check first; `--verify` re-hashes every recorded sha256
-  digest instead (a file path records none).
+  file wins over a library name. `--file <path> <library-name>`
+  registers an external image in the library, then mounts by name
+  (see External images below); it cannot combine with a positional
+  file path. Library members pass a quick size and mtime check
+  first; `--verify` re-hashes every recorded sha256 digest instead
+  (a bare file path records none).
   `--subdir <path>` exposes one image subdirectory as the mount
   root: members missing the subdirectory drop out of the stack,
   and when no member has it the mount fails before anything is
@@ -325,6 +328,57 @@ Available now:
   and a path inside the runtime tree (an upper or a lower transit
   point) both resolve back to the covering session, and a path no
   session covers is an error.
+
+### External images
+
+NAS shares and vendor trees often hold a ready-made squashfs, erofs,
+or dmg without tiler's library layout (`meta.yaml`, `image.sqsh`, or
+`image.dmg`). Two mount paths apply:
+
+| Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
+|------|---------------|---------|-------------------------|--------------------|
+| Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
+| Register + mount | `tiler mount --file /path/to/file.sqsh alice/app work` | symlink + meta under `images_dir` | yes | yes on Linux |
+
+`--file` writes an absolute symlink from the library leaf to the
+external file, hashes the target for `meta.yaml`, then runs the same
+library-name mount as a published image. A second call with the same
+target and digest is idempotent for the leaf.
+
+Platform format gates match `build` (wrong format is a usage error,
+exit 2):
+
+| Host | Allowed source | Library leaf | Refused |
+|------|----------------|--------------|---------|
+| Linux | squashfs, erofs | `image.sqsh` | dmg |
+| macOS | dmg only | `image.dmg` | squashfs, erofs |
+
+NAS lifecycle for a linked image:
+
+- `tiler images remove` and `tiler images gc` drop library metadata,
+  symlinks, and local increment layers only — they never delete the
+  external file on NAS or elsewhere.
+- `tiler build --full` (or a dmg bake on macOS) materializes a new
+  active payload under the library; the previous active, including an
+  external symlink, moves to hold or archive.
+- Incremental layers from a writable view land under the library
+  leaf (`_incr/` on Linux); the active payload may stay a symlink.
+- With `--cache`, member bytes copy into `cache_dir` for mounting,
+  but the mount table and session still name the library path
+  (`images_dir/.../image.*`), not the cache file.
+
+Example:
+
+```bash
+# Linux: register a NAS squashfs, develop, append local incr layers
+tiler mount --file /mnt/nas/vendor/app.sqsh vendor/app work
+# edit under work
+tiler build -i
+tiler umount work
+
+# macOS: register an external dmg (writable shadow; full bake to materialize)
+tiler mount --file /Volumes/share/base.dmg vendor/base work
+```
 
 ### Split storage
 
