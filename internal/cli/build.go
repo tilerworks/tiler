@@ -77,7 +77,8 @@ func newBuildCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
 	cmd.Flags().BoolVarP(&incr, "incremental", "i", false, "force an incremental build")
-	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit 1-to-5 segment image name")
+	cmd.Flags().StringVarP(&imageName, "image", "I", "",
+		"explicit image name (1 to 5 path segments)")
 	cmd.Flags().StringVar(&format, "format", "", "container format: dmg, squashfs, or erofs")
 	cmd.Flags().StringVar(&compression, "compression", "", "container compression; default is the format default")
 	cmd.Flags().StringVarP(&split, "split", "s", "",

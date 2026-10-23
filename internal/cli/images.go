@@ -61,7 +61,8 @@ func newImagesShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show one image in detail",
-		Long: "Show prints a multi-line record for one active image:\n" +
+		Long: "Show prints a multi-line record for one active image.\n" +
+			"<name> is a 1-to-5 segment library name. The record covers\n" +
 			"identity, the container format, each chain layer, the\n" +
 			"split payload, and the parked archive and hold ids.\n" +
 			"--json renders the same repository as one machine-readable\n" +
@@ -541,13 +542,15 @@ func newImagesGCCmd() *cobra.Command {
 
 func newImagesRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "remove <name | name/_archives/full-id>",
+		Use:     "remove <name | name/_archives/<id>>",
 		Aliases: []string{"rm"},
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
-			"physically removes it. Both calls refuse while a session still\n" +
-			"references the target, and while hdiutil info shows a dmg\n" +
-			"target is attached. Only image files and archives are deleted.",
+			"physically removes it. <name> is a 1-to-5 segment library\n" +
+			"name; an archive target is <name>/_archives/<16-hex-id>.\n" +
+			"Both calls refuse while a session still references the\n" +
+			"target, and while hdiutil info shows a dmg target is\n" +
+			"attached. Only image files and archives are deleted.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)

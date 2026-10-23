@@ -69,15 +69,16 @@ func newMountCmd() *cobra.Command {
 		Use:   "mount <image> <dir>",
 		Short: "Mount an image as a workspace",
 		Long: "Mount serves <image> at <dir>: a writable merged view by\n" +
-			"default, or a read-only view with --read-only. <image> is an\n" +
-			"library name or the path of one squashfs or\n" +
-			"erofs file; the library reference wins when an argument is both.\n" +
-			"Chain layers mount as a cascade, --subdir exposes one image\n" +
-			"subdirectory as the mount root, and --verify re-hashes every\n" +
-			"recorded digest instead of the default quick check. <dir>\n" +
-			"must be an empty directory owned by the current user, outside\n" +
-			"every reserved tree, and must not cover sessions_dir,\n" +
-			"images_dir, cache_dir, or $HOME/.tiler.\n" +
+			"default, or a read-only view with --read-only. <image> is the\n" +
+			"path of one squashfs or erofs file, or a 1-to-5 segment library\n" +
+			"name. When the cleaned path exists as a regular file, that\n" +
+			"file wins over a library name. Chain layers mount as a cascade,\n" +
+			"--subdir exposes one image subdirectory as the mount root,\n" +
+			"and --verify re-hashes every recorded digest instead of the\n" +
+			"default quick check. <dir> must be an empty directory owned\n" +
+			"by the current user, outside every reserved tree, and must\n" +
+			"not cover sessions_dir, images_dir, cache_dir, or\n" +
+			"$HOME/.tiler.\n" +
 			"\n" +
 			"Every mount is recorded write-ahead in a session: -s, --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +
