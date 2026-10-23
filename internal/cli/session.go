@@ -271,11 +271,21 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 }
 
 // sessionMount resolves one recorded action back into an engine
-// request: the image reference resolves through the library, and
-// the execution shares the mount command's engine half.
+// request: a pin (name + FullID) uses ResolvePinned so a hold leaf
+// stays paired with the recorded upper; empty FullID keeps today's
+// name-only ResolveMount. The execution shares the mount command's
+// engine half and reuses sessions/<name>/runtime/m<seq>.
 func sessionMount(cfg config.Config, name string) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
-		target, err := image.ResolveMount(cfg, action.Image)
+		var (
+			target image.Target
+			err    error
+		)
+		if action.Name != "" && action.FullID != "" {
+			target, err = image.ResolvePinned(cfg, action.Name, action.FullID)
+		} else {
+			target, err = image.ResolveMount(cfg, action.Image)
+		}
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}

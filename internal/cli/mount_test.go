@@ -40,10 +40,11 @@ type mountFake struct {
 	mountErr   error
 	umountErr  error
 
-	assembleCalls [][]string
-	assembleN     int
-	assembleOut   string
-	assembleErr   error
+	assembleCalls      [][]string
+	assembleBlockPaths [][]string
+	assembleN          int
+	assembleOut        string
+	assembleErr        error
 }
 
 func (f *mountFake) cache(cacheDir, src, want string) (string, string, error) {
@@ -83,6 +84,11 @@ func (f *mountFake) assemble(
 ) (string, error) {
 	f.assembleN++
 	f.assembleCalls = append(f.assembleCalls, []string{cacheDir, wantSHA, fmt.Sprint(wantSize), fmt.Sprint(len(blocks))})
+	paths := make([]string, len(blocks))
+	for i, block := range blocks {
+		paths[i] = block.Path
+	}
+	f.assembleBlockPaths = append(f.assembleBlockPaths, paths)
 	if f.assembleErr != nil {
 		return "", f.assembleErr
 	}

@@ -460,3 +460,72 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 		t.Fatal("cache on did not match the cache copy of the file image")
 	}
 }
+
+func TestRecordedImageAndLibraryDigestFollowHoldPin(t *testing.T) {
+	images := t.TempDir()
+	repo, err := image.OpenRepo(images, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo.Dir, "_incr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heldSum := strings.Repeat("a", 64)
+	activeSum := strings.Repeat("b", 64)
+	held := image.Meta{
+		ID: heldSum, Name: "alice/app", Kind: image.KindFull,
+		Format: image.Format{Type: image.FormatDMG, Compression: "ulfo"},
+		Size:   8, SHA256: heldSum, MtimeUnix: 1710000000,
+		CreatedAt: time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC), Builder: "dev",
+	}
+	active := held
+	active.ID, active.SHA256 = activeSum, activeSum
+	active.Size = 9
+
+	hold, err := repo.HoldPath(held.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(hold, "_incr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	holdDMG := filepath.Join(hold, "image.dmg")
+	if err := os.WriteFile(holdDMG, []byte("held-dmg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := image.Store(filepath.Join(hold, "meta.yaml"), held); err != nil {
+		t.Fatal(err)
+	}
+	activeDMG := filepath.Join(repo.Dir, "image.dmg")
+	if err := os.WriteFile(activeDMG, []byte("active-dmg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := image.Store(repo.MetaPath(), active); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned := Action{
+		Type: TypeMount, Image: "alice/app", Name: "alice/app",
+		FullID: held.ID, Mountpoint: "/ws/lib", Mode: ModeRO,
+	}
+	if got := recordedImage(pinned, images); got != holdDMG {
+		t.Fatalf("recordedImage pin = %s, want %s", got, holdDMG)
+	}
+	e := &Engine{ImagesDir: images}
+	sum, ok := e.libraryDigest(pinned)
+	if !ok || sum != heldSum {
+		t.Fatalf("libraryDigest pin = %s %v, want %s", sum, ok, heldSum)
+	}
+
+	nameOnly := Action{
+		Type: TypeMount, Image: "alice/app", Name: "alice/app",
+		Mountpoint: "/ws/lib", Mode: ModeRO,
+	}
+	if got := recordedImage(nameOnly, images); got != activeDMG {
+		t.Fatalf("recordedImage empty FullID = %s, want active %s", got, activeDMG)
+	}
+	sum, ok = e.libraryDigest(nameOnly)
+	if !ok || sum != activeSum {
+		t.Fatalf("libraryDigest empty FullID = %s %v, want %s", sum, ok, activeSum)
+	}
+}

@@ -97,6 +97,18 @@ type Member struct {
 	Blocks []BlockFile
 }
 
+// LocatePinned returns the absolute leaf root for a library name plus
+// id reference: the active repository directory or _hold/<id>. It
+// uses the same location rules as ResolvePinned (index, then HoldPath
+// fallback for an on-disk id directory). Archives are refused.
+func LocatePinned(imagesDir, name, idRef string) (string, error) {
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return "", pinError(name, idRef, err)
+	}
+	return pinnedRoot(repo, name, idRef)
+}
+
 // ResolvePinned expands a library image by name plus an id reference
 // (full sha256 or a unique lowercase hex prefix). The leaf root comes
 // from sha256.index: active (".") or _hold/<id>. Archives never
@@ -106,11 +118,7 @@ type Member struct {
 // missing hold fail and quote the name and id. Name-only ResolveMount
 // stays active-only.
 func ResolvePinned(cfg config.Config, name, idRef string) (Target, error) {
-	repo, err := OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		return Target{}, pinError(name, idRef, err)
-	}
-	root, err := pinnedRoot(repo, name, idRef)
+	root, err := LocatePinned(cfg.ImagesDir, name, idRef)
 	if err != nil {
 		return Target{}, err
 	}
