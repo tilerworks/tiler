@@ -77,8 +77,8 @@ func newMountCmd() *cobra.Command {
 			"and --verify re-hashes every recorded digest instead of the\n" +
 			"default quick check. <dir> must be an empty directory owned\n" +
 			"by the current user, outside every reserved tree, and must\n" +
-			"not cover sessions_dir, images_dir, cache_dir, or\n" +
-			"$HOME/.tiler.\n" +
+			"not cover the sessions_dir, images_dir, or cache_dir paths\n" +
+			"from .tiler.yaml, or $HOME/.tiler.\n" +
 			"\n" +
 			"Every mount is recorded write-ahead in a session: -s, --session\n" +
 			"names one, the " + sessionEnvVar + " environment variable\n" +

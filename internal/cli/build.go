@@ -48,8 +48,9 @@ func newBuildCmd() *cobra.Command {
 		Long: "Build packs dir into a new full image. Omitting dir uses the\n" +
 			"working directory. \".\" and the absolute path of that directory\n" +
 			"select the same source. The source must stay outside every\n" +
-			"reserved tree and must not cover images_dir, sessions_dir,\n" +
-			"cache_dir, or $HOME/.tiler (real paths, including symlinks).\n" +
+			"reserved tree and must not cover the images_dir, sessions_dir,\n" +
+			"or cache_dir paths from .tiler.yaml, or $HOME/.tiler (real\n" +
+			"paths, including symlinks).\n" +
 			"Inside a merged mount view the default is an incremental build\n" +
 			"that appends the writable upper as one layer. When the recorded\n" +
 			"incremental layers plus that upper already exceed half the base\n" +
@@ -63,11 +64,12 @@ func newBuildCmd() *cobra.Command {
 			"and --full when --image matches the mounted image.\n" +
 			"\n" +
 			"--format and --compression select the container. An omitted\n" +
-			"format uses image_format, then the host default (dmg on macOS),\n" +
-			"then the installed tools: both stacks select squashfs, erofs\n" +
-			"alone selects erofs, and squashfs alone selects squashfs. An\n" +
-			"omitted compression uses image_compression or that format's\n" +
-			"default. --format squashfs or erofs on macOS is a usage error.\n" +
+			"format uses the image_format key in .tiler.yaml, then the host\n" +
+			"default (dmg on macOS), then the installed tools: both stacks\n" +
+			"select squashfs, erofs alone selects erofs, and squashfs alone\n" +
+			"selects squashfs. An omitted compression uses the\n" +
+			"image_compression key in .tiler.yaml, or that format's default.\n" +
+			"--format squashfs or erofs on macOS is a usage error.\n" +
 			"An incremental build inherits the base image; a flag that\n" +
 			"disagrees is a usage error.",
 		Args: maxOneArg,
@@ -82,7 +84,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "", "container format: dmg, squashfs, or erofs")
 	cmd.Flags().StringVar(&compression, "compression", "", "container compression; default is the format default")
 	cmd.Flags().StringVarP(&split, "split", "s", "",
-		"block size for split builds (e.g. 512M, 2G); 0 disables for this build")
+		"block size for split builds (e.g. 512M, 2G); omit to use the split_size key in .tiler.yaml; 0 disables for this build")
 	return cmd
 }
 

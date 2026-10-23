@@ -501,13 +501,13 @@ func newImagesGCCmd() *cobra.Command {
 		Short: "Promote held chains, expire archives, and clean session records",
 		Long: "One garbage collection entry manages two kinds of expired\n" +
 			"objects: it promotes every unreferenced image hold into\n" +
-			"archives, deletes the archives past the retention rules, and\n" +
-			"then cleans the session records — deleting closed records past\n" +
-			"the session age limit and reporting active sessions whose\n" +
-			"mounts are all stale. Active session records are never\n" +
-			"deleted automatically, except a --rm one whose views are all\n" +
-			"dead: it is torn down, its runtime purged, and its record\n" +
-			"removed.",
+			"archives, deletes archives past the keep_versions and max_age\n" +
+			"keys in .tiler.yaml, and then cleans the session records —\n" +
+			"deleting closed records past the session_max_age key in\n" +
+			".tiler.yaml and reporting active sessions whose mounts are\n" +
+			"all stale. Active session records are never deleted\n" +
+			"automatically, except a --rm one whose views are all dead:\n" +
+			"it is torn down, its runtime purged, and its record removed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
