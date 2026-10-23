@@ -272,6 +272,30 @@ func TestImagesShowBadNames(t *testing.T) {
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
+	_, stderr, _, err := runCmd(t, append(lib, "images", "show", "ffffffffffffffffffff")...)
+	if ExitCode(err) != 1 || !strings.Contains(stderr, "unknown id reference") {
+		t.Fatalf("ExitCode(%v) = %d stderr = %q", err, ExitCode(err), stderr)
+	}
+}
+
+func TestImagesShowByID(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
+	id := buildImage(t, lib, "alice/app", src)
+	other := filepath.Join(work, "other")
+	writeTestFile(t, filepath.Join(other, "b.txt"), "b")
+	buildImage(t, lib, "bob/tool", other)
+
+	wantID := "  id          " + id
+	for _, ref := range []string{id, listID(id), id[:16]} {
+		out := mustShow(t, lib, ref)
+		if !strings.Contains(out, "alice/app") || !strings.Contains(out, wantID) {
+			t.Fatalf("show %s missing alice/app or id:\n%s", ref, out)
+		}
+	}
 }
 
 func TestImagesListChainAndDeprecated(t *testing.T) {

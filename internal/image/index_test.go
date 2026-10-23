@@ -269,6 +269,55 @@ func TestEnsureIndexesCreatesMissingAndKeepsPresent(t *testing.T) {
 	}
 }
 
+func TestFindRepoByIDAcrossLeaves(t *testing.T) {
+	imagesDir := t.TempDir()
+	alice, err := OpenRepo(imagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := OpenRepo(imagesDir, "bob/tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(alice.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bob.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliceID := "abc111" + strings.Repeat("0", sumHexLen-6)
+	bobID := "abc222" + strings.Repeat("0", sumHexLen-6)
+	storeIndexMeta(t, alice.Dir, aliceID, "")
+	storeIndexMeta(t, bob.Dir, bobID, "")
+	if err := rebuildIndexes(alice); err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildIndexes(bob); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := FindRepoByID(imagesDir, aliceID[:10])
+	if err != nil || got.Name() != "alice/app" {
+		t.Fatalf("unique = %s, %v", got.Name(), err)
+	}
+	got, err = FindRepoByID(imagesDir, aliceID)
+	if err != nil || got.Name() != "alice/app" {
+		t.Fatalf("full = %s, %v", got.Name(), err)
+	}
+	_, err = FindRepoByID(imagesDir, "abc")
+	if err == nil || !strings.Contains(err.Error(), `ambiguous id reference "abc"`) {
+		t.Fatalf("ambiguous err = %v", err)
+	}
+	_, err = FindRepoByID(imagesDir, "fff")
+	if err == nil || !IsUnknownIDRef(err) {
+		t.Fatalf("unknown err = %v", err)
+	}
+	_, err = FindRepoByID(imagesDir, "NotHex")
+	if err == nil || !IsUnknownIDRef(err) {
+		t.Fatalf("non-hex err = %v", err)
+	}
+}
+
 func TestLookupRebuildsMalformedIndex(t *testing.T) {
 	repo := indexLeaf(t)
 	active := strings.Repeat("a", sumHexLen)

@@ -61,14 +61,15 @@ func newImagesListCmd() *cobra.Command {
 func newImagesShowCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "show <name>",
+		Use:   "show <name|id>",
 		Short: "Show one image in detail",
 		Long: "Show prints a multi-line record for one active image.\n" +
-			"<name> is a 1-to-5 segment library name. The record covers\n" +
-			"identity, the container format, each chain layer, the\n" +
-			"split payload, and the parked archive and hold ids.\n" +
-			"--json renders the same repository as one machine-readable\n" +
-			"object.",
+			"<name|id> is a 1-to-5 segment library name, or a full\n" +
+			"payload sha256 / unique hex prefix from images list. The\n" +
+			"record covers identity, the container format, each chain\n" +
+			"layer, the split payload, and the parked archive and hold\n" +
+			"ids. --json renders the same repository as one\n" +
+			"machine-readable object.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -121,24 +122,71 @@ func activeStates(repos []image.Repo) ([]namedState, error) {
 	return states, nil
 }
 
-func showOneImage(w io.Writer, cfg config.Config, name string, asJSON bool) error {
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
+func showOneImage(w io.Writer, cfg config.Config, ref string, asJSON bool) error {
+	named, err := resolveShowTarget(cfg.ImagesDir, ref)
 	if err != nil {
-		return usageError{err}
-	}
-	state, err := image.Inspect(repo)
-	if err != nil {
+		if isShowUsage(err) {
+			return usageError{err}
+		}
 		return fmt.Errorf("images show: %w", err)
 	}
-	if !state.HasActive {
-		return fmt.Errorf("images show: %s has no active image", name)
-	}
-	named := namedState{name: repo.Name(), state: state}
 	if asJSON {
 		// Show always includes parked chains, matching the human record.
 		return writeJSON(w, newImageJSON(named.name, named.state, true))
 	}
-	return writeImageDetail(w, named.name, state)
+	return writeImageDetail(w, named.name, named.state)
+}
+
+// resolveShowTarget accepts a library name or an id reference. A
+// legal name that still has an active image wins. Otherwise a full
+// sha256 or unique hex prefix locates the owning leaf.
+func resolveShowTarget(imagesDir, ref string) (namedState, error) {
+	_, nameErr := image.ParseName(ref)
+	if nameErr == nil {
+		repo, err := image.OpenRepo(imagesDir, ref)
+		if err != nil {
+			return namedState{}, err
+		}
+		state, err := image.Inspect(repo)
+		if err != nil {
+			return namedState{}, err
+		}
+		if state.HasActive {
+			return namedState{name: repo.Name(), state: state}, nil
+		}
+		namedMiss := fmt.Errorf("%s has no active image", ref)
+		named, idErr := showRepoByID(imagesDir, ref)
+		if idErr == nil {
+			return named, nil
+		}
+		if image.IsUnknownIDRef(idErr) {
+			return namedState{}, namedMiss
+		}
+		return namedState{}, idErr
+	}
+	if !image.IsIDRef(ref) {
+		return namedState{}, nameErr
+	}
+	return showRepoByID(imagesDir, ref)
+}
+
+func showRepoByID(imagesDir, ref string) (namedState, error) {
+	repo, err := image.FindRepoByID(imagesDir, ref)
+	if err != nil {
+		return namedState{}, err
+	}
+	state, err := image.Inspect(repo)
+	if err != nil {
+		return namedState{}, err
+	}
+	if !state.HasActive {
+		return namedState{}, fmt.Errorf("%s has no active image", repo.Name())
+	}
+	return namedState{name: repo.Name(), state: state}, nil
+}
+
+func isShowUsage(err error) bool {
+	return errors.Is(err, image.ErrInvalidName)
 }
 
 // detailKeyWidth is the padded key column of a named image record.

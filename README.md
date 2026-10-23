@@ -207,12 +207,14 @@ Available now:
   shortened the same way, under each row. `--json` keeps the full
   sha256 in one machine-readable document, with the additive `form`
   field for blocks actives.
-- `tiler images show <name> [--json]` prints a multi-line record for
-  one active image. `<name>` is a 1-to-5 segment library name. The
-  record covers identity, a `format` line such as `squashfs/zstd`,
-  each chain layer, the blocks payload count when present, and the
-  parked archive and hold ids. `--json` renders the same repository
-  as one object, including `format`.
+- `tiler images show <name|id> [--json]` prints a multi-line record
+  for one active image. `<name|id>` is a 1-to-5 segment library name,
+  or a full payload sha256 / unique hex prefix (including the
+  10-hex id from `images list`). The record covers identity, a
+  `format` line such as `squashfs/zstd`, each chain layer, the
+  blocks payload count when present, and the parked archive and hold
+  ids. `--json` renders the same repository as one object, including
+  `format`.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass

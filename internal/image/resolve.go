@@ -179,6 +179,12 @@ func isArchiveRel(rel string) bool {
 	return rel == dirArchives || strings.HasPrefix(rel, dirArchives+"/")
 }
 
+// IsUnknownIDRef reports a missing id lookup that quotes the
+// reference. Callers that tried a name first can keep the name error.
+func IsUnknownIDRef(err error) bool {
+	return isUnknownIDRef(err)
+}
+
 func isUnknownIDRef(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "unknown id reference")
 }

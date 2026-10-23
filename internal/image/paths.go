@@ -216,6 +216,11 @@ func resolveID(candidates []string, ref string) (string, error) {
 	return match, nil
 }
 
+// IsIDRef reports a lowercase hex id reference of length 1 to 64.
+func IsIDRef(ref string) bool {
+	return isIDRef(ref)
+}
+
 func isIDRef(ref string) bool {
 	if len(ref) < 1 || len(ref) > sumHexLen {
 		return false

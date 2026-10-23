@@ -168,11 +168,12 @@ tiler session close feature                # 逆序卸载，记录保留
   补上同样缩短的停放链 id。`--json` 仍保留完整 sha256，并渲染
   一份机器可读文档，blocks 活跃位新增 `form` 字段
   （契约只增不改）。
-- `tiler images show <name> [--json]` 输出一个活跃镜像的多行记录。
-  `<name>` 是 1 到 5 段的库名。记录包括身份、一行 `format`（例如
-  `squashfs/zstd`）、每一层增量、blocks 载荷块数（若有），以及停放的
-  归档和 hold id。`--json` 把同一仓库渲染成一个对象，其中包含
-  `format`。
+- `tiler images show <name|id> [--json]` 输出一个活跃镜像的多行记录。
+  `<name|id>` 是 1 到 5 段的库名，或完整 payload sha256 / 唯一十六
+  进制前缀（含 `images list` 打出的 10 位 id）。记录包括身份、一行
+  `format`（例如 `squashfs/zstd`）、每一层增量、blocks 载荷块数
+  （若有），以及停放的归档和 hold id。`--json` 把同一仓库渲染成
+  一个对象，其中包含 `format`。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`

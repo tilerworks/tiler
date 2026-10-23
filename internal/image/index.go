@@ -215,6 +215,44 @@ func lookupID(repo Repo, idRef string) (string, error) {
 	})
 }
 
+// FindRepoByID locates the single library leaf whose sha256.index has
+// a unique prefix match for idRef. idRef is the full 64-hex payload
+// sha256 or a unique lowercase hex prefix. Zero matches and matches
+// in more than one leaf quote idRef.
+func FindRepoByID(imagesDir, idRef string) (Repo, error) {
+	if !isIDRef(idRef) {
+		return Repo{}, fmt.Errorf("unknown id reference %q", idRef)
+	}
+	repos, err := ListRepos(imagesDir)
+	if err != nil {
+		return Repo{}, err
+	}
+	var match Repo
+	var matchKey string
+	for _, repo := range repos {
+		rel, err := lookupID(repo, idRef)
+		switch {
+		case err == nil:
+			meta, loadErr := Load(indexMetaPath(repo, rel))
+			if loadErr != nil {
+				return Repo{}, loadErr
+			}
+			if matchKey != "" && (matchKey != meta.SHA256 || match.Name() != repo.Name()) {
+				return Repo{}, fmt.Errorf("ambiguous id reference %q", idRef)
+			}
+			match, matchKey = repo, meta.SHA256
+		case isUnknownIDRef(err):
+			continue
+		default:
+			return Repo{}, err
+		}
+	}
+	if matchKey == "" {
+		return Repo{}, fmt.Errorf("unknown id reference %q", idRef)
+	}
+	return match, nil
+}
+
 func lookupIndexed(repo Repo, query indexLookup) (string, error) {
 	rel, status, err := probeIndex(repo, query)
 	if err != nil || status != probeStale {
