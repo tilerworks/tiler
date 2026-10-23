@@ -4,10 +4,10 @@ import "github.com/jiangxin/tiler/internal/mountinfo"
 
 // Identity resolves image identities from the session records: the
 // mount action of an active session that recorded the point carries
-// the owner and repository of the library image behind it. It is
-// the fallback for the mount table's path identity when a killed
-// daemon left the table entry anonymous or stale. File-path images
-// record no identity and never resolve.
+// the library name of the image behind it. It is the fallback for
+// the mount table's path identity when a killed daemon left the
+// table entry anonymous or stale. File-path images record no
+// identity and never resolve.
 type Identity struct {
 	// Store reads the session records.
 	Store
@@ -32,8 +32,8 @@ func (i Identity) Lookup(mountPoint string) (mountinfo.Name, bool, error) {
 				!SameMountPoint(action.Mountpoint, mountPoint) {
 				continue
 			}
-			if action.Owner != "" && action.Repo != "" {
-				found = mountinfo.Name{Owner: action.Owner, Repo: action.Repo}
+			if action.Name != "" {
+				found = mountinfo.Name(action.Name)
 				hit = true
 			}
 			return true
@@ -41,7 +41,7 @@ func (i Identity) Lookup(mountPoint string) (mountinfo.Name, bool, error) {
 		return false
 	})
 	if err != nil {
-		return mountinfo.Name{}, false, err
+		return "", false, err
 	}
 	return found, hit, nil
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/image"
 )
 
 // sampleAction is one fully populated mount action for the round
@@ -17,8 +19,7 @@ func sampleAction(seq int) Action {
 		Seq:        seq,
 		Type:       TypeMount,
 		Image:      "alice/app",
-		Owner:      "alice",
-		Repo:       "app",
+		Name:       "alice/app",
 		FullID:     "0123456789abcdef",
 		Mountpoint: "/tmp/view",
 		Mode:       ModeRW,
@@ -109,7 +110,7 @@ func TestRecordJSONContractKeys(t *testing.T) {
 		t.Fatalf("action = %v", actions[0])
 	}
 	for _, key := range []string{
-		"seq", "type", "image", "owner", "repo", "full_id",
+		"seq", "type", "image", "name", "full_id",
 		"mountpoint", "mode", "subdir", "runtime_id", "status",
 		"timestamp",
 	} {
@@ -168,6 +169,38 @@ func TestRecordRemoveOnCloseJSON(t *testing.T) {
 	}
 	if _, ok := doc["remove_on_close"]; ok {
 		t.Errorf("a plain record carried remove_on_close: %v", doc["remove_on_close"])
+	}
+}
+
+func TestOldOwnerRepoActionDoesNotPin(t *testing.T) {
+	const fullID = "0123456789abcdef"
+	raw := `{
+		"seq": 1,
+		"type": "mount",
+		"image": "alice/app",
+		"owner": "alice",
+		"repo": "app",
+		"full_id": "` + fullID + `",
+		"mountpoint": "/ws/dev",
+		"mode": "rw",
+		"status": "mounted",
+		"timestamp": "2026-10-17T03:15:00Z"
+	}`
+	var action Action
+	if err := json.Unmarshal([]byte(raw), &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Name != "" {
+		t.Fatalf("Name = %q, want empty after owner/repo-only JSON", action.Name)
+	}
+	rec := Record{
+		Name:    "dev",
+		State:   StateActive,
+		Actions: []Action{action},
+	}
+	ref := image.Ref{Name: "alice/app", FullID: fullID}
+	if recordPins(rec, ref) {
+		t.Fatal("owner/repo-only action pinned the library image")
 	}
 }
 

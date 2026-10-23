@@ -58,8 +58,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempot
 	id2=$(cut -d" " -f3 full2.out) &&
 	test "$id1" = "$id2" &&
 	test_cmp full1.meta "$alice_meta" &&
-	test_path_is_missing "$HOME/.tiler/images/alice/app/archives" &&
-	test_path_is_missing "$HOME/.tiler/images/alice/app/hold"
+	test_path_is_missing "$HOME/.tiler/images/alice/app/_archives" &&
+	test_path_is_missing "$HOME/.tiler/images/alice/app/_hold"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental build of an unchanged upper is idempotent' '
@@ -100,7 +100,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'subdir of a mount packs a differ
 	bob_id2=$(cut -d" " -f3 div2.out) &&
 	test "$bob_id" = "$bob_id2" &&
 	test_cmp div1.meta "$bob_meta" &&
-	test_path_is_missing "$HOME/.tiler/images/bob/docs/archives" &&
+	test_path_is_missing "$HOME/.tiler/images/bob/docs/_archives" &&
 	"$tiler_bin" images show alice/app >alice-show.out 2>alice-show.err &&
 	test_grep -E "^  chain +1$" alice-show.out
 '

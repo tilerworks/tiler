@@ -106,11 +106,12 @@ func TestImagesShowJSONKeepsErrorSemantics(t *testing.T) {
 		args []string
 		want int
 	}{
-		{name: "bad name is a usage error", args: []string{"nope", "--json"}, want: 2},
+		{name: "bad name is a usage error", args: []string{"_foo", "--json"}, want: 2},
 		{name: "too many arguments is a usage error", args: []string{"a", "b", "--json"}, want: 2},
 		{name: "missing name is a usage error", args: []string{"--json"}, want: 2},
 		{name: "repository without an active image fails", args: []string{"carol/old", "--json"}, want: 1},
 		{name: "unknown repository fails", args: []string{"bob/missing", "--json"}, want: 1},
+		{name: "single-segment missing library is runtime", args: []string{"nope", "--json"}, want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,7 +164,7 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	createdAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	format := image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}
 	alice := image.Meta{
-		ID: goldenActiveID, Owner: "alice", Repo: "app", Version: "v3",
+		ID: goldenActiveID, Name: "alice/app", Version: "v3",
 		Kind: image.KindIncremental, Format: format,
 		Size: 2048, SHA256: goldenActiveSum, MtimeUnix: 1772600767,
 		CreatedAt: createdAt, Builder: "tiler golden",
@@ -175,10 +176,10 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	}
 	aliceDir := filepath.Join(imagesDir, "alice", "app")
 	storeGoldenRepo(t, aliceDir, alice)
-	writeGoldenChainDir(t, aliceDir, "archives", goldenArchiveID)
-	writeGoldenChainDir(t, aliceDir, "hold", goldenHoldID)
+	writeGoldenChainDir(t, aliceDir, "_archives", goldenArchiveID)
+	writeGoldenChainDir(t, aliceDir, "_hold", goldenHoldID)
 	bob := image.Meta{
-		ID: goldenBobID, Owner: "bob", Repo: "tool", Version: "v1",
+		ID: goldenBobID, Name: "bob/tool", Version: "v1",
 		Kind: image.KindFull, Format: format,
 		Size: 4096, SHA256: goldenBobSum, MtimeUnix: 1772600767,
 		CreatedAt: createdAt.Add(2 * time.Hour), Builder: "tiler golden",

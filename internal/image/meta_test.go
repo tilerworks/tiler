@@ -20,12 +20,17 @@ func TestIDUsesSHA256Prefix(t *testing.T) {
 	}
 }
 
+func TestIDHexLenFloor(t *testing.T) {
+	if idHexLen < 16 {
+		t.Fatalf("idHexLen = %d, want >= 16", idHexLen)
+	}
+}
+
 func TestValidateReportsEveryViolation(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	meta := Meta{
 		ID:     "0123456789ABCDEF",
-		Owner:  "..",
-		Repo:   "",
+		Name:   "..",
 		Kind:   "blob",
 		Format: Format{Type: "tar", Compression: "gzip"},
 		Size:   0,
@@ -52,8 +57,7 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 	wants := []string{
 		"id: must be 16 lowercase hex digits",
 		"sha256: must be 64 lowercase hex digits",
-		"owner: invalid segment",
-		"repo: invalid segment",
+		"name: invalid image name",
 		"kind: must be full or incremental",
 		"builder: must be set",
 		"source.commit: must be lowercase hex",
@@ -96,19 +100,38 @@ func TestValidateRejectsDuplicateAndBrokenChain(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsSlashInSegments(t *testing.T) {
+func TestValidateRejectsNonCanonicalName(t *testing.T) {
 	meta := validMeta()
-	meta.Owner = "foo/../../etc"
-	meta.Repo = "app/../../tmp"
+	meta.Name = "alice//app"
 	err := meta.Validate()
 	if err == nil {
-		t.Fatal("expected slash segments to fail")
+		t.Fatal("expected non-canonical name to fail")
 	}
-	text := err.Error()
-	for _, want := range []string{"owner: invalid segment", "repo: invalid segment"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("missing %q in %s", want, text)
+	if !strings.Contains(err.Error(), "name: invalid image name") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsOwnerRepoOnlyIdentity(t *testing.T) {
+	meta := validMeta()
+	encoded, err := Encode(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(string(encoded), "\n") {
+		if strings.HasPrefix(line, "name:") {
+			continue
 		}
+		lines = append(lines, line)
+	}
+	body := strings.Join(lines, "\n") + "owner: alice\nrepo: app\n"
+	_, err = Decode([]byte(body))
+	if err == nil {
+		t.Fatal("expected owner/repo-only document to fail Decode")
+	}
+	if !strings.Contains(err.Error(), "name: invalid image name") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -238,8 +261,7 @@ func validMeta() Meta {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return Meta{
 		ID:        sum[:idHexLen],
-		Owner:     "alice",
-		Repo:      "app",
+		Name:      "alice/app",
 		Kind:      KindFull,
 		Format:    Format{Type: FormatSquashfs, Compression: CompressionZstd},
 		Size:      12345,

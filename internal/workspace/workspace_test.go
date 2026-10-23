@@ -301,8 +301,8 @@ func TestMountFSNameOverridesForCacheCopies(t *testing.T) {
 	req, _ := testRequest(t)
 	req.FullFSName = "/nas/images/alice/app/image.sqsh"
 	req.LayerFSNames = []string{
-		"/nas/images/alice/app/incr/inc1.sqsh",
-		"/nas/images/alice/app/incr/inc2.sqsh",
+		"/nas/images/alice/app/_incr/inc1.sqsh",
+		"/nas/images/alice/app/_incr/inc2.sqsh",
 	}
 	rec := &recRunner{}
 	if _, err := mountTest(t, req, rec.run, testHooks()); err != nil {

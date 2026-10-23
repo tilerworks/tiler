@@ -21,6 +21,11 @@ const (
 	// CompressionZstd is the default container compression.
 	CompressionZstd = "zstd"
 
+	// idHexLen is the chain-id hex length used in layout paths and
+	// meta. It is also the floor for name-segment reservation: a
+	// segment of this many or more hex digits is refused as a name.
+	// Do not decrease it; shortening would collide with names that
+	// were previously valid hex segments.
 	idHexLen  = 16
 	sumHexLen = 64
 )
@@ -30,8 +35,8 @@ const (
 	// PayloadSingle is the default single-file image.sqsh payload.
 	PayloadSingle = "single"
 	// PayloadBlocks is a byte-block split payload. The full image
-	// lives in blocks/<full-id>/; each incremental layer with a
-	// Blocks manifest lives in blocks/<incr-id>/.
+	// lives in _blocks/<full-id>/; each incremental layer with a
+	// Blocks manifest lives in _blocks/<incr-id>/.
 	PayloadBlocks = "blocks"
 )
 
@@ -51,7 +56,7 @@ type Source struct {
 
 // ChainEntry is one incremental layer. Kind is not repeated here;
 // every member is incremental. Blocks is set when the layer is
-// stored as blocks/<id>/; digest and size still describe the whole
+// stored as _blocks/<id>/; digest and size still describe the whole
 // logical squashfs.
 type ChainEntry struct {
 	ID        string       `yaml:"id"`
@@ -88,8 +93,7 @@ type MemberEntry struct {
 // are dropped on load.
 type Meta struct {
 	ID         string    `yaml:"id"`
-	Owner      string    `yaml:"owner"`
-	Repo       string    `yaml:"repo"`
+	Name       string    `yaml:"name"`
 	Version    string    `yaml:"version"`
 	Kind       string    `yaml:"kind"`
 	Format     Format    `yaml:"format"`

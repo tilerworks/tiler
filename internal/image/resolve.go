@@ -22,10 +22,10 @@ var ErrNotImageFile = errors.New("not an image file")
 // into its active stack or split payload manifest, or a single
 // file-path image.
 type Target struct {
-	// Library is true for an owner/repo reference and false for a
+	// Library is true for a library-name reference and false for a
 	// file path.
 	Library bool
-	// Name is the owner/repo name when Library is true.
+	// Name is the canonical library name when Library is true.
 	Name string
 	// ID is the full image id of the resolved active chain or split
 	// payload when Library is true, and empty for a file path.
@@ -61,7 +61,7 @@ type Target struct {
 // path, so the mount layer can verify and reassemble without
 // revisiting the repository layout.
 type BlockFile struct {
-	// Path is the absolute block file blocks/<full-id>/<name>.
+	// Path is the absolute block file _blocks/<full-id>/<name>.
 	Path string
 	// Name is the manifest block name blk.NNN.
 	Name string
@@ -80,7 +80,7 @@ type BlockFile struct {
 // blocks-form target, Path stays empty and Blocks holds the layer's
 // byte-block files; mount reassembles each layer before stacking.
 type Member struct {
-	// Path is the full image file or an incr/<id>.sqsh layer file.
+	// Path is the full image file or an _incr/<id>.sqsh layer file.
 	// Empty for a blocks-form layer until reassembly fills a cache path.
 	Path string
 	// ID is the full or incremental image id of a blocks-form layer.
@@ -99,14 +99,29 @@ type Member struct {
 
 // ResolveMount turns a mount argument into what a mount consumes:
 // the ordered stack member list, or the manifest of a split payload.
-// An argument that parses as a legal owner/repo name is always a
-// library reference and never falls back to a file path; anything
-// else is a file path that must name an existing regular file.
-// Library resolution reads only the active slot and follows the
-// payload kind its metadata names; archives and delayed-archive
-// holds never participate.
+// An existing regular file wins over a library name: filepath.Clean
+// the argument, then os.Stat. A regular file uses the file resolver.
+// os.ErrNotExist, or a path that exists but is not a regular file,
+// falls through to ParseName and library resolution. Any other Stat
+// error is a runtime error and is not treated as a library name.
+// Relative paths are Stat'd without forcing Abs; resolveFile still
+// absolutizes when opening. Library resolution reads only the active
+// slot and follows the payload kind its metadata names; archives and
+// delayed-archive holds never participate.
 func ResolveMount(cfg config.Config, arg string) (Target, error) {
-	if _, _, err := ParseName(arg); err == nil {
+	cleaned := filepath.Clean(arg)
+	info, err := os.Stat(cleaned)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return resolveFile(cleaned)
+	case err == nil:
+		// Exists but not a regular file — try a library name.
+	case errors.Is(err, os.ErrNotExist):
+		// Missing path — try a library name.
+	default:
+		return Target{}, fmt.Errorf("mount: %w", err)
+	}
+	if _, err := ParseName(arg); err == nil {
 		return resolveLibrary(cfg, arg)
 	}
 	return resolveFile(arg)
@@ -206,7 +221,7 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 }
 
 // resolveLayerBlocks checks that every manifest block of one layer
-// rests in blocks/<id>/ and returns the block facts with the layer
+// rests in _blocks/<id>/ and returns the block facts with the layer
 // directory.
 func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile, string, error) {
 	blocksDir, err := repo.BlocksDirPath(id)
@@ -294,14 +309,15 @@ func resolveFile(arg string) (Target, error) {
 	return Target{Members: []Member{{Path: abs}}}, nil
 }
 
-// fileFormError reports a file-path failure. When the argument also
-// looks like a library reference (a relative slash-separated name
-// that is not legal), the error names why both forms missed.
+// fileFormError reports a file-path failure after the library-name
+// path was skipped or rejected. When the argument is a relative
+// slash-separated name that is not a legal library name, the error
+// also names why the library form missed.
 func fileFormError(arg string, err error) error {
 	base := fmt.Errorf("mount: %w: %w", ErrNotImageFile, err)
 	if !strings.Contains(arg, "/") || filepath.IsAbs(arg) {
 		return base
 	}
-	_, _, nameErr := ParseName(arg)
+	_, nameErr := ParseName(arg)
 	return fmt.Errorf("%w; as a library reference: %w", base, nameErr)
 }

@@ -97,7 +97,7 @@ func TestBuildDMGDirectoryUsesSrcfolder(t *testing.T) {
 		t.Fatalf("calls = %q", runner.calls)
 	}
 	temp := dmgArgOut(runner.calls[0][1:])
-	want, err := container.HdiutilCreateArgv(src, "ulmo", "alice/app", temp)
+	want, err := container.HdiutilCreateArgv(src, "ulmo", "app", temp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestBuildDMGEmptyCompressionIsULFO(t *testing.T) {
 		t.Fatal(err)
 	}
 	temp := dmgArgOut(runner.calls[0][1:])
-	want, err := container.HdiutilCreateArgv(src, "", "alice/app", temp)
+	want, err := container.HdiutilCreateArgv(src, "", "app", temp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestBakeDMGUsesShadowAndArchivesPrevious(t *testing.T) {
 		t.Fatalf("temp survived: %v", statErr)
 	}
 	assertBytes(t, base, baked)
-	arch := filepath.Join(repo.Dir, "archives", old.ID, ImageDMG)
+	arch := filepath.Join(repo.Dir, "_archives", old.ID, ImageDMG)
 	assertBytes(t, arch, oldBody)
 	meta, err := Load(repo.MetaPath())
 	if err != nil {
@@ -211,7 +211,7 @@ func TestBakeDMGKeepsReferencedBaseInHold(t *testing.T) {
 	}
 	assertBytes(t, filepath.Join(hold, ImageDMG), oldBody)
 	assertBytes(t, shadow, []byte("keep"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, "archives", old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, "_archives", old.ID)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("referenced base was archived: %v", statErr)
 	}
 }
@@ -320,7 +320,7 @@ func TestBakeDMGIdleSkipsConvertWhenShadowUnchanged(t *testing.T) {
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("first-bake"))
 	assertBytes(t, shadow, postShadow)
-	if _, err := os.Stat(filepath.Join(repo.Dir, "archives")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(repo.Dir, "_archives")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("idle bake archived: %v", err)
 	}
 	// A write into the live shadow must miss the idle fingerprint.
@@ -388,7 +388,7 @@ func TestBuildDMGCreateIdleSkipsNonDeterministicPacker(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("idle create rewrote meta")
 	}
-	if _, err := os.Stat(filepath.Join(repo.Dir, "archives")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(repo.Dir, "_archives")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("idle create archived: %v", err)
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("first-create"))

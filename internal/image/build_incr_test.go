@@ -620,7 +620,7 @@ func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
 		t.Fatalf("result = %+v, want path %s", res, wantDir)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("blocks incr left incr/: %v", err)
+		t.Fatalf("blocks incr left _incr/: %v", err)
 	}
 	parts := [][]byte{body[0:24], body[24:48], body[48:64]}
 	for i, part := range parts {
@@ -689,7 +689,7 @@ func TestBuildIncrSingleKeepsIncrSqsh(t *testing.T) {
 		t.Fatalf("chain = %+v", loaded.Chain)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, dirBlocks)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("single incr created blocks/: %v", err)
+		t.Fatalf("single incr created _blocks/: %v", err)
 	}
 }
 
@@ -772,7 +772,7 @@ func TestBuildIncrBlocksSameDigestIsNoOp(t *testing.T) {
 	}
 	assertNoTemps(t, repo.Dir)
 	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("blocks incr left incr/: %v", err)
+		t.Fatalf("blocks incr left _incr/: %v", err)
 	}
 }
 
@@ -824,7 +824,7 @@ func TestBuildIncrBlocksRestoresMissingDir(t *testing.T) {
 		t.Fatalf("restored blocks dir match = %v, %v", ok, err)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("blocks restore left incr/: %v", err)
+		t.Fatalf("blocks restore left _incr/: %v", err)
 	}
 }
 
@@ -865,7 +865,7 @@ func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
 		t.Fatalf("full blocks dir: %v", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("blocks incr left incr/: %v", statErr)
+		t.Fatalf("blocks incr left _incr/: %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
 }

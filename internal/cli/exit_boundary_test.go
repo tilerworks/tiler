@@ -40,7 +40,9 @@ func TestExitCodeBoundaries(t *testing.T) {
 		{name: "invalid session name is usage",
 			args: []string{"session", "show", "bad name"}, want: 2},
 		{name: "invalid image name is usage",
-			args: []string{"images", "show", "nope"}, want: 2},
+			args: []string{"images", "show", "_foo"}, want: 2},
+		{name: "missing library image is runtime",
+			args: []string{"images", "show", "nope"}, want: 1},
 		{name: "images list with a name is usage",
 			args: []string{"images", "ls", "alice/app"}, want: 2},
 		{name: "doctor with a failing probe is runtime",
@@ -114,6 +116,6 @@ func seedCorruptBlocks(t *testing.T, home string) {
 	imagesDir := defaultImagesDir(home)
 	id := writeBlocksFixture(t, imagesDir, "alice/data", []string{"one", "two"}, true)
 	writeSplitFile(t,
-		filepath.Join(imagesDir, "alice", "data", "blocks", id, "blk.000"),
+		filepath.Join(imagesDir, "alice", "data", "_blocks", id, "blk.000"),
 		"corrupted-and-longer")
 }

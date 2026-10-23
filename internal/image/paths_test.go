@@ -11,8 +11,8 @@ func TestOpenRepoLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.Owner != "alice" || repo.Repo != "app" {
-		t.Fatalf("name = %s/%s", repo.Owner, repo.Repo)
+	if repo.Name() != "alice/app" {
+		t.Fatalf("name = %s", repo.Name())
 	}
 	root := filepath.Join("/var/lib/images", "alice", "app")
 	if repo.Dir != root {
@@ -29,21 +29,21 @@ func TestOpenRepoLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if incr != filepath.Join(root, "incr", id+".sqsh") {
+	if incr != filepath.Join(root, "_incr", id+".sqsh") {
 		t.Fatalf("incr = %s", incr)
 	}
 	arch, err := repo.ArchivePath(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if arch != filepath.Join(root, "archives", id) {
+	if arch != filepath.Join(root, "_archives", id) {
 		t.Fatalf("archive = %s", arch)
 	}
 	hold, err := repo.HoldPath(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hold != filepath.Join(root, "hold", id) {
+	if hold != filepath.Join(root, "_hold", id) {
 		t.Fatalf("hold = %s", hold)
 	}
 }
@@ -85,8 +85,8 @@ func TestLibraryPathsRejectEscape(t *testing.T) {
 	if _, err := OpenRepo("  ", "alice/app"); err == nil {
 		t.Fatal("accepted empty images dir")
 	}
-	if _, err := OpenRepo(t.TempDir(), "alice/app/extra"); err == nil {
-		t.Fatal("accepted three segments")
+	if _, err := OpenRepo(t.TempDir(), "a/b/c/d/e/f"); err == nil {
+		t.Fatal("accepted six segments")
 	}
 }
 
@@ -96,7 +96,7 @@ func TestCheckRelRejectsDotDot(t *testing.T) {
 			t.Errorf("accepted %q", rel)
 		}
 	}
-	if err := checkRel("incr/0123456789abcdef.sqsh"); err != nil {
+	if err := checkRel("_incr/0123456789abcdef.sqsh"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -112,14 +112,14 @@ func TestSplitPayloadLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocksDir != filepath.Join(root, "blocks", id) {
+	if blocksDir != filepath.Join(root, "_blocks", id) {
 		t.Fatalf("blocks dir = %s", blocksDir)
 	}
 	block, err := repo.BlockPath(id, "blk.007")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if block != filepath.Join(root, "blocks", id, "blk.007") {
+	if block != filepath.Join(root, "_blocks", id, "blk.007") {
 		t.Fatalf("block = %s", block)
 	}
 	if fileConcatView != "image.sqsh-concat-view" {

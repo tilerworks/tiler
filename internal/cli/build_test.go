@@ -170,11 +170,14 @@ func isHex16(s string) bool {
 // viewTable is one writable merged view over the library image, with
 // its upper under the runtime tree.
 func viewTable(imagesDir, name, merged, upper string) []mountinfo.Mount {
-	owner, repo, _ := strings.Cut(name, "/")
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		panic(err)
+	}
 	return []mountinfo.Mount{{
 		Point:  merged,
 		FSType: "fuse.fuse-overlayfs",
-		Source: filepath.Join(imagesDir, owner, repo, image.ImageFile),
+		Source: filepath.Join(repo.Dir, image.ImageFile),
 		Upper:  upper,
 	}}
 }
@@ -242,7 +245,7 @@ func TestBuildSplitFlagProducesBlocks(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
 	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
 	if err != nil || len(names) < 2 {
 		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
@@ -269,7 +272,7 @@ func TestBuildSplitZeroYieldsSingleFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
 		t.Fatalf("explicit --split 0 left no image.sqsh: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "blocks")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_blocks")); !os.IsNotExist(err) {
 		t.Fatalf("--split 0 published blocks: %v", err)
 	}
 }
@@ -288,7 +291,7 @@ func TestBuildSplitFlagOverridesConfig(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
 	if _, err := os.Stat(blocksDir); err != nil {
 		t.Fatalf("CLI --split did not override config: %v", err)
 	}
@@ -307,7 +310,7 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 	}{
 		{name: "both mode flags", args: []string{"build", "--full", "--incremental", "--image", "alice/app", src}},
 		{name: "missing image name", args: []string{"build", src}},
-		{name: "bad image name", args: []string{"build", "--image", "nope", src}},
+		{name: "bad image name", args: []string{"build", "--image", "_foo", src}},
 		{name: "incr outside a view", args: []string{"build", "--incremental", "--image", "alice/app", src}},
 		{name: "short incr outside a view", args: []string{"build", "-i", "-I", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
@@ -355,7 +358,7 @@ func TestBuildFullIdempotentOnSameSource(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("idle rebuild rewrote meta:\n%s\n%s", before, after)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("idle rebuild archived the image: %v", err)
 	}
 }
@@ -540,7 +543,7 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	if meta.ID != fullID || len(meta.Chain) != 1 || meta.Chain[0].ID != fields[2] {
 		t.Fatalf("meta = %+v, stdout id = %s", meta, fields[2])
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "incr", fields[2]+".sqsh")); err != nil {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_incr", fields[2]+".sqsh")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -854,8 +857,11 @@ func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
 
 func assertBuiltFormat(t *testing.T, imagesDir, name, id, format, compression string) {
 	t.Helper()
-	owner, repo, _ := strings.Cut(name, "/")
-	meta, err := image.Load(filepath.Join(imagesDir, owner, repo, "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := image.Load(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}

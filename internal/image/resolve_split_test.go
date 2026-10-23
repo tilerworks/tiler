@@ -184,7 +184,7 @@ func chainBlocksEntry(parent string, bodies [][]byte) ChainEntry {
 	return entry
 }
 
-// mustBlocksDir returns blocks/<id>/ or fails the test.
+// mustBlocksDir returns _blocks/<id>/ or fails the test.
 func mustBlocksDir(t *testing.T, repo Repo, id string) string {
 	t.Helper()
 	dir, err := repo.BlocksDirPath(id)

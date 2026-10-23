@@ -65,35 +65,44 @@ func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attache
 	return OutcomeRemoved, nil
 }
 
-// resolveRemoveTarget parses the two accepted target shapes,
-// owner/repo and owner/repo/archives/<full-id>, and loads the meta
-// that carries the deprecated flag.
+// resolveRemoveTarget parses the two accepted target shapes: a
+// 1-to-5 segment library name, or <name>/_archives/<full-id>, and
+// loads the meta that carries the deprecated flag.
 func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, error) {
-	parts := strings.Split(target, "/")
+	parts := strings.Split(cleanImageName(target), "/")
+	archIdx := -1
+	for i, p := range parts {
+		if p == dirArchives {
+			archIdx = i
+			break
+		}
+	}
 	var (
 		rt  rmTarget
 		err error
 	)
-	switch len(parts) {
-	case 2:
+	switch {
+	case archIdx < 0:
 		rt.repo, err = OpenRepo(cfg.ImagesDir, target)
 		rt.dir = rt.repo.Dir
-	case 4:
-		if parts[2] != dirArchives {
+	case archIdx == len(parts)-2:
+		id := parts[len(parts)-1]
+		nameParts := parts[:archIdx]
+		if err = checkID(id); err != nil {
 			return rmTarget{}, Meta{}, invalidTarget(target)
 		}
-		if err = checkID(parts[3]); err != nil {
-			return rmTarget{}, Meta{}, invalidTarget(target)
-		}
-		rt.repo, err = OpenRepo(cfg.ImagesDir, parts[0]+"/"+parts[1])
+		rt.repo, err = OpenRepo(cfg.ImagesDir, strings.Join(nameParts, "/"))
 		if err == nil {
-			rt.archive = parts[3]
-			rt.dir = filepath.Join(rt.repo.Dir, dirArchives, parts[3])
+			rt.archive = id
+			rt.dir = filepath.Join(rt.repo.Dir, dirArchives, id)
 		}
 	default:
 		err = invalidTarget(target)
 	}
 	if err != nil {
+		if errors.Is(err, ErrInvalidName) || errors.Is(err, ErrInvalidPath) {
+			return rmTarget{}, Meta{}, invalidTarget(target)
+		}
 		return rmTarget{}, Meta{}, err
 	}
 	meta, err := Load(filepath.Join(rt.dir, fileMeta))
@@ -103,8 +112,8 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 	return rt, meta, nil
 }
 
-// invalidTarget reports a target that is neither owner/repo nor
-// owner/repo/archives/<full-id>. It wraps ErrInvalidName so command
+// invalidTarget reports a target that is neither a library name nor
+// <name>/_archives/<full-id>. It wraps ErrInvalidName so command
 // entries classify the refusal as a usage error.
 func invalidTarget(target string) error {
 	return fmt.Errorf("remove: invalid target %q: %w", target, ErrInvalidName)
@@ -248,8 +257,10 @@ func (t rmTarget) markDeprecated(meta Meta) error {
 }
 
 // delete removes the target scope. The whole-repository target
-// takes incr/, hold/, and archives/ with it; the archive target
-// only takes that one archive directory.
+// takes _incr/, _hold/, and _archives/ with it; the archive target
+// only takes that one archive directory. After a whole-repository
+// delete, empty ancestors under the library root are pruned, but
+// the library root itself is never removed.
 func (t rmTarget) delete() error {
 	if t.archive != "" {
 		if err := os.RemoveAll(t.dir); err != nil {
@@ -261,6 +272,27 @@ func (t rmTarget) delete() error {
 	if err := os.RemoveAll(t.repo.Dir); err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
-	removeEmpty(filepath.Dir(t.repo.Dir))
+	imagesDir := t.repo.Dir
+	for range t.repo.Segments {
+		imagesDir = filepath.Dir(imagesDir)
+	}
+	removeEmptyAncestors(filepath.Dir(t.repo.Dir), imagesDir)
 	return nil
+}
+
+// removeEmptyAncestors removes empty directories walking from dir up
+// toward, but not including, stop (typically the library root).
+func removeEmptyAncestors(dir, stop string) {
+	dir = filepath.Clean(dir)
+	stop = filepath.Clean(stop)
+	for dir != stop {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = parent
+	}
 }

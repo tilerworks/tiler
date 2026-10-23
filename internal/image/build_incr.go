@@ -24,7 +24,7 @@ const maxStackDepth = 8
 type IncrRequest struct {
 	// Config supplies the image library location and split policy.
 	Config config.Config
-	// Name is the resolved owner/repo image name.
+	// Name is the resolved 1-to-5 segment image name.
 	Name string
 	// Format, when set, must match the active image container type.
 	// Empty inherits that type. A mismatch is ErrFormatConflict and
@@ -61,8 +61,8 @@ type IncrRequest struct {
 type IncrResult struct {
 	// ID is the first 16 hex digits of the layer sha256.
 	ID string
-	// Path is the published layer: incr/<id>.sqsh for a single-file
-	// layer, or blocks/<id>/ when SplitSize is positive.
+	// Path is the published layer: _incr/<id>.sqsh for a single-file
+	// layer, or _blocks/<id>/ when SplitSize is positive.
 	Path string
 	// SHA256 is the 64 hex digit layer digest.
 	SHA256 string
@@ -76,9 +76,9 @@ type IncrResult struct {
 // the upper under the image layout with rename, never copy, so
 // device nodes keep their inode type; the upper is moved back even
 // when packing fails. The container packer keeps whiteout and
-// opaque markers. An unsplit layer is renamed into incr/
-// first. A split layer is packed outside incr/ and published as
-// blocks/<id>/, so the blocks layout never gains an incr/ directory.
+// opaque markers. An unsplit layer is renamed into _incr/
+// first. A split layer is packed outside _incr/ and published as
+// _blocks/<id>/, so the blocks layout never gains an _incr/ directory.
 // Metadata is replaced atomically afterwards; a failed metadata
 // replace deletes the fresh layer and keeps the old metadata. A
 // digest already in the chain is an idempotent success.
@@ -133,6 +133,9 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 func validateIncr(req IncrRequest) (Repo, Meta, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
+		return Repo{}, Meta{}, err
+	}
+	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
 		return Repo{}, Meta{}, err
 	}
 	info, err := os.Stat(req.Upper)
@@ -269,7 +272,7 @@ func ensureIncrSpace(req IncrRequest, repo Repo, src string) error {
 }
 
 // packIncrTemp packs the staged upper into a synced temporary file
-// inside the incr directory of the repository.
+// inside the _incr directory of the repository.
 func packIncrTemp(repo Repo, src string, run ToolRunner, typ, compression string) (string, error) {
 	dir := filepath.Join(repo.Dir, dirIncr)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -296,7 +299,7 @@ func packIncrTemp(repo Repo, src string, run ToolRunner, typ, compression string
 }
 
 // packIncrStaged packs a blocks incr into a cache staging file. The
-// packed bytes stay outside incr/, which is not part of a blocks
+// packed bytes stay outside _incr/, which is not part of a blocks
 // layout. The caller removes stage after the split finishes.
 func packIncrStaged(cacheDir, src string, run ToolRunner, typ, compression string) (stage, tmp string, err error) {
 	stage, err = makeStagingDir(cacheDir)
@@ -328,8 +331,8 @@ func packIncrImage(run ToolRunner, src, dst, typ, compression string) error {
 
 // finishIncr hashes the packed layer, appends the chain entry, and
 // publishes layer and metadata. A positive SplitSize splits the
-// packed bytes into blocks/<id>/; otherwise the layer lands as
-// incr/<id>.sqsh.
+// packed bytes into _blocks/<id>/; otherwise the layer lands as
+// _incr/<id>.sqsh.
 func finishIncr(
 	repo Repo,
 	req IncrRequest,
@@ -402,9 +405,9 @@ func finishIncrSingle(
 	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
 }
 
-// finishIncrBlocks splits the packed layer into blocks/<id>/ and
+// finishIncrBlocks splits the packed layer into _blocks/<id>/ and
 // records the block manifest on the new chain entry. Digest and size
-// stay those of the whole logical squashfs; no incr/<id>.sqsh is
+// stay those of the whole logical squashfs; no _incr/<id>.sqsh is
 // written.
 func finishIncrBlocks(
 	repo Repo,
@@ -584,7 +587,7 @@ func runIncrSmoke(req IncrRequest, path string, entry ChainEntry, format Format)
 	return nil
 }
 
-// assembleIncrBlocks materializes blocks/<id>/ into the content-
+// assembleIncrBlocks materializes _blocks/<id>/ into the content-
 // addressed cache so the smoke gate can mount one image file.
 func assembleIncrBlocks(cacheDir, blocksDir string, entry ChainEntry) (string, error) {
 	files := make([]BlockFile, 0, len(entry.Blocks))

@@ -141,7 +141,7 @@ tiler session close feature                # 逆序卸载，记录保留
   SLA；可选的 contrib 辅助工具 `concatfs` 与 `slowfs` 一并探测，
   缺失时输出构建指引，tiler 从不自动安装。存在 fail 探测项即
   退出码 1；warn 与 info 不影响退出码。
-- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` 把准备好
+- `tiler build [--full|-f|--incremental|-i] [--image|-I <name>] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` 把准备好
   的目录打成全量镜像；位于可写合并视图内时，默认把 upper 追加为
   一个增量层。`--format` 优先于 `image_format`，再优先于工具链
   推断：双栈齐全选 squashfs，仅 erofs 选 erofs，仅 squashfs 选
@@ -149,15 +149,15 @@ tiler session close feature                # 逆序卸载，记录保留
   格式的默认压缩。squashfs 默认 zstd。erofs 在 `mkfs.erofs` 提供
   zstd 时默认 zstd，否则依次用 lz4、gzip。双栈主机上不带这些 flag、也不写配置时，
   镜像仍是 squashfs 加 zstd。增量构建继承 base 的格式与压缩；与
-  base 冲突的 flag 是用法错误。erofs 不接受 xz。普通目录默认全量构建，必须显式给出 `owner/repo`
-  名字；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的
+  base 冲突的 flag 是用法错误。erofs 不接受 xz。普通目录默认全量构建，必须显式给出
+  1 到 5 段的镜像名；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的
   增量层加上当前 upper 已超过 base image 的一半，默认改为全量重建，
   并警告可用 `--incremental`（或 `-i`）继续追加增量。构建
-  成功打印一行：`full <owner>/<repo> <id>` 或
-  `incr <owner>/<repo> <id>`。当 `split_size`（或
+  成功打印一行：`full <name> <id>` 或
+  `incr <name> <id>`。当 `split_size`（或
   `tiler build --split <size>`）大于零时，全量与增量构建都按该块
   大小切成字节块入库，而不再是单个 `image.sqsh` /
-  `incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
+  `_incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
   blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
 - `tiler images list [--archives] [--json]` 把每个活跃镜像打成
   对齐的一行：名字、id、创建日期、体积、链长、载荷形态
@@ -166,10 +166,11 @@ tiler session close feature                # 逆序卸载，记录保留
   `--archives` 在列表每一行下面补上停放的链 id。`--json` 改为
   渲染一份机器可读文档，blocks 活跃位新增 `form` 字段
   （契约只增不改）。
-- `tiler images show <owner/repo> [--json]` 输出一个活跃镜像的
-  多行记录：身份、一行 `format`（例如 `squashfs/zstd`）、每一层
-  增量、blocks 载荷块数（若有），以及停放的归档和 hold id。
-  `--json` 把同一仓库渲染成一个对象，其中包含 `format`。
+- `tiler images show <name> [--json]` 输出一个活跃镜像的多行记录。
+  `<name>` 是 1 到 5 段的库名。记录包括身份、一行 `format`（例如
+  `squashfs/zstd`）、每一层增量、blocks 载荷块数（若有），以及停放的
+  归档和 hold id。`--json` 把同一仓库渲染成一个对象，其中包含
+  `format`。
 - `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
   与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
   一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
@@ -178,8 +179,9 @@ tiler session close feature                # 逆序卸载，记录保留
   载且超龄的 active 记录自动转 closed，进入之后的删除范围。
   唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
   都会被拆除视图、清理 runtime 并删除记录。
-- `tiler images remove <owner/repo[/archives/<id>]>` 第一次调用标记
-  废弃，第二次物理删除。仍有引用时两次都拒绝。
+- `tiler images remove <name | name/_archives/<id>>` 第一次调用标记
+  废弃，第二次物理删除。`<name>` 是 1 到 5 段的库名；归档目标使用
+  `/_archives/` 与 16 位十六进制链 id。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
   写：每个 squashfs 成员先只读挂到该 session 的
   `runtime/m<seq>/` 树下转接点，再由 `fuse-overlayfs` 叠加在
@@ -188,21 +190,20 @@ tiler session close feature                # 逆序卸载，记录保留
   下文「分块存储」）。同一视图的健康挂载提示 `already
   mounted`；身份不一致报冲突错误，绝不静默重挂。
   `--read-only` 把单镜像直接挂在 `<dir>`，带增量链时仅以
-  lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或
-  `owner/repo` 库引用：库引用经活跃位 meta 解析为全量镜像加
-  增量链，一个栈至多八个成员；参数同时是合法名字与真实文件
-  时，库引用优先。库成员默认先做 size 加 mtime 快速校验；
-  `--verify` 改为对每个记录在案的 sha256 摘要整体重验（文件
-  路径形态没有记录摘要）。`--subdir <path>` 把镜像内一个子
-  目录暴露为挂载根：缺少该子目录的成员不进栈，全部缺失时挂载
-  失败且不创建任何东西。子树内没有 `.git` 时，工作区 git
-  命令会向上寻到挂载点之外，因此 subdir 形态面向独立子仓库
-  或非 git 内容。配置 `cache_enabled`（默认关；`--cache` 对
-  单次调用开启）后，每个成员先按内容摘要拷入 `cache_dir` 并
-  整体校验通过才挂载，NAS 上的镜像因此从本地副本挂载，而挂
-  载表身份仍指向原始库路径。目标必须是当前用户拥有的空目录，
-  位于运行时树与全部保留目录之外，也不能是这些树的祖先（挂载
-  不得覆盖 `sessions_dir`、`images_dir`、`cache_dir` 或
+  lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或 1 到 5
+  段的库名：库名经活跃位 meta 解析为全量镜像加增量链，一个栈至多
+  八个成员；清理后的路径若存在且是普通文件，则文件优先于库名。
+  库成员默认先做 size 加 mtime 快速校验；`--verify` 改为对每个
+  记录在案的 sha256 摘要整体重验（文件路径形态没有记录摘要）。
+  `--subdir <path>` 把镜像内一个子目录暴露为挂载根：缺少该子目录
+  的成员不进栈，全部缺失时挂载失败且不创建任何东西。子树内没有
+  `.git` 时，工作区 git 命令会向上寻到挂载点之外，因此 subdir
+  形态面向独立子仓库或非 git 内容。配置 `cache_enabled`（默认关；
+  `--cache` 对单次调用开启）后，每个成员先按内容摘要拷入
+  `cache_dir` 并整体校验通过才挂载，NAS 上的镜像因此从本地副本
+  挂载，而挂载表身份仍指向原始库路径。目标必须是当前用户拥有的
+  空目录，位于运行时树与全部保留目录之外，也不能是这些树的祖先
+  （挂载不得覆盖 `sessions_dir`、`images_dir`、`cache_dir` 或
   `$HOME/.tiler`）。每次挂载都在引擎执行前
   先写进 session 记录（write-ahead）：`-s, --session <name>` 挂进
   用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
@@ -262,12 +263,12 @@ split_size: 2G    # tiler build 的默认块大小；0 = 关
 ```
 
 ```bash
-tiler build --split 64k --full --image owner/repo /path/to/src
+tiler build --split 64k --full --image alice/app /path/to/src
 tiler build --split 0 ...   # 本次构建不分块
 ```
 
 有效块大小大于零时，**全量与每一层增量**都存为定长字节块
-（`blocks/<layer-id>/blk.NNN`）。元数据上的 digest/size 仍描述
+（`_blocks/<layer-id>/blk.NNN`）。元数据上的 digest/size 仍描述
 该层整份逻辑 squashfs。挂载时对每层重组进
 `<cache_dir>/<layer-sha256>.sqsh`（逐块校验再校验整体摘要），再按
 newest-incr-first 走与单文件链相同的 overlay。缓存目录需要容纳

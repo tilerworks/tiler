@@ -159,7 +159,7 @@ Available now:
   looked up, with build guidance when missing — tiler never
   installs them automatically. Any failed probe exits 1; warn and
   info results never affect the exit code.
-- `tiler build [--full|-f|--incremental|-i] [--image|-I owner/repo] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` packs a
+- `tiler build [--full|-f|--incremental|-i] [--image|-I <name>] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` packs a
   prepared directory into a full image, or, inside a writable merged
   view, appends the upper layer as one increment. `--format` wins
   over `image_format`, which wins over toolchain inference: both
@@ -172,11 +172,12 @@ Available now:
   image stays squashfs with zstd. An incremental build inherits the
   base format and compression; a flag that disagrees is a usage
   error. erofs does not accept xz. A plain directory
-  defaults to a full build and needs the explicit `owner/repo` name;
-  a writable merged view defaults to an incremental build and infers
-  the name from the mounted image. If the recorded incremental layers
-  plus the live upper already exceed half the base image, that default
-  becomes a full rebuild and a warning names `--incremental` to keep appending.
+  defaults to a full build and needs an explicit 1-to-5 segment
+  image name; a writable merged view defaults to an incremental
+  build and infers the name from the mounted image. If the recorded
+  incremental layers plus the live upper already exceed half the base
+  image, that default becomes a full rebuild and a warning names
+  `--incremental` to keep appending.
   The packed directory must stay outside every reserved tree and must
   not cover `images_dir`, `sessions_dir`, `cache_dir`, or
   `$HOME/.tiler`; comparison uses real paths, so a symlink into or
@@ -190,10 +191,10 @@ Available now:
   With `--image` naming a different library image, a path under a
   live view (often a subdirectory) packs as that image's full source.
   Success prints one line:
-  `full <owner>/<repo> <id>` or `incr <owner>/<repo> <id>`. With
+  `full <name> <id>` or `incr <name> <id>`. With
   `split_size` (or `tiler build --split <size>`) greater than zero,
   full and incremental builds store verified byte blocks instead of
-  one `image.sqsh` / `incr/<id>.sqsh` (see Split storage below). The
+  one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
 - `tiler images list [--archives] [--json]` lists every active image
@@ -203,11 +204,12 @@ Available now:
   trail that row. `--archives` adds those parked chain ids under
   each row. `--json` renders one machine-readable document instead,
   with the additive `form` field for blocks actives.
-- `tiler images show <owner/repo> [--json]` prints a multi-line
-  record for one active image: identity, a `format` line such as
-  `squashfs/zstd`, each chain layer, the blocks payload count when
-  present, and the parked archive and hold ids. `--json` renders
-  the same repository as one object, including `format`.
+- `tiler images show <name> [--json]` prints a multi-line record for
+  one active image. `<name>` is a 1-to-5 segment library name. The
+  record covers identity, a `format` line such as `squashfs/zstd`,
+  each chain layer, the blocks payload count when present, and the
+  parked archive and hold ids. `--json` renders the same repository
+  as one object, including `format`.
 - `tiler images gc` promotes held chains that nothing references
   into archives, then deletes archives beyond `--keep-versions` or
   `--max-age`. Zero means that rule is unlimited. The same pass
@@ -219,9 +221,11 @@ Available now:
   eligible for a later removal. The one exception is a `--rm`
   active record whose views are all dead: it is torn down, its
   runtime purged, and its record removed whatever its age.
-- `tiler images remove <owner/repo[/archives/<id>]>` deprecates the
-  target on the first call and removes it on the second. Both calls
-  refuse while a reference pins the target.
+- `tiler images remove <name | name/_archives/<id>>` deprecates the
+  target on the first call and removes it on the second. `<name>` is
+  a 1-to-5 segment library name; an archive target uses
+  `/_archives/` and a 16-hex chain id. Both calls refuse while a
+  reference pins the target.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
   under the session's `runtime/m<seq>/` tree, and `fuse-overlayfs`
@@ -233,13 +237,13 @@ Available now:
   identity is a conflict error, never a silent restack.
   `--read-only` mounts a single image straight onto `<dir>`, or
   merges a chain lowerdir-only.
-  `<image>` is the path of one squashfs file, or an `owner/repo`
-  library reference that resolves through the active metadata into
-  the full image plus its incremental chain, at most eight members
-  in one stack; when an argument is both a valid name and a real
-  file, the library reference wins. Library members pass a quick
-  size and mtime check first; `--verify` re-hashes every recorded
-  sha256 digest instead (a file path records none).
+  `<image>` is the path of one squashfs file, or a 1-to-5 segment
+  library name that resolves through the active metadata into the
+  full image plus its incremental chain, at most eight members in
+  one stack; when the cleaned path exists as a regular file, that
+  file wins over a library name. Library members pass a quick size
+  and mtime check first; `--verify` re-hashes every recorded sha256
+  digest instead (a file path records none).
   `--subdir <path>` exposes one image subdirectory as the mount
   root: members missing the subdirectory drop out of the stack,
   and when no member has it the mount fails before anything is
@@ -329,13 +333,13 @@ split_size: 2G    # default for tiler build; 0 = off
 ```
 
 ```bash
-tiler build --split 64k --full --image owner/repo /path/to/src
+tiler build --split 64k --full --image alice/app /path/to/src
 tiler build --split 0 ...   # this build stays single-file
 ```
 
 When the effective size is greater than zero, **full and each
 incremental layer** are stored as fixed-size byte blocks under
-`blocks/<layer-id>/blk.NNN`. Digests and sizes on metadata still
+`_blocks/<layer-id>/blk.NNN`. Digests and sizes on metadata still
 describe the whole logical squashfs per layer. Mounting reassembles
 every layer into `<cache_dir>/<layer-sha256>.sqsh` (each block
 verified, then the whole digest) and stacks them newest-incr-first

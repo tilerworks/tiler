@@ -12,7 +12,6 @@ import (
 const (
 	hdiutilName    = "hdiutil"
 	dmgShadowFile  = "upper.shadow"
-	dmgVolnameSep  = "/"
 	dmgRuntimeName = "runtime"
 )
 
@@ -34,12 +33,12 @@ func DMGShadowPath(sessionsDir, name string, seq int) (string, error) {
 
 // HdiutilCreateArgv builds hdiutil create for a directory source.
 // compression ulfo, ulmo, and udro become ULFO, ULMO, and UDRO.
-// An empty compression is ULFO. volname is the repo segment of an
-// owner/repo name, because a slash cannot be a volume label. The
+// An empty compression is ULFO. volname is the last segment of an
+// image name, because a slash cannot be a volume label. The
 // filesystem is APFS, or HFS+ for every new image when this OS
 // cannot use attach -shadow on an APFS image. That choice is not
 // a configuration key.
-func HdiutilCreateArgv(src, compression, repo, temp string) ([]string, error) {
+func HdiutilCreateArgv(src, compression, volname, temp string) ([]string, error) {
 	if err := requireDMGPath("source", src); err != nil {
 		return nil, err
 	}
@@ -50,7 +49,7 @@ func HdiutilCreateArgv(src, compression, repo, temp string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	label, err := dmgVolname(repo)
+	label, err := dmgVolname(volname)
 	if err != nil {
 		return nil, err
 	}
@@ -203,20 +202,12 @@ func dmgFormatCode(compression string, emptyIsDefault bool) (string, error) {
 	}
 }
 
-// dmgVolname is the label hdiutil can pass to -volname. An
-// owner/repo name contributes its repo segment. Colon and slash
-// are not volume labels.
-func dmgVolname(repo string) (string, error) {
-	label := repo
-	if strings.Contains(repo, dmgVolnameSep) {
-		owner, rest, _ := strings.Cut(repo, dmgVolnameSep)
-		if owner == "" || rest == "" || strings.Contains(rest, dmgVolnameSep) {
-			return "", fmt.Errorf("container: dmg volume name %q is not a label", repo)
-		}
-		label = rest
-	}
+// dmgVolname is the label hdiutil can pass to -volname. Callers
+// pass the last segment of an image name. Colon and slash are not
+// volume labels.
+func dmgVolname(label string) (string, error) {
 	if label == "" || strings.ContainsAny(label, `/:`) || badDMGLabelRune(label) {
-		return "", fmt.Errorf("container: dmg volume name %q is not a label", repo)
+		return "", fmt.Errorf("container: dmg volume name %q is not a label", label)
 	}
 	return label, nil
 }

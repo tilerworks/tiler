@@ -99,9 +99,9 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	wantTree := listTree(t, src)
 	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
 
-	// Layout: blocks/<id>/blk.NNN plus the concat description file
+	// Layout: _blocks/<id>/blk.NNN plus the concat description file
 	// beside them, listing the block names in order.
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "blocks", res.ID)
+	blocksDir := filepath.Join(imagesDir, "alice", "data", "_blocks", res.ID)
 	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
 	if err != nil || len(names) < 2 {
 		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
@@ -221,13 +221,13 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 		t.Fatalf("umount output = %q", out)
 	}
 
-	// The incr layer lives under blocks/<id>/, never incr/.
-	incrBlocks := filepath.Join(imagesDir, "alice", "data", "blocks", incrID)
+	// The incr layer lives under _blocks/<id>/, never _incr/.
+	incrBlocks := filepath.Join(imagesDir, "alice", "data", "_blocks", incrID)
 	if _, err := os.Stat(filepath.Join(incrBlocks, "blk.000")); err != nil {
 		t.Fatalf("blocks incr layout: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "data", "incr")); !os.IsNotExist(err) {
-		t.Fatalf("blocks incr left incr/: %v", err)
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "data", "_incr")); !os.IsNotExist(err) {
+		t.Fatalf("blocks incr left _incr/: %v", err)
 	}
 
 	// A fresh mount reassembles full + incr and shows incr bytes.
@@ -326,7 +326,7 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	canonical := filepath.Join(imagesDir, "alice", "data", image.ImageFile)
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "blocks", res.ID)
+	blocksDir := filepath.Join(imagesDir, "alice", "data", "_blocks", res.ID)
 
 	view := filepath.Join(work, "concat-view")
 	deferForceUmount(t, sessionsRoot, view)
@@ -498,7 +498,7 @@ func TestSplitGuidanceWalkthrough(t *testing.T) {
 	if _, err := os.Stat(imagePath); err != nil {
 		t.Errorf("the build left no single-file image: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "data", "blocks")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "data", "_blocks")); !os.IsNotExist(err) {
 		t.Errorf("split-off build published blocks: %v", err)
 	}
 

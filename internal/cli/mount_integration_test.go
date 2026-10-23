@@ -543,7 +543,7 @@ func TestMountCascadingChain(t *testing.T) {
 	umountCmd(t, lib, view3)
 
 	// A missing chain member file fails the mount with a clear error.
-	layerPath := filepath.Join(imagesDir, "alice", "app", "incr", layer1+".sqsh")
+	layerPath := filepath.Join(imagesDir, "alice", "app", "_incr", layer1+".sqsh")
 	if err := os.Remove(layerPath); err != nil {
 		t.Fatal(err)
 	}

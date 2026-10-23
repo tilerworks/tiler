@@ -151,12 +151,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the mer
 '
 
 # The merge retires the old full + chain. verify_dir is still live, so its
-# implicit session pins the retired chain: it lands in hold/<old-id> (still
+# implicit session pins the retired chain: it lands in _hold/<old-id> (still
 # serving the live view through open fds) rather than being freed at once.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
 	"$tiler_bin" images show alice/app >ls3.out 2>ls3.err &&
 	test_grep -E "^    $id1$" ls3.out &&
-	test_path_is_file "$img_dir/hold/$id1/image.sqsh"
+	test_path_is_file "$img_dir/_hold/$id1/image.sqsh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '

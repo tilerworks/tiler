@@ -18,7 +18,7 @@ import (
 type DMGRequest struct {
 	// Config supplies the image library location.
 	Config config.Config
-	// Name is the explicit owner/repo image name.
+	// Name is the explicit 1-to-5 segment image name.
 	Name string
 	// SrcDir is the directory hdiutil create packs. Empty for a bake.
 	SrcDir string
@@ -27,7 +27,7 @@ type DMGRequest struct {
 	// Its post-convert digest is the bake content fingerprint.
 	Shadow string
 	// MountedID is the full id this shadow was attached to. When
-	// hold/<id>/image.dmg exists, convert reads that file instead of
+	// _hold/<id>/image.dmg exists, convert reads that file instead of
 	// the active image.dmg. Empty selects a held copy Refs still
 	// pins once the active id is a newer image.
 	MountedID string
@@ -65,6 +65,9 @@ func BuildDMG(req DMGRequest) (FullResult, error) {
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
+	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
+		return FullResult{}, err
+	}
 	if req.Shadow != "" {
 		return bakeDMG(repo, req)
 	}
@@ -100,7 +103,8 @@ func createDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err != nil {
 		return FullResult{}, err
 	}
-	argv, consErr := container.HdiutilCreateArgv(req.SrcDir, comp, req.Name, tmp)
+	vol := repo.Segments[len(repo.Segments)-1]
+	argv, consErr := container.HdiutilCreateArgv(req.SrcDir, comp, vol, tmp)
 	if err := runDMG(req, argv, consErr, tmp); err != nil {
 		return FullResult{}, err
 	}
@@ -181,7 +185,7 @@ func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult
 }
 
 // bakeSource is the disk image the live shadow belongs to. Publish
-// moves a pinned active image.dmg into hold/<id> and puts the new
+// moves a pinned active image.dmg into _hold/<id> and puts the new
 // bytes at the active slot. The shadow stays the delta for the held
 // base, so a later bake must not open the new active file.
 func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (string, string, error) {
@@ -210,7 +214,7 @@ func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (stri
 	return activePath, active.Format.Compression, nil
 }
 
-// holdDMG is hold/<id>/image.dmg when that held copy exists.
+// holdDMG is _hold/<id>/image.dmg when that held copy exists.
 func holdDMG(repo Repo, id string) (string, string, bool, error) {
 	hold, err := repo.HoldPath(id)
 	if err != nil {
@@ -364,8 +368,7 @@ func dmgMeta(repo Repo, req DMGRequest, tmp, compression, content string) (Meta,
 		now = time.Now
 	}
 	meta := Meta{
-		Owner:         repo.Owner,
-		Repo:          repo.Repo,
+		Name:          repo.Name(),
 		ID:            ID(sum),
 		Kind:          KindFull,
 		Format:        Format{Type: FormatDMG, Compression: compression},
