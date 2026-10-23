@@ -99,13 +99,28 @@ type Member struct {
 
 // ResolveMount turns a mount argument into what a mount consumes:
 // the ordered stack member list, or the manifest of a split payload.
-// An argument that parses as a legal library name is always a
-// library reference and never falls back to a file path; anything
-// else is a file path that must name an existing regular file.
-// Library resolution reads only the active slot and follows the
-// payload kind its metadata names; archives and delayed-archive
-// holds never participate.
+// An existing regular file wins over a library name: filepath.Clean
+// the argument, then os.Stat. A regular file uses the file resolver.
+// os.ErrNotExist, or a path that exists but is not a regular file,
+// falls through to ParseName and library resolution. Any other Stat
+// error is a runtime error and is not treated as a library name.
+// Relative paths are Stat'd without forcing Abs; resolveFile still
+// absolutizes when opening. Library resolution reads only the active
+// slot and follows the payload kind its metadata names; archives and
+// delayed-archive holds never participate.
 func ResolveMount(cfg config.Config, arg string) (Target, error) {
+	cleaned := filepath.Clean(arg)
+	info, err := os.Stat(cleaned)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return resolveFile(cleaned)
+	case err == nil:
+		// Exists but not a regular file — try a library name.
+	case errors.Is(err, os.ErrNotExist):
+		// Missing path — try a library name.
+	default:
+		return Target{}, fmt.Errorf("mount: %w", err)
+	}
 	if _, err := ParseName(arg); err == nil {
 		return resolveLibrary(cfg, arg)
 	}
@@ -294,9 +309,10 @@ func resolveFile(arg string) (Target, error) {
 	return Target{Members: []Member{{Path: abs}}}, nil
 }
 
-// fileFormError reports a file-path failure. When the argument also
-// looks like a library reference (a relative slash-separated name
-// that is not legal), the error names why both forms missed.
+// fileFormError reports a file-path failure after the library-name
+// path was skipped or rejected. When the argument is a relative
+// slash-separated name that is not a legal library name, the error
+// also names why the library form missed.
 func fileFormError(arg string, err error) error {
 	base := fmt.Errorf("mount: %w: %w", ErrNotImageFile, err)
 	if !strings.Contains(arg, "/") || filepath.IsAbs(arg) {

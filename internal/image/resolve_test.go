@@ -115,7 +115,8 @@ type fileFormCase struct {
 func TestResolveMountFileForm(t *testing.T) {
 	dir := t.TempDir()
 	// Underscore-prefixed names stay illegal library names, so they
-	// still exercise the file-path branch under name-first ResolveMount.
+	// exercise the file-path branch: Stat finds a regular file, or
+	// ParseName rejects the library fallback.
 	img := filepath.Join(dir, "_img.sqsh")
 	if err := os.WriteFile(img, []byte("raw squashfs bytes"), 0o644); err != nil {
 		t.Fatal(err)
@@ -463,21 +464,85 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 	}
 }
 
-func TestResolveMountPrefersLibraryOverExistingFile(t *testing.T) {
+func TestResolveMountPrefersExistingFileOverLibrary(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	_ = seedChain(t, repo, 0)
 	work := t.TempDir()
 	t.Chdir(work)
 	if err := os.MkdirAll("alice", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join("alice", "app"), []byte("raw"), 0o644); err != nil {
+	file := filepath.Join(work, "alice", "app")
+	if err := os.WriteFile(file, []byte("raw"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
-		t.Fatalf("library form must win over the same-shaped file: %v", err)
+		t.Fatalf("existing regular file must win over the library name: %v", err)
+	}
+	if got.Library {
+		t.Fatalf("target = %+v, want the file form", got)
+	}
+	assertTarget(t, got, Target{Members: []Member{{Path: file}}})
+}
+
+func TestResolveMountExistingFileWinsWithoutLibrary(t *testing.T) {
+	cfg := buildConfig(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.MkdirAll("alice", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(work, "alice", "app")
+	if err := os.WriteFile(file, []byte("raw"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatalf("legal name that is an existing file must mount as a file: %v", err)
+	}
+	if got.Library {
+		t.Fatalf("target = %+v, want the file form", got)
+	}
+	assertTarget(t, got, Target{Members: []Member{{Path: file}}})
+}
+
+func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
+	cfg := buildConfig(t)
+	repo := mustRepo(t, cfg)
+	meta := seedChain(t, repo, 0)
+	work := t.TempDir()
+	t.Chdir(work)
+	got, err := ResolveMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTarget(t, got, Target{
+		Library: true,
+		Name:    "alice/app",
+		Format:  FormatSquashfs,
+		Members: []Member{{
+			Path:      repo.ImagePath(),
+			Size:      meta.Size,
+			MtimeUnix: meta.MtimeUnix,
+			SHA256:    meta.SHA256,
+		}},
+	})
+}
+
+func TestResolveMountDirectoryFallsThroughToLibrary(t *testing.T) {
+	cfg := buildConfig(t)
+	repo := mustRepo(t, cfg)
+	meta := seedChain(t, repo, 0)
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.MkdirAll(filepath.Join("alice", "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatalf("directory must not take the file branch: %v", err)
 	}
 	if !got.Library {
 		t.Fatalf("target = %+v, want the library form", got)
@@ -495,18 +560,33 @@ func TestResolveMountPrefersLibraryOverExistingFile(t *testing.T) {
 	})
 }
 
-func TestResolveMountLegalNameNeverFallsBackToFile(t *testing.T) {
+func TestResolveMountStatErrorIsNotLibrary(t *testing.T) {
 	cfg := buildConfig(t)
+	repo := mustRepo(t, cfg)
+	_ = seedChain(t, repo, 0)
 	work := t.TempDir()
 	t.Chdir(work)
-	if err := os.MkdirAll("alice", 0o755); err != nil {
+	if err := os.Mkdir("alice", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join("alice", "app"), []byte("raw"), 0o644); err != nil {
+	if err := os.Chmod("alice", 0o000); err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod("alice", 0o755)
+	})
+	probe := filepath.Join("alice", "app")
+	if _, err := os.Stat(probe); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Skip("cannot provoke a non-NotExist Stat error on this platform")
 	}
 	_, err := ResolveMount(cfg, "alice/app")
-	if !errors.Is(err, ErrUnknownImage) {
-		t.Fatalf("err = %v, want %v", err, ErrUnknownImage)
+	if err == nil {
+		t.Fatal("want a Stat runtime error, got nil")
+	}
+	if errors.Is(err, ErrUnknownImage) || errors.Is(err, ErrNotImageFile) {
+		t.Fatalf("err = %v, must not fall through to library or file-form sentinels", err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want a non-NotExist Stat error", err)
 	}
 }
