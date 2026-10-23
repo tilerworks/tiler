@@ -55,9 +55,9 @@ func storeFixtureMeta(t *testing.T, repoDir string, meta image.Meta) {
 }
 
 // fixtureMeta is the shared metadata head of the split fixtures.
-func fixtureMeta(owner, repo string) image.Meta {
+func fixtureMeta(name string) image.Meta {
 	return image.Meta{
-		Owner: owner, Repo: repo, Version: "v1",
+		Name: name, Version: "v1",
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd},
 		MtimeUnix: splitMtime.Unix(), CreatedAt: splitMtime,
@@ -71,20 +71,20 @@ func fixtureMeta(owner, repo string) image.Meta {
 // document. It returns the whole-image id.
 func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, view bool) string {
 	t.Helper()
-	owner, repo, ok := strings.Cut(name, "/")
-	if !ok {
-		t.Fatalf("fixture name %q is not owner/repo", name)
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var whole []byte
 	for _, body := range bodies {
 		whole = append(whole, body...)
 	}
 	wholeSum := sha256.Sum256(whole)
-	meta := fixtureMeta(owner, repo)
+	meta := fixtureMeta(repo.Name())
 	meta.ID = image.ID(wholeSum)
 	meta.Size = int64(len(whole))
 	meta.SHA256 = hex.EncodeToString(wholeSum[:])
-	blocksDir := filepath.Join(imagesDir, owner, repo, "_blocks", meta.ID)
+	blocksDir := filepath.Join(repo.Dir, "_blocks", meta.ID)
 	var names []string
 	for i, body := range bodies {
 		block := fmt.Sprintf("blk.%03d", i)
@@ -99,7 +99,7 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 		writeSplitFile(t, filepath.Join(blocksDir, concatViewFile),
 			strings.Join(names, "\n")+"\n")
 	}
-	storeFixtureMeta(t, filepath.Join(imagesDir, owner, repo), meta)
+	storeFixtureMeta(t, repo.Dir, meta)
 	return meta.ID
 }
 
@@ -110,9 +110,9 @@ func writeBlocksChainFixture(
 	t *testing.T, imagesDir, name string, fullBodies, layerBodies []string,
 ) (fullSum, layerSum string) {
 	t.Helper()
-	owner, repo, ok := strings.Cut(name, "/")
-	if !ok {
-		t.Fatalf("fixture name %q is not owner/repo", name)
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
 	}
 	fullID := writeBlocksFixture(t, imagesDir, name, fullBodies, true)
 	var layerWhole []byte
@@ -122,9 +122,8 @@ func writeBlocksChainFixture(
 	layerDigest := sha256.Sum256(layerWhole)
 	layerSum = hex.EncodeToString(layerDigest[:])
 	layerID := image.ID(layerDigest)
-	blocksDir := filepath.Join(imagesDir, owner, repo, "_blocks", layerID)
-	metaPath := filepath.Join(imagesDir, owner, repo, "meta.yaml")
-	meta, err := image.Load(metaPath)
+	blocksDir := filepath.Join(repo.Dir, "_blocks", layerID)
+	meta, err := image.Load(filepath.Join(repo.Dir, "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +144,7 @@ func writeBlocksChainFixture(
 		})
 	}
 	meta.Chain = []image.ChainEntry{entry}
-	storeFixtureMeta(t, filepath.Join(imagesDir, owner, repo), meta)
+	storeFixtureMeta(t, repo.Dir, meta)
 	return meta.SHA256, layerSum
 }
 
@@ -369,7 +368,7 @@ func TestSessionUmountInjectsLibraryOwnership(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	f := withMountSeams(t, nil)
 	f.removed = 1
-	writeSession(t, sessionsDir(home), "dev", "alice", "app", "0123456789abcdef", "active")
+	writeSession(t, sessionsDir(home), "dev", "alice/app", "0123456789abcdef", "active")
 	if _, stderr, _, err := runCmd(t, append(lib, "session", "close", "dev")...); err != nil {
 		t.Fatalf("session close: %v\n%s", err, stderr)
 	}

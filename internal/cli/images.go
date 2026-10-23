@@ -59,7 +59,7 @@ func newImagesListCmd() *cobra.Command {
 func newImagesShowCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "show <owner/repo>",
+		Use:   "show <name>",
 		Short: "Show one image in detail",
 		Long: "Show prints a multi-line record for one active image:\n" +
 			"identity, the container format, each chain layer, the\n" +
@@ -108,12 +108,12 @@ func activeStates(repos []image.Repo) ([]namedState, error) {
 	for _, repo := range repos {
 		state, err := image.Inspect(repo)
 		if err != nil {
-			return nil, fmt.Errorf("images list: %s/%s: %w", repo.Owner, repo.Repo, err)
+			return nil, fmt.Errorf("images list: %s: %w", repo.Name(), err)
 		}
 		if !state.HasActive {
 			continue
 		}
-		states = append(states, namedState{name: repo.Owner + "/" + repo.Repo, state: state})
+		states = append(states, namedState{name: repo.Name(), state: state})
 	}
 	return states, nil
 }
@@ -130,7 +130,7 @@ func showOneImage(w io.Writer, cfg config.Config, name string, asJSON bool) erro
 	if !state.HasActive {
 		return fmt.Errorf("images show: %s has no active image", name)
 	}
-	named := namedState{name: repo.Owner + "/" + repo.Repo, state: state}
+	named := namedState{name: repo.Name(), state: state}
 	if asJSON {
 		// Show always includes parked chains, matching the human record.
 		return writeJSON(w, newImageJSON(named.name, named.state, true))
@@ -518,8 +518,8 @@ func newImagesGCCmd() *cobra.Command {
 			events, gcErr := image.GC(cfg, refs, now)
 			out := cmd.OutOrStdout()
 			for _, event := range events {
-				if _, wErr := fmt.Fprintf(out, "%s %s/%s %s\n",
-					event.Action, event.Owner, event.Repo, event.FullID); wErr != nil {
+				if _, wErr := fmt.Fprintf(out, "%s %s %s\n",
+					event.Action, event.Name, event.FullID); wErr != nil {
 					return wErr
 				}
 			}
@@ -541,7 +541,7 @@ func newImagesGCCmd() *cobra.Command {
 
 func newImagesRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "remove <owner/repo | owner/repo/_archives/full-id>",
+		Use:     "remove <name | name/_archives/full-id>",
 		Aliases: []string{"rm"},
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
@@ -572,5 +572,7 @@ func newImagesRemoveCmd() *cobra.Command {
 // isTargetUsage reports whether err rejects the target shape itself,
 // which is a command-line usage problem, not a runtime failure.
 func isTargetUsage(err error) bool {
-	return errors.Is(err, image.ErrInvalidName) || errors.Is(err, image.ErrInvalidPath)
+	return errors.Is(err, image.ErrInvalidName) ||
+		errors.Is(err, image.ErrInvalidPath) ||
+		errors.Is(err, image.ErrNameConflict)
 }

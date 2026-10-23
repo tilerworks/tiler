@@ -117,7 +117,7 @@ func TestDecidePlainDirectoryIsFull(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Decision{
-		Mode: ModeFull, Name: Name{Owner: "alice", Repo: "app"}, SrcDir: "/home/u/work",
+		Mode: ModeFull, Name: Name("alice/app"), SrcDir: "/home/u/work",
 	}
 	if got != want {
 		t.Fatalf("decision = %+v", got)
@@ -138,7 +138,7 @@ func TestDecideMergedViewIsIncremental(t *testing.T) {
 	}
 	want := Decision{
 		Mode:       ModeIncr,
-		Name:       Name{Owner: "alice", Repo: "app"},
+		Name:       Name("alice/app"),
 		MountPoint: "/ws/view",
 		Upper:      testRuntime + "/up-2049-7/upper",
 	}
@@ -155,7 +155,7 @@ func TestDecideLongestMountPointWins(t *testing.T) {
 	if got.MountPoint != "/ws/view/nested" || got.Upper != testRuntime+"/up-9-9/upper" {
 		t.Fatalf("decision = %+v", got)
 	}
-	if got.Mode != ModeIncr || got.Name != (Name{Owner: "alice", Repo: "app"}) {
+	if got.Mode != ModeIncr || got.Name != (Name("alice/app")) {
 		t.Fatalf("decision = %+v", got)
 	}
 }
@@ -224,7 +224,7 @@ func TestDecideReadOnlyViewFullPacksMountPoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Decision{
-		Mode: ModeFull, Name: Name{Owner: "bob", Repo: "tool"},
+		Mode: ModeFull, Name: Name("bob/tool"),
 		SrcDir: "/ws/ro", MountPoint: "/ws/ro",
 	}
 	if got != want {
@@ -238,7 +238,7 @@ func TestDecideDifferentImagePacksPathAsFull(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Decision{
-		Mode: ModeFull, Name: Name{Owner: "carol", Repo: "docs"}, SrcDir: "/ws/view/docs",
+		Mode: ModeFull, Name: Name("carol/docs"), SrcDir: "/ws/view/docs",
 	}
 	if got != want {
 		t.Fatalf("decision = %+v", got)
@@ -260,7 +260,7 @@ func TestDecideReadOnlyViewDifferentImagePacksPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Decision{
-		Mode: ModeFull, Name: Name{Owner: "alice", Repo: "docs"}, SrcDir: "/ws/ro/docs",
+		Mode: ModeFull, Name: Name("alice/docs"), SrcDir: "/ws/ro/docs",
 	}
 	if got != want {
 		t.Fatalf("decision = %+v", got)
@@ -272,7 +272,7 @@ func TestDecideConsistentImageAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Mode != ModeIncr || got.Name != (Name{Owner: "alice", Repo: "app"}) {
+	if got.Mode != ModeIncr || got.Name != (Name("alice/app")) {
 		t.Fatalf("decision = %+v", got)
 	}
 }
@@ -313,7 +313,7 @@ func TestDecideDMGShadowViewIsFull(t *testing.T) {
 	}
 	want := Decision{
 		Mode:       ModeFull,
-		Name:       Name{Owner: "alice", Repo: "app"},
+		Name:       Name("alice/app"),
 		SrcDir:     "/ws/dmg",
 		MountPoint: "/ws/dmg",
 	}
@@ -331,14 +331,14 @@ func TestDecideOpaqueViewNeedsExplicitImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Mode != ModeIncr || got.Name != (Name{Owner: "dave", Repo: "x"}) ||
+	if got.Mode != ModeIncr || got.Name != (Name("dave/x")) ||
 		got.Upper != testRuntime+"/up-5-6/upper" {
 		t.Fatalf("decision = %+v", got)
 	}
 }
 
 func TestDecideInvalidExplicitImage(t *testing.T) {
-	_, err := Decide("/home/u/work", testTable(), testPrefixes(), Explicit{Image: "no-slash"})
+	_, err := Decide("/home/u/work", testTable(), testPrefixes(), Explicit{Image: "_foo"})
 	if err == nil {
 		t.Fatal("expected name error")
 	}
@@ -357,13 +357,13 @@ func (s *stubIdentity) Lookup(mountPoint string) (Name, bool, error) {
 }
 
 func TestDecideUsesInjectedIdentitySource(t *testing.T) {
-	stub := &stubIdentity{name: Name{Owner: "erin", Repo: "sess"}, ok: true}
+	stub := &stubIdentity{name: Name("erin/sess"), ok: true}
 	got, err := Decide("/ws/opaque/x", testTable(), testPrefixes(),
 		Explicit{Identity: stub})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != (Name{Owner: "erin", Repo: "sess"}) || got.Mode != ModeIncr {
+	if got.Name != (Name("erin/sess")) || got.Mode != ModeIncr {
 		t.Fatalf("decision = %+v", got)
 	}
 	if len(stub.seen) != 1 || stub.seen[0] != "/ws/opaque" {
@@ -375,7 +375,7 @@ func TestDecideUsesInjectedIdentitySource(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantDivert := Decision{
-		Mode: ModeFull, Name: Name{Owner: "alice", Repo: "app"}, SrcDir: "/ws/opaque/x",
+		Mode: ModeFull, Name: Name("alice/app"), SrcDir: "/ws/opaque/x",
 	}
 	if got != wantDivert {
 		t.Fatalf("diverted decision = %+v", got)
@@ -392,9 +392,12 @@ func TestLibraryNameMapping(t *testing.T) {
 		path string
 		want Name
 	}{
-		{testImages + "/alice/app/image.sqsh", Name{"alice", "app"}},
-		{testImages + "/alice/app/image.dmg", Name{"alice", "app"}},
-		{testImages + "/alice/app/_incr/fedcba9876543210.sqsh", Name{"alice", "app"}},
+		{testImages + "/alice/app/image.sqsh", Name("alice/app")},
+		{testImages + "/alice/app/image.dmg", Name("alice/app")},
+		{testImages + "/alice/app/_incr/fedcba9876543210.sqsh", Name("alice/app")},
+		{testImages + "/solo/image.sqsh", Name("solo")},
+		{testImages + "/a/b/c/image.dmg", Name("a/b/c")},
+		{testImages + "/a/b/c/_incr/fedcba9876543210.sqsh", Name("a/b/c")},
 	}
 	for _, tc := range good {
 		got, ok := LibraryName(testImages, tc.path)
@@ -408,12 +411,10 @@ func TestLibraryNameMapping(t *testing.T) {
 		testImages + "/alice/app/_hold/0123456789abcdef/image.sqsh",
 		testImages + "/alice/app/_incr/not-hex.sqsh",
 		testImages + "/alice/app/_incr/fedcba9876543210",
-		testImages + "/alice/app/sub/image.sqsh",
-		testImages + "/onlyowner/image.sqsh",
 		"/elsewhere/alice/app/image.sqsh",
 		testImages + "/bad owner/app/image.sqsh",
 		// Blocks payloads never carry an identity: a blocks mount
-		// publishes the canonical three-segment image.sqsh fsname.
+		// publishes the canonical image.sqsh fsname.
 		testImages + "/alice/app/_blocks/0123456789abcdef/blk.000",
 		testImages + "/alice/app/members/src.sqsh",
 		testImages + "/alice/app/members/no-ext",
@@ -421,6 +422,7 @@ func TestLibraryNameMapping(t *testing.T) {
 		testImages + "/alice/app/members/..sqsh",
 		testImages + "/alice/app/members/bad name.sqsh",
 		testImages + "/alice/app/members/deep/name.sqsh",
+		testImages + "/a/b/c/d/e/f/image.sqsh",
 	}
 	for _, path := range bad {
 		if got, ok := LibraryName(testImages, path); ok {

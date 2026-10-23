@@ -28,7 +28,7 @@ type ToolRunner func(name string, env []string, args ...string) error
 type FullRequest struct {
 	// Config supplies the image library location and split policy.
 	Config config.Config
-	// Name is the explicit owner/repo image name.
+	// Name is the explicit 1-to-5 segment image name.
 	Name string
 	// SrcDir is the prepared directory to pack.
 	SrcDir string
@@ -163,6 +163,9 @@ func prepareScene(req FullRequest) error {
 func validateFull(req *FullRequest) (Repo, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
+		return Repo{}, err
+	}
+	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
 		return Repo{}, err
 	}
 	if err := checkSourceDir(req.SrcDir, req.Config); err != nil {
@@ -338,8 +341,7 @@ func packedMeta(repo Repo, req FullRequest, tmp string, now func() time.Time) (M
 // before the payload facts are filled in.
 func newFullMeta(repo Repo, req FullRequest, now func() time.Time) Meta {
 	return Meta{
-		Owner:     repo.Owner,
-		Repo:      repo.Repo,
+		Name:      repo.Name(),
 		Version:   req.Version,
 		Kind:      KindFull,
 		Format:    Format{Type: req.Format, Compression: req.Compression},

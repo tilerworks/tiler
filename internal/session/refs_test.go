@@ -12,7 +12,7 @@ import (
 
 // aliceRef is the identity the seeded fixtures pin.
 func aliceRef() image.Ref {
-	return image.Ref{Owner: "alice", Repo: "app", FullID: "0123456789abcdef"}
+	return image.Ref{Name: "alice/app", FullID: "0123456789abcdef"}
 }
 
 // seedActionRecord writes one record carrying a single action with
@@ -40,9 +40,9 @@ func TestRefsHoldsActiveLibraryMounts(t *testing.T) {
 		t.Fatalf("active record held = %v (%v)", held, err)
 	}
 	for _, probe := range []image.Ref{
-		{Owner: "alice", Repo: "app", FullID: "fedcba9876543210"},
-		{Owner: "bob", Repo: "app", FullID: "0123456789abcdef"},
-		{Owner: "alice", Repo: "other", FullID: "0123456789abcdef"},
+		{Name: "alice/app", FullID: "fedcba9876543210"},
+		{Name: "bob/app", FullID: "0123456789abcdef"},
+		{Name: "alice/other", FullID: "0123456789abcdef"},
 	} {
 		held, err := refs.Holds(probe)
 		if err != nil || held {
@@ -80,7 +80,7 @@ func TestRefsHolderNamesPinningSession(t *testing.T) {
 		t.Fatalf("Holds = (%v, %v)", held, err)
 	}
 	// A probe nothing pins answers with an empty name.
-	probe := image.Ref{Owner: "alice", Repo: "app", FullID: "fedcba9876543210"}
+	probe := image.Ref{Name: "alice/app", FullID: "fedcba9876543210"}
 	name, held, err = refs.Holder(probe)
 	if err != nil || held || name != "" {
 		t.Fatalf("probe Holder = (%q, %v, %v)", name, held, err)
@@ -124,7 +124,7 @@ func TestRefsFilePathImageNeverProtects(t *testing.T) {
 	action := mountAction("/ws/view")
 	action.Seq = 1
 	action.Status = StatusMounted
-	action.Owner, action.Repo, action.FullID = "", "", ""
+	action.Name, action.FullID = "", ""
 	action.Image = "/somewhere/bare.sqsh"
 	rec := Record{Name: "dev", State: StateActive, Actions: []Action{action}, CreatedAt: testNow}
 	if err := e.Save(rec); err != nil {

@@ -172,8 +172,11 @@ func buildLibrary(t *testing.T, home string, lib []string, imagesDir, name strin
 	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
 	withBuildSeams(t, nil)
 	buildImage(t, lib, name, src)
-	owner, repo, _ := strings.Cut(name, "/")
-	return filepath.Join(imagesDir, owner, repo)
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo.Dir
 }
 
 func TestMountLibraryImagePrintsMounted(t *testing.T) {
@@ -770,7 +773,7 @@ func writeLibraryContainer(t *testing.T, imagesDir, format string, body []byte) 
 	}
 	sum := sha256.Sum256(body)
 	meta := image.Meta{
-		ID: image.ID(sum), Owner: "alice", Repo: "app",
+		ID: image.ID(sum), Name: "alice/app",
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: format, Compression: image.CompressionZstd},
 		Size:      int64(len(body)),

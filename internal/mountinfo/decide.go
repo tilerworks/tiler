@@ -19,13 +19,11 @@ const (
 	ModeIncr Mode = "incremental"
 )
 
-// Name is an image identity: an explicit owner/repo pair.
-type Name struct {
-	Owner string
-	Repo  string
-}
+// Name is an image identity: one canonical 1-to-5 segment library
+// name.
+type Name string
 
-func (n Name) String() string { return n.Owner + "/" + n.Repo }
+func (n Name) String() string { return string(n) }
 
 // Prefixes locates the reserved trees for one decision.
 type Prefixes struct {
@@ -41,7 +39,7 @@ type Explicit struct {
 	Full bool
 	// Incr is the --incremental flag.
 	Incr bool
-	// Image is the --image owner/repo value, empty when omitted.
+	// Image is the --image library name, empty when omitted.
 	Image string
 	// Stale marks a path the caller declares was a mount point that
 	// the table no longer lists.
@@ -155,11 +153,11 @@ func divertDifferentImage(
 	if explicit.Image == "" {
 		return Decision{}, false, nil
 	}
-	owner, repo, err := image.ParseName(explicit.Image)
+	segs, err := image.ParseName(explicit.Image)
 	if err != nil {
 		return Decision{}, false, err
 	}
-	given := Name{Owner: owner, Repo: repo}
+	given := Name(strings.Join(segs, "/"))
 	looked, found, err := lookupViewName(view.Point, table, prefixes, explicit)
 	if err != nil {
 		return Decision{}, false, err
@@ -234,24 +232,24 @@ func resolveName(viewPoint string, table []Mount, prefixes Prefixes, explicit Ex
 		}
 		name, ok, err := identity.Lookup(viewPoint)
 		if err != nil {
-			return Name{}, err
+			return "", err
 		}
 		looked, found = name, ok
 	}
 	if explicit.Image == "" {
 		if !found {
-			return Name{}, errors.New(
-				"build identity: cannot infer owner/repo; pass an explicit --image")
+			return "", errors.New(
+				"build identity: cannot infer image name; pass an explicit --image")
 		}
 		return looked, nil
 	}
-	owner, repo, err := image.ParseName(explicit.Image)
+	segs, err := image.ParseName(explicit.Image)
 	if err != nil {
-		return Name{}, err
+		return "", err
 	}
-	given := Name{Owner: owner, Repo: repo}
+	given := Name(strings.Join(segs, "/"))
 	if found && given != looked {
-		return Name{}, fmt.Errorf(
+		return "", fmt.Errorf(
 			"build identity: --image %s conflicts with the mounted image %s", given, looked)
 	}
 	return given, nil
@@ -292,7 +290,7 @@ type PathIdentity struct {
 func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 	view, ok := findMount(p.Table, mountPoint)
 	if !ok {
-		return Name{}, false, nil
+		return "", false, nil
 	}
 	candidates := append([]string{view.Source}, view.Lowers...)
 	var (
@@ -312,7 +310,7 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 		case !seen:
 			found, seen = name, true
 		case name != found:
-			return Name{}, false, fmt.Errorf(
+			return "", false, fmt.Errorf(
 				"build identity: mount %s mixes images %s and %s", mountPoint, found, name)
 		}
 	}
@@ -320,34 +318,38 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 }
 
 // LibraryName maps a library file path to its image identity. Only
-// <images_dir>/<owner>/<repo>/image.sqsh,
-// <images_dir>/<owner>/<repo>/image.dmg, and
-// <images_dir>/<owner>/<repo>/_incr/<id>.sqsh count; archives, holds,
-// blocks, and metadata never carry an identity. Blocks-form mounts
-// publish the canonical three-segment image.sqsh path, so they
-// resolve without a blocks shape here.
+// <images_dir>/<name>/image.sqsh, <images_dir>/<name>/image.dmg, and
+// <images_dir>/<name>/_incr/<id>.sqsh count, where <name> is 1 to 5
+// segments. Paths under _archives, _hold, or _blocks never carry an
+// identity. Blocks-form mounts publish the canonical image.sqsh
+// path, so they resolve without a blocks shape here.
 func LibraryName(imagesDir, path string) (Name, bool) {
 	if imagesDir == "" || !strings.HasPrefix(path, imagesDir+"/") {
-		return Name{}, false
+		return "", false
 	}
 	parts := strings.Split(path[len(imagesDir)+1:], "/")
-	switch len(parts) {
-	case 3:
-		if parts[2] != image.ImageFile && parts[2] != image.ImageDMG {
-			return Name{}, false
+	for _, p := range parts {
+		switch p {
+		case "_archives", "_hold", "_blocks":
+			return "", false
 		}
-	case 4:
-		if parts[2] != image.IncrDir || !isLayerFile(parts[3]) {
-			return Name{}, false
-		}
+	}
+	var nameParts []string
+	switch {
+	case len(parts) >= 2 &&
+		(parts[len(parts)-1] == image.ImageFile || parts[len(parts)-1] == image.ImageDMG):
+		nameParts = parts[:len(parts)-1]
+	case len(parts) >= 3 &&
+		parts[len(parts)-2] == image.IncrDir && isLayerFile(parts[len(parts)-1]):
+		nameParts = parts[:len(parts)-2]
 	default:
-		return Name{}, false
+		return "", false
 	}
-	owner, repo, err := image.ParseName(parts[0] + "/" + parts[1])
+	segs, err := image.ParseName(strings.Join(nameParts, "/"))
 	if err != nil {
-		return Name{}, false
+		return "", false
 	}
-	return Name{Owner: owner, Repo: repo}, true
+	return Name(strings.Join(segs, "/")), true
 }
 
 // isLayerFile reports a <id>.sqsh name with a 16 lowercase hex id.

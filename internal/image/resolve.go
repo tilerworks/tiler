@@ -22,10 +22,10 @@ var ErrNotImageFile = errors.New("not an image file")
 // into its active stack or split payload manifest, or a single
 // file-path image.
 type Target struct {
-	// Library is true for an owner/repo reference and false for a
+	// Library is true for a library-name reference and false for a
 	// file path.
 	Library bool
-	// Name is the owner/repo name when Library is true.
+	// Name is the canonical library name when Library is true.
 	Name string
 	// ID is the full image id of the resolved active chain or split
 	// payload when Library is true, and empty for a file path.
@@ -99,14 +99,14 @@ type Member struct {
 
 // ResolveMount turns a mount argument into what a mount consumes:
 // the ordered stack member list, or the manifest of a split payload.
-// An argument that parses as a legal owner/repo name is always a
+// An argument that parses as a legal library name is always a
 // library reference and never falls back to a file path; anything
 // else is a file path that must name an existing regular file.
 // Library resolution reads only the active slot and follows the
 // payload kind its metadata names; archives and delayed-archive
 // holds never participate.
 func ResolveMount(cfg config.Config, arg string) (Target, error) {
-	if _, _, err := ParseName(arg); err == nil {
+	if _, err := ParseName(arg); err == nil {
 		return resolveLibrary(cfg, arg)
 	}
 	return resolveFile(arg)
@@ -302,6 +302,6 @@ func fileFormError(arg string, err error) error {
 	if !strings.Contains(arg, "/") || filepath.IsAbs(arg) {
 		return base
 	}
-	_, _, nameErr := ParseName(arg)
+	_, nameErr := ParseName(arg)
 	return fmt.Errorf("%w; as a library reference: %w", base, nameErr)
 }

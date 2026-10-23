@@ -37,8 +37,8 @@ func withStatusSeeds(t *testing.T, home string, healthy map[string]bool) (lib []
 		engine.LoadTable = func() ([]mountinfo.Mount, error) { return table, nil }
 		engine.Health = func(point string) bool { return healthy[point] }
 	})
-	writeSession(t, sessions, "dev", "alice", "app", "0123456789abcdef", "running")
-	writeSession(t, sessions, "old", "alice", "app", "0123456789abcdef", "closed")
+	writeSession(t, sessions, "dev", "alice/app", "0123456789abcdef", "running")
+	writeSession(t, sessions, "old", "alice/app", "0123456789abcdef", "closed")
 	return lib, sessions
 }
 

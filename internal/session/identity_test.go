@@ -128,7 +128,7 @@ func (s *spyIdentity) Lookup(string) (mountinfo.Name, bool, error) {
 }
 
 func TestCombinedIdentityOrder(t *testing.T) {
-	want := mountinfo.Name{Owner: "alice", Repo: "app"}
+	want := mountinfo.Name("alice/app")
 	primary := &spyIdentity{name: want, ok: true}
 	fallback := &spyIdentity{}
 	name, ok, err := CombinedIdentity{Primary: primary, Fallback: fallback}.Lookup("/ws/view")

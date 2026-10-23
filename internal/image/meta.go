@@ -93,8 +93,7 @@ type MemberEntry struct {
 // are dropped on load.
 type Meta struct {
 	ID         string    `yaml:"id"`
-	Owner      string    `yaml:"owner"`
-	Repo       string    `yaml:"repo"`
+	Name       string    `yaml:"name"`
 	Version    string    `yaml:"version"`
 	Kind       string    `yaml:"kind"`
 	Format     Format    `yaml:"format"`

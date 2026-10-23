@@ -77,7 +77,7 @@ func newBuildCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
 	cmd.Flags().BoolVarP(&incr, "incremental", "i", false, "force an incremental build")
-	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit owner/repo image name")
+	cmd.Flags().StringVarP(&imageName, "image", "I", "", "explicit 1-to-5 segment image name")
 	cmd.Flags().StringVar(&format, "format", "", "container format: dmg, squashfs, or erofs")
 	cmd.Flags().StringVar(&compression, "compression", "", "container compression; default is the format default")
 	cmd.Flags().StringVarP(&split, "split", "s", "",
@@ -397,10 +397,13 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	return err
 }
 
-// mapBuildPathError turns a reserved-tree refusal into a usage error
-// so packing a library or session ancestor exits 2 like mount.
+// mapBuildPathError turns a reserved-tree refusal or name placement
+// conflict into a usage error so packing a library or session
+// ancestor exits 2 like mount.
 func mapBuildPathError(err error) error {
-	if errors.Is(err, config.ErrReservedPath) {
+	if errors.Is(err, config.ErrReservedPath) ||
+		errors.Is(err, image.ErrNameConflict) ||
+		errors.Is(err, image.ErrInvalidName) {
 		return usageError{err}
 	}
 	return err
@@ -433,7 +436,7 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		return usageError{err}
 	}
 	if err != nil {
-		return err
+		return mapBuildPathError(err)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
@@ -506,7 +509,7 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 		Run:         hdiutilTool,
 	})
 	if err != nil {
-		return err
+		return mapBuildPathError(err)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err

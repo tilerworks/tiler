@@ -396,8 +396,7 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 	}
 	meta := image.Meta{
 		ID:        sum[:16],
-		Owner:     "alice",
-		Repo:      "app",
+		Name:      "alice/app",
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
 		Size:      4,
@@ -413,7 +412,7 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 	cacheFile := filepath.Join(cache, sum+image.SquashExt)
 	dmg := filepath.Join(images, "alice", "app", "image.dmg")
 	library := Action{
-		Type: TypeMount, Image: "alice/app", Owner: "alice", Repo: "app",
+		Type: TypeMount, Image: "alice/app", Name: "alice/app",
 		Mountpoint: "/ws/lib", Mode: ModeRO, Status: StatusMounted,
 	}
 	e := &Engine{ImagesDir: images, CacheDir: cache}

@@ -125,7 +125,7 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	if action.Type != session.TypeMount || action.Image != "alice/app" {
 		t.Errorf("action = %+v", action)
 	}
-	if action.Owner != "alice" || action.Repo != "app" || action.FullID != fullID {
+	if action.Name != "alice/app" || action.FullID != fullID {
 		t.Errorf("identity = %+v, want full id %s", action, fullID)
 	}
 	if action.Mountpoint != view || action.Mode != session.ModeRW {
@@ -315,7 +315,7 @@ func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
 	if action.Image != img {
 		t.Errorf("image = %q, want the reference as given", action.Image)
 	}
-	if action.Owner != "" || action.Repo != "" || action.FullID != "" {
+	if action.Name != "" || action.FullID != "" {
 		t.Errorf("file-path identity = %+v, want empty", action)
 	}
 }

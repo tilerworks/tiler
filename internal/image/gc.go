@@ -20,8 +20,7 @@ const (
 
 // GCEvent is one garbage collection action a command can report.
 type GCEvent struct {
-	Owner  string
-	Repo   string
+	Name   string
 	Action string
 	FullID string
 }
@@ -42,7 +41,7 @@ func GC(cfg config.Config, refs Refs, now time.Time) ([]GCEvent, error) {
 		repoEvents, err := gcRepo(repo, cfg, refs, now)
 		events = append(events, repoEvents...)
 		if err != nil {
-			return events, fmt.Errorf("gc: %s/%s: %w", repo.Owner, repo.Repo, err)
+			return events, fmt.Errorf("gc: %s: %w", repo.Name(), err)
 		}
 	}
 	return events, nil
@@ -83,8 +82,7 @@ func promoteHolds(repo Repo, refs Refs) ([]GCEvent, error) {
 			return events, err
 		}
 		events = append(events, GCEvent{
-			Owner: repo.Owner, Repo: repo.Repo,
-			Action: GCActionArchived, FullID: id,
+			Name: repo.Name(), Action: GCActionArchived, FullID: id,
 		})
 	}
 	return events, nil
@@ -121,8 +119,7 @@ func expireArchives(repo Repo, cfg config.Config, refs Refs, now time.Time) ([]G
 			return events, err
 		}
 		events = append(events, GCEvent{
-			Owner: repo.Owner, Repo: repo.Repo,
-			Action: GCActionRemoved, FullID: archive.id,
+			Name: repo.Name(), Action: GCActionRemoved, FullID: archive.id,
 		})
 	}
 	removeEmpty(dir)

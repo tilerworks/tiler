@@ -26,6 +26,7 @@ func gcRepoFixture(t *testing.T) (config.Config, Repo) {
 func makeArchive(t *testing.T, repo Repo, data []byte, createdAt time.Time) Meta {
 	t.Helper()
 	meta := metaFor(data)
+	meta.Name = repo.Name()
 	meta.CreatedAt = createdAt.UTC()
 	dir, err := repo.ArchivePath(meta.ID)
 	if err != nil {
@@ -303,7 +304,7 @@ func (p pinRefs) Holder(ref Ref) (string, bool, error) {
 // session package writes, used to prove GC never touches the
 // sessions directory.
 const sessionRecordBody = `{"name":"s1","state":"active","actions":[{"seq":1,` +
-	`"type":"mount","image":"alice/app","owner":"alice","repo":"app",` +
+	`"type":"mount","image":"alice/app","name":"alice/app",` +
 	`"full_id":"0000000000000000","mountpoint":"/ws/view","mode":"rw",` +
 	`"status":"mounted","timestamp":"2026-10-16T09:00:00Z"}],` +
 	`"created_at":"2026-10-16T09:00:00Z","closed_at":"0001-01-01T00:00:00Z"}`
@@ -322,7 +323,7 @@ func TestGCNeverTouchesSessionsOrActive(t *testing.T) {
 	cfg.MaxAge = time.Hour
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	makeArchive(t, repo, []byte("archive-old"), now.Add(-48*time.Hour))
-	refs := pinRefs{pin: Ref{Owner: "alice", Repo: "app", FullID: "0000000000000000"}}
+	refs := pinRefs{pin: Ref{Name: "alice/app", FullID: "0000000000000000"}}
 	events, err := GC(cfg, refs, now)
 	if err != nil {
 		t.Fatal(err)
@@ -531,14 +532,14 @@ func TestRemoveTargetRejectsBadTargets(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	seedActive(t, repo, []byte("active-full"), false)
 	for _, target := range []string{
-		"plain",
-		"a/b/c",
 		"alice/app/archive/0123456789abcdef",
 		"alice/app/archives/not-hex",
 		"alice/app/_archives/not-hex",
 		"alice/app/archives/0123456789abcdef/extra",
 		"alice/app/_archives/0123456789abcdef/extra",
 		"bad owner/app",
+		"_foo",
+		"a/b/c/d/e/f",
 	} {
 		if _, err := RemoveTarget(cfg, target, nil); err == nil {
 			t.Errorf("target %q was accepted", target)
@@ -546,5 +547,39 @@ func TestRemoveTargetRejectsBadTargets(t *testing.T) {
 	}
 	if _, statErr := os.Stat(repo.ImagePath()); statErr != nil {
 		t.Fatalf("active image deleted by a bad target: %v", statErr)
+	}
+}
+
+func TestRemoveTargetOneAndThreeSegmentNames(t *testing.T) {
+	for _, name := range []string{"solo", "a/b/c"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := buildConfig(t)
+			repo, err := OpenRepo(cfg.ImagesDir, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedActive(t, repo, []byte("doomed-"+name), false)
+			if _, err := RemoveTarget(cfg, name, nil); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := RemoveTarget(cfg, name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome != OutcomeRemoved {
+				t.Fatalf("outcome = %s", outcome)
+			}
+			if _, err := os.Stat(cfg.ImagesDir); err != nil {
+				t.Fatalf("library root deleted: %v", err)
+			}
+			if _, err := os.Stat(repo.Dir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("repo dir survived: %v", err)
+			}
+			if name == "a/b/c" {
+				if _, err := os.Stat(filepath.Join(cfg.ImagesDir, "a")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("empty namespace left behind: %v", err)
+				}
+			}
+		})
 	}
 }

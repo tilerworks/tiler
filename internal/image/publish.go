@@ -212,7 +212,7 @@ func validateMeta(repo Repo, meta Meta) error {
 	if meta.Kind != KindFull {
 		return errors.New("publish: active meta kind must be full")
 	}
-	if meta.Owner != repo.Owner || meta.Repo != repo.Repo {
+	if meta.Name != repo.Name() {
 		return errors.New("publish: meta name does not match repository")
 	}
 	return meta.Validate()
@@ -955,7 +955,7 @@ func listHoldIDs(repo Repo) ([]string, error) {
 }
 
 func refFor(repo Repo, id string) Ref {
-	return Ref{Owner: repo.Owner, Repo: repo.Repo, FullID: id}
+	return Ref{Name: repo.Name(), FullID: id}
 }
 
 func removeHold(repo Repo, id string) error {

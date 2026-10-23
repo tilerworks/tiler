@@ -121,7 +121,7 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Owner != "alice" || loaded.Repo != "app" || loaded.Version != "v1.2.3" {
+	if loaded.Name != "alice/app" || loaded.Version != "v1.2.3" {
 		t.Fatalf("meta identity = %+v", loaded)
 	}
 	if loaded.Kind != KindFull || loaded.Format.Type != FormatSquashfs ||
@@ -154,7 +154,7 @@ func equalArgs(got, want []string) bool {
 func TestBuildFullRejectsInvalidName(t *testing.T) {
 	cfg := buildConfig(t)
 	_, err := BuildFull(FullRequest{
-		Config: cfg, Name: "missing-slash", SrcDir: sourceDir(t), Builder: "test",
+		Config: cfg, Name: "_foo", SrcDir: sourceDir(t), Builder: "test",
 	})
 	if err == nil {
 		t.Fatal("expected name error")

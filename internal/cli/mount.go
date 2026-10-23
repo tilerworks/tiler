@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
@@ -69,7 +70,7 @@ func newMountCmd() *cobra.Command {
 		Short: "Mount an image as a workspace",
 		Long: "Mount serves <image> at <dir>: a writable merged view by\n" +
 			"default, or a read-only view with --read-only. <image> is an\n" +
-			"owner/repo library reference or the path of one squashfs or\n" +
+			"library name or the path of one squashfs or\n" +
 			"erofs file; the library reference wins when an argument is both.\n" +
 			"Chain layers mount as a cascade, --subdir exposes one image\n" +
 			"subdirectory as the mount root, and --verify re-hashes every\n" +
@@ -139,7 +140,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if flags.verify && !target.Library {
 		return usageError{errors.New(
-			"mount: --verify needs an owner/repo image; a file path records no digest")}
+			"mount: --verify needs a library image; a file path records no digest")}
 	}
 	if err := verifyTarget(target, flags.verify); err != nil {
 		return err
@@ -322,11 +323,11 @@ func mountAction(ref string, target image.Target, dir string, flags mountFlags) 
 		Subdir:     flags.subdir,
 	}
 	if target.Library {
-		owner, repo, err := image.ParseName(target.Name)
+		segs, err := image.ParseName(target.Name)
 		if err != nil {
 			return session.Action{}, fmt.Errorf("mount: %w", err)
 		}
-		action.Owner, action.Repo, action.FullID = owner, repo, target.ID
+		action.Name, action.FullID = strings.Join(segs, "/"), target.ID
 	}
 	return action, nil
 }

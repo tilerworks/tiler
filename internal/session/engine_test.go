@@ -41,8 +41,7 @@ func mountAction(point string) Action {
 	return Action{
 		Type:       TypeMount,
 		Image:      "alice/app",
-		Owner:      "alice",
-		Repo:       "app",
+		Name:       "alice/app",
 		FullID:     "0123456789abcdef",
 		Mountpoint: point,
 		Mode:       ModeRW,

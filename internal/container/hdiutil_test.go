@@ -30,7 +30,7 @@ func TestHdiutilArgv(t *testing.T) {
 		{
 			name: "create default ulfo",
 			call: func() ([]string, error) {
-				return HdiutilCreateArgv(src, "", "alice/app", temp)
+				return HdiutilCreateArgv(src, "", "app", temp)
 			},
 			want: []string{
 				"hdiutil", "create", "-srcfolder", src,
@@ -50,7 +50,7 @@ func TestHdiutilArgv(t *testing.T) {
 		{
 			name: "create udro",
 			call: func() ([]string, error) {
-				return HdiutilCreateArgv(src, "udro", "alice/app", temp)
+				return HdiutilCreateArgv(src, "udro", "app", temp)
 			},
 			want: []string{
 				"hdiutil", "create", "-srcfolder", src,
@@ -193,13 +193,13 @@ func TestHdiutilFailedConstructorIsNotExecuted(t *testing.T) {
 		{
 			name: "create rejects unknown compression",
 			call: func() ([]string, error) {
-				return HdiutilCreateArgv("/src", "zstd", "alice/app", "t.dmg")
+				return HdiutilCreateArgv("/src", "zstd", "app", "t.dmg")
 			},
 		},
 		{
 			name: "create rejects a colon in the volume name",
 			call: func() ([]string, error) {
-				return HdiutilCreateArgv("/src", "ulfo", "alice/my:disk", "t.dmg")
+				return HdiutilCreateArgv("/src", "ulfo", "my:disk", "t.dmg")
 			},
 		},
 		{

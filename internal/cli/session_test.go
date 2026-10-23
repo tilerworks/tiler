@@ -57,8 +57,7 @@ func libraryAction(imageRef, mountpoint, mode string) session.Action {
 	return session.Action{
 		Type:       session.TypeMount,
 		Image:      imageRef,
-		Owner:      "alice",
-		Repo:       "app",
+		Name:       "alice/app",
 		FullID:     "0123456789abcdef",
 		Mountpoint: mountpoint,
 		Mode:       mode,

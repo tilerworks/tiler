@@ -1183,6 +1183,7 @@ func metaFor(data []byte) Meta {
 func seedActive(t *testing.T, repo Repo, data []byte, withChain bool) Meta {
 	t.Helper()
 	meta := metaFor(data)
+	meta.Name = repo.Name()
 	if withChain {
 		const layer = "fedcba9876543210"
 		meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}

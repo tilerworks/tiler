@@ -62,13 +62,12 @@ type Action struct {
 	Seq int `json:"seq"`
 	// Type is mount or umount.
 	Type string `json:"type"`
-	// Image is the reference as given: an owner/repo library name or
-	// the path of a single squashfs file.
+	// Image is the reference as given: a library name or the path of
+	// a single squashfs file.
 	Image string `json:"image"`
-	// Owner is the library owner, empty for a file-path image.
-	Owner string `json:"owner,omitempty"`
-	// Repo is the library repository, empty for a file-path image.
-	Repo string `json:"repo,omitempty"`
+	// Name is the canonical library name, empty for a file-path
+	// image.
+	Name string `json:"name,omitempty"`
 	// FullID is the resolved full image id, empty for a file-path
 	// image.
 	FullID string `json:"full_id,omitempty"`

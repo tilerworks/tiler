@@ -2,8 +2,7 @@ package image
 
 // Ref is one full image a holder may still pin.
 type Ref struct {
-	Owner  string
-	Repo   string
+	Name   string
 	FullID string
 }
 

@@ -18,7 +18,7 @@ const diskShadowFile = "upper.shadow"
 
 // diskImageFile is the active dmg payload inside a library
 // repository. With the cache off, hdiutil attach opens this file.
-// The session record stores the owner/repo reference.
+// The session record stores the library name reference.
 const diskImageFile = "image.dmg"
 
 // DiskImage is one mounted volume from hdiutil info -plist.
@@ -148,7 +148,7 @@ func (e *Engine) diskMatch(name string, action Action, images []DiskImage) bool 
 // file still counts. A file-path image is the absolute path attach
 // used, plus the cache copy when the cache is on.
 func (e *Engine) attachImages(action Action) []string {
-	library := action.Owner != "" && action.Repo != "" && e.ImagesDir != ""
+	library := action.Name != "" && e.ImagesDir != ""
 	primary := recordedImage(action, e.ImagesDir)
 	if !library && primary != "" {
 		if abs, err := filepath.Abs(primary); err == nil {
@@ -180,7 +180,7 @@ func (e *Engine) cachedAttachPath(action Action) string {
 		sum string
 		ok  bool
 	)
-	if action.Owner != "" && action.Repo != "" && e.ImagesDir != "" {
+	if action.Name != "" && e.ImagesDir != "" {
 		sum, ok = e.libraryDigest(action)
 	} else if action.Image != "" {
 		abs, err := filepath.Abs(action.Image)
@@ -198,7 +198,7 @@ func (e *Engine) cachedAttachPath(action Action) string {
 // libraryDigest is the sha256 metadata records for the active
 // library payload. attach uses that digest as the cache file name.
 func (e *Engine) libraryDigest(action Action) (string, bool) {
-	repo, err := image.OpenRepo(e.ImagesDir, action.Owner+"/"+action.Repo)
+	repo, err := image.OpenRepo(e.ImagesDir, action.Name)
 	if err != nil {
 		return "", false
 	}
@@ -231,8 +231,12 @@ func fileDigest(path string) (string, bool) {
 // absolute path attach used and adds the cache copy when the cache
 // is on. A library mount with the cache off stays on image.dmg.
 func recordedImage(action Action, imagesDir string) string {
-	if action.Owner != "" && action.Repo != "" && imagesDir != "" {
-		return filepath.Join(imagesDir, action.Owner, action.Repo, diskImageFile)
+	if action.Name != "" && imagesDir != "" {
+		repo, err := image.OpenRepo(imagesDir, action.Name)
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(repo.Dir, diskImageFile)
 	}
 	return action.Image
 }

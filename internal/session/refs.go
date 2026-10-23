@@ -26,14 +26,14 @@ func (r Refs) Holds(ref image.Ref) (bool, error) {
 
 // Holder names the first active session pinning the full image. Only
 // library identities participate: a file-path image records no
-// owner, repository, or id and never protects. Actions already
-// unmounted do not pin; pending and failed actions do, because a
-// crashed execution may have left the mount up. A record another
-// process holds counts as holding — its name is the conservative
-// answer that never causes a wrong delete — and a corrupt record is
-// reported instead of ignored.
+// name or id and never protects. Actions already unmounted do not
+// pin; pending and failed actions do, because a crashed execution
+// may have left the mount up. A record another process holds counts
+// as holding — its name is the conservative answer that never causes
+// a wrong delete — and a corrupt record is reported instead of
+// ignored.
 func (r Refs) Holder(ref image.Ref) (string, bool, error) {
-	if ref.Owner == "" || ref.Repo == "" || ref.FullID == "" {
+	if ref.Name == "" || ref.FullID == "" {
 		return "", false, nil
 	}
 	store := Store(r)
@@ -87,8 +87,7 @@ func recordPins(rec Record, ref image.Ref) bool {
 	}
 	for _, action := range rec.Actions {
 		if action.Type == TypeMount && action.Status != StatusUnmounted &&
-			action.Owner == ref.Owner && action.Repo == ref.Repo &&
-			action.FullID == ref.FullID {
+			action.Name == ref.Name && action.FullID == ref.FullID {
 			return true
 		}
 	}

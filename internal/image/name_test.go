@@ -7,22 +7,27 @@ import (
 	"testing"
 )
 
-func TestParseNameAcceptsOwnerRepo(t *testing.T) {
-	cases := []string{
-		"alice/app",
-		"alice/incr",
-		"alice/abc123",
-		"alice/0123456789abcde", // 15 hex digits: shorter than idHexLen
+func TestParseNameAcceptsLegalNames(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"app", []string{"app"}},
+		{"alice/app", []string{"alice", "app"}},
+		{"a/b/c", []string{"a", "b", "c"}},
+		{"a/b/c/d/e", []string{"a", "b", "c", "d", "e"}},
+		{"alice/incr", []string{"alice", "incr"}},
+		{"alice/abc123", []string{"alice", "abc123"}},
+		{"alice/0123456789abcde", []string{"alice", "0123456789abcde"}}, // 15 hex
 	}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			owner, repo, err := ParseName(name)
+	for _, tt := range cases {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseName(tt.in)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantOwner, wantRepo, ok := strings.Cut(cleanImageName(name), "/")
-			if !ok || owner != wantOwner || repo != wantRepo {
-				t.Fatalf("got %s/%s, want %s/%s", owner, repo, wantOwner, wantRepo)
+			if strings.Join(got, "/") != strings.Join(tt.want, "/") {
+				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -30,14 +35,10 @@ func TestParseNameAcceptsOwnerRepo(t *testing.T) {
 
 func TestParseNameRejectsIllegalShapes(t *testing.T) {
 	cases := []string{
-		"alice",
-		"alice/app/extra",
-		"alice/",
-		"/app",
+		"a/b/c/d/e/f",
 		"",
 		"/",
-		"alice/.",
-		"./app",
+		"/app",
 		"alice/..",
 		"../app",
 		"ali ce/app",
@@ -50,30 +51,33 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 		"alice/ap\u00a0p",
 		"alice/ap\u0080p",
 		"alice/ap\u009fp",
-		"https://example.com/alice/app",
 		"alice/_incr",
 		"alice/_archives",
 		"alice/.hidden",
 		"_alice/app",
 		".alice/app",
+		"_foo",
+		".bar",
 		"alice/meta.yaml",
 		"alice/image.sqsh",
 		"alice/image.dmg",
 		"alice/image.sqsh-concat-view",
+		"meta.yaml",
 		"meta.yaml/app",
 		"alice/0123456789abcdef",
 		"alice/0123456789ABCDEF",
 		"alice/0123456789abcdef0",
 		"0123456789abcdef/app",
+		"alice/../../bob/app",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := ParseName(name)
+			_, err := ParseName(name)
 			if !errors.Is(err, ErrInvalidName) {
 				t.Fatalf("error = %v", err)
 			}
 			msg := err.Error()
-			if !strings.Contains(msg, "want owner/repo") {
+			if !strings.Contains(msg, "want 1 to 5 segments") {
 				t.Fatalf("error = %q, want format guidance", msg)
 			}
 			if !strings.Contains(msg, strconv.Quote(name)) {
@@ -84,37 +88,39 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 }
 
 func TestParseNameCleansBeforeCheckingShape(t *testing.T) {
-	cases := []string{
-		"alice//app",
-		"alice/./app",
-		"alice/app/",
-		"alice/foo/../app",
-		"./alice/app",
-		"alice/././app",
+	cases := map[string]string{
+		"alice//app":       "alice/app",
+		"alice/./app":      "alice/app",
+		"alice/app/":       "alice/app",
+		"alice/foo/../app": "alice/app",
+		"./alice/app":      "alice/app",
+		"alice/././app":    "alice/app",
+		"alice/.":          "alice",
+		"./app":            "app",
 	}
-	for _, name := range cases {
+	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {
-			owner, repo, err := ParseName(name)
+			got, err := ParseName(name)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if owner != "alice" || repo != "app" {
-				t.Fatalf("got %s/%s", owner, repo)
+			if strings.Join(got, "/") != want {
+				t.Fatalf("got %v, want %s", got, want)
 			}
 		})
 	}
 }
 
-func TestParseNameRejectsEmptySegmentWithFullInput(t *testing.T) {
-	_, _, err := ParseName("alice/")
+func TestParseNameQuotesRawInputOnFailure(t *testing.T) {
+	_, err := ParseName("a/b/c/d/e/f")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, `"alice/"`) {
-		t.Fatalf("error = %q, want the full input, not an empty segment", msg)
+	if !strings.Contains(msg, `"a/b/c/d/e/f"`) {
+		t.Fatalf("error = %q, want quoted raw input", msg)
 	}
-	if !strings.Contains(msg, "want owner/repo") {
+	if !strings.Contains(msg, "want 1 to 5 segments") {
 		t.Fatalf("error = %q, want format guidance", msg)
 	}
 }

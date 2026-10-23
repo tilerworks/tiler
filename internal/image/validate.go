@@ -21,8 +21,7 @@ func (m Meta) Validate() error {
 
 func (m Meta) checkIdentity(list *issueList) {
 	checkDigest(m.ID, m.SHA256, "", list)
-	checkSegmentField("owner", m.Owner, list)
-	checkSegmentField("repo", m.Repo, list)
+	checkNameField(m.Name, list)
 	if m.Kind != KindFull && m.Kind != KindIncremental {
 		list.add("kind: must be full or incremental")
 	}
@@ -30,6 +29,15 @@ func (m Meta) checkIdentity(list *issueList) {
 		list.add("builder: must be set")
 	}
 	checkCommit("source.commit", m.Source.Commit, list)
+}
+
+// checkNameField requires Name to parse as a canonical 1-to-5
+// segment library name that round-trips through ParseName.
+func checkNameField(name string, list *issueList) {
+	segs, err := ParseName(name)
+	if err != nil || strings.Join(segs, "/") != name {
+		list.add("name: invalid image name")
+	}
 }
 
 // checkPayload checks the active container and the payload facts.
@@ -149,12 +157,6 @@ func checkDigest(id, sum, prefix string, list *issueList) {
 func checkSum(field, sum string, list *issueList) {
 	if !isLowerHex(sum, sumHexLen) {
 		list.add("%s: must be 64 lowercase hex digits", field)
-	}
-}
-
-func checkSegmentField(field, seg string, list *issueList) {
-	if err := checkSegment(seg); err != nil {
-		list.add("%s: invalid segment", field)
 	}
 }
 

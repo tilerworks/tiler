@@ -11,8 +11,8 @@ func TestOpenRepoLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.Owner != "alice" || repo.Repo != "app" {
-		t.Fatalf("name = %s/%s", repo.Owner, repo.Repo)
+	if repo.Name() != "alice/app" {
+		t.Fatalf("name = %s", repo.Name())
 	}
 	root := filepath.Join("/var/lib/images", "alice", "app")
 	if repo.Dir != root {
@@ -85,8 +85,8 @@ func TestLibraryPathsRejectEscape(t *testing.T) {
 	if _, err := OpenRepo("  ", "alice/app"); err == nil {
 		t.Fatal("accepted empty images dir")
 	}
-	if _, err := OpenRepo(t.TempDir(), "alice/app/extra"); err == nil {
-		t.Fatal("accepted three segments")
+	if _, err := OpenRepo(t.TempDir(), "a/b/c/d/e/f"); err == nil {
+		t.Fatal("accepted six segments")
 	}
 }
 

@@ -56,15 +56,14 @@ func mustRemove(t *testing.T, lib []string, target string) string {
 // writeSession drops one JSON session record whose mount action
 // pins a full image. A "closed" state closes the record and marks
 // the action unmounted; every other state keeps it active.
-func writeSession(t *testing.T, dir, name, owner, repo, fullID, state string) {
+func writeSession(t *testing.T, dir, name, imageName, fullID, state string) {
 	t.Helper()
 	now := time.Now().UTC()
 	action := session.Action{
 		Seq:        1,
 		Type:       session.TypeMount,
-		Image:      owner + "/" + repo,
-		Owner:      owner,
-		Repo:       repo,
+		Image:      imageName,
+		Name:       imageName,
 		FullID:     fullID,
 		Mountpoint: "/ws/" + name,
 		Mode:       session.ModeRW,
@@ -224,9 +223,13 @@ func TestImagesShowBadNames(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
-	_, _, _, err := runCmd(t, append(lib, "images", "show", "nope")...)
+	_, _, _, err := runCmd(t, append(lib, "images", "show", "_foo")...)
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+	_, _, _, err = runCmd(t, append(lib, "images", "show", "nope")...)
+	if ExitCode(err) != 1 {
+		t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
 	}
 	_, _, _, err = runCmd(t, append(lib, "images", "show", "bob/missing")...)
 	if ExitCode(err) != 1 {
@@ -292,7 +295,7 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
 	id1 := buildImage(t, lib, "alice/app", src)
-	writeSession(t, sessions, "s1", "alice", "app", id1, "running")
+	writeSession(t, sessions, "s1", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	id2 := buildImage(t, lib, "alice/app", src)
 
@@ -303,7 +306,7 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	if out := mustGC(t, lib); out != "" {
 		t.Fatalf("gc with a referenced hold printed %q", out)
 	}
-	writeSession(t, sessions, "s1", "alice", "app", id1, "closed")
+	writeSession(t, sessions, "s1", "alice/app", id1, "closed")
 	want := fmt.Sprintf("archived alice/app %s\n", id1)
 	if out := mustGC(t, lib); out != want {
 		t.Fatalf("gc promotion:\n%s\nwant:\n%s", out, want)
@@ -325,7 +328,7 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	// The pinning record must exist before the second build, which
 	// is what retires the first chain to a hold instead of an
 	// archive.
-	writeSession(t, sessions, "live", "alice", "app", id1, "running")
+	writeSession(t, sessions, "live", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	activeID := buildImage(t, lib, "alice/app", src)
 	// An aged closed record is reclaimed; the active record both
@@ -360,7 +363,7 @@ func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
 	id1 := buildImage(t, lib, "alice/app", src)
-	writeSession(t, sessions, "dev", "alice", "app", id1, "running")
+	writeSession(t, sessions, "dev", "alice/app", id1, "running")
 
 	if out := mustGC(t, lib); out != "stale session dev\n" {
 		t.Fatalf("gc report:\n%s\nwant:\nstale session dev\n", out)
@@ -419,6 +422,86 @@ func TestImagesRemoveTwoPhases(t *testing.T) {
 	}
 }
 
+// TestImagesOneAndThreeSegmentFlows covers publish, list, show, pin,
+// archive path shape, and whole-repo remove for one- and three-
+// segment library names.
+func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
+	for _, name := range []string{"solo", "a/b/c"} {
+		t.Run(name, func(t *testing.T) {
+			home, work := withWorkspace(t)
+			imagesDir, lib := libFlags(home)
+			sessions := sessionsDir(home)
+			withBuildSeams(t, nil)
+			withSessionSeams(t, healthySessions)
+			src := filepath.Join(work, "src")
+			writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
+			id1 := buildImage(t, lib, name, src)
+
+			repo, err := image.OpenRepo(imagesDir, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, err := image.Load(repo.MetaPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.Name != name || meta.ID != id1 {
+				t.Fatalf("meta name=%q id=%s, want %s %s", meta.Name, meta.ID, name, id1)
+			}
+			if _, err := os.Stat(filepath.Join(repo.Dir, "image.sqsh")); err != nil {
+				t.Fatal(err)
+			}
+			if out := mustList(t, lib); !strings.Contains(out, name) || !strings.Contains(out, id1) {
+				t.Fatalf("ls missing %s %s:\n%s", name, id1, out)
+			}
+			if detail := mustShow(t, lib, name); !strings.Contains(detail, "  id          "+id1) {
+				t.Fatalf("show missing id:\n%s", detail)
+			}
+
+			writeSession(t, sessions, "s1", name, id1, "running")
+			writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
+			id2 := buildImage(t, lib, name, src)
+			if out := mustShow(t, lib, name); !strings.Contains(out, id2) ||
+				!strings.Contains(out, "  holds       1") {
+				t.Fatalf("show held:\n%s\nwant active %s hold %s", out, id2, id1)
+			}
+			if out := mustGC(t, lib); out != "" {
+				t.Fatalf("gc with a referenced hold printed %q", out)
+			}
+			writeSession(t, sessions, "s1", name, id1, "closed")
+			want := fmt.Sprintf("archived %s %s\n", name, id1)
+			if out := mustGC(t, lib); out != want {
+				t.Fatalf("gc promotion:\n%s\nwant:\n%s", out, want)
+			}
+			arch := filepath.Join(repo.Dir, "_archives", id1)
+			if _, err := os.Stat(arch); err != nil {
+				t.Fatalf("archive path %s: %v", name+"/_archives/"+id1, err)
+			}
+			if !isHex16(id1) {
+				t.Fatalf("archive id %q is not 16 lowercase hex", id1)
+			}
+
+			if out := mustRemove(t, lib, name); out != "deprecated "+name+"\n" {
+				t.Fatalf("phase 1 printed %q", out)
+			}
+			if out := mustRemove(t, lib, name); out != "removed "+name+"\n" {
+				t.Fatalf("phase 2 printed %q", out)
+			}
+			if _, err := os.Stat(imagesDir); err != nil {
+				t.Fatalf("library root deleted: %v", err)
+			}
+			if _, err := os.Stat(repo.Dir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("repo dir survived: %v", err)
+			}
+			if name == "a/b/c" {
+				if _, err := os.Stat(filepath.Join(imagesDir, "a")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("empty namespace left behind: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -427,7 +510,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
 	id1 := buildImage(t, lib, "alice/app", src)
-	writeSession(t, sessions, "s1", "alice", "app", id1, "running")
+	writeSession(t, sessions, "s1", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	buildImage(t, lib, "alice/app", src)
 
@@ -451,7 +534,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 
 	// After the reference closes, gc promotes the hold and the
 	// archive target walks both rm phases.
-	writeSession(t, sessions, "s1", "alice", "app", id1, "closed")
+	writeSession(t, sessions, "s1", "alice/app", id1, "closed")
 	mustGC(t, lib)
 	target := "alice/app/_archives/" + id1
 	if out := mustRemove(t, lib, target); out != "deprecated "+target+"\n" {
@@ -470,7 +553,8 @@ func TestImagesRemoveBadTargets(t *testing.T) {
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	for _, target := range []string{
-		"plain", "a/b/c", "alice/app/archives/not-hex", "alice/app/_archives/not-hex", "bad owner/app",
+		"_foo", ".bar", "a/b/c/d/e/f", "alice/app/_archives",
+		"alice/app/_archives/not-hex", "bad owner/app",
 	} {
 		_, _, _, err := runCmd(t, append(lib, "images", "rm", target)...)
 		if ExitCode(err) != 2 {

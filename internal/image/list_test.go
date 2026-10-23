@@ -3,13 +3,14 @@ package image
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
 
 func TestListReposEnumeratesValidNames(t *testing.T) {
 	cfg := buildConfig(t)
-	for _, name := range []string{"alice/app", "alice/tool", "bob/app"} {
+	for _, name := range []string{"alice/app", "alice/tool", "bob/app", "solo", "a/b/c"} {
 		repo, err := OpenRepo(cfg.ImagesDir, name)
 		if err != nil {
 			t.Fatal(err)
@@ -17,6 +18,15 @@ func TestListReposEnumeratesValidNames(t *testing.T) {
 		if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		// Empty dirs are namespaces; plant a leaf marker so ListRepos
+		// records them.
+		if err := os.WriteFile(filepath.Join(repo.Dir, fileMeta), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Namespace under alice with no leaf marker must not list.
+	if err := os.MkdirAll(filepath.Join(cfg.ImagesDir, "alice", "ns"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(cfg.ImagesDir, "stray dir", "x"), 0o755); err != nil {
 		t.Fatal(err)
@@ -30,16 +40,12 @@ func TestListReposEnumeratesValidNames(t *testing.T) {
 	}
 	var got []string
 	for _, repo := range repos {
-		got = append(got, repo.Owner+"/"+repo.Repo)
+		got = append(got, repo.Name())
 	}
-	want := []string{"alice/app", "alice/tool", "bob/app"}
-	if len(got) != len(want) {
+	slices.Sort(got)
+	want := []string{"a/b/c", "alice/app", "alice/tool", "bob/app", "solo"}
+	if !slices.Equal(got, want) {
 		t.Fatalf("repos = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("repos = %v, want %v", got, want)
-		}
 	}
 }
 

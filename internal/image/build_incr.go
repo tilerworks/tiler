@@ -24,7 +24,7 @@ const maxStackDepth = 8
 type IncrRequest struct {
 	// Config supplies the image library location and split policy.
 	Config config.Config
-	// Name is the resolved owner/repo image name.
+	// Name is the resolved 1-to-5 segment image name.
 	Name string
 	// Format, when set, must match the active image container type.
 	// Empty inherits that type. A mismatch is ErrFormatConflict and
@@ -133,6 +133,9 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 func validateIncr(req IncrRequest) (Repo, Meta, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
+		return Repo{}, Meta{}, err
+	}
+	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
 		return Repo{}, Meta{}, err
 	}
 	info, err := os.Stat(req.Upper)

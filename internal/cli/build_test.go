@@ -170,11 +170,14 @@ func isHex16(s string) bool {
 // viewTable is one writable merged view over the library image, with
 // its upper under the runtime tree.
 func viewTable(imagesDir, name, merged, upper string) []mountinfo.Mount {
-	owner, repo, _ := strings.Cut(name, "/")
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		panic(err)
+	}
 	return []mountinfo.Mount{{
 		Point:  merged,
 		FSType: "fuse.fuse-overlayfs",
-		Source: filepath.Join(imagesDir, owner, repo, image.ImageFile),
+		Source: filepath.Join(repo.Dir, image.ImageFile),
 		Upper:  upper,
 	}}
 }
@@ -307,7 +310,7 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 	}{
 		{name: "both mode flags", args: []string{"build", "--full", "--incremental", "--image", "alice/app", src}},
 		{name: "missing image name", args: []string{"build", src}},
-		{name: "bad image name", args: []string{"build", "--image", "nope", src}},
+		{name: "bad image name", args: []string{"build", "--image", "_foo", src}},
 		{name: "incr outside a view", args: []string{"build", "--incremental", "--image", "alice/app", src}},
 		{name: "short incr outside a view", args: []string{"build", "-i", "-I", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
@@ -854,8 +857,11 @@ func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
 
 func assertBuiltFormat(t *testing.T, imagesDir, name, id, format, compression string) {
 	t.Helper()
-	owner, repo, _ := strings.Cut(name, "/")
-	meta, err := image.Load(filepath.Join(imagesDir, owner, repo, "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := image.Load(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}

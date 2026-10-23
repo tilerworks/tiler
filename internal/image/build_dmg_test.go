@@ -97,7 +97,7 @@ func TestBuildDMGDirectoryUsesSrcfolder(t *testing.T) {
 		t.Fatalf("calls = %q", runner.calls)
 	}
 	temp := dmgArgOut(runner.calls[0][1:])
-	want, err := container.HdiutilCreateArgv(src, "ulmo", "alice/app", temp)
+	want, err := container.HdiutilCreateArgv(src, "ulmo", "app", temp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestBuildDMGEmptyCompressionIsULFO(t *testing.T) {
 		t.Fatal(err)
 	}
 	temp := dmgArgOut(runner.calls[0][1:])
-	want, err := container.HdiutilCreateArgv(src, "", "alice/app", temp)
+	want, err := container.HdiutilCreateArgv(src, "", "app", temp)
 	if err != nil {
 		t.Fatal(err)
 	}

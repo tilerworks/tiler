@@ -54,27 +54,31 @@ const (
 // contains an empty, ".", or ".." segment.
 var ErrInvalidPath = errors.New("invalid library path")
 
-// Repo is one owner/repo directory under the image library.
+// Repo is one named leaf directory under the image library.
 type Repo struct {
-	Owner string
-	Repo  string
-	Dir   string
+	Segments []string
+	Dir      string
 }
 
-// OpenRepo parses name and joins it under imagesDir. The name must
-// be an explicit owner/repo pair.
+// Name returns the canonical slash-joined library name.
+func (repo Repo) Name() string {
+	return strings.Join(repo.Segments, "/")
+}
+
+// OpenRepo parses name and joins every segment under imagesDir. It
+// does not check leaf nesting; publish callers do that separately.
 func OpenRepo(imagesDir, name string) (Repo, error) {
-	owner, repo, err := ParseName(name)
+	segments, err := ParseName(name)
 	if err != nil {
 		return Repo{}, err
 	}
 	if strings.TrimSpace(imagesDir) == "" {
 		return Repo{}, fmt.Errorf("%w: empty images dir", ErrInvalidPath)
 	}
+	parts := append([]string{imagesDir}, segments...)
 	return Repo{
-		Owner: owner,
-		Repo:  repo,
-		Dir:   filepath.Join(imagesDir, owner, repo),
+		Segments: segments,
+		Dir:      filepath.Join(parts...),
 	}, nil
 }
 

@@ -114,7 +114,9 @@ type fileFormCase struct {
 
 func TestResolveMountFileForm(t *testing.T) {
 	dir := t.TempDir()
-	img := filepath.Join(dir, "img.sqsh")
+	// Underscore-prefixed names stay illegal library names, so they
+	// still exercise the file-path branch under name-first ResolveMount.
+	img := filepath.Join(dir, "_img.sqsh")
 	if err := os.WriteFile(img, []byte("raw squashfs bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -122,18 +124,18 @@ func TestResolveMountFileForm(t *testing.T) {
 	if err := os.WriteFile(spaced, []byte("spaced name"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	nested := filepath.Join(dir, "a", "b")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
+	nested := filepath.Join(dir, "_a", "b", "c", "d", "e", "f")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nested, "c"), []byte("deep"), 0o644); err != nil {
+	if err := os.WriteFile(nested, []byte("deep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "_sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	fifoOK := true
-	if err := syscall.Mkfifo(filepath.Join(dir, "fifo"), 0o644); err != nil {
+	if err := syscall.Mkfifo(filepath.Join(dir, "_fifo"), 0o644); err != nil {
 		fifoOK = false
 		t.Logf("mkfifo unavailable; skipping only the fifo case: %v", err)
 	}
@@ -145,7 +147,7 @@ func TestResolveMountFileForm(t *testing.T) {
 		},
 		{
 			name:     "relative regular file resolves to the same absolute path",
-			arg:      "img.sqsh",
+			arg:      "_img.sqsh",
 			wantPath: img,
 		},
 		{
@@ -155,32 +157,32 @@ func TestResolveMountFileForm(t *testing.T) {
 		},
 		{
 			name:     "illegal library-shaped name resolves as a file path",
-			arg:      filepath.Join("a", "b", "c"),
-			wantPath: filepath.Join(dir, "a", "b", "c"),
+			arg:      filepath.Join("_a", "b", "c", "d", "e", "f"),
+			wantPath: nested,
 		},
 		{
 			name:     "missing file",
-			arg:      "missing.sqsh",
+			arg:      "_missing.sqsh",
 			wantErrs: []error{ErrNotImageFile, os.ErrNotExist},
 			wantText: []string{"no such file or directory"},
 			notText:  []string{"library reference"},
 		},
 		{
 			name:     "directory is refused",
-			arg:      "sub",
+			arg:      "_sub",
 			wantErrs: []error{ErrNotImageFile},
 			wantText: []string{"is not a regular file"},
 		},
 		{
 			name:     "non-regular file is refused",
-			arg:      "fifo",
+			arg:      "_fifo",
 			skip:     !fifoOK,
 			wantErrs: []error{ErrNotImageFile},
 			wantText: []string{"is not a regular file"},
 		},
 		{
 			name:     "library-looking missing path names both forms",
-			arg:      "x/y/z",
+			arg:      "_x/y/z",
 			wantErrs: []error{ErrNotImageFile, ErrInvalidName},
 			wantText: []string{"library reference", "invalid image name"},
 		},
