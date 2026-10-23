@@ -243,8 +243,8 @@ func TestUnmountPathTearsDownOwnedChildrenInReverse(t *testing.T) {
 	// The parent itself is not a listed mount; the combination lives
 	// in its direct children, one of which is foreign.
 	table := []Entry{
-		{Point: src, FSType: "fuse", Source: filepath.Join(images, "alice/app/members/src.sqsh")},
-		{Point: docs, FSType: "fuse", Source: filepath.Join(images, "alice/app/members/docs.sqsh")},
+		{Point: src, FSType: "fuse", Source: filepath.Join(images, "alice/app/_incr/aaaaaaaaaaaaaaaa.sqsh")},
+		{Point: docs, FSType: "fuse", Source: filepath.Join(images, "alice/app/_incr/bbbbbbbbbbbbbbbb.sqsh")},
 		{Point: tools, FSType: "fuse", Source: "/mnt/usb/tools"},
 	}
 	k := newFakeKernel()
@@ -300,7 +300,7 @@ func TestUnmountPathWithoutOwnedLeavesChildren(t *testing.T) {
 		Dir: parent,
 		Table: []Entry{{
 			Point: child, FSType: "fuse",
-			Source: "/images/alice/app/members/src.sqsh",
+			Source: "/images/alice/app/_incr/aaaaaaaaaaaaaaaa.sqsh",
 		}},
 		RuntimeDir: filepath.Join(dir, "runtime"),
 	}

@@ -30,7 +30,7 @@ type hooks struct {
 
 // Publish writes data and meta into the active slot.
 //
-// An existing active chain is renamed into hold/<old-id> before the
+// An existing active chain is renamed into _hold/<old-id> before the
 // new bytes become active. If activation fails, that chain is put
 // back. When refs does not hold the previous chain, hold is renamed
 // to archives in the same call, replacing an older archive of that
@@ -47,8 +47,8 @@ type hooks struct {
 //
 // The next publish repairs a crash that restored only part of the
 // previous chain, dropped one active file, or parked an archive
-// beside its final name. Layer files left in the active incr
-// directory, and blocks/<id> directories a chain lists, move into
+// beside its final name. Layer files left in the active _incr
+// directory, and _blocks/<id> directories a chain lists, move into
 // the one hold whose chain lists them.
 // Unreferenced holds are archived even when another image is already
 // active, and republishing a pinned id returns the chain layers its
@@ -281,18 +281,15 @@ func singleFileNames(formatType string) []string {
 // payloadFormPaths lists the payload shapes as they rest in a
 // directory that preserves the active layout: the repository
 // directory, a hold, or an archive. formatType selects the
-// single-file name. Blocks and members stay in every list; repair
-// still recognizes those leftovers.
+// single-file name. Blocks stay in every list; repair still
+// recognizes those leftovers.
 func payloadFormPaths(dir, formatType string) []string {
 	names := singleFileNames(formatType)
-	paths := make([]string, 0, len(names)+2)
+	paths := make([]string, 0, len(names)+1)
 	for _, name := range names {
 		paths = append(paths, filepath.Join(dir, name))
 	}
-	return append(paths,
-		filepath.Join(dir, dirBlocks),
-		filepath.Join(dir, dirMembers),
-	)
+	return append(paths, filepath.Join(dir, dirBlocks))
 }
 
 // anyPayloadExists reports whether any payload form rests in a
@@ -510,11 +507,11 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 
 // activeMoves lists the renames that carry the active slot into a
 // hold. The hold preserves the active layout: the payload root meta
-// names plus meta.yaml, and incr/ only for the single-file form.
+// names plus meta.yaml, and _incr/ only for the single-file form.
 // Directory payloads move as one rename each way. For blocks that
-// one rename is the whole blocks/ tree, so chain layer directories
+// one rename is the whole _blocks/ tree, so chain layer directories
 // reclaimed into the active slot travel with the full image. Do not
-// MkdirAll the hold blocks/ destination first: rename onto an
+// MkdirAll the hold _blocks/ destination first: rename onto an
 // existing directory fails.
 func activeMoves(repo Repo, hold string, meta Meta) ([][2]string, error) {
 	moves := [][2]string{
@@ -652,7 +649,7 @@ func archiveUnreferencedHolds(repo Repo, refs Refs, seam hooks) error {
 }
 
 // sweepActiveIncr moves active layer files into the one hold whose
-// meta chain lists them. A torn replace can leave incr/ behind while
+// meta chain lists them. A torn replace can leave _incr/ behind while
 // image and meta already rest in a hold; returning the files by
 // chain id keeps foreign layers out of unrelated archives and
 // completes the move even when a reference pins the hold. Files the
@@ -691,7 +688,7 @@ func sweepActiveIncr(repo Repo, holdIDs []string, seam hooks) error {
 	return nil
 }
 
-// sweepActiveBlockDirs moves blocks/<id> directories left in the
+// sweepActiveBlockDirs moves _blocks/<id> directories left in the
 // active slot into the one hold whose chain lists that id. A crashed
 // restore or return of chain layers can leave one directory behind
 // after the rest of the hold moved; deleting that directory as an
@@ -824,7 +821,7 @@ func holdChainClaims(repo Repo, holdIDs []string) (map[string][]string, error) {
 	return claims, nil
 }
 
-// layerID is the content id encoded in an incr/<id>.sqsh name.
+// layerID is the content id encoded in an _incr/<id>.sqsh name.
 func layerID(name string) (string, bool) {
 	id, ok := strings.CutSuffix(name, squashExt)
 	if !ok || checkID(id) != nil {
@@ -1000,8 +997,8 @@ func retireStaleHold(repo Repo, id string, chain []ChainEntry, refs Refs, seam h
 }
 
 // returnChainLayers moves the layers the chain lists from the hold
-// back into the active slot. Single-file layers come from incr/;
-// blocks layers come from blocks/<id>/. Files the active slot already
+// back into the active slot. Single-file layers come from _incr/;
+// blocks layers come from _blocks/<id>/. Files the active slot already
 // has stay untouched.
 func returnChainLayers(repo Repo, hold string, chain []ChainEntry, seam hooks) error {
 	for _, entry := range chain {
@@ -1079,7 +1076,7 @@ func reclaimHoldIncr(repo Repo, hold string, seam hooks) error {
 	return nil
 }
 
-// reclaimHoldBlocks moves blocks/<id> directories a stale hold of the
+// reclaimHoldBlocks moves _blocks/<id> directories a stale hold of the
 // active id owns but the active slot lacks. The following removal of
 // the hold would otherwise delete chain layers that the fresh hold
 // is supposed to carry.
@@ -1209,7 +1206,7 @@ func repairMissingMeta(repo Repo, seam hooks) error {
 		return err
 	}
 	// Salvage chain layer directories before the orphan-payload
-	// cleanup. A blocks/<id> left beside a missing meta looks like a
+	// cleanup. A _blocks/<id> left beside a missing meta looks like a
 	// payload and would be deleted with it.
 	if err := sweepActiveBlockDirs(repo, ids, seam); err != nil {
 		return err
@@ -1538,7 +1535,6 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 		return err
 	}
 	for _, pair := range [][2]string{
-		{filepath.Join(hold, dirMembers), filepath.Join(repo.Dir, dirMembers)},
 		{filepath.Join(hold, dirIncr), filepath.Join(repo.Dir, dirIncr)},
 	} {
 		if moves, err = appendPresentDirMove(moves, pair[0], pair[1]); err != nil {
@@ -1563,7 +1559,7 @@ func restoreHold(repo Repo, id string, seam hooks) error {
 }
 
 // appendBlocksRestore adds the blocks directory move. When the active
-// slot already has blocks/, each held layer directory is merged in
+// slot already has _blocks/, each held layer directory is merged in
 // instead, so a chain dir that did not travel with the full image
 // still returns.
 func appendBlocksRestore(moves [][2]string, hold, repoDir string) ([][2]string, error) {

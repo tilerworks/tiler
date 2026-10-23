@@ -81,7 +81,7 @@ equipped host, so a genuine regression is never masked by a skip.
   chain cascades in `images show` and in `meta.yaml`. A fresh remount
   serves the full plus both increments, `build --full` merges the live
   view into a new full (replacing `meta.yaml` and clearing the chain),
-  and the old full + chain retire into a session-pinned `hold/`. Needs
+  and the old full + chain retire into a session-pinned `_hold/`. Needs
   the FUSE toolchain; skips cleanly without it.
 - `e2e/t0005-images-ls-gc-rm.sh` — exercises the library subcommands
   over a mounted image: `images list` / `images show` (all images,
@@ -146,10 +146,10 @@ equipped host, so a genuine regression is never masked by a skip.
   cleanly without it.
 - `e2e/t0012-build-split-size.sh` — builds a full image with a small
   `--split` into multiple blocks, mounts it, writes the upper, builds
-  an incr with the same `--split` into `blocks/<incr-id>/`, remounts
+  an incr with the same `--split` into `_blocks/<incr-id>/`, remounts
   to verify the upper file, then publishes a second full of the same
   name while that view is still mounted so the old full and incr retire
-  into a session-pinned `hold/<id>/blocks/` (not archives). Omitting
+  into a session-pinned `_hold/<id>/_blocks/` (not `_archives`). Omitting
   `--split` or setting project `split_size: 0` stays a single
   `image.sqsh`. Needs the FUSE toolchain; skips cleanly without it.
 - `e2e/t0014-squashfs-compression.sh` — builds a full image with
@@ -178,7 +178,7 @@ equipped host, so a genuine regression is never masked by a skip.
   and a subdirectory of that mount under a different `--image`
   (directory create, not a bake). Each repeat must keep the same id
   and `meta.yaml` (content fingerprint idle), with no new
-  `archives/` or `hold/`. Needs `hdiutil`; macOS-only (`MACOS`);
+  `_archives/` or `_hold/`. Needs `hdiutil`; macOS-only (`MACOS`);
   skips on Linux and when `hdiutil` is missing.
 
 ## Adding cases in later phases

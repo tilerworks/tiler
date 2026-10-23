@@ -30,8 +30,8 @@ const (
 	// PayloadSingle is the default single-file image.sqsh payload.
 	PayloadSingle = "single"
 	// PayloadBlocks is a byte-block split payload. The full image
-	// lives in blocks/<full-id>/; each incremental layer with a
-	// Blocks manifest lives in blocks/<incr-id>/.
+	// lives in _blocks/<full-id>/; each incremental layer with a
+	// Blocks manifest lives in _blocks/<incr-id>/.
 	PayloadBlocks = "blocks"
 )
 
@@ -51,7 +51,7 @@ type Source struct {
 
 // ChainEntry is one incremental layer. Kind is not repeated here;
 // every member is incremental. Blocks is set when the layer is
-// stored as blocks/<id>/; digest and size still describe the whole
+// stored as _blocks/<id>/; digest and size still describe the whole
 // logical squashfs.
 type ChainEntry struct {
 	ID        string       `yaml:"id"`

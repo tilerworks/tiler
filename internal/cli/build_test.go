@@ -242,7 +242,7 @@ func TestBuildSplitFlagProducesBlocks(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
 	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
 	if err != nil || len(names) < 2 {
 		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
@@ -269,7 +269,7 @@ func TestBuildSplitZeroYieldsSingleFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
 		t.Fatalf("explicit --split 0 left no image.sqsh: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "blocks")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_blocks")); !os.IsNotExist(err) {
 		t.Fatalf("--split 0 published blocks: %v", err)
 	}
 }
@@ -288,7 +288,7 @@ func TestBuildSplitFlagOverridesConfig(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
 	if _, err := os.Stat(blocksDir); err != nil {
 		t.Fatalf("CLI --split did not override config: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestBuildFullIdempotentOnSameSource(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("idle rebuild rewrote meta:\n%s\n%s", before, after)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("idle rebuild archived the image: %v", err)
 	}
 }
@@ -540,7 +540,7 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	if meta.ID != fullID || len(meta.Chain) != 1 || meta.Chain[0].ID != fields[2] {
 		t.Fatalf("meta = %+v, stdout id = %s", meta, fields[2])
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "incr", fields[2]+".sqsh")); err != nil {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_incr", fields[2]+".sqsh")); err != nil {
 		t.Fatal(err)
 	}
 }

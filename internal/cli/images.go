@@ -541,7 +541,7 @@ func newImagesGCCmd() *cobra.Command {
 
 func newImagesRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "remove <owner/repo | owner/repo/archives/full-id>",
+		Use:     "remove <owner/repo | owner/repo/_archives/full-id>",
 		Aliases: []string{"rm"},
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +

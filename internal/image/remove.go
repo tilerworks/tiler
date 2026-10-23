@@ -66,10 +66,10 @@ func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attache
 }
 
 // resolveRemoveTarget parses the two accepted target shapes,
-// owner/repo and owner/repo/archives/<full-id>, and loads the meta
+// owner/repo and owner/repo/_archives/<full-id>, and loads the meta
 // that carries the deprecated flag.
 func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, error) {
-	parts := strings.Split(target, "/")
+	parts := strings.Split(cleanImageName(target), "/")
 	var (
 		rt  rmTarget
 		err error
@@ -104,7 +104,7 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 }
 
 // invalidTarget reports a target that is neither owner/repo nor
-// owner/repo/archives/<full-id>. It wraps ErrInvalidName so command
+// owner/repo/_archives/<full-id>. It wraps ErrInvalidName so command
 // entries classify the refusal as a usage error.
 func invalidTarget(target string) error {
 	return fmt.Errorf("remove: invalid target %q: %w", target, ErrInvalidName)
@@ -248,7 +248,7 @@ func (t rmTarget) markDeprecated(meta Meta) error {
 }
 
 // delete removes the target scope. The whole-repository target
-// takes incr/, hold/, and archives/ with it; the archive target
+// takes _incr/, _hold/, and _archives/ with it; the archive target
 // only takes that one archive directory.
 func (t rmTarget) delete() error {
 	if t.archive != "" {

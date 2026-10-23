@@ -453,7 +453,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	// archive target walks both rm phases.
 	writeSession(t, sessions, "s1", "alice", "app", id1, "closed")
 	mustGC(t, lib)
-	target := "alice/app/archives/" + id1
+	target := "alice/app/_archives/" + id1
 	if out := mustRemove(t, lib, target); out != "deprecated "+target+"\n" {
 		t.Fatalf("archive phase 1 printed %q", out)
 	}
@@ -470,7 +470,7 @@ func TestImagesRemoveBadTargets(t *testing.T) {
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	for _, target := range []string{
-		"plain", "a/b/c", "alice/app/archives/not-hex", "bad owner/app",
+		"plain", "a/b/c", "alice/app/archives/not-hex", "alice/app/_archives/not-hex", "bad owner/app",
 	} {
 		_, _, _, err := runCmd(t, append(lib, "images", "rm", target)...)
 		if ExitCode(err) != 2 {

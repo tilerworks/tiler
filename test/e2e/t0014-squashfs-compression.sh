@@ -76,7 +76,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gzip full build records squashfs
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
 	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_missing "$img_dir/blocks" &&
+	test_path_is_missing "$img_dir/_blocks" &&
 	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
 	test_grep "^    type: squashfs$" "$meta_file" &&
 	test_grep "^    compression: gzip$" "$meta_file" &&
@@ -100,7 +100,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable mount and same-format i
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
 	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_file "$img_dir/incr/$layer.sqsh" &&
+	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
 	test_grep "^    type: squashfs$" "$meta_file" &&
 	test_grep "^    compression: gzip$" "$meta_file" &&
 	"$tiler_bin" images show alice/gzip >show-incr.out 2>show-incr.err &&

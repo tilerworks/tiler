@@ -175,8 +175,8 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	}
 	aliceDir := filepath.Join(imagesDir, "alice", "app")
 	storeGoldenRepo(t, aliceDir, alice)
-	writeGoldenChainDir(t, aliceDir, "archives", goldenArchiveID)
-	writeGoldenChainDir(t, aliceDir, "hold", goldenHoldID)
+	writeGoldenChainDir(t, aliceDir, "_archives", goldenArchiveID)
+	writeGoldenChainDir(t, aliceDir, "_hold", goldenHoldID)
 	bob := image.Meta{
 		ID: goldenBobID, Owner: "bob", Repo: "tool", Version: "v1",
 		Kind: image.KindFull, Format: format,

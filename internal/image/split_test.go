@@ -136,7 +136,7 @@ func TestTempPayloadDirNamesFollowTempPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const prefix = ".blocks.tmp."
+	const prefix = "._blocks.tmp."
 	if !strings.HasPrefix(first, prefix) {
 		t.Fatalf("name = %s, want prefix %s", first, prefix)
 	}

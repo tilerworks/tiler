@@ -559,7 +559,7 @@ func TestMountChainRequestKeepsMemberOrder(t *testing.T) {
 	}
 	repoDir := filepath.Join(imagesDir, "alice", "app")
 	fullOrig := filepath.Join(repoDir, "image.sqsh")
-	layerOrig := filepath.Join(repoDir, "incr", incrID+".sqsh")
+	layerOrig := filepath.Join(repoDir, "_incr", incrID+".sqsh")
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d", len(f.mountReqs))
 	}

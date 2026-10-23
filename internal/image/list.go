@@ -14,8 +14,8 @@ type State struct {
 	// archived has none.
 	Active    Meta
 	HasActive bool
-	// Archives and Holds list the chain ids under archives/ and
-	// hold/, sorted by name. Transient parked entries never list.
+	// Archives and Holds list the chain ids under _archives/ and
+	// _hold/, sorted by name. Transient parked entries never list.
 	Archives []string
 	Holds    []string
 }

@@ -40,7 +40,6 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 		"alice/ap\u0080p",
 		"alice/ap\u009fp",
 		"https://example.com/alice/app",
-		"alice//app",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -54,6 +53,28 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 			}
 			if !strings.Contains(msg, strconv.Quote(name)) {
 				t.Fatalf("error = %q, want quoted input %s", msg, strconv.Quote(name))
+			}
+		})
+	}
+}
+
+func TestParseNameCleansBeforeCheckingShape(t *testing.T) {
+	cases := []string{
+		"alice//app",
+		"alice/./app",
+		"alice/app/",
+		"alice/foo/../app",
+		"./alice/app",
+		"alice/././app",
+	}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			owner, repo, err := ParseName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owner != "alice" || repo != "app" {
+				t.Fatalf("got %s/%s", owner, repo)
 			}
 		})
 	}

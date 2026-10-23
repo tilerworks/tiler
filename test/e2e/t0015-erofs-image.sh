@@ -111,7 +111,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs pack
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
 	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_missing "$img_dir/blocks" &&
+	test_path_is_missing "$img_dir/_blocks" &&
 	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
 	test_grep "^    type: erofs$" "$meta_file" &&
 	test_grep "^    compression: $erofs_comp$" "$meta_file" &&
@@ -133,7 +133,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
 	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_file "$img_dir/incr/$layer.sqsh" &&
+	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
 	test_grep "^    type: erofs$" "$meta_file" &&
 	test_grep "^    compression: $erofs_comp$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show-incr.out 2>show-incr.err &&
@@ -155,7 +155,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'a fresh remount serves the erof
 
 # 300 KiB of incompressible bytes so a 64k split spans more than one
 # block. The project config still selects erofs; --split does not
-# change the container. The payload lives in blocks/<id>/, not
+# change the container. The payload lives in _blocks/<id>/, not
 # image.sqsh.
 test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --split publishes blocks' '
 	mkdir -p "$blk_src" &&
@@ -168,10 +168,10 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --sp
 	test_grep -E "^full alice/blocks [0-9a-f]+" blk.out &&
 	blk_id=$(cut -d" " -f3 blk.out) &&
 	test -n "$blk_id" &&
-	test_path_is_dir "$blk_dir/blocks/$blk_id" &&
-	set -- "$blk_dir/blocks/$blk_id"/blk.[0-9][0-9][0-9] &&
+	test_path_is_dir "$blk_dir/_blocks/$blk_id" &&
+	set -- "$blk_dir/_blocks/$blk_id"/blk.[0-9][0-9][0-9] &&
 	test $# -gt 1 &&
-	test_path_is_file "$blk_dir/blocks/$blk_id/blk.000" &&
+	test_path_is_file "$blk_dir/_blocks/$blk_id/blk.000" &&
 	test_path_is_missing "$blk_dir/image.sqsh" &&
 	test_grep "^    type: erofs$" "$blk_meta" &&
 	test_grep "^    compression: $erofs_comp$" "$blk_meta" &&

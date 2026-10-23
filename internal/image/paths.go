@@ -17,7 +17,7 @@ const (
 	// is dmg. It does not replace ImageFile.
 	ImageDMG = "image.dmg"
 	// IncrDir is the subdirectory holding incremental layer files.
-	IncrDir = "incr"
+	IncrDir = "_incr"
 	// SquashExt is the file extension of every packed image file.
 	SquashExt = ".sqsh"
 )
@@ -30,13 +30,10 @@ const (
 	// concat FUSE tool recognize it as a concat description.
 	fileConcatView = fileImage + "-concat-view"
 	dirIncr        = IncrDir
-	dirArchives    = "archives"
-	dirHold        = "hold"
-	dirBlocks      = "blocks"
-	// dirMembers names the historical members-form payload directory.
-	// Repair and hold restore still recognize leftovers under it.
-	dirMembers = "members"
-	squashExt  = SquashExt
+	dirArchives    = "_archives"
+	dirHold        = "_hold"
+	dirBlocks      = "_blocks"
+	squashExt      = SquashExt
 
 	// blockNamePrefix and blockNameFmt name the byte blocks of one
 	// split payload; the three-digit format bounds the manifest.
@@ -101,7 +98,7 @@ func (repo Repo) MetaPath() string {
 	return filepath.Join(repo.Dir, fileMeta)
 }
 
-// IncrPath is incr/<id>.sqsh inside this repository.
+// IncrPath is _incr/<id>.sqsh inside this repository.
 func (repo Repo) IncrPath(id string) (string, error) {
 	if err := checkID(id); err != nil {
 		return "", err
@@ -109,23 +106,23 @@ func (repo Repo) IncrPath(id string) (string, error) {
 	return filepath.Join(repo.Dir, dirIncr, id+squashExt), nil
 }
 
-// ArchivePath is archives/<full-id> for a retired chain.
+// ArchivePath is _archives/<full-id> for a retired chain.
 func (repo Repo) ArchivePath(id string) (string, error) {
 	return repo.idSubdir(dirArchives, id)
 }
 
-// HoldPath is hold/<full-id> for a chain waiting on a reference.
+// HoldPath is _hold/<full-id> for a chain waiting on a reference.
 func (repo Repo) HoldPath(id string) (string, error) {
 	return repo.idSubdir(dirHold, id)
 }
 
-// BlocksDirPath is blocks/<full-id>, the directory holding the byte
+// BlocksDirPath is _blocks/<full-id>, the directory holding the byte
 // blocks of one split payload.
 func (repo Repo) BlocksDirPath(id string) (string, error) {
 	return repo.idSubdir(dirBlocks, id)
 }
 
-// BlockPath is blocks/<full-id>/<name> for one manifest block. The
+// BlockPath is _blocks/<full-id>/<name> for one manifest block. The
 // name must be the blk.NNN form, which also rules out path escapes.
 func (repo Repo) BlockPath(id, name string) (string, error) {
 	dir, err := repo.BlocksDirPath(id)

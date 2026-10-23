@@ -347,7 +347,7 @@ func TestPublishReclaimsChainBlockDirFromStaleHold(t *testing.T) {
 }
 
 // TestPublishRepairsTornBlocksHold covers a crash after the whole
-// blocks/ tree reached the hold but meta.yaml is still active. The
+// _blocks/ tree reached the hold but meta.yaml is still active. The
 // next publish must restore (then archive) the chain, not stick on
 // "active payload missing".
 func TestPublishRepairsTornBlocksHold(t *testing.T) {
@@ -589,7 +589,7 @@ func TestRepairSweepsStrayPayloadTemps(t *testing.T) {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	strays := []string{".blocks.tmp.111.aa"}
+	strays := []string{"._blocks.tmp.111.aa"}
 	for _, name := range strays {
 		dir := filepath.Join(repo.Dir, name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -720,7 +720,7 @@ func writePayloadDir(t *testing.T, dir string, fx splitFixture) {
 }
 
 // seedBlocksWithChain publishes a blocks full image plus one chain
-// layer directory blocks/<id>/, and returns the layer id.
+// layer directory _blocks/<id>/, and returns the layer id.
 func seedBlocksWithChain(t *testing.T, repo Repo, layerBody []byte) (splitFixture, string) {
 	t.Helper()
 	fx := blocksFixture([][]byte{[]byte("full-a"), []byte("full-b")})

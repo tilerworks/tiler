@@ -27,7 +27,7 @@ type DMGRequest struct {
 	// Its post-convert digest is the bake content fingerprint.
 	Shadow string
 	// MountedID is the full id this shadow was attached to. When
-	// hold/<id>/image.dmg exists, convert reads that file instead of
+	// _hold/<id>/image.dmg exists, convert reads that file instead of
 	// the active image.dmg. Empty selects a held copy Refs still
 	// pins once the active id is a newer image.
 	MountedID string
@@ -181,7 +181,7 @@ func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult
 }
 
 // bakeSource is the disk image the live shadow belongs to. Publish
-// moves a pinned active image.dmg into hold/<id> and puts the new
+// moves a pinned active image.dmg into _hold/<id> and puts the new
 // bytes at the active slot. The shadow stays the delta for the held
 // base, so a later bake must not open the new active file.
 func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (string, string, error) {
@@ -210,7 +210,7 @@ func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (stri
 	return activePath, active.Format.Compression, nil
 }
 
-// holdDMG is hold/<id>/image.dmg when that held copy exists.
+// holdDMG is _hold/<id>/image.dmg when that held copy exists.
 func holdDMG(repo Repo, id string) (string, string, bool, error) {
 	hold, err := repo.HoldPath(id)
 	if err != nil {

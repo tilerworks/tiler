@@ -84,7 +84,7 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 	meta.ID = image.ID(wholeSum)
 	meta.Size = int64(len(whole))
 	meta.SHA256 = hex.EncodeToString(wholeSum[:])
-	blocksDir := filepath.Join(imagesDir, owner, repo, "blocks", meta.ID)
+	blocksDir := filepath.Join(imagesDir, owner, repo, "_blocks", meta.ID)
 	var names []string
 	for i, body := range bodies {
 		block := fmt.Sprintf("blk.%03d", i)
@@ -104,7 +104,7 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 }
 
 // writeBlocksChainFixture seeds a blocks full image plus one chain
-// layer under blocks/<incr-id>/. It returns the full and layer
+// layer under _blocks/<incr-id>/. It returns the full and layer
 // whole-image digests used as cache keys on reassembly.
 func writeBlocksChainFixture(
 	t *testing.T, imagesDir, name string, fullBodies, layerBodies []string,
@@ -122,7 +122,7 @@ func writeBlocksChainFixture(
 	layerDigest := sha256.Sum256(layerWhole)
 	layerSum = hex.EncodeToString(layerDigest[:])
 	layerID := image.ID(layerDigest)
-	blocksDir := filepath.Join(imagesDir, owner, repo, "blocks", layerID)
+	blocksDir := filepath.Join(imagesDir, owner, repo, "_blocks", layerID)
 	metaPath := filepath.Join(imagesDir, owner, repo, "meta.yaml")
 	meta, err := image.Load(metaPath)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestMountBlocksCorruptManifestFails(t *testing.T) {
 	id := writeBlocksFixture(t, imagesDir, "alice/app", []string{"one", "two"}, true)
 	// Break the recorded size fact of the first block.
 	writeSplitFile(t,
-		filepath.Join(imagesDir, "alice", "app", "blocks", id, "blk.000"),
+		filepath.Join(imagesDir, "alice", "app", "_blocks", id, "blk.000"),
 		"corrupted-and-longer")
 	dir := filepath.Join(work, "view")
 
@@ -304,7 +304,7 @@ func TestMountBlocksVerifyRehashesEveryBlock(t *testing.T) {
 	// Flip the content of the second block while keeping its size
 	// and mtime, so only the full re-hash catches it.
 	writeSplitFile(t,
-		filepath.Join(imagesDir, "alice", "app", "blocks", id, "blk.001"),
+		filepath.Join(imagesDir, "alice", "app", "_blocks", id, "blk.001"),
 		"flip")
 	dir := filepath.Join(work, "view")
 
@@ -388,7 +388,7 @@ func assertOwnedPredicate(t *testing.T, imagesDir string, owned func(string) boo
 	}
 	for _, source := range []string{
 		filepath.Join(imagesDir, "alice", "app", image.ImageFile),
-		filepath.Join(imagesDir, "alice", "app", "incr", "0123456789abcdef.sqsh"),
+		filepath.Join(imagesDir, "alice", "app", "_incr", "0123456789abcdef.sqsh"),
 	} {
 		if !owned(source) {
 			t.Errorf("library source %s was not owned", source)
@@ -396,7 +396,7 @@ func assertOwnedPredicate(t *testing.T, imagesDir string, owned func(string) boo
 	}
 	for _, source := range []string{
 		"/mnt/usb/tools",
-		filepath.Join(imagesDir, "alice", "app", "blocks", "0123456789abcdef", "blk.000"),
+		filepath.Join(imagesDir, "alice", "app", "_blocks", "0123456789abcdef", "blk.000"),
 		filepath.Join(imagesDir, "alice", "app", "members", "src.sqsh"),
 	} {
 		if owned(source) {

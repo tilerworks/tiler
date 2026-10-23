@@ -61,7 +61,7 @@ type Target struct {
 // path, so the mount layer can verify and reassemble without
 // revisiting the repository layout.
 type BlockFile struct {
-	// Path is the absolute block file blocks/<full-id>/<name>.
+	// Path is the absolute block file _blocks/<full-id>/<name>.
 	Path string
 	// Name is the manifest block name blk.NNN.
 	Name string
@@ -80,7 +80,7 @@ type BlockFile struct {
 // blocks-form target, Path stays empty and Blocks holds the layer's
 // byte-block files; mount reassembles each layer before stacking.
 type Member struct {
-	// Path is the full image file or an incr/<id>.sqsh layer file.
+	// Path is the full image file or an _incr/<id>.sqsh layer file.
 	// Empty for a blocks-form layer until reassembly fills a cache path.
 	Path string
 	// ID is the full or incremental image id of a blocks-form layer.
@@ -206,7 +206,7 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 }
 
 // resolveLayerBlocks checks that every manifest block of one layer
-// rests in blocks/<id>/ and returns the block facts with the layer
+// rests in _blocks/<id>/ and returns the block facts with the layer
 // directory.
 func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile, string, error) {
 	blocksDir, err := repo.BlocksDirPath(id)

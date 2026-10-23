@@ -515,6 +515,18 @@ func TestRemoveTargetWholeRepoRefusedByHoldReference(t *testing.T) {
 	}
 }
 
+func TestRemoveTargetCleansName(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("clean-name"), true)
+	outcome, err := RemoveTarget(cfg, "alice/./app", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != OutcomeDeprecated {
+		t.Fatalf("outcome = %s", outcome)
+	}
+}
+
 func TestRemoveTargetRejectsBadTargets(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	seedActive(t, repo, []byte("active-full"), false)
@@ -523,7 +535,9 @@ func TestRemoveTargetRejectsBadTargets(t *testing.T) {
 		"a/b/c",
 		"alice/app/archive/0123456789abcdef",
 		"alice/app/archives/not-hex",
+		"alice/app/_archives/not-hex",
 		"alice/app/archives/0123456789abcdef/extra",
+		"alice/app/_archives/0123456789abcdef/extra",
 		"bad owner/app",
 	} {
 		if _, err := RemoveTarget(cfg, target, nil); err == nil {

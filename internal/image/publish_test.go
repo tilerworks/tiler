@@ -1103,7 +1103,7 @@ func TestPublishReplaceKeepsReferencedHoldLayers(t *testing.T) {
 	}
 	// Simulate a crash after A became active again but before the
 	// stale hold was processed: the active slot shows A while
-	// hold/<A> still owns the image, the meta, and the only copy of
+	// _hold/<A> still owns the image, the meta, and the only copy of
 	// the layer.
 	if err := os.WriteFile(repo.ImagePath(), dataA, 0o644); err != nil {
 		t.Fatal(err)
@@ -1233,7 +1233,7 @@ func writeLayer(t *testing.T, repo Repo, id string, data []byte) {
 }
 
 // tearActive simulates a replace that crashed after image and meta
-// reached hold/<id> but before incr/ did. It returns the hold path.
+// reached _hold/<id> but before _incr/ did. It returns the hold path.
 func tearActive(t *testing.T, repo Repo, id string) string {
 	t.Helper()
 	hold, err := repo.HoldPath(id)

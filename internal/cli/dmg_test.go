@@ -596,8 +596,8 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 				t.Fatalf("shadow = %q %v", body, readErr)
 			}
 			assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "hold", meta.ID, image.ImageDMG), "old-dmg")
-			if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(statErr, os.ErrNotExist) {
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_hold", meta.ID, image.ImageDMG), "old-dmg")
+			if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("active session archived the pinned image: %v", statErr)
 			}
 			rec, err := (session.Store{Dir: sessionsDir(home)}).Load("dev")
@@ -706,8 +706,8 @@ func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
 	}
 	assertFileText(t, shadow, "live-shadow")
 	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "archives", meta.ID, image.ImageDMG), "old-dmg")
-	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "hold")); !errors.Is(statErr, os.ErrNotExist) {
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", meta.ID, image.ImageDMG), "old-dmg")
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_hold")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unreferenced bake held the image: %v", statErr)
 	}
 }
@@ -739,7 +739,7 @@ func TestDMGBakeFailureLeavesImageAndShadow(t *testing.T) {
 	}
 	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "old-dmg")
 	assertFileText(t, shadow, "live-shadow")
-	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "archives")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed bake archived the image: %v", statErr)
 	}
 }

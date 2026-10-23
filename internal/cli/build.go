@@ -486,7 +486,7 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 		return err
 	}
 	// The live shadow belongs to the session's full id. After the
-	// first publish that id rests in hold/, not at image.dmg.
+	// first publish that id rests in _hold/, not at image.dmg.
 	mounted, err := mountedFullID(cfg.SessionsDir, shadow)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)

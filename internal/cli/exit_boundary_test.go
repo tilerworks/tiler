@@ -114,6 +114,6 @@ func seedCorruptBlocks(t *testing.T, home string) {
 	imagesDir := defaultImagesDir(home)
 	id := writeBlocksFixture(t, imagesDir, "alice/data", []string{"one", "two"}, true)
 	writeSplitFile(t,
-		filepath.Join(imagesDir, "alice", "data", "blocks", id, "blk.000"),
+		filepath.Join(imagesDir, "alice", "data", "_blocks", id, "blk.000"),
 		"corrupted-and-longer")
 }

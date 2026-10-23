@@ -7,14 +7,14 @@
 # size-based split surface:
 #
 #   1. a small --split (64k) full build of an incompressible tree
-#      publishes blocks/<id>/ with more than one blk.NNN and no
+#      publishes _blocks/<id>/ with more than one blk.NNN and no
 #      image.sqsh,
 #   2. mounting that image, writing the upper, and building --incremental
-#      with the same --split publishes blocks/<incr-id>/ (not
-#      incr/<id>.sqsh); a fresh remount shows the upper file,
+#      with the same --split publishes _blocks/<incr-id>/ (not
+#      _incr/<id>.sqsh); a fresh remount shows the upper file,
 #   3. a second full --split of the same name, while the first image
 #      is still mounted, retires the old full and its incr into a
-#      session-pinned hold/<old-id>/blocks/ (not archives),
+#      session-pinned _hold/<old-id>/_blocks/ (not _archives),
 #   4. a build with no --split, and a build under a project
 #      split_size: 0, each stay a single image.sqsh.
 #
@@ -82,10 +82,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'full --split 64k publishes more 
 	test_grep -E "^full alice/split [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_path_is_dir "$img_dir/blocks/$id1" &&
-	set -- "$img_dir/blocks/$id1"/blk.[0-9][0-9][0-9] &&
+	test_path_is_dir "$img_dir/_blocks/$id1" &&
+	set -- "$img_dir/_blocks/$id1"/blk.[0-9][0-9][0-9] &&
 	test $# -gt 1 &&
-	test_path_is_file "$img_dir/blocks/$id1/blk.000" &&
+	test_path_is_file "$img_dir/_blocks/$id1/blk.000" &&
 	test_path_is_missing "$img_dir/image.sqsh" &&
 	"$tiler_bin" images show alice/split >ls.out 2>ls.err &&
 	test_grep -E "^  form +blocks$" ls.out &&
@@ -108,10 +108,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount, edit the upper, and incr 
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
-	test_path_is_dir "$img_dir/blocks/$layer" &&
-	test_path_is_file "$img_dir/blocks/$layer/blk.000" &&
-	test_path_is_missing "$img_dir/incr/$layer.sqsh" &&
-	test_path_is_missing "$img_dir/incr" &&
+	test_path_is_dir "$img_dir/_blocks/$layer" &&
+	test_path_is_file "$img_dir/_blocks/$layer/blk.000" &&
+	test_path_is_missing "$img_dir/_incr/$layer.sqsh" &&
+	test_path_is_missing "$img_dir/_incr" &&
 	test_grep -E "^[[:space:]]*- id: \"?$layer\"?$" "$meta_file" &&
 	test_grep -E "^[[:space:]]*- name: blk.000$" "$meta_file" &&
 	"$tiler_bin" images show alice/split >ls-incr.out 2>ls-incr.err &&
@@ -136,7 +136,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the split
 
 # verify_dir stays mounted across this case so its session pins the
 # retired full id. An unpinned replace would archive the chain instead
-# of leaving it in hold/.
+# of leaving it in _hold/.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split chain into a pinned hold' '
 	id1=$(cat full.id) &&
 	layer=$(cat layer.id) &&
@@ -153,14 +153,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split cha
 	test "$id2" != "$layer" &&
 	test_grep -E "^id: \"?$id2\"?$" "$meta_file" &&
 	test_grep ! "^chain:" "$meta_file" &&
-	test_path_is_dir "$img_dir/blocks/$id2" &&
-	test_path_is_file "$img_dir/blocks/$id2/blk.000" &&
-	test_path_is_missing "$img_dir/blocks/$id1" &&
-	test_path_is_missing "$img_dir/blocks/$layer" &&
-	test_path_is_file "$img_dir/hold/$id1/meta.yaml" &&
-	test_path_is_file "$img_dir/hold/$id1/blocks/$id1/blk.000" &&
-	test_path_is_file "$img_dir/hold/$id1/blocks/$layer/blk.000" &&
-	test_path_is_missing "$img_dir/archives" &&
+	test_path_is_dir "$img_dir/_blocks/$id2" &&
+	test_path_is_file "$img_dir/_blocks/$id2/blk.000" &&
+	test_path_is_missing "$img_dir/_blocks/$id1" &&
+	test_path_is_missing "$img_dir/_blocks/$layer" &&
+	test_path_is_file "$img_dir/_hold/$id1/meta.yaml" &&
+	test_path_is_file "$img_dir/_hold/$id1/_blocks/$id1/blk.000" &&
+	test_path_is_file "$img_dir/_hold/$id1/_blocks/$layer/blk.000" &&
+	test_path_is_missing "$img_dir/_archives" &&
 	"$tiler_bin" images show alice/split >ls-new.out 2>ls-new.err &&
 	test_grep -E "^  chain +0$" ls-new.out &&
 	test_grep -E "^  form +blocks$" ls-new.out &&
@@ -176,7 +176,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a build with no --split stays a 
 	"$tiler_bin" build --image bob/plain "$plain_src" >plain.out 2>plain.err &&
 	test_grep -E "^full bob/plain [0-9a-f]+" plain.out &&
 	test_path_is_file "$plain_dir/image.sqsh" &&
-	test_path_is_missing "$plain_dir/blocks" &&
+	test_path_is_missing "$plain_dir/_blocks" &&
 	"$tiler_bin" images show bob/plain >ls-plain.out 2>ls-plain.err &&
 	test_grep -E "^  chain +0$" ls-plain.out &&
 	test_grep -E "^  form +single$" ls-plain.out &&
@@ -196,7 +196,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'project split_size 0 stays a sin
 	) >zero.out 2>zero.err &&
 	test_grep -E "^full carol/zero [0-9a-f]+" zero.out &&
 	test_path_is_file "$zero_dir/image.sqsh" &&
-	test_path_is_missing "$zero_dir/blocks" &&
+	test_path_is_missing "$zero_dir/_blocks" &&
 	"$tiler_bin" images show carol/zero >ls-zero.out 2>ls-zero.err &&
 	test_grep -E "^  form +single$" ls-zero.out &&
 	test_grep ! -E "^  form +blocks$" ls-zero.out

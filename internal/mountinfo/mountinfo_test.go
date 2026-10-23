@@ -23,7 +23,7 @@ func testTable() []Mount {
 		},
 		{
 			Point: testRuntime + "/ro1", FSType: "fuse",
-			Source: testImages + "/alice/app/incr/fedcba9876543210.sqsh",
+			Source: testImages + "/alice/app/_incr/fedcba9876543210.sqsh",
 		},
 		{
 			Point: "/ws/view", FSType: "fuse.fuse-overlayfs", Source: "fuse-overlayfs",
@@ -394,7 +394,7 @@ func TestLibraryNameMapping(t *testing.T) {
 	}{
 		{testImages + "/alice/app/image.sqsh", Name{"alice", "app"}},
 		{testImages + "/alice/app/image.dmg", Name{"alice", "app"}},
-		{testImages + "/alice/app/incr/fedcba9876543210.sqsh", Name{"alice", "app"}},
+		{testImages + "/alice/app/_incr/fedcba9876543210.sqsh", Name{"alice", "app"}},
 	}
 	for _, tc := range good {
 		got, ok := LibraryName(testImages, tc.path)
@@ -404,17 +404,17 @@ func TestLibraryNameMapping(t *testing.T) {
 	}
 	bad := []string{
 		testImages + "/alice/app/meta.yaml",
-		testImages + "/alice/app/archives/0123456789abcdef/image.sqsh",
-		testImages + "/alice/app/hold/0123456789abcdef/image.sqsh",
-		testImages + "/alice/app/incr/not-hex.sqsh",
-		testImages + "/alice/app/incr/fedcba9876543210",
+		testImages + "/alice/app/_archives/0123456789abcdef/image.sqsh",
+		testImages + "/alice/app/_hold/0123456789abcdef/image.sqsh",
+		testImages + "/alice/app/_incr/not-hex.sqsh",
+		testImages + "/alice/app/_incr/fedcba9876543210",
 		testImages + "/alice/app/sub/image.sqsh",
 		testImages + "/onlyowner/image.sqsh",
 		"/elsewhere/alice/app/image.sqsh",
 		testImages + "/bad owner/app/image.sqsh",
 		// Blocks payloads never carry an identity: a blocks mount
 		// publishes the canonical three-segment image.sqsh fsname.
-		testImages + "/alice/app/blocks/0123456789abcdef/blk.000",
+		testImages + "/alice/app/_blocks/0123456789abcdef/blk.000",
 		testImages + "/alice/app/members/src.sqsh",
 		testImages + "/alice/app/members/no-ext",
 		testImages + "/alice/app/members/.sqsh",

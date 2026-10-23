@@ -322,7 +322,7 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 // LibraryName maps a library file path to its image identity. Only
 // <images_dir>/<owner>/<repo>/image.sqsh,
 // <images_dir>/<owner>/<repo>/image.dmg, and
-// <images_dir>/<owner>/<repo>/incr/<id>.sqsh count; archives, holds,
+// <images_dir>/<owner>/<repo>/_incr/<id>.sqsh count; archives, holds,
 // blocks, and metadata never carry an identity. Blocks-form mounts
 // publish the canonical three-segment image.sqsh path, so they
 // resolve without a blocks shape here.
