@@ -224,8 +224,8 @@ Available now:
 - `tiler images remove <name | name/_archives/<id>>` deprecates the
   target on the first call and removes it on the second. `<name>` is
   a 1-to-5 segment library name; an archive target uses
-  `/_archives/` and a 16-hex chain id. Both calls refuse while a
-  reference pins the target.
+  `/_archives/` and a full sha256 or a unique prefix. Both calls
+  refuse while a reference pins the target.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
   under the session's `runtime/m<seq>/` tree, and `fuse-overlayfs`

@@ -395,6 +395,7 @@ func TestLibraryNameMapping(t *testing.T) {
 		{testImages + "/alice/app/image.sqsh", Name("alice/app")},
 		{testImages + "/alice/app/image.dmg", Name("alice/app")},
 		{testImages + "/alice/app/_incr/fedcba9876543210.sqsh", Name("alice/app")},
+		{testImages + "/alice/app/_incr/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210.sqsh", Name("alice/app")},
 		{testImages + "/solo/image.sqsh", Name("solo")},
 		{testImages + "/a/b/c/image.dmg", Name("a/b/c")},
 		{testImages + "/a/b/c/_incr/fedcba9876543210.sqsh", Name("a/b/c")},

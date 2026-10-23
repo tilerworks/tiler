@@ -163,7 +163,8 @@ func Inspect(repo Repo) (State, error) {
 }
 
 // chainDirIDs lists the valid chain directory names under dir in
-// lexical order. Foreign and transient entries are skipped.
+// lexical order. Full sha256 names and legacy 16-hex names count;
+// foreign and transient entries are skipped.
 func chainDirIDs(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -174,7 +175,7 @@ func chainDirIDs(dir string) ([]string, error) {
 	}
 	var ids []string
 	for _, entry := range entries {
-		if entry.IsDir() && checkID(entry.Name()) == nil {
+		if entry.IsDir() && onDiskID(entry.Name()) {
 			ids = append(ids, entry.Name())
 		}
 	}

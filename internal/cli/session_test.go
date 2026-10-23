@@ -52,13 +52,13 @@ func writeSessionRecordMarked(t *testing.T, dir, name string, removable bool, ac
 	}
 }
 
-// libraryAction is one recorded library mount action.
+// libraryAction is one recorded library mount action. FullID stays
+// empty so fixtures without a real pin keep name-only ResolveMount.
 func libraryAction(imageRef, mountpoint, mode string) session.Action {
 	return session.Action{
 		Type:       session.TypeMount,
 		Image:      imageRef,
 		Name:       "alice/app",
-		FullID:     "0123456789abcdef",
 		Mountpoint: mountpoint,
 		Mode:       mode,
 	}

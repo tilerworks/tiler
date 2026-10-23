@@ -631,6 +631,11 @@ func archiveUnreferencedHolds(repo Repo, refs Refs, seam hooks) error {
 	}
 	var pending []string
 	for _, id := range ids {
+		if legacyID(id) {
+			// Leave pre-sha256 hold directories in place; do not
+			// rename them into _archives/.
+			continue
+		}
 		held, err := heldBy(refs, refFor(repo, id))
 		if err != nil {
 			return err
@@ -946,10 +951,15 @@ func listHoldIDs(repo Repo) ([]string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		if err := checkID(entry.Name()); err != nil {
+		name := entry.Name()
+		if legacyID(name) {
+			ids = append(ids, name)
+			continue
+		}
+		if err := checkID(name); err != nil {
 			return nil, err
 		}
-		ids = append(ids, entry.Name())
+		ids = append(ids, name)
 	}
 	return ids, nil
 }

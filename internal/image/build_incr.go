@@ -59,7 +59,7 @@ type IncrRequest struct {
 
 // IncrResult reports one successful incremental build.
 type IncrResult struct {
-	// ID is the first 16 hex digits of the layer sha256.
+	// ID is the lowercase hex sha256 of the layer payload.
 	ID string
 	// Path is the published layer: _incr/<id>.sqsh for a single-file
 	// layer, or _blocks/<id>/ when SplitSize is positive.

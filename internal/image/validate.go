@@ -145,12 +145,12 @@ func checkBlockList(field string, blocks []BlockEntry, list *issueList) {
 
 func checkDigest(id, sum, prefix string, list *issueList) {
 	idName := joinField(prefix, "id")
-	if !isLowerHex(id, idHexLen) {
-		list.add("%s: must be 16 lowercase hex digits", idName)
+	if !isLowerHex(id, sumHexLen) {
+		list.add("%s: must be 64 lowercase hex digits", idName)
 	}
 	checkSum(joinField(prefix, "sha256"), sum, list)
-	if isLowerHex(sum, sumHexLen) && id != sum[:idHexLen] {
-		list.add("%s: must be the first 16 hex digits of sha256", idName)
+	if isLowerHex(sum, sumHexLen) && id != sum {
+		list.add("%s: must equal sha256", idName)
 	}
 }
 

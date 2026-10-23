@@ -97,6 +97,96 @@ type Member struct {
 	Blocks []BlockFile
 }
 
+// LocatePinned returns the absolute leaf root for a library name plus
+// id reference: the active repository directory or _hold/<id>. It
+// uses the same location rules as ResolvePinned (index, then HoldPath
+// fallback for an on-disk id directory). Archives are refused.
+func LocatePinned(imagesDir, name, idRef string) (string, error) {
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return "", pinError(name, idRef, err)
+	}
+	return pinnedRoot(repo, name, idRef)
+}
+
+// ResolvePinned expands a library image by name plus an id reference
+// (full sha256 or a unique lowercase hex prefix). The leaf root comes
+// from sha256.index: active (".") or _hold/<id>. Archives never
+// remount. When the index has no match, HoldPath is a fallback only
+// if idRef is itself an existing hold directory name (64-hex or a
+// legacy 16-hex directory). Zero matches, ambiguous matches, and a
+// missing hold fail and quote the name and id. Name-only ResolveMount
+// stays active-only.
+func ResolvePinned(cfg config.Config, name, idRef string) (Target, error) {
+	root, err := LocatePinned(cfg.ImagesDir, name, idRef)
+	if err != nil {
+		return Target{}, err
+	}
+	meta, err := Load(filepath.Join(root, fileMeta))
+	if err != nil {
+		return Target{}, pinError(name, idRef, err)
+	}
+	if PayloadKind(meta) == PayloadBlocks {
+		return resolveBlocksAt(root, name, meta)
+	}
+	return resolveStackAt(root, name, meta)
+}
+
+// pinnedRoot locates the absolute leaf root for a pin: index hit for
+// active or hold, else HoldPath when idRef names an existing hold
+// directory. An archive index hit is refused.
+func pinnedRoot(repo Repo, name, idRef string) (string, error) {
+	rel, err := lookupID(repo, idRef)
+	switch {
+	case err == nil:
+		if isArchiveRel(rel) {
+			return "", pinError(name, idRef, errors.New("archived image cannot be remounted"))
+		}
+		return indexRootPath(repo, rel), nil
+	case isUnknownIDRef(err):
+		return holdRootFallback(repo, name, idRef)
+	default:
+		return "", pinError(name, idRef, err)
+	}
+}
+
+func holdRootFallback(repo Repo, name, idRef string) (string, error) {
+	if !onDiskID(idRef) {
+		return "", pinError(name, idRef, fmt.Errorf("unknown id reference %q", idRef))
+	}
+	hold, err := repo.HoldPath(idRef)
+	if err != nil {
+		return "", pinError(name, idRef, err)
+	}
+	info, err := os.Stat(hold)
+	if err != nil {
+		return "", pinError(name, idRef, err)
+	}
+	if !info.IsDir() {
+		return "", pinError(name, idRef, fmt.Errorf("%s is not a directory", hold))
+	}
+	return hold, nil
+}
+
+func indexRootPath(repo Repo, rel string) string {
+	if rel == indexRelActive {
+		return repo.Dir
+	}
+	return filepath.Join(repo.Dir, filepath.FromSlash(rel))
+}
+
+func isArchiveRel(rel string) bool {
+	return rel == dirArchives || strings.HasPrefix(rel, dirArchives+"/")
+}
+
+func isUnknownIDRef(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unknown id reference")
+}
+
+func pinError(name, idRef string, err error) error {
+	return fmt.Errorf("mount: %s id %s: %w", name, idRef, err)
+}
+
 // ResolveMount turns a mount argument into what a mount consumes:
 // the ordered stack member list, or the manifest of a split payload.
 // An existing regular file wins over a library name: filepath.Clean
@@ -147,15 +237,20 @@ func resolveLibrary(cfg config.Config, name string) (Target, error) {
 	return resolveStack(repo, name, meta)
 }
 
-// resolveStack expands the full image plus its chain layers in
-// stored order.
+// resolveStack expands the active full image plus its chain layers.
 func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
+	return resolveStackAt(repo.Dir, name, meta)
+}
+
+// resolveStackAt expands the full image plus chain layers under root
+// (the active leaf or a hold directory that preserves that layout).
+func resolveStackAt(root, name string, meta Meta) (Target, error) {
 	if depth := 1 + len(meta.Chain); depth > maxStackDepth {
 		return Target{}, fmt.Errorf(
 			"mount: %s stack holds %d members; the limit is %d",
 			name, depth, maxStackDepth)
 	}
-	members, err := stackMembers(repo, meta)
+	members, err := stackMembersAt(root, meta)
 	if err != nil {
 		return Target{}, err
 	}
@@ -165,18 +260,22 @@ func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
 	}, nil
 }
 
-// resolveBlocks expands the full image blocks plus every chain layer
-// that carries its own Blocks manifest into an ordered mountable
-// stack (full first, then chain oldest-first). A chain entry without
-// Blocks is a corrupt or unsupported layout. A missing block file
-// names the entry.
+// resolveBlocks expands the active blocks payload plus chain layers.
 func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
+	return resolveBlocksAt(repo.Dir, name, meta)
+}
+
+// resolveBlocksAt expands blocks under root/_blocks/<layer-id>/.
+// Active root is the repository directory; hold root is
+// _hold/<resolved-id>/. Do not call BlocksDirPath here: that always
+// joins the active repo leaf.
+func resolveBlocksAt(root, name string, meta Meta) (Target, error) {
 	if depth := 1 + len(meta.Chain); depth > maxStackDepth {
 		return Target{}, fmt.Errorf(
 			"mount: %s stack holds %d members; the limit is %d",
 			name, depth, maxStackDepth)
 	}
-	fullBlocks, blocksDir, err := resolveLayerBlocks(repo, meta.ID, meta.Blocks)
+	fullBlocks, blocksDir, err := resolveLayerBlocksAt(root, meta.ID, meta.Blocks)
 	if err != nil {
 		return Target{}, fmt.Errorf("mount: %w", err)
 	}
@@ -193,7 +292,7 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 				"mount: chain layer %s: blocks form requires a blocks manifest",
 				entry.ID)
 		}
-		layerBlocks, _, err := resolveLayerBlocks(repo, entry.ID, entry.Blocks)
+		layerBlocks, _, err := resolveLayerBlocksAt(root, entry.ID, entry.Blocks)
 		if err != nil {
 			return Target{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
 		}
@@ -220,17 +319,17 @@ func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
 	}, nil
 }
 
-// resolveLayerBlocks checks that every manifest block of one layer
-// rests in _blocks/<id>/ and returns the block facts with the layer
+// resolveLayerBlocksAt checks that every manifest block of one layer
+// rests in root/_blocks/<id>/ and returns the block facts with that
 // directory.
-func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile, string, error) {
-	blocksDir, err := repo.BlocksDirPath(id)
+func resolveLayerBlocksAt(root, id string, entries []BlockEntry) ([]BlockFile, string, error) {
+	blocksDir, err := blocksDirAt(root, id)
 	if err != nil {
 		return nil, "", err
 	}
 	blocks := make([]BlockFile, 0, len(entries))
 	for _, entry := range entries {
-		path, err := repo.BlockPath(id, entry.Name)
+		path, err := blockPathAt(root, id, entry.Name)
 		if err != nil {
 			return nil, "", fmt.Errorf("block %s: %w", entry.Name, err)
 		}
@@ -248,12 +347,30 @@ func resolveLayerBlocks(repo Repo, id string, entries []BlockEntry) ([]BlockFile
 	return blocks, blocksDir, nil
 }
 
-// stackMembers pairs every file of the active stack with its
-// recorded facts. Every member file must exist.
-func stackMembers(repo Repo, meta Meta) ([]Member, error) {
-	full, err := activePayloadPath(repo, meta)
+func blocksDirAt(root, id string) (string, error) {
+	if !onDiskID(id) {
+		return "", invalidPath(id)
+	}
+	return filepath.Join(root, dirBlocks, id), nil
+}
+
+func blockPathAt(root, id, name string) (string, error) {
+	dir, err := blocksDirAt(root, id)
 	if err != nil {
-		return nil, err
+		return "", err
+	}
+	if !isBlockName(name) {
+		return "", invalidPath(name)
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// stackMembersAt pairs every container file under root with its
+// recorded facts: image.sqsh / image.dmg and _incr/<id>.sqsh.
+func stackMembersAt(root string, meta Meta) ([]Member, error) {
+	full := filepath.Join(root, activeImageName(meta.Format.Type))
+	if _, err := os.Stat(full); err != nil {
+		return nil, fmt.Errorf("mount: %w", err)
 	}
 	members := []Member{{
 		Path:      full,
@@ -262,7 +379,7 @@ func stackMembers(repo Repo, meta Meta) ([]Member, error) {
 		SHA256:    meta.SHA256,
 	}}
 	for _, entry := range meta.Chain {
-		member, err := chainMember(repo, entry)
+		member, err := chainMemberAt(root, entry)
 		if err != nil {
 			return nil, err
 		}
@@ -271,13 +388,12 @@ func stackMembers(repo Repo, meta Meta) ([]Member, error) {
 	return members, nil
 }
 
-// chainMember locates one chain layer file. The error names the
-// layer id so a broken chain pinpoints the missing layer.
-func chainMember(repo Repo, entry ChainEntry) (Member, error) {
-	path, err := repo.IncrPath(entry.ID)
-	if err != nil {
-		return Member{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
+// chainMemberAt locates one chain layer file under root/_incr.
+func chainMemberAt(root string, entry ChainEntry) (Member, error) {
+	if !onDiskID(entry.ID) {
+		return Member{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, invalidPath(entry.ID))
 	}
+	path := filepath.Join(root, dirIncr, entry.ID+squashExt)
 	if _, err := os.Stat(path); err != nil {
 		return Member{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
 	}

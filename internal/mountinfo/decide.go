@@ -352,10 +352,11 @@ func LibraryName(imagesDir, path string) (Name, bool) {
 	return Name(strings.Join(segs, "/")), true
 }
 
-// isLayerFile reports a <id>.sqsh name with a 16 lowercase hex id.
+// isLayerFile reports a <id>.sqsh name whose id is 64 lowercase hex
+// digits, or a legacy 16-hex layer file that is left in place.
 func isLayerFile(name string) bool {
 	id, ok := strings.CutSuffix(name, image.SquashExt)
-	if !ok || len(id) != 16 {
+	if !ok || (len(id) != 64 && len(id) != 16) {
 		return false
 	}
 	for _, r := range id {

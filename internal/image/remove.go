@@ -66,8 +66,9 @@ func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attache
 }
 
 // resolveRemoveTarget parses the two accepted target shapes: a
-// 1-to-5 segment library name, or <name>/_archives/<full-id>, and
-// loads the meta that carries the deprecated flag.
+// 1-to-5 segment library name, or <name>/_archives/<id> where id is
+// a full sha256 or a unique prefix, and loads the meta that carries
+// the deprecated flag.
 func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, error) {
 	parts := strings.Split(cleanImageName(target), "/")
 	archIdx := -1
@@ -86,16 +87,24 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 		rt.repo, err = OpenRepo(cfg.ImagesDir, target)
 		rt.dir = rt.repo.Dir
 	case archIdx == len(parts)-2:
-		id := parts[len(parts)-1]
+		ref := parts[len(parts)-1]
 		nameParts := parts[:archIdx]
-		if err = checkID(id); err != nil {
-			return rmTarget{}, Meta{}, invalidTarget(target)
-		}
 		rt.repo, err = OpenRepo(cfg.ImagesDir, strings.Join(nameParts, "/"))
-		if err == nil {
-			rt.archive = id
-			rt.dir = filepath.Join(rt.repo.Dir, dirArchives, id)
+		if err != nil {
+			break
 		}
+		var id string
+		id, err = resolveArchiveRef(rt.repo, ref)
+		if errors.Is(err, ErrInvalidPath) {
+			err = invalidTarget(target)
+			break
+		}
+		if err != nil {
+			err = fmt.Errorf("remove: %w", err)
+			break
+		}
+		rt.archive = id
+		rt.dir, err = rt.repo.ArchivePath(id)
 	default:
 		err = invalidTarget(target)
 	}
@@ -112,9 +121,20 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 	return rt, meta, nil
 }
 
+// resolveArchiveRef matches ref against archive directory names and
+// returns the stored id. ref may be the full sha256 or a unique
+// prefix. A ref that is not lowercase hex is ErrInvalidPath.
+func resolveArchiveRef(repo Repo, ref string) (string, error) {
+	ids, err := chainDirIDs(filepath.Join(repo.Dir, dirArchives))
+	if err != nil {
+		return "", err
+	}
+	return resolveID(ids, ref)
+}
+
 // invalidTarget reports a target that is neither a library name nor
-// <name>/_archives/<full-id>. It wraps ErrInvalidName so command
-// entries classify the refusal as a usage error.
+// <name>/_archives/<id>. It wraps ErrInvalidName so command entries
+// classify the refusal as a usage error.
 func invalidTarget(target string) error {
 	return fmt.Errorf("remove: invalid target %q: %w", target, ErrInvalidName)
 }
@@ -224,15 +244,11 @@ func (t rmTarget) repoFullIDs() ([]string, error) {
 		return nil, err
 	}
 	ids = append(ids, holdIDs...)
-	entries, err := os.ReadDir(filepath.Join(t.repo.Dir, dirArchives))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	archIDs, err := chainDirIDs(filepath.Join(t.repo.Dir, dirArchives))
+	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() && checkID(entry.Name()) == nil {
-			ids = append(ids, entry.Name())
-		}
-	}
+	ids = append(ids, archIDs...)
 	return ids, nil
 }
 

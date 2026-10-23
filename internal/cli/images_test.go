@@ -477,8 +477,8 @@ func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
 			if _, err := os.Stat(arch); err != nil {
 				t.Fatalf("archive path %s: %v", name+"/_archives/"+id1, err)
 			}
-			if !isHex16(id1) {
-				t.Fatalf("archive id %q is not 16 lowercase hex", id1)
+			if !isPayloadID(id1) {
+				t.Fatalf("archive id %q is not 64 lowercase hex", id1)
 			}
 
 			if out := mustRemove(t, lib, name); out != "deprecated "+name+"\n" {

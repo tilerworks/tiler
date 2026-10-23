@@ -547,7 +547,8 @@ func newImagesRemoveCmd() *cobra.Command {
 		Short:   "Deprecate and then remove an image target",
 		Long: "The first call flags the target deprecated; the second call\n" +
 			"physically removes it. <name> is a 1-to-5 segment library\n" +
-			"name; an archive target is <name>/_archives/<16-hex-id>.\n" +
+			"name; an archive target is <name>/_archives/<id>, where\n" +
+			"<id> is a full sha256 or a unique prefix.\n" +
 			"Both calls refuse while a session still references the\n" +
 			"target, and while hdiutil info shows a dmg target is\n" +
 			"attached. Only image files and archives are deleted.",

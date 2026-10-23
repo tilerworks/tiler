@@ -21,9 +21,9 @@ const (
 	// CompressionZstd is the default container compression.
 	CompressionZstd = "zstd"
 
-	// idHexLen is the chain-id hex length used in layout paths and
-	// meta. It is also the floor for name-segment reservation: a
-	// segment of this many or more hex digits is refused as a name.
+	// idHexLen is the name-segment reservation floor only. A segment
+	// of this many or more hex digits is refused as an image name.
+	// It is not the stored-id width; new ids are sumHexLen digits.
 	// Do not decrease it; shortening would collide with names that
 	// were previously valid hex segments.
 	idHexLen  = 16
@@ -123,9 +123,10 @@ type Meta struct {
 	Members []MemberEntry `yaml:"members,omitempty"`
 }
 
-// ID is the first 16 lowercase hex digits of a sha256 sum.
+// ID is the lowercase hex encoding of a sha256 sum. It equals the
+// payload digest stored on meta.
 func ID(sum [32]byte) string {
-	return hex.EncodeToString(sum[:idHexLen/2])
+	return hex.EncodeToString(sum[:])
 }
 
 // PayloadKind reports the storage form of the active payload. Load,

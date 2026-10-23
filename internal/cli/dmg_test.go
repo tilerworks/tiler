@@ -454,7 +454,7 @@ func writeDMGFixture(t *testing.T, imagesDir, compression string) {
 	}
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	meta := image.Meta{
-		ID:        sum[:16],
+		ID:        sum,
 		Name:      "alice/app",
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: compression},

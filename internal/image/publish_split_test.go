@@ -735,7 +735,7 @@ func seedBlocksWithChain(t *testing.T, repo Repo, layerBody []byte) (splitFixtur
 		t.Fatal(err)
 	}
 	seedSplitActive(t, repo, fx)
-	dir, err := repo.BlocksDirPath(layer)
+	dir, err := repo.BlocksDirPath(entry.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,7 +745,7 @@ func seedBlocksWithChain(t *testing.T, repo Repo, layerBody []byte) (splitFixtur
 	if err := os.WriteFile(filepath.Join(dir, "blk.000"), layerBody, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return fx, layer
+	return fx, entry.ID
 }
 
 func seedSplitActive(t *testing.T, repo Repo, fx splitFixture) {

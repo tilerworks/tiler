@@ -110,20 +110,22 @@ func (repo Repo) IncrPath(id string) (string, error) {
 	return filepath.Join(repo.Dir, dirIncr, id+squashExt), nil
 }
 
-// ArchivePath is _archives/<full-id> for a retired chain.
+// ArchivePath is _archives/<id> for a retired chain. id is a full
+// sha256, or a legacy 16-hex directory left on disk.
 func (repo Repo) ArchivePath(id string) (string, error) {
-	return repo.idSubdir(dirArchives, id)
+	return repo.idSubdir(dirArchives, id, true)
 }
 
-// HoldPath is _hold/<full-id> for a chain waiting on a reference.
+// HoldPath is _hold/<id> for a chain waiting on a reference. id is a
+// full sha256, or a legacy 16-hex directory left on disk.
 func (repo Repo) HoldPath(id string) (string, error) {
-	return repo.idSubdir(dirHold, id)
+	return repo.idSubdir(dirHold, id, true)
 }
 
 // BlocksDirPath is _blocks/<full-id>, the directory holding the byte
-// blocks of one split payload.
+// blocks of one split payload. New block trees always use a full id.
 func (repo Repo) BlocksDirPath(id string) (string, error) {
-	return repo.idSubdir(dirBlocks, id)
+	return repo.idSubdir(dirBlocks, id, false)
 }
 
 // BlockPath is _blocks/<full-id>/<name> for one manifest block. The
@@ -161,18 +163,64 @@ func isBlockName(name string) bool {
 	return true
 }
 
-func (repo Repo) idSubdir(kind, id string) (string, error) {
-	if err := checkID(id); err != nil {
-		return "", err
+func (repo Repo) idSubdir(kind, id string, allowLegacy bool) (string, error) {
+	if checkID(id) == nil || (allowLegacy && legacyID(id)) {
+		return filepath.Join(repo.Dir, kind, id), nil
 	}
-	return filepath.Join(repo.Dir, kind, id), nil
+	return "", invalidPath(id)
 }
 
+// checkID accepts a stored id: 64 lowercase hex digits, the payload
+// sha256. Callers that still hold a user prefix resolve it first.
+// New tiler-written directory names must pass checkID; legacy 16-hex
+// on-disk names use onDiskID / legacyID instead.
 func checkID(id string) error {
-	if !isLowerHex(id, idHexLen) {
+	if !isLowerHex(id, sumHexLen) {
 		return invalidPath(id)
 	}
 	return checkRel(id)
+}
+
+// legacyID reports a 16-hex directory name written before stored ids
+// were the full sha256. Those directories are left in place.
+func legacyID(id string) bool {
+	return isLowerHex(id, idHexLen)
+}
+
+// onDiskID reports a chain directory name tiler may list or resolve:
+// a full sha256, or a legacy 16-hex name still on disk.
+func onDiskID(id string) bool {
+	return checkID(id) == nil || legacyID(id)
+}
+
+// resolveID returns the one candidate that has ref as a prefix.
+// ref is lowercase hex of length 1 to 64. Zero matches and more
+// than one match are errors, and both quote ref.
+func resolveID(candidates []string, ref string) (string, error) {
+	if !isIDRef(ref) {
+		return "", invalidPath(ref)
+	}
+	var match string
+	for _, candidate := range candidates {
+		if !strings.HasPrefix(candidate, ref) {
+			continue
+		}
+		if match != "" {
+			return "", fmt.Errorf("ambiguous id reference %q", ref)
+		}
+		match = candidate
+	}
+	if match == "" {
+		return "", fmt.Errorf("unknown id reference %q", ref)
+	}
+	return match, nil
+}
+
+func isIDRef(ref string) bool {
+	if len(ref) < 1 || len(ref) > sumHexLen {
+		return false
+	}
+	return isLowerHex(ref, len(ref))
 }
 
 func checkRel(rel string) error {
