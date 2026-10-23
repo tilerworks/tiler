@@ -8,12 +8,23 @@ import (
 )
 
 func TestParseNameAcceptsOwnerRepo(t *testing.T) {
-	owner, repo, err := ParseName("alice/app")
-	if err != nil {
-		t.Fatal(err)
+	cases := []string{
+		"alice/app",
+		"alice/incr",
+		"alice/abc123",
+		"alice/0123456789abcde", // 15 hex digits: shorter than idHexLen
 	}
-	if owner != "alice" || repo != "app" {
-		t.Fatalf("got %s/%s", owner, repo)
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			owner, repo, err := ParseName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantOwner, wantRepo, ok := strings.Cut(cleanImageName(name), "/")
+			if !ok || owner != wantOwner || repo != wantRepo {
+				t.Fatalf("got %s/%s, want %s/%s", owner, repo, wantOwner, wantRepo)
+			}
+		})
 	}
 }
 
@@ -40,6 +51,20 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 		"alice/ap\u0080p",
 		"alice/ap\u009fp",
 		"https://example.com/alice/app",
+		"alice/_incr",
+		"alice/_archives",
+		"alice/.hidden",
+		"_alice/app",
+		".alice/app",
+		"alice/meta.yaml",
+		"alice/image.sqsh",
+		"alice/image.dmg",
+		"alice/image.sqsh-concat-view",
+		"meta.yaml/app",
+		"alice/0123456789abcdef",
+		"alice/0123456789ABCDEF",
+		"alice/0123456789abcdef0",
+		"0123456789abcdef/app",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {

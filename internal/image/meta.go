@@ -21,6 +21,11 @@ const (
 	// CompressionZstd is the default container compression.
 	CompressionZstd = "zstd"
 
+	// idHexLen is the chain-id hex length used in layout paths and
+	// meta. It is also the floor for name-segment reservation: a
+	// segment of this many or more hex digits is refused as a name.
+	// Do not decrease it; shortening would collide with names that
+	// were previously valid hex segments.
 	idHexLen  = 16
 	sumHexLen = 64
 )

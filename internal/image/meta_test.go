@@ -20,6 +20,12 @@ func TestIDUsesSHA256Prefix(t *testing.T) {
 	}
 }
 
+func TestIDHexLenFloor(t *testing.T) {
+	if idHexLen < 16 {
+		t.Fatalf("idHexLen = %d, want >= 16", idHexLen)
+	}
+}
+
 func TestValidateReportsEveryViolation(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	meta := Meta{
