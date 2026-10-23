@@ -4,23 +4,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
 
-// Fixed golden identifiers: every id is the first 16 hex digits of
-// its sha256, as the library requires.
+// Fixed golden identifiers: every stored id is the payload sha256.
 const (
-	goldenActiveID  = "0123456789abcdef"
 	goldenActiveSum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	goldenChainID   = "1111111111111111"
+	goldenActiveID  = goldenActiveSum
 	goldenChainSum  = "1111111111111111111111111111111111111111111111111111111111111111"
-	goldenArchiveID = "2222222222222222"
-	goldenHoldID    = "3333333333333333"
-	goldenBobID     = "4444444444444444"
+	goldenChainID   = goldenChainSum
+	goldenArchiveID = "2222222222222222222222222222222222222222222222222222222222222222"
+	goldenHoldID    = "3333333333333333333333333333333333333333333333333333333333333333"
 	goldenBobSum    = "4444444444444444444444444444444444444444444444444444444444444444"
+	goldenBobID     = goldenBobSum
 )
 
 func TestImagesListJSONGoldens(t *testing.T) {
@@ -129,8 +129,9 @@ func TestImagesListHumanRecord(t *testing.T) {
 	withBuildSeams(t, nil)
 	writeGoldenLibrary(t, imagesDir)
 
+	idPad := strings.Repeat(" ", len(goldenActiveID)-len("ID"))
 	want := "" +
-		"NAME       ID                CREATED     SIZE   CHAIN  FORM    ARCH  HOLD\n" +
+		"NAME       ID" + idPad + "  CREATED     SIZE   CHAIN  FORM    ARCH  HOLD\n" +
 		"alice/app  " + goldenActiveID + "  2026-03-04  2 KiB  1      single  1     1\n" +
 		"bob/tool   " + goldenBobID + "  2026-03-04  4 KiB  0      single  0     0\n"
 	if out := mustList(t, lib); out != want {

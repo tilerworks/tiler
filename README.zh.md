@@ -181,7 +181,7 @@ tiler session close feature                # 逆序卸载，记录保留
   都会被拆除视图、清理 runtime 并删除记录。
 - `tiler images remove <name | name/_archives/<id>>` 第一次调用标记
   废弃，第二次物理删除。`<name>` 是 1 到 5 段的库名；归档目标使用
-  `/_archives/` 与 16 位十六进制链 id。仍有引用时两次都拒绝。
+  `/_archives/` 与完整 sha256 或唯一前缀。仍有引用时两次都拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
   写：每个 squashfs 成员先只读挂到该 session 的
   `runtime/m<seq>/` 树下转接点，再由 `fuse-overlayfs` 叠加在

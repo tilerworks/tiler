@@ -26,7 +26,7 @@ func mustRepo(t *testing.T, cfg config.Config) Repo {
 // layerHexID is the deterministic chain id seedChain uses for layer
 // number i (1-based).
 func layerHexID(i int) string {
-	return fmt.Sprintf("%016x", i)
+	return testID(fmt.Sprintf("%016x", i))
 }
 
 // seedChain publishes a full image plus a chain of that many layers.
@@ -39,8 +39,9 @@ func seedChain(t *testing.T, repo Repo, layers int) Meta {
 	parent := meta.ID
 	for i := 1; i <= layers; i++ {
 		id := layerHexID(i)
-		meta.Chain = append(meta.Chain, validEntry(parent, id))
-		parent = id
+		entry := validEntry(parent, id)
+		meta.Chain = append(meta.Chain, entry)
+		parent = entry.ID
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)

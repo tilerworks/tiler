@@ -60,6 +60,8 @@ func gcRepo(repo Repo, cfg config.Config, refs Refs, now time.Time) ([]GCEvent, 
 }
 
 // promoteHolds renames every hold no reference pins into archives.
+// Legacy 16-hex hold directories stay put; pin checks still see them
+// through listHoldIDs, but they are not renamed.
 func promoteHolds(repo Repo, refs Refs) ([]GCEvent, error) {
 	ids, err := listHoldIDs(repo)
 	if err != nil {
@@ -67,6 +69,9 @@ func promoteHolds(repo Repo, refs Refs) ([]GCEvent, error) {
 	}
 	var events []GCEvent
 	for _, id := range ids {
+		if legacyID(id) {
+			continue
+		}
 		hold, err := repo.HoldPath(id)
 		if err != nil {
 			return events, err
@@ -139,7 +144,7 @@ func rankArchives(dir string) ([]archiveInfo, error) {
 	var archives []archiveInfo
 	for _, entry := range entries {
 		id := entry.Name()
-		if !entry.IsDir() || checkID(id) != nil {
+		if !entry.IsDir() || !onDiskID(id) {
 			continue
 		}
 		meta, err := Load(filepath.Join(dir, id, fileMeta))

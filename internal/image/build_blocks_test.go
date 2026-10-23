@@ -292,7 +292,7 @@ func TestBuildBlocksCleansUpOnPublishFailure(t *testing.T) {
 	}
 	// A hold whose meta cannot be parsed makes the publish
 	// preparation fail after the payload was already split.
-	hold, err := repo.HoldPath("0123456789abcdef")
+	hold, err := repo.HoldPath(testID("0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}

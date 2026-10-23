@@ -494,7 +494,7 @@ func TestMountRuntimeErrors(t *testing.T) {
 	// A chain entry whose layer file is missing names the layer.
 	addDanglingChain(t, repoDir)
 	_, _, _, err = runCmd(t, append(lib, "mount", "alice/app", view)...)
-	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "chain layer 0123456789abcdef") {
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "chain layer "+strings.Repeat("0123456789abcdef", 4)) {
 		t.Fatalf("dangling chain: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
 	}
 
@@ -522,9 +522,10 @@ func addDanglingChain(t *testing.T, repoDir string) {
 		t.Fatal(err)
 	}
 	const id = "0123456789abcdef"
+	sum := strings.Repeat(id, 4)
 	meta.Chain = append(meta.Chain, image.ChainEntry{
-		ID: id, Parent: meta.ID, Size: 4096,
-		SHA256:    strings.Repeat(id, 4),
+		ID: sum, Parent: meta.ID, Size: 4096,
+		SHA256:    sum,
 		MtimeUnix: 1710000001,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
 	})

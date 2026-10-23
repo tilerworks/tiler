@@ -395,7 +395,7 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := image.Meta{
-		ID:        sum[:16],
+		ID:        sum,
 		Name:      "alice/app",
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},

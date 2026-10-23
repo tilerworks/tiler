@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
-func TestIDUsesSHA256Prefix(t *testing.T) {
+func TestIDEqualsPayloadSHA256(t *testing.T) {
 	sum := sha256.Sum256([]byte("tiler"))
 	got := ID(sum)
-	want := hex.EncodeToString(sum[:])[:idHexLen]
+	want := hex.EncodeToString(sum[:])
 	if got != want {
 		t.Fatalf("id = %s, want %s", got, want)
+	}
+	if len(got) != sumHexLen {
+		t.Fatalf("len(id) = %d, want %d", len(got), sumHexLen)
 	}
 }
 
@@ -55,7 +58,7 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 	}
 	text := err.Error()
 	wants := []string{
-		"id: must be 16 lowercase hex digits",
+		"id: must be 64 lowercase hex digits",
 		"sha256: must be 64 lowercase hex digits",
 		"name: invalid image name",
 		"kind: must be full or incremental",
@@ -65,7 +68,8 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 		"size: must be greater than 0",
 		"mtime_unix: must not be negative",
 		"created_at: must be UTC",
-		"chain[0].id: must be the first 16 hex digits of sha256",
+		"chain[0].id: must be 64 lowercase hex digits",
+		"chain[0].id: must equal sha256",
 		"chain[0].parent: must continue the linear chain",
 		"chain[0].size: must be greater than 0",
 		"chain[0].mtime_unix: must not be negative",
@@ -257,10 +261,19 @@ func TestSingleFileMetaOmitsSplitKeys(t *testing.T) {
 	}
 }
 
+// testID expands a legacy 16-hex token into the stored 64-hex id.
+// A value that is already 64 hex is returned unchanged.
+func testID(id string) string {
+	if len(id) == idHexLen && isLowerHex(id, idHexLen) {
+		return strings.Repeat(id, sumHexLen/idHexLen)
+	}
+	return id
+}
+
 func validMeta() Meta {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return Meta{
-		ID:        sum[:idHexLen],
+		ID:        sum,
 		Name:      "alice/app",
 		Kind:      KindFull,
 		Format:    Format{Type: FormatSquashfs, Compression: CompressionZstd},
@@ -273,11 +286,12 @@ func validMeta() Meta {
 }
 
 func validEntry(parent, id string) ChainEntry {
+	sum := testID(id)
 	return ChainEntry{
-		ID:        id,
-		Parent:    parent,
+		ID:        sum,
+		Parent:    testID(parent),
 		Size:      4096,
-		SHA256:    id + id + id + id,
+		SHA256:    sum,
 		MtimeUnix: 1710000001,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
 	}

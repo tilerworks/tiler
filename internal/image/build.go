@@ -67,7 +67,7 @@ type FullRequest struct {
 
 // FullResult reports one successful full build.
 type FullResult struct {
-	// ID is the first 16 hex digits of the image sha256.
+	// ID is the lowercase hex sha256 of the image payload.
 	ID string
 	// Path is the published active payload: the image file for the
 	// single-file form, or the blocks directory for a blocks build.

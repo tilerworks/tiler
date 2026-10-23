@@ -3,6 +3,8 @@ package image
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -24,7 +26,7 @@ func TestOpenRepoLayout(t *testing.T) {
 	if repo.MetaPath() != filepath.Join(root, "meta.yaml") {
 		t.Fatalf("meta = %s", repo.MetaPath())
 	}
-	const id = "0123456789abcdef"
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	incr, err := repo.IncrPath(id)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +65,7 @@ func TestLibraryPathsRejectEscape(t *testing.T) {
 		".",
 		"ABCDEF0123456789",
 		"0123456789abcde",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
 		"image.sqsh",
 	}
 	for _, id := range samples {
@@ -81,6 +84,19 @@ func TestLibraryPathsRejectEscape(t *testing.T) {
 		if _, err := repo.BlockPath(id, "blk.000"); err == nil {
 			t.Errorf("block accepted id %q", id)
 		}
+	}
+	const legacy = "0123456789abcdef"
+	if _, err := repo.IncrPath(legacy); err == nil {
+		t.Fatal("incr accepted legacy 16-hex id")
+	}
+	if _, err := repo.BlocksDirPath(legacy); err == nil {
+		t.Fatal("blocks accepted legacy 16-hex id")
+	}
+	if _, err := repo.ArchivePath(legacy); err != nil {
+		t.Fatalf("archive rejected legacy 16-hex id: %v", err)
+	}
+	if _, err := repo.HoldPath(legacy); err != nil {
+		t.Fatalf("hold rejected legacy 16-hex id: %v", err)
 	}
 	if _, err := OpenRepo("  ", "alice/app"); err == nil {
 		t.Fatal("accepted empty images dir")
@@ -107,7 +123,7 @@ func TestSplitPayloadLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join("/var/lib/images", "alice", "app")
-	const id = "0123456789abcdef"
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	blocksDir, err := repo.BlocksDirPath(id)
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +151,7 @@ func TestSplitPayloadPathsRejectEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const id = "0123456789abcdef"
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	blockNames := []string{
 		"", ".", "..", "blk.", "blk.00", "blk.0000", "blk.0a0",
 		"BLK.000", "../blk.000", "blk.000/../meta.yaml", "blk.000/",
@@ -149,6 +165,56 @@ func TestSplitPayloadPathsRejectEscape(t *testing.T) {
 	for _, name := range []string{"blk.000", "blk.999"} {
 		if _, err := repo.BlockPath(id, name); err != nil {
 			t.Errorf("block rejected %q: %v", name, err)
+		}
+	}
+}
+
+func TestResolveIDUniquePrefix(t *testing.T) {
+	const (
+		full  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		other = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	)
+	candidates := []string{full, other}
+	got, err := resolveID(candidates, "0123456789abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != full {
+		t.Fatalf("resolved %s, want %s", got, full)
+	}
+	got, err = resolveID(candidates, full)
+	if err != nil || got != full {
+		t.Fatalf("full ref: %s %v", got, err)
+	}
+	if _, err = resolveID(candidates, "a"); err == nil {
+		t.Fatal("one-character prefix of nothing was accepted")
+	}
+}
+
+func TestResolveIDRejectsAmbiguousAndUnknown(t *testing.T) {
+	candidates := []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"aaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+	cases := []struct {
+		ref  string
+		want string
+	}{
+		{"aaaa", "ambiguous"},
+		{"0123", "unknown"},
+		{"ZZ", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		_, err := resolveID(candidates, tc.ref)
+		if err == nil {
+			t.Fatalf("ref %s was accepted", tc.ref)
+		}
+		if !strings.Contains(err.Error(), strconv.Quote(tc.ref)) {
+			t.Fatalf("error %q does not quote %s", err, strconv.Quote(tc.ref))
+		}
+		if tc.want != "" && !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("ref %s: error %q missing %q", tc.ref, err, tc.want)
 		}
 	}
 }

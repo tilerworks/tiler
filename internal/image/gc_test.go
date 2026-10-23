@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,82 @@ func archPath(t *testing.T, repo Repo, id string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// makeLegacyHold lays a pre-sha256 _hold/<16-hex> directory. The
+// directory name is the legacy id used for pins; meta inside still
+// carries a full sha256 so Load succeeds under current validation.
+func makeLegacyHold(t *testing.T, repo Repo, data []byte) string {
+	t.Helper()
+	meta := metaFor(data)
+	meta.Name = repo.Name()
+	legacy := meta.ID[:idHexLen]
+	dir, err := repo.HoldPath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+		t.Fatal(err)
+	}
+	return legacy
+}
+
+// makeLegacyArchive lays _archives/<legacy> with a Validate-passing
+// meta. legacy must be a 16-hex name.
+func makeLegacyArchive(t *testing.T, repo Repo, legacy string, data []byte, createdAt time.Time) Meta {
+	t.Helper()
+	if !legacyID(legacy) {
+		t.Fatalf("legacy id %q", legacy)
+	}
+	meta := metaFor(data)
+	meta.Name = repo.Name()
+	meta.CreatedAt = createdAt.UTC()
+	dir, err := repo.ArchivePath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta
+}
+
+// plantArchive writes _archives/<id> with a Validate-passing meta
+// whose id equals sha256. The payload bytes need not hash to id.
+func plantArchive(t *testing.T, repo Repo, id string, data []byte, createdAt time.Time) Meta {
+	t.Helper()
+	meta := validMeta()
+	meta.ID = id
+	meta.SHA256 = id
+	meta.Name = repo.Name()
+	meta.Size = int64(len(data))
+	meta.CreatedAt = createdAt.UTC()
+	dir, err := repo.ArchivePath(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta
 }
 
 func TestGCDeletesExpiredByAge(t *testing.T) {
@@ -516,6 +593,78 @@ func TestRemoveTargetWholeRepoRefusedByHoldReference(t *testing.T) {
 	}
 }
 
+func TestRemoveTargetWholeRepoRefusedByLegacyHoldReference(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("active-beside-legacy"), false)
+	legacy := makeLegacyHold(t, repo, []byte("legacy-hold-payload"))
+	refs := holdSet{ids: map[string]bool{legacy: true}}
+	_, err := RemoveTarget(cfg, "alice/app", refs)
+	if err == nil || !strings.Contains(err.Error(), "referenced") {
+		t.Fatalf("err = %v", err)
+	}
+	hold, err := repo.HoldPath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(hold); statErr != nil {
+		t.Fatalf("legacy hold deleted while referenced: %v", statErr)
+	}
+	if _, statErr := os.Stat(repo.Dir); statErr != nil {
+		t.Fatalf("repo deleted while a legacy hold is referenced: %v", statErr)
+	}
+}
+
+func TestRemoveTargetArchiveLegacyAmbiguousWithFullPrefix(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("active-full"), false)
+	full := makeArchive(t, repo, []byte("shared-archive-payload"), time.Now())
+	legacy := full.ID[:idHexLen]
+	makeLegacyArchive(t, repo, legacy, []byte("legacy-archive-sibling"), time.Now())
+	target := "alice/app/" + dirArchives + "/" + legacy
+	_, err := RemoveTarget(cfg, target, nil)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Quote(legacy)) {
+		t.Fatalf("error %q does not quote %q", err, legacy)
+	}
+	if _, statErr := os.Stat(archPath(t, repo, full.ID)); statErr != nil {
+		t.Fatalf("full archive touched: %v", statErr)
+	}
+	legacyDir, err := repo.ArchivePath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(legacyDir); statErr != nil {
+		t.Fatalf("legacy archive touched: %v", statErr)
+	}
+}
+
+func TestGCLeavesLegacyHoldUnpromoted(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("active-full"), false)
+	legacy := makeLegacyHold(t, repo, []byte("legacy-hold-payload"))
+	events, err := GC(cfg, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.FullID == legacy {
+			t.Fatalf("legacy hold was promoted: %+v", events)
+		}
+	}
+	hold, err := repo.HoldPath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(hold); statErr != nil {
+		t.Fatalf("legacy hold missing after gc: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirArchives, legacy)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("legacy hold was renamed into archives: %v", statErr)
+	}
+}
+
 func TestRemoveTargetCleansName(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	seedActive(t, repo, []byte("clean-name"), true)
@@ -547,6 +696,102 @@ func TestRemoveTargetRejectsBadTargets(t *testing.T) {
 	}
 	if _, statErr := os.Stat(repo.ImagePath()); statErr != nil {
 		t.Fatalf("active image deleted by a bad target: %v", statErr)
+	}
+}
+
+func TestRemoveTargetArchivePrefixResolution(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("active-full"), false)
+	const (
+		victimID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		otherID  = "aaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		prefix   = "aaaaaaaaaaaa"
+		shared   = "aaaaaaaa"
+	)
+	plantArchive(t, repo, victimID, []byte("archive-prefix-victim"), time.Now())
+	plantArchive(t, repo, otherID, []byte("archive-prefix-other"), time.Now())
+
+	target := "alice/app/" + dirArchives + "/" + prefix
+	outcome, err := RemoveTarget(cfg, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != OutcomeDeprecated {
+		t.Fatalf("outcome = %s", outcome)
+	}
+	archived, err := Load(filepath.Join(archPath(t, repo, victimID), fileMeta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !archived.Deprecated {
+		t.Fatal("unique prefix did not deprecate the matching archive")
+	}
+	otherMeta, err := Load(filepath.Join(archPath(t, repo, otherID), fileMeta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherMeta.Deprecated {
+		t.Fatal("unique prefix deprecated a different archive")
+	}
+
+	_, err = RemoveTarget(cfg, "alice/app/"+dirArchives+"/"+shared, nil)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous err = %v", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Quote(shared)) {
+		t.Fatalf("ambiguous error %q does not quote %q", err, shared)
+	}
+	if loaded, loadErr := Load(filepath.Join(archPath(t, repo, otherID), fileMeta)); loadErr != nil {
+		t.Fatal(loadErr)
+	} else if loaded.Deprecated {
+		t.Fatal("ambiguous prefix marked another archive")
+	}
+
+	const unknown = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	_, err = RemoveTarget(cfg, "alice/app/"+dirArchives+"/"+unknown, nil)
+	if err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("unknown err = %v", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Quote(unknown)) {
+		t.Fatalf("unknown error %q does not quote the ref", err)
+	}
+	if errors.Is(err, ErrInvalidName) {
+		t.Fatalf("well-formed unknown id classified as usage error: %v", err)
+	}
+
+	bad := "alice/app/" + dirArchives + "/not-hex"
+	_, err = RemoveTarget(cfg, bad, nil)
+	if err == nil || !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("non-hex err = %v", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Quote(bad)) {
+		t.Fatalf("non-hex error %q does not quote the target", err)
+	}
+}
+
+func TestRemoveTargetArchiveLegacyExactName(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	seedActive(t, repo, []byte("active-full"), false)
+	const legacy = "cccccccccccccccc"
+	makeLegacyArchive(t, repo, legacy, []byte("legacy-only-archive"), time.Now())
+	target := "alice/app/" + dirArchives + "/" + legacy
+	outcome, err := RemoveTarget(cfg, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != OutcomeDeprecated {
+		t.Fatalf("outcome = %s", outcome)
+	}
+	dir, err := repo.ArchivePath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Load(filepath.Join(dir, fileMeta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !meta.Deprecated {
+		t.Fatal("exact legacy archive name was not selected")
 	}
 }
 

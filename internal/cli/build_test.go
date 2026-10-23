@@ -149,14 +149,14 @@ func buildImage(t *testing.T, lib []string, name, src string) string {
 func buildOutput(t *testing.T, stdout string) string {
 	t.Helper()
 	fields := strings.Fields(stdout)
-	if len(fields) != 3 || !isHex16(fields[2]) {
+	if len(fields) != 3 || !isPayloadID(fields[2]) {
 		t.Fatalf("build stdout = %q", stdout)
 	}
 	return fields[2]
 }
 
-func isHex16(s string) bool {
-	if len(s) != 16 {
+func isPayloadID(s string) bool {
+	if len(s) != 64 {
 		return false
 	}
 	for _, r := range s {
@@ -194,7 +194,7 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	fields := strings.Fields(stdout)
-	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
@@ -384,7 +384,7 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 		t.Fatalf("first incr: %v\n%s", err, stderr)
 	}
 	fields := strings.Fields(stdout)
-	if len(fields) != 3 || fields[0] != "incr" || !isHex16(fields[2]) {
+	if len(fields) != 3 || fields[0] != "incr" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	layer := fields[2]
@@ -533,7 +533,7 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 		t.Fatalf("incr build: %v\n%s", err, stderr)
 	}
 	fields := strings.Fields(stdout)
-	if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+	if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
@@ -598,7 +598,7 @@ func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
 				t.Fatalf("build: %v\n%s", err, stderr)
 			}
 			fields := strings.Fields(stdout)
-			if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+			if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 				t.Fatalf("stdout = %q", stdout)
 			}
 			meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
@@ -635,7 +635,7 @@ func TestBuildIdentityFallsBackToSessionRecord(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	fields := strings.Fields(stdout)
-	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isHex16(fields[2]) {
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
@@ -646,7 +646,7 @@ func TestBuildIdentityFallsBackToSessionRecord(t *testing.T) {
 		t.Fatalf("diverted build: %v\n%s", err, stderr)
 	}
 	fields = strings.Fields(stdout)
-	if len(fields) != 3 || fields[0] != "full" || fields[1] != "bob/other" || !isHex16(fields[2]) {
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "bob/other" || !isPayloadID(fields[2]) {
 		t.Fatalf("diverted stdout = %q", stdout)
 	}
 	if _, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...); err != nil {

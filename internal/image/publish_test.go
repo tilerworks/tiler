@@ -457,7 +457,7 @@ func TestPublishIdleKeepsIncomingChain(t *testing.T) {
 	if err := repo.Publish(data, meta, nil); err != nil {
 		t.Fatal(err)
 	}
-	const layer = "fedcba9876543210"
+	layer := testID("fedcba9876543210")
 	meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
 	if err := repo.Publish(data, meta, nil); err != nil {
 		t.Fatal(err)
@@ -799,8 +799,8 @@ func TestPublishRepairsOrphanMetaWithPreviousHold(t *testing.T) {
 
 func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 	repo := testRepo(t)
-	layerA := "aaaaaaaaaaaaaaaa"
-	layerB := "bbbbbbbbbbbbbbbb"
+	layerA := testID("aaaaaaaaaaaaaaaa")
+	layerB := testID("bbbbbbbbbbbbbbbb")
 	dataA := []byte("image-a")
 	metaA := metaFor(dataA)
 	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layerA)}
@@ -888,8 +888,8 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 
 func TestPublishSweepKeepsForeignLayersOutOfArchives(t *testing.T) {
 	repo := testRepo(t)
-	layerB := "bbbbbbbbbbbbbbbb"
-	layerC := "cccccccccccccccc"
+	layerB := testID("bbbbbbbbbbbbbbbb")
+	layerC := testID("cccccccccccccccc")
 	dataA := []byte("image-a")
 	metaA := metaFor(dataA)
 	if err := repo.Publish(dataA, metaA, nil); err != nil {
@@ -941,7 +941,7 @@ func TestPublishSweepKeepsForeignLayersOutOfArchives(t *testing.T) {
 
 func TestPublishSweepsTornIncrIntoReferencedHold(t *testing.T) {
 	repo := testRepo(t)
-	layerC := "cccccccccccccccc"
+	layerC := testID("cccccccccccccccc")
 	dataC := []byte("image-c")
 	metaC := metaFor(dataC)
 	metaC.Chain = []ChainEntry{validEntry(metaC.ID, layerC)}
@@ -977,7 +977,7 @@ func TestPublishSweepsTornIncrIntoReferencedHold(t *testing.T) {
 
 func TestPublishSweepResolvesAmbiguousHoldsByChain(t *testing.T) {
 	repo := testRepo(t)
-	layerC := "cccccccccccccccc"
+	layerC := testID("cccccccccccccccc")
 	dataA := []byte("image-a")
 	metaA := metaFor(dataA)
 	if err := repo.Publish(dataA, metaA, nil); err != nil {
@@ -1031,7 +1031,7 @@ func TestPublishSweepResolvesAmbiguousHoldsByChain(t *testing.T) {
 
 func TestPublishRepublishReturnsLayersFromReferencedHold(t *testing.T) {
 	repo := testRepo(t)
-	layer := "aaaaaaaaaaaaaaaa"
+	layer := testID("aaaaaaaaaaaaaaaa")
 	dataA := []byte("image-a")
 	metaA := metaFor(dataA)
 	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layer)}
@@ -1088,7 +1088,7 @@ func TestPublishRepublishReturnsLayersFromReferencedHold(t *testing.T) {
 
 func TestPublishReplaceKeepsReferencedHoldLayers(t *testing.T) {
 	repo := testRepo(t)
-	layer := "aaaaaaaaaaaaaaaa"
+	layer := testID("aaaaaaaaaaaaaaaa")
 	dataA := []byte("image-a")
 	metaA := metaFor(dataA)
 	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layer)}
@@ -1185,7 +1185,7 @@ func seedActive(t *testing.T, repo Repo, data []byte, withChain bool) Meta {
 	meta := metaFor(data)
 	meta.Name = repo.Name()
 	if withChain {
-		const layer = "fedcba9876543210"
+		layer := testID("fedcba9876543210")
 		meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
