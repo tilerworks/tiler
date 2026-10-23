@@ -200,10 +200,13 @@ Available now:
 - `tiler images list [--archives] [--json]` lists every active image
   as one aligned row: name, id, creation date, size, chain length,
   payload form (`single` or `blocks`), and the archive and hold
-  counts. A deprecated image, and a recorded ref or short commit,
-  trail that row. `--archives` adds those parked chain ids under
-  each row. `--json` renders one machine-readable document instead,
-  with the additive `form` field for blocks actives.
+  counts. The human id column is a 10-hex prefix of the payload
+  sha256. That prefix locates the image when it is unique in the
+  library leaf. A deprecated image, and a recorded ref or short
+  commit, trail that row. `--archives` adds those parked chain ids,
+  shortened the same way, under each row. `--json` keeps the full
+  sha256 in one machine-readable document, with the additive `form`
+  field for blocks actives.
 - `tiler images show <name> [--json]` prints a multi-line record for
   one active image. `<name>` is a 1-to-5 segment library name. The
   record covers identity, a `format` line such as `squashfs/zstd`,

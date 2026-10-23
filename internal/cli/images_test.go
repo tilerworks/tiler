@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/session"
 )
@@ -190,13 +191,16 @@ func TestImagesListAllAndShow(t *testing.T) {
 	id3 := buildImage(t, lib, "bob/tool", other)
 
 	out := mustList(t, lib)
-	for _, want := range []string{"NAME", "alice/app", id2, "bob/tool", id3} {
+	for _, want := range []string{"NAME", "alice/app", listID(id2), "bob/tool", listID(id3)} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, id1) {
-		t.Fatalf("short list included archived id %s:\n%s", id1, out)
+	if strings.Contains(out, id2) || strings.Contains(out, id3) {
+		t.Fatalf("short list printed a full id:\n%s", out)
+	}
+	if listID(id1) != listID(id2) && strings.Contains(out, listID(id1)) {
+		t.Fatalf("short list included archived id %s:\n%s", listID(id1), out)
 	}
 	detail := mustShow(t, lib, "alice/app")
 	for _, want := range []string{"  id          " + id2, "    " + id1, "  holds       0"} {
@@ -204,8 +208,33 @@ func TestImagesListAllAndShow(t *testing.T) {
 			t.Fatalf("show missing %q:\n%s", want, detail)
 		}
 	}
-	if out = mustList(t, lib, "--archives"); !strings.Contains(out, "  archive "+id1) {
-		t.Fatalf("ls all --archives:\n%s\nwant archive %s", out, id1)
+	if out = mustList(t, lib, "--archives"); !strings.Contains(out, "  archive "+listID(id1)) {
+		t.Fatalf("ls all --archives:\n%s\nwant archive %s", out, listID(id1))
+	}
+	if strings.Contains(out, id1) {
+		t.Fatalf("archives listing printed the full id:\n%s", out)
+	}
+}
+
+func TestImagesListPrefixLocatesImage(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
+	id := buildImage(t, lib, "alice/app", src)
+
+	short := listID(id)
+	if len(short) != listIDHex || !strings.HasPrefix(id, short) {
+		t.Fatalf("list id %q is not a %d-hex prefix of %s", short, listIDHex, id)
+	}
+	out := mustList(t, lib)
+	if !strings.Contains(out, short) || strings.Contains(out, id) {
+		t.Fatalf("ls id column:\n%s", out)
+	}
+	target, err := image.ResolvePinned(config.Config{ImagesDir: imagesDir}, "alice/app", short)
+	if err != nil || target.ID != id {
+		t.Fatalf("ResolvePinned(%s) = (%s, %v), want %s", short, target.ID, err, id)
 	}
 }
 
@@ -451,8 +480,12 @@ func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(repo.Dir, "image.sqsh")); err != nil {
 				t.Fatal(err)
 			}
-			if out := mustList(t, lib); !strings.Contains(out, name) || !strings.Contains(out, id1) {
-				t.Fatalf("ls missing %s %s:\n%s", name, id1, out)
+			out := mustList(t, lib)
+			if !strings.Contains(out, name) || !strings.Contains(out, listID(id1)) {
+				t.Fatalf("ls missing %s %s:\n%s", name, listID(id1), out)
+			}
+			if strings.Contains(out, id1) {
+				t.Fatalf("ls printed the full id:\n%s", out)
 			}
 			if detail := mustShow(t, lib, name); !strings.Contains(detail, "  id          "+id1) {
 				t.Fatalf("show missing id:\n%s", detail)
@@ -575,10 +608,13 @@ func TestImagesListSplitForms(t *testing.T) {
 		[]string{"block-one", "b2"}, true)
 
 	out := mustList(t, lib)
-	for _, want := range []string{blocksID, "blocks"} {
+	for _, want := range []string{listID(blocksID), "blocks"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, blocksID) {
+		t.Fatalf("ls printed the full id:\n%s", out)
 	}
 	out = mustShow(t, lib, "alice/data")
 	for _, want := range []string{"  form        blocks", "  blocks      2"} {

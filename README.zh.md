@@ -161,10 +161,12 @@ tiler session close feature                # 逆序卸载，记录保留
   blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
 - `tiler images list [--archives] [--json]` 把每个活跃镜像打成
   对齐的一行：名字、id、创建日期、体积、链长、载荷形态
-  （`single` 或 `blocks`），以及归档和 hold 的个数。
-  被标记废弃，或记录了 ref / 短 commit 时，这些信息跟在行尾。
-  `--archives` 在列表每一行下面补上停放的链 id。`--json` 改为
-  渲染一份机器可读文档，blocks 活跃位新增 `form` 字段
+  （`single` 或 `blocks`），以及归档和 hold 的个数。给人看的
+  id 列是 payload sha256 的 10 位十六进制前缀；该前缀在库叶子
+  内唯一时即可定位这份镜像。被标记废弃，或记录了 ref / 短
+  commit 时，这些信息跟在行尾。`--archives` 在列表每一行下面
+  补上同样缩短的停放链 id。`--json` 仍保留完整 sha256，并渲染
+  一份机器可读文档，blocks 活跃位新增 `form` 字段
   （契约只增不改）。
 - `tiler images show <name> [--json]` 输出一个活跃镜像的多行记录。
   `<name>` 是 1 到 5 段的库名。记录包括身份、一行 `format`（例如

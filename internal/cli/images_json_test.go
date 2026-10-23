@@ -129,11 +129,11 @@ func TestImagesListHumanRecord(t *testing.T) {
 	withBuildSeams(t, nil)
 	writeGoldenLibrary(t, imagesDir)
 
-	idPad := strings.Repeat(" ", len(goldenActiveID)-len("ID"))
+	idPad := strings.Repeat(" ", listIDHex-len("ID"))
 	want := "" +
 		"NAME       ID" + idPad + "  CREATED     SIZE   CHAIN  FORM    ARCH  HOLD\n" +
-		"alice/app  " + goldenActiveID + "  2026-03-04  2 KiB  1      single  1     1\n" +
-		"bob/tool   " + goldenBobID + "  2026-03-04  4 KiB  0      single  0     0\n"
+		"alice/app  " + listID(goldenActiveID) + "  2026-03-04  2 KiB  1      single  1     1\n" +
+		"bob/tool   " + listID(goldenBobID) + "  2026-03-04  4 KiB  0      single  0     0\n"
 	if out := mustList(t, lib); out != want {
 		t.Fatalf("ls all:\n%s\nwant:\n%s", out, want)
 	}

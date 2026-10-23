@@ -38,10 +38,12 @@ func newImagesListCmd() *cobra.Command {
 		Short:   "List active images",
 		Long: "Print one aligned row per active image: name, id, creation\n" +
 			"date, size, chain length, payload form, and the archive and\n" +
-			"hold counts. --archives adds those parked chain ids under\n" +
-			"each row. --json renders one machine-readable document\n" +
-			"instead of the human listing. Use 'images show' for one\n" +
-			"repository in detail.",
+			"hold counts. The id column is a 10-hex prefix of the payload\n" +
+			"sha256; that prefix locates the image when it is unique in\n" +
+			"the library leaf. --archives adds those parked chain ids,\n" +
+			"shortened the same way, under each row. --json keeps the\n" +
+			"full sha256 in a machine-readable document. Use 'images\n" +
+			"show' for one repository in detail.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -212,7 +214,7 @@ func newImageTableRow(named namedState) imageTableRow {
 	return imageTableRow{
 		cols: []string{
 			named.name,
-			meta.ID,
+			listID(meta.ID),
 			meta.CreatedAt.UTC().Format("2006-01-02"),
 			formatSize(meta.Size),
 			strconv.Itoa(shownChainLength(meta)),
@@ -387,16 +389,28 @@ func formatSize(n int64) string {
 
 func writeSideChains(w io.Writer, state image.State) error {
 	for _, id := range state.Archives {
-		if _, err := fmt.Fprintf(w, "  archive %s\n", id); err != nil {
+		if _, err := fmt.Fprintf(w, "  archive %s\n", listID(id)); err != nil {
 			return err
 		}
 	}
 	for _, id := range state.Holds {
-		if _, err := fmt.Fprintf(w, "  hold %s\n", id); err != nil {
+		if _, err := fmt.Fprintf(w, "  hold %s\n", listID(id)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// listIDHex is how many hex digits images list prints for an id.
+// The stored id stays the full sha256. A unique prefix of this
+// length locates that image through resolveID.
+const listIDHex = 10
+
+func listID(id string) string {
+	if len(id) <= listIDHex {
+		return id
+	}
+	return id[:listIDHex]
 }
 
 // imagesDocument is the images list --json envelope: one object
