@@ -658,13 +658,21 @@ func mountRequest(
 	runtimeDir string,
 ) (workspace.Request, error) {
 	original := memberPaths(target)
-	format, err := resolveRequestFormat(target, original)
+	bytesPaths, err := payloadBytesPaths(original)
+	if err != nil {
+		return workspace.Request{}, err
+	}
+	format, err := resolveRequestFormat(target, bytesPaths)
 	if err != nil {
 		return workspace.Request{}, err
 	}
 	mounted := make([]string, 0, len(target.Members))
+	keepIdentity := cfg.CacheEnabled
 	for i, m := range target.Members {
-		path := original[i]
+		path := bytesPaths[i]
+		if path != original[i] {
+			keepIdentity = true
+		}
 		if cfg.CacheEnabled {
 			cached, _, err := ensureCache(cfg.CacheDir, m.Path, m.SHA256)
 			if err != nil {
@@ -691,11 +699,29 @@ func mountRequest(
 		MergedDir:       dir,
 		Run:             mountRun,
 	}
-	if cfg.CacheEnabled {
+	if keepIdentity {
 		req.FullFSName = original[0]
 		req.LayerFSNames = original[1:]
 	}
 	return req, nil
+}
+
+// payloadBytesPaths resolves each library leaf (symlink or path-ref)
+// to the container file FUSE or hdiutil should open.
+func payloadBytesPaths(paths []string) ([]string, error) {
+	out := make([]string, len(paths))
+	for i, path := range paths {
+		if path == "" {
+			out[i] = path
+			continue
+		}
+		bytesPath, err := image.ResolvePayloadBytesPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("mount: %w", err)
+		}
+		out[i] = bytesPath
+	}
+	return out, nil
 }
 
 // guardMountFormat refuses unknown or mismatched container magic
@@ -715,7 +741,12 @@ func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) 
 		}
 		return mounted, nil
 	}
-	_, err := resolveRequestFormat(target, memberPaths(target))
+	paths := memberPaths(target)
+	bytesPaths, err := payloadBytesPaths(paths)
+	if err != nil {
+		return nil, err
+	}
+	_, err = resolveRequestFormat(target, bytesPaths)
 	return nil, err
 }
 
@@ -814,7 +845,12 @@ func matchLibraryFormat(target image.Target, paths []string) (string, error) {
 
 // matchOneFormat reports when path is not the container want names.
 func matchOneFormat(path string, want container.Format) error {
-	got, err := container.DetectFile(path)
+	bytesPath, err := image.ResolvePayloadBytesPath(path)
+	if err != nil {
+		return fmt.Errorf("mount: %s does not match meta format %s: %w",
+			path, want.Type(), err)
+	}
+	got, err := container.DetectFile(bytesPath)
 	if err != nil {
 		return fmt.Errorf("mount: %s does not match meta format %s: %w",
 			path, want.Type(), err)

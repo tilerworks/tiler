@@ -15,7 +15,11 @@ func VerifySHA256(meta Meta, path string) error {
 }
 
 func verifyFileSHA256(path, want string) error {
-	sum, err := fileSHA256(path)
+	bytesPath, err := ResolvePayloadBytesPath(path)
+	if err != nil {
+		return err
+	}
+	sum, err := fileSHA256(bytesPath)
 	if err != nil {
 		return err
 	}
@@ -32,7 +36,11 @@ func QuickCheck(meta Meta, path string) error {
 }
 
 func quickCheckFile(path string, size, mtime int64) error {
-	info, err := os.Stat(path)
+	bytesPath, err := ResolvePayloadBytesPath(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(bytesPath)
 	if err != nil {
 		return err
 	}

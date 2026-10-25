@@ -1446,7 +1446,11 @@ func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
 	if err != nil || !there {
 		return false, err
 	}
-	return fileMatchesMeta(path, meta)
+	bytesPath, err := ResolvePayloadBytesPath(path)
+	if err != nil {
+		return false, err
+	}
+	return fileMatchesMeta(bytesPath, meta)
 }
 
 // dirMatchesBlocks re-hashes every manifest block under dir. The

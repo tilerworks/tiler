@@ -267,10 +267,13 @@ NAS 共享或供应商目录里常有现成的 squashfs、erofs 或 dmg，但
 | 路径 | 命令形态 | 入库 | session `Name`/`FullID` | 视图内 `build -i` |
 |------|----------|------|-------------------------|-------------------|
 | 裸文件 | `tiler mount /path/to/file.sqsh work` | 否 | 否 | 无法反查库名 |
-| 登记后挂载 | `tiler mount --file /path/to/file.sqsh alice/app work` | 库内 symlink + meta | 是 | Linux 可用 |
+| 登记后挂载 | `tiler mount --file /path/to/file.sqsh alice/app work` | 库内外链 + meta | 是 | Linux 可用 |
 
-`--file` 在库叶子上写指向外部文件的绝对 symlink、按目标内容写入
-`meta.yaml`，再与普通库名挂载走同一路径。相同目标与 digest 的
+`--file` 在库叶子上优先写指向外部文件的绝对 symlink；若主机无法
+创建 symlink，则写入 path-ref 普通文件（内容为绝对路径加换行，与
+`core.symlinks=false` 时 git 检出 symlink 的形态一致）。按目标内容
+写入 `meta.yaml` 后，与普通库名挂载走同一路径。挂载、校验与 cache
+都会解析 symlink 或 path-ref 再打开目标字节。相同目标与 digest 的
 第二次登记对叶子幂等。
 
 平台格式门禁与 `build` 对称（非法格式为 usage 错误，退出码 2）：
@@ -282,12 +285,13 @@ NAS 共享或供应商目录里常有现成的 squashfs、erofs 或 dmg，但
 
 已登记外部镜像的生命周期：
 
-- `tiler images remove` 与 `tiler images gc` 只删库内 meta、
-  symlink 与本地增量层，**不会**删除 NAS 或其他位置上的外部文件。
+- `tiler images remove` 与 `tiler images gc` 只删库内 meta、外链
+  叶子（symlink 或 path-ref）与本地增量层，**不会**删除 NAS 或
+  其他位置上的外部文件。
 - `tiler build --full`（macOS 上为 dmg bake）会在库内物化新的
-  active 载荷；先前的 active（含外部 symlink）进入 hold 或归档。
+  active 载荷；先前的 active（含外链）进入 hold 或归档。
 - 可写视图产生的增量层落在库叶子下（Linux 为 `_incr/`）；active
-  载荷仍可保持为 symlink。
+  载荷仍可保持为外链。
 - 开启 `--cache` 时，成员字节先拷入 `cache_dir` 再挂载，但挂载表
   与 session 身份仍指向库路径（`images_dir/.../image.*`），而非
   缓存文件。

@@ -120,6 +120,10 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 	if err != nil {
 		return FullResult{}, err
 	}
+	base, err = ResolvePayloadBytesPath(base)
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
 	comp := req.Compression
 	if comp == "" {
 		comp = baseComp

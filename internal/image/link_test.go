@@ -150,7 +150,7 @@ func TestLinkExternalConflictPayload(t *testing.T) {
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("external"))
 	err := LinkExternal(linkImagesRoot(repo), repo.Name(), src, "test")
-	if err == nil || !strings.Contains(err.Error(), "external symlink") {
+	if err == nil || !strings.Contains(err.Error(), "external link") {
 		t.Fatalf("error = %v", err)
 	}
 }

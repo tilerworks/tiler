@@ -17,9 +17,10 @@
 # rather than false-fails -- on a host without the toolchain.
 #
 # Scope guard: this case asserts --file registration, library mount,
-# incremental build, link idempotency, and Linux dmg refusal only. It
-# does not cover macOS dmg --file (t0024), bare path mounts, split
-# blocks, or images remove/gc against NAS files.
+# incremental build, link idempotency, path-ref remount (git-style
+# text leaf), and Linux dmg refusal only. It does not cover macOS
+# dmg --file (t0024), bare path mounts, split blocks, or images
+# remove/gc against NAS files.
 
 test_description='tiler mount --file links NAS squashfs and supports incr'
 
@@ -140,6 +141,22 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file refuses a dmg sourc
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	test_grep -E "^unmounted " umount.out
+'
+
+# Simulate git core.symlinks=false: replace the leaf symlink with a
+# regular file whose content is the absolute NAS path.
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'path-ref leaf mounts like a symlink' '
+	test_path_is_symlink "$payload" &&
+	printf "%s\n" "$img" >"$payload" &&
+	test_path_is_file "$payload" &&
+	! test -L "$payload" &&
+	mkdir -p "$work_dir" &&
+	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >pathref.out 2>pathref.err &&
+	test_grep -E "^mounted " pathref.out &&
+	test_grep "hello vendor" "$work_dir/README.txt" &&
+	test_path_is_file "$work_dir/extra.txt" &&
+	"$tiler_bin" umount "$work_dir" >pathref-umount.out 2>pathref-umount.err &&
+	test_grep -E "^unmounted " pathref-umount.out
 '
 
 test_done

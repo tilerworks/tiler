@@ -338,12 +338,17 @@ or dmg without tiler's library layout (`meta.yaml`, `image.sqsh`, or
 | Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
 |------|---------------|---------|-------------------------|--------------------|
 | Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
-| Register + mount | `tiler mount --file /path/to/file.sqsh alice/app work` | symlink + meta under `images_dir` | yes | yes on Linux |
+| Register + mount | `tiler mount --file /path/to/file.sqsh alice/app work` | external link + meta under `images_dir` | yes | yes on Linux |
 
-`--file` writes an absolute symlink from the library leaf to the
-external file, hashes the target for `meta.yaml`, then runs the same
-library-name mount as a published image. A second call with the same
-target and digest is idempotent for the leaf.
+`--file` records the external file under the library leaf as an
+absolute symlink when the host supports it; if symlink creation
+fails, it writes a path-ref regular file whose content is the
+absolute path plus a newline (the same shape git uses when
+`core.symlinks` is false). It hashes the target for `meta.yaml`,
+then runs the same library-name mount as a published image. Mount,
+verify, and cache open the target bytes whether the leaf is a
+symlink or a path-ref. A second call with the same target and
+digest is idempotent for the leaf.
 
 Platform format gates match `build` (wrong format is a usage error,
 exit 2):
@@ -356,13 +361,15 @@ exit 2):
 NAS lifecycle for a linked image:
 
 - `tiler images remove` and `tiler images gc` drop library metadata,
-  symlinks, and local increment layers only — they never delete the
-  external file on NAS or elsewhere.
+  external-link leaves (symlink or path-ref), and local increment
+  layers only — they never delete the external file on NAS or
+  elsewhere.
 - `tiler build --full` (or a dmg bake on macOS) materializes a new
   active payload under the library; the previous active, including an
-  external symlink, moves to hold or archive.
+  external link, moves to hold or archive.
 - Incremental layers from a writable view land under the library
-  leaf (`_incr/` on Linux); the active payload may stay a symlink.
+  leaf (`_incr/` on Linux); the active payload may stay an external
+  link.
 - With `--cache`, member bytes copy into `cache_dir` for mounting,
   but the mount table and session still name the library path
   (`images_dir/.../image.*`), not the cache file.

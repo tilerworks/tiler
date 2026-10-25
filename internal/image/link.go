@@ -22,10 +22,16 @@ var linkNow = func() time.Time { return time.Now().UTC() }
 // format policy. Tests may replace it.
 var linkDarwinHost = func() bool { return runtime.GOOS == "darwin" }
 
+// linkSymlink creates a symlink. Tests may replace it to force the
+// path-ref fallback when the host cannot create symlinks.
+var linkSymlink = os.Symlink
+
 // LinkExternal registers an external image file in the library leaf
 // name under imagesDir. It writes an absolute symlink to
-// image.sqsh or image.dmg and meta.yaml without copying payload
-// bytes. The same external target and digest is idempotent.
+// image.sqsh or image.dmg when possible, otherwise a path-ref
+// regular file whose content is the absolute source path, plus
+// meta.yaml, without copying payload bytes. The same external
+// target and digest is idempotent.
 func LinkExternal(imagesDir, name, srcPath, builder string) error {
 	repo, err := OpenRepo(imagesDir, name)
 	if err != nil {
@@ -61,7 +67,7 @@ func LinkExternal(imagesDir, name, srcPath, builder string) error {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		return fmt.Errorf("link: %w", err)
 	}
-	if err := writeLinkSymlink(absSrc, payloadPath); err != nil {
+	if err := writeLinkExternal(absSrc, payloadPath); err != nil {
 		return err
 	}
 	if err := writeLinkMeta(repo, next, hooks{}); err != nil {
@@ -222,49 +228,31 @@ func linkExisting(repo Repo) (Meta, bool, error) {
 
 func checkStrayPayload(dir, absSrc string, next Meta) error {
 	payloadPath := filepath.Join(dir, activeImageName(next.Format.Type))
-	info, err := os.Lstat(payloadPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	target, ok, err := readExternalLinkTarget(payloadPath)
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(payloadPath)
-		if err != nil {
-			return err
-		}
-		resolved, err := filepath.Abs(target)
-		if err != nil {
-			return err
-		}
-		if resolved == absSrc {
+	if !ok {
+		if _, err := os.Lstat(payloadPath); errors.Is(err, os.ErrNotExist) {
 			return nil
+		} else if err != nil {
+			return err
 		}
+		return fmt.Errorf("link: leaf payload conflicts with external link")
+	}
+	if target == absSrc {
+		return nil
 	}
 	return fmt.Errorf("link: leaf payload conflicts with external link")
 }
 
 func readLinkTarget(repo Repo, typ string) (string, bool, error) {
 	path := filepath.Join(repo.Dir, activeImageName(typ))
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
+	target, ok, err := readExternalLinkTarget(path)
 	if err != nil {
-		return "", false, err
+		return "", ok, fmt.Errorf("link: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return "", false, nil
-	}
-	target, err := os.Readlink(path)
-	if err != nil {
-		return "", false, err
-	}
-	if !filepath.IsAbs(target) {
-		return "", true, fmt.Errorf("link: active payload symlink is not absolute")
-	}
-	return target, true, nil
+	return target, ok, nil
 }
 
 func linkConflict(repo Repo, absSrc string, existing, next Meta) error {
@@ -276,7 +264,7 @@ func linkConflict(repo Repo, absSrc string, existing, next Meta) error {
 		return fmt.Errorf("link: active payload points elsewhere")
 	}
 	if !ok {
-		return fmt.Errorf("link: active payload is not an external symlink")
+		return fmt.Errorf("link: active payload is not an external link")
 	}
 	if existing.SHA256 != next.SHA256 || existing.Size != next.Size {
 		return fmt.Errorf("link: active meta does not match external file")
@@ -284,25 +272,32 @@ func linkConflict(repo Repo, absSrc string, existing, next Meta) error {
 	return fmt.Errorf("link: active image conflicts with external link")
 }
 
-func writeLinkSymlink(absSrc, payloadPath string) error {
-	info, err := os.Lstat(payloadPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return os.Symlink(absSrc, payloadPath)
-	}
+// writeLinkExternal records absSrc at payloadPath as a symlink when
+// possible, otherwise as a path-ref regular file. An existing link
+// that already names absSrc is left alone.
+func writeLinkExternal(absSrc, payloadPath string) error {
+	target, ok, err := readExternalLinkTarget(payloadPath)
 	if err != nil {
 		return fmt.Errorf("link: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("link: active payload is not an external symlink")
+	if ok {
+		if target == absSrc {
+			return nil
+		}
+		return fmt.Errorf("link: active payload points elsewhere")
 	}
-	target, err := os.Readlink(payloadPath)
-	if err != nil {
+	if _, err := os.Lstat(payloadPath); err == nil {
+		return fmt.Errorf("link: active payload is not an external link")
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("link: %w", err)
 	}
-	if target == absSrc {
+	if err := linkSymlink(absSrc, payloadPath); err == nil {
 		return nil
 	}
-	return fmt.Errorf("link: active payload points elsewhere")
+	if err := writePathRef(absSrc, payloadPath); err != nil {
+		return fmt.Errorf("link: %w", err)
+	}
+	return nil
 }
 
 func writeLinkMeta(repo Repo, meta Meta, seam hooks) error {

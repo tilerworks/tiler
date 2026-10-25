@@ -21,9 +21,13 @@ import (
 // recorded digest fails before anything is cached and no partial
 // entry survives a failure.
 func EnsureCached(cacheDir, src, want string) (path string, sha256 string, err error) {
+	bytesSrc, err := ResolvePayloadBytesPath(src)
+	if err != nil {
+		return "", "", fmt.Errorf("cache: %w", err)
+	}
 	sum := want
 	if sum == "" {
-		digest, digestErr := fileSHA256(src)
+		digest, digestErr := fileSHA256(bytesSrc)
 		if digestErr != nil {
 			return "", "", fmt.Errorf("cache: %w", digestErr)
 		}
@@ -37,7 +41,7 @@ func EnsureCached(cacheDir, src, want string) (path string, sha256 string, err e
 	if cachedOK(path, sum) {
 		return path, sum, nil
 	}
-	if err := copyVerified(cacheDir, src, sum, path); err != nil {
+	if err := copyVerified(cacheDir, bytesSrc, sum, path); err != nil {
 		return "", "", err
 	}
 	return path, sum, nil
