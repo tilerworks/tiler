@@ -200,17 +200,21 @@ func checkLinkIdle(repo Repo, absSrc string, next Meta) (bool, error) {
 		}
 		return false, nil
 	}
-	if len(existing.Chain) > 0 {
-		return false, fmt.Errorf("link: active image has incremental chain")
-	}
 	if existing.SHA256 == next.SHA256 && existing.Size == next.Size {
 		target, ok, err := readLinkTarget(repo, next.Format.Type)
 		if err != nil {
 			return false, err
 		}
+		// Re-registering the same external file is a no-op even when
+		// incremental layers sit on top: the idle path keeps meta,
+		// chain, and leaf untouched, so only a payload *replacing*
+		// link has to clear the chain guard below.
 		if ok && target == absSrc {
 			return true, nil
 		}
+	}
+	if len(existing.Chain) > 0 {
+		return false, fmt.Errorf("link: active image has incremental chain")
 	}
 	return false, linkConflict(repo, absSrc, existing, next)
 }

@@ -131,6 +131,67 @@ func TestLinkExternalIdempotent(t *testing.T) {
 	}
 }
 
+func TestLinkExternalIdempotentWithChain(t *testing.T) {
+	withLinuxLinkPolicy(t)
+	images := t.TempDir()
+	nas := t.TempDir()
+	src := writeFakeSquashfs(t, nas, []byte("chained-bytes"))
+	if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepo(images, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Grow the active image with one incremental layer, the way a
+	// build --incremental inside the linked view does.
+	meta, err := Load(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layer := testID("abc1234567890def")
+	meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
+	if err := Store(repo.MetaPath(), meta); err != nil {
+		t.Fatal(err)
+	}
+	incr, err := repo.IncrPath(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(incr), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(incr, []byte("layer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-registering the same external file is still a no-op: the
+	// chain guard must not fire for a link that replaces nothing.
+	if err := LinkExternal(images, "alice/app", src, "other-builder"); err != nil {
+		t.Fatalf("re-link with chain = %v", err)
+	}
+	after, err := os.ReadFile(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("idempotent link rewrote meta")
+	}
+	if got, err := Load(repo.MetaPath()); err != nil || len(got.Chain) != 1 {
+		t.Fatalf("chain after re-link = %+v (%v)", got.Chain, err)
+	}
+	// A different external file still hits the chain guard.
+	other := writeFakeSquashfs(t, nas, []byte("other-bytes"))
+	err = LinkExternal(images, "alice/app", other, "test")
+	if err == nil || !strings.Contains(err.Error(), "incremental chain") {
+		t.Fatalf("conflicting re-link = %v, want chain refusal", err)
+	}
+}
+
 func TestLinkExternalConflictChain(t *testing.T) {
 	withLinuxLinkPolicy(t)
 	repo := testRepo(t)
