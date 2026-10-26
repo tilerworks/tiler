@@ -1,13 +1,16 @@
 # Image pack benchmarks
 
-Scripts under this directory compare packing a directory as an image
-with `tar+gzip`, and compare sequential reads of the expanded tree
-with reads through a mounted image. They are not part of `make test`.
+Prefer `tiler benchmark <path>` for a single image size on a chosen
+volume (external disk or NAS). The scripts below stay as standalone
+helpers: they are not part of `make test`, and
+`bench-img-vs-tar.sh` still drives the multi-size image-vs-tar tables
+in this document.
 
-| Script | Role |
-|--------|------|
-| [bench-img-path.py](bench-img-path.py) | Create and read one image on a chosen path; probe the volume for IOPS and latency |
-| [bench-img-vs-tar.sh](bench-img-vs-tar.sh) | For several sizes: image pack vs `tar+gzip`, then expanded-tree read vs image mount read |
+| Tool | Role |
+|------|------|
+| `tiler benchmark <path>` | Create and read one image on a chosen path; probe the volume for IOPS and latency |
+| [bench-img-path.py](bench-img-path.py) | Standalone Python helper with the same path-level workflow (kept for comparison and scripting outside the binary) |
+| [bench-img-vs-tar.sh](bench-img-vs-tar.sh) | Standalone multi-size helper: image pack vs `tar+gzip`, then expanded-tree read vs image mount read |
 
 `bench-img-path.py` detects the host OS. macOS defaults to `--type dmg`.
 `--type tar` (gzip tar) runs on macOS and Linux. `--type squashfs` and
@@ -170,104 +173,115 @@ cached, but gzip still inflates every byte. Attach itself is about
 
 ---
 
-## External disk and NAS with `bench-img-path.py`
+## External disk and NAS with `tiler benchmark`
 
-Use `bench-img-path.py` when the question is how create and read
-behave on a specific volume — an external USB disk, a Thunderbolt
-volume, or a NAS share mounted under `/Volumes` (macOS) or
-`/mnt` (Linux).
+Use `tiler benchmark <path>` when the question is how create and read
+operations behave on a specific volume — an external USB disk, a
+Thunderbolt volume, or a NAS share mounted under `/Volumes` (macOS) or
+`/mnt` (Linux). The command does not read `.tiler.yaml` or accept
+root persistent flags such as `--images-dir`.
 
 ### Safety
 
-- Writable runs create files only under `--path/tiler-img-bench/`.
-  They do not delete or rename anything outside that directory.
-- The default attach mountpoint is a **local** temporary directory, so
-  hdiutil/FUSE attach does not mkdir on the NAS unless you pass
-  `--mountpoint`.
-- The device probe writes a temporary 4 KiB-random file under
-  `tiler-img-bench/` and removes it. Skip it with `--no-probe`.
-- If `--path` is **not writable** (read-only mount), only this form
+- Writable runs create files only under `--bench-dir`. The default is
+  a fresh `<path>/tiler-bench-<random>/`. They do not delete or rename
+  anything outside that directory. Pass an explicit empty directory
+  under `<path>` when you want a fixed location; an existing non-empty
+  `--bench-dir` is refused.
+- Mount and logs live under `--runtime-dir` on the **local** machine
+  (default: a private directory in the system temp area, removed at
+  the end). Attach never creates a directory on the NAS unless you
+  point `--runtime-dir` there. A user-supplied `--runtime-dir` is
+  kept; only the command's `mount/` and `logs/` children are removed.
+- The device probe writes `.tiler-bench-probe` under `--bench-dir` and
+  removes it. Skip it with `--no-probe`.
+- If `<path>` is **not writable** (read-only mount), only this form
   is accepted:
 
   ```sh
-  docs/benchmark/bench-img-path.py \
-    --path /Volumes/ro-share \
+  tiler benchmark /Volumes/ro-share \
+    --readonly \
     --mode read \
     --image /Volumes/ro-share/existing/image.dmg \
     --no-probe
   ```
 
   That run attaches the image read-only, walks it, and writes
-  **nothing** under `--path` (logs go to a local temp dir). `write`,
-  `both`, create-without-`--image`, and a probe are refused. Prefer a
-  local `--mountpoint` (or omit it); a mountpoint on the read-only
-  volume must already exist and be writable/empty.
+  **nothing** under `<path>` (mount and logs stay under
+  `--runtime-dir`). Pass `--mode read`: the default mode is `both`,
+  and `--readonly` with `write` or `both` is refused. `--bench-dir`
+  and a probe are also refused. Prefer omitting `--runtime-dir` (or
+  pass a local directory); `--runtime-dir` and `<path>` must not
+  contain each other, so a runtime directory on the read-only volume
+  under test is refused.
 - On a writable volume, `--mode read --image FILE` also requires
   `--no-probe` so the read benchmark cannot leave a probe file behind.
 
 ### Writable share examples
 
 ```sh
-# macOS: NAS share already mounted under /Volumes
-docs/benchmark/bench-img-path.py \
-  --path /Volumes/share/bench \
+# macOS: NAS share already mounted under /Volumes.
+# Default --bench-dir is <path>/tiler-bench-<random>/; omit --runtime-dir
+# for a private local temp parent (mount/ and logs/ underneath).
+tiler benchmark /Volumes/share/bench \
   --type dmg \
   --mode both \
-  --size-mib 512 \
-  --file-mib 4 \
+  --size 512M \
+  --file-size 4M \
   --probe-ops 2000
 
-# Create the image on the share, then re-read it. The dmg file stays
-# on the share. Attach mounts that image onto the local physical disk
-# (omit --mountpoint for a local temp dir, or pass an empty directory
-# on the internal volume). The read walk uses that local mount, not a
+# Create the image on the share, then re-read it. Keep a fixed
+# --bench-dir so the dmg path is known. Attach mounts onto the local
+# disk via --runtime-dir; the read walk uses that local mount, not a
 # directory on the share.
-docs/benchmark/bench-img-path.py \
-  --path /Volumes/share/bench \
+tiler benchmark /Volumes/share/bench \
+  --bench-dir /Volumes/share/bench/tiler-bench-run \
   --mode write \
   --type dmg \
-  --size-mib 256 \
+  --size 256M \
+  --file-size 4M \
   --keep
-mkdir -p /tmp/tiler-bench-mnt
-docs/benchmark/bench-img-path.py \
-  --path /Volumes/share/bench \
-  --mountpoint /tmp/tiler-bench-mnt \
+mkdir -p /tmp/tiler-bench-runtime
+tiler benchmark /Volumes/share/bench \
+  --runtime-dir /tmp/tiler-bench-runtime \
   --type dmg \
   --mode read \
-  --image /Volumes/share/bench/tiler-img-bench/image.dmg \
+  --image /Volumes/share/bench/tiler-bench-run/image.dmg \
   --no-probe
 ```
 
 `--mode write` times only image create. `--mode read` without
 `--image` still creates an image first (setup) and needs a writable
-`--path`. `--mode both` times create and both read passes. `--type tar`
+`<path>`. `--mode both` times create and both read passes. `--type tar`
 packs with `tar -czf` and reads by streaming member bytes; it does not
 mount. `--src DIR` packs an existing tree instead of generating a new
-one. For dmg, `--compression` is `ULFO`, `ULMO`, or `UDRO`, and `--fs`
-is `APFS` or `HFS+`. For squashfs, `--comp` is `zstd` (default),
-`gzip`, `lz4`, or `xz`; for erofs it is `zstd`, `lz4`, or `gzip`,
-defaulting to the best compressor the host's `mkfs.erofs` lists.
-`--probe-ops` defaults to 2000. `--keep` leaves
-`tiler-img-bench/` under `--path`. `--tsv` prints only step rows for
-scripts that build a larger table. Payload bytes are `os.urandom`.
+one. `--size` and `--file-size` use the same byte-size syntax as the
+rest of tiler (`128M`, `4M`, bare integers are bytes). For dmg,
+`--compress` is `ULFO` (default), `ULMO`, or `UDRO`. For squashfs it
+is `zstd` (default), `gzip`, `lz4`, or `xz`; for erofs it is `zstd`,
+`lz4`, or `gzip`, defaulting to the best compressor the host's
+`mkfs.erofs` lists. tar rejects `--compress`. `--probe-ops` defaults
+to 2000. `--keep` leaves `--bench-dir` in place. `--tsv` prints only
+step rows for scripts that build a larger table. Payload bytes are
+random and incompressible.
 
-On Linux the same `--path` pattern works with `--type squashfs` and
+On Linux the same `<path>` pattern works with `--type squashfs` and
 `--type erofs`:
 
 ```sh
 # squashfs on a NAS share, create and both read passes
-docs/benchmark/bench-img-path.py \
-  --path /mnt/share/bench \
+tiler benchmark /mnt/share/bench \
   --type squashfs \
   --mode both \
-  --size-mib 512
+  --size 512M \
+  --file-size 4M
 
-# read an existing erofs image back without writing under --path
-docs/benchmark/bench-img-path.py \
-  --path /mnt/share/bench \
-  --type erofs \
+# read an existing erofs image back without writing under <path>
+tiler benchmark /mnt/share/bench \
+  --readonly \
   --mode read \
-  --image /mnt/share/bench/tiler-img-bench/image.erofs \
+  --type erofs \
+  --image /mnt/share/bench/existing/image.erofs \
   --no-probe
 ```
 
