@@ -1,7 +1,6 @@
 package benchmark
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,32 +19,38 @@ var imageNames = map[string]string{
 	"erofs":    "image.erofs",
 }
 
+// runState tracks the directories one run prepared. keep mirrors
+// --keep: when true, cleanup and the abort path leave the runtime
+// and bench dirs alone. src is the absolute payload dir under the
+// runtime dir and is empty when the run creates no image.
 type runState struct {
-	bench       string
-	removeBench bool
-	runtime     string
-	ownRuntime  bool
-	mount       string
-	logs        string
-	image       string
-	mounted     *Mount
+	bench   string
+	runtime string
+	keep    bool
+	src     string
+	mount   string
+	logs    string
+	image   string
+	mounted *Mount
 }
 
 func prepareRun(d Decision) (*runState, error) {
-	bench, removeBench, err := prepareBench(d)
+	bench, err := prepareBench(d)
 	if err != nil {
 		return nil, err
 	}
 	state := &runState{
-		bench:       bench,
-		removeBench: removeBench,
-		ownRuntime:  d.OwnRuntime,
+		bench: bench,
+		keep:  d.Keep,
 	}
 	runtimeDir, err := prepareRuntime(d)
 	if err != nil {
 		return state.abort(err)
 	}
 	state.runtime = runtimeDir
+	if d.Src != "" {
+		state.src = filepath.Join(runtimeDir, d.Src)
+	}
 	mount := filepath.Join(runtimeDir, runtimeMount)
 	logs := filepath.Join(runtimeDir, runtimeLogs)
 	if err := os.MkdirAll(mount, 0o755); err != nil {
@@ -56,7 +61,7 @@ func prepareRun(d Decision) (*runState, error) {
 		return state.abort(fmt.Errorf("benchmark: mkdir %s: %w", logs, err))
 	}
 	state.logs = logs
-	if err := requireEmptyDir(mount); err != nil {
+	if err := requireEmptyDir(mount, "mount point"); err != nil {
 		return state.abort(err)
 	}
 	image, err := resolveImage(d, bench)
@@ -67,47 +72,53 @@ func prepareRun(d Decision) (*runState, error) {
 	return state, nil
 }
 
-// abort removes an owned runtime and a bench this call would have
-// removed, then returns the prepare error unchanged.
+// abort releases the prepared directories, then returns the prepare
+// error unchanged.
 func (s *runState) abort(err error) (*runState, error) {
-	s.releasePrepared()
+	s.release()
 	return nil, err
 }
 
-func (s *runState) releasePrepared() {
-	if s == nil {
+// release removes the runtime dir (owned or user-supplied) and the
+// bench dir this run prepared, unless --keep asked to preserve them.
+// A nil state releases nothing. It never touches the benchmark path
+// itself or anything else under it, so abort and cleanup share
+// exactly the same conditions.
+func (s *runState) release() {
+	if s == nil || s.keep {
 		return
 	}
-	if s.ownRuntime && s.runtime != "" {
+	if s.runtime != "" {
 		_ = os.RemoveAll(s.runtime)
 	}
-	if s.removeBench && s.bench != "" {
+	if s.bench != "" {
 		_ = os.RemoveAll(s.bench)
 	}
 }
 
-func prepareBench(d Decision) (string, bool, error) {
+// prepareBench creates the bench dir Plan joined under the benchmark
+// path when the run creates an image or probes. Read-only image runs
+// use no bench dir and adopt none.
+func prepareBench(d Decision) (string, error) {
 	if !d.Create && !d.Probe {
-		return "", false, nil
+		return "", nil
 	}
-	bench := d.BenchDir
-	if bench == "" {
-		name, err := randomBenchName()
-		if err != nil {
-			return "", false, err
-		}
-		bench = filepath.Join(d.Path, name)
+	if err := os.MkdirAll(d.BenchDir, 0o755); err != nil {
+		return "", fmt.Errorf("benchmark: mkdir %s: %w", d.BenchDir, err)
 	}
-	if err := os.MkdirAll(bench, 0o755); err != nil {
-		return "", false, fmt.Errorf("benchmark: mkdir %s: %w", bench, err)
-	}
-	return bench, !d.Keep, nil
+	return d.BenchDir, nil
 }
 
 func prepareRuntime(d Decision) (string, error) {
 	if !d.OwnRuntime {
 		if err := os.MkdirAll(d.RuntimeDir, 0o755); err != nil {
 			return "", fmt.Errorf("benchmark: mkdir %s: %w", d.RuntimeDir, err)
+		}
+		// Plan already refuses a non-empty --runtime-dir; this guards
+		// callers that build a Decision directly, because the run
+		// removes the whole directory at the end.
+		if err := requireEmptyDir(d.RuntimeDir, "--runtime-dir"); err != nil {
+			return "", err
 		}
 		return d.RuntimeDir, nil
 	}
@@ -132,40 +143,28 @@ func resolveImage(d Decision, bench string) (string, error) {
 	return filepath.Join(bench, name), nil
 }
 
-func randomBenchName() (string, error) {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("benchmark: random bench name: %w", err)
-	}
-	return fmt.Sprintf("tiler-bench-%x", b), nil
-}
-
-func requireEmptyDir(path string) error {
+// requireEmptyDir reports a runtime error when path holds entries.
+// what names the directory kind in the message, such as "mount
+// point" or "--runtime-dir".
+func requireEmptyDir(path, what string) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fmt.Errorf("benchmark: read %s: %w", path, err)
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("benchmark: mount point %s is not empty", path)
+		return fmt.Errorf("benchmark: %s %s is not empty", what, path)
 	}
 	return nil
 }
 
+// cleanup detaches an active mount first, then releases the runtime
+// and bench dirs under the same keep-based conditions as the abort
+// path. The mount/ and logs/ subdirs go with the runtime dir; the
+// benchmark path itself is never touched.
 func (s *runState) cleanup(cmd Command) {
-	if s == nil {
-		return
-	}
-	if s.mounted != nil {
+	if s != nil && s.mounted != nil {
 		_ = Detach(cmd, *s.mounted, s.mount)
 		s.mounted = nil
 	}
-	if s.ownRuntime {
-		_ = os.RemoveAll(s.runtime)
-	} else {
-		_ = os.RemoveAll(s.mount)
-		_ = os.RemoveAll(s.logs)
-	}
-	if s.removeBench && s.bench != "" {
-		_ = os.RemoveAll(s.bench)
-	}
+	s.release()
 }

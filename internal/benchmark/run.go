@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -130,7 +129,7 @@ func runProbe(d Decision, bench string, env Env) (ProbeStats, error) {
 }
 
 func runCreate(d Decision, state *runState, env Env, rep *Reporter) error {
-	src, input, files, err := prepareSource(d, state.bench)
+	src, input, files, err := prepareSource(d, state)
 	if err != nil {
 		return err
 	}
@@ -154,17 +153,15 @@ func runCreate(d Decision, state *runState, env Env, rep *Reporter) error {
 	})
 }
 
-func prepareSource(d Decision, bench string) (src string, input int64, files int, err error) {
-	if d.Src != "" {
-		n, count, walkErr := treeBytes(d.Src)
-		return d.Src, n, count, walkErr
-	}
-	src = filepath.Join(bench, payloadDir)
-	count, err := WritePayload(src, d.Size, d.FileSize)
+// prepareSource generates the random payload tree under the runtime
+// dir at state.src, never under the bench dir on the measured volume,
+// so pack reads local disk while only the image lands on the volume.
+func prepareSource(d Decision, state *runState) (src string, input int64, files int, err error) {
+	count, err := WritePayload(state.src, d.Size, d.FileSize)
 	if err != nil {
 		return "", 0, 0, err
 	}
-	return src, d.Size, count, nil
+	return state.src, d.Size, count, nil
 }
 
 func createNotes(d Decision, files int) string {
@@ -264,28 +261,4 @@ func reportTreeOrTar(rep *Reporter, name, path string, tar bool, notes string) e
 		Bytes:   &n,
 		Notes:   notes,
 	})
-}
-
-func treeBytes(root string) (int64, int, error) {
-	var total int64
-	var files int
-	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if skipTreeEntry(d) {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		total += info.Size()
-		files++
-		return nil
-	})
-	if err != nil {
-		return 0, 0, fmt.Errorf("benchmark: walk %s: %w", root, err)
-	}
-	return total, files, nil
 }
