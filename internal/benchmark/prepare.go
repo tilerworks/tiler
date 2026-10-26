@@ -9,8 +9,13 @@ import (
 const (
 	runtimeMount = "mount"
 	runtimeLogs  = "logs"
-	payloadDir   = "data"
 )
+
+// DefaultPayloadDir is the --src name used when the flag was not set
+// explicitly. Plan validates it as a relative name and the run
+// creates it under the runtime dir; the CLI registers it as the
+// cobra flag default so help and Plan stay in sync.
+const DefaultPayloadDir = "data"
 
 var imageNames = map[string]string{
 	"dmg":      "image.dmg",

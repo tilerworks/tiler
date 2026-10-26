@@ -41,10 +41,11 @@ func ensureWritable(files FS, path string, readonly bool) error {
 	return nil
 }
 
-// defaultBenchDir is the --bench-dir name used when the flag was not
-// set explicitly. The --src default reuses payloadDir. Plan joins it
-// under the benchmark path.
-const defaultBenchDir = "tiler-bench"
+// DefaultBenchDir is the --bench-dir name used when the flag was not
+// set explicitly. The --src default reuses DefaultPayloadDir. Plan
+// joins it under the benchmark path, and the CLI registers it as the
+// cobra flag default so help and Plan stay in sync.
+const DefaultBenchDir = "tiler-bench"
 
 // relativeSub validates a relative subdirectory passed via flag and
 // returns its cleaned form. It rejects empty values, absolute paths,
@@ -86,7 +87,7 @@ func relativeSub(flag, raw string) (string, error) {
 func placeBench(files FS, path, bench string, benchSet bool, act actions) (string, error) {
 	bench = strings.TrimSpace(bench)
 	if bench == "" && !benchSet {
-		bench = defaultBenchDir
+		bench = DefaultBenchDir
 	}
 	rel, err := relativeSub("--bench-dir", bench)
 	if err != nil {
@@ -130,7 +131,7 @@ func placeRuntime(files FS, path, runtime string) (string, bool, error) {
 func placeSrc(src string, srcSet, create bool) (string, error) {
 	src = strings.TrimSpace(src)
 	if src == "" && !srcSet {
-		src = payloadDir
+		src = DefaultPayloadDir
 	}
 	rel, err := relativeSub("--src", src)
 	if err != nil {

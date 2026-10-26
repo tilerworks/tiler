@@ -107,6 +107,64 @@ func TestBenchmarkValidatesWithoutProjectConfig(t *testing.T) {
 	if !d.Create || d.Read || d.Probe {
 		t.Fatalf("create/read/probe = %v/%v/%v", d.Create, d.Read, d.Probe)
 	}
+	if want := filepath.Join(work, "tiler-bench"); d.BenchDir != want {
+		t.Fatalf("bench dir = %q, want %q", d.BenchDir, want)
+	}
+	if d.Src != "data" {
+		t.Fatalf("src = %q, want %q", d.Src, "data")
+	}
+}
+
+func TestBenchmarkRejectsBadRelativeDirs(t *testing.T) {
+	_, work := withWorkspace(t)
+	stubBenchmarkRun(t)
+	for _, flag := range []string{"--bench-dir", "--src"} {
+		for _, value := range []string{"", "/abs/path", "./x", "../x"} {
+			_, _, _, err := runCmd(t, "benchmark", work,
+				"--type", "tar", "--size", "1", "--file-size", "1",
+				"--no-probe", "--mode", "write", flag, value)
+			if ExitCode(err) != 2 {
+				t.Fatalf("%s %q: ExitCode(%v) = %d, want 2",
+					flag, value, err, ExitCode(err))
+			}
+			if err == nil || !strings.Contains(err.Error(), flag) {
+				t.Fatalf("%s %q: error = %v, want %s mention",
+					flag, value, err, flag)
+			}
+		}
+	}
+}
+
+func TestBenchmarkReadonlyIgnoresDefaultBenchDir(t *testing.T) {
+	_, work := withWorkspace(t)
+	got, ok := captureBenchmarkRun(t)
+
+	_, _, _, err := runCmd(t, "benchmark", work,
+		"--readonly", "--mode", "read", "--image", "F", "--no-probe",
+		"--type", "tar", "--size", "1", "--file-size", "1",
+		"--bench-dir", "x")
+	if ExitCode(err) != 2 {
+		t.Fatalf("explicit --bench-dir: ExitCode(%v) = %d, want 2",
+			err, ExitCode(err))
+	}
+	if err == nil || !strings.Contains(err.Error(), "--bench-dir") {
+		t.Fatalf("error = %v, want --bench-dir mention", err)
+	}
+
+	_, _, _, err = runCmd(t, "benchmark", work,
+		"--readonly", "--mode", "read", "--image", "F", "--no-probe",
+		"--type", "tar", "--size", "1", "--file-size", "1")
+	if err != nil {
+		t.Fatalf("readonly with default bench-dir: %v", err)
+	}
+	if !ok() {
+		t.Fatal("runBenchmark was not called")
+	}
+	d := got()
+	if d.BenchDir != "" || d.Src != "" {
+		t.Fatalf("bench/src = %q/%q, want empty for readonly",
+			d.BenchDir, d.Src)
+	}
 }
 
 func TestBenchmarkFormatJSONPassedToPlan(t *testing.T) {
