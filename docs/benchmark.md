@@ -10,29 +10,56 @@ Build with `make build` and call `bin/tiler`, or any `tiler` on
 
 ## Procedure
 
-Use a scratch directory as `<path>`. Put `--runtime-dir` next to it,
-not inside it: the two paths must not contain each other. Each type
-needs its own empty `--bench-dir`. The first type writes `data/`;
-later types pack that same tree with `--src`. `--no-probe` skips the
+Use a scratch directory as `<path>`. Each type runs a single
+command: `--mode both` generates the payload, packs the image,
+attaches it (when the type mounts), and measures both read passes in
+one run. `--bench-dir run-<type>` is a relative name that tiler
+joins under `<path>`; the joined directory must not exist or must be
+empty, and it is removed when the run ends. `--no-probe` skips the
 4 KiB IOPS probe so the rows match these tables. `--format tsv`
 prints only step rows (`image_create`, `image_attach` when the type
-mounts, `read_image_1`, `read_image_2`). `--keep` leaves the bench
-directory so the image and `data/` stay for the read passes.
+mounts, `read_image_1`, `read_image_2`).
 
-Payload bytes are urandom. Pack MiB/s is input size over wall time.
-Read MiB/s is bytes read over wall time. Attach time is its own row
-and is not included in the read rate. `read_image_2` is a second pass
-on a warm cache. tar reads stream member bytes and do not extract
-onto `<path>`.
+Each run generates its own payload under `--src` (default `data`)
+inside the runtime directory: a private local temp dir by default,
+or the local directory passed to `--runtime-dir`. The measured
+volume only ever holds the bench dir with the image inside it, so
+pack reads the payload from local disk while writing the image to
+`<path>`. Payload bytes are urandom and incompressible, so pack
+rates stay comparable across types without sharing a tree. Pack
+MiB/s is input size over wall time. Read MiB/s is bytes read over
+wall time. Attach time is its own row and is not included in the
+read rate. `read_image_2` is a second pass on a warm cache. tar
+reads stream member bytes and do not extract onto `<path>`.
+
+A later run can re-read an image that an earlier run kept with
+`--keep`: rerun one of the tar commands below with `--keep` added,
+then read the image it left behind. The read needs `--no-probe`, and
+an explicit `--bench-dir` or `--src` is refused because it creates
+nothing:
+
+```sh
+# after a --keep run left /tmp/tiler-scratch/run-tar/image.tar.gz
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type tar --mode read \
+  --image /tmp/tiler-scratch/run-tar/image.tar.gz \
+  --no-probe --format tsv
+```
 
 Cold image reads drop the cache inside `tiler benchmark` when
 passwordless sudo works (`sudo -n purge` on macOS,
 `drop_caches` on Linux). The `purge=` note says whether it worked.
 
-The **expanded** columns are not a `tiler benchmark` step. After the
-packs, and after the same passwordless purge, walk `data/` twice in
-1 MiB reads, skipping names that start with `.`. The first walk is
-"expanded, first"; the second is "expanded, warm".
+The **expanded** columns are not a `tiler benchmark` step. Rerun
+with `--keep` and an explicit local `--runtime-dir`, then — after
+the same passwordless purge — walk the kept payload tree
+(`<runtime-dir>/data`) twice in 1 MiB reads, skipping names that
+start with `.`. The first walk is "expanded, first"; the second is
+"expanded, warm". That tree lives on the local disk, so these
+columns measure local reads. The tables below were produced with the
+older procedure, where the payload tree was generated under the
+bench directory on the measured volume and later types packed the
+first type's shared `data/`.
 
 ### macOS (dmg and tar)
 
@@ -40,38 +67,26 @@ Needs `hdiutil`. For each `SIZE` in `32`, `128`, `256`, `512`:
 
 ```sh
 SIZE=32
-work=$(mktemp -d "${TMPDIR:-/tmp}/tiler-bench.XXXXXX")
-runtime=$(mktemp -d "${TMPDIR:-/tmp}/tiler-bench-rt.XXXXXX")
+mkdir -p /tmp/tiler-scratch
 
-bin/tiler benchmark "$work" \
-  --bench-dir "$work/bench-dmg" \
-  --runtime-dir "$runtime" \
-  --type dmg --mode write \
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type dmg --mode both \
+  --bench-dir run-dmg \
   --size "${SIZE}M" --file-size 4M \
-  --no-probe --keep --format tsv
-
-bin/tiler benchmark "$work" \
-  --bench-dir "$work/bench-tar" \
-  --runtime-dir "$runtime" \
-  --type tar --mode write \
-  --src "$work/bench-dmg/data" \
-  --no-probe --keep --format tsv
-
-# expanded, first then warm (after sudo -n purge when it is allowed)
-# walk "$work/bench-dmg/data" twice
-
-bin/tiler benchmark "$work" \
-  --runtime-dir "$runtime" \
-  --type dmg --mode read \
-  --image "$work/bench-dmg/image.dmg" \
   --no-probe --format tsv
 
-bin/tiler benchmark "$work" \
-  --runtime-dir "$runtime" \
-  --type tar --mode read \
-  --image "$work/bench-tar/image.tar.gz" \
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type tar --mode both \
+  --bench-dir run-tar \
+  --size "${SIZE}M" --file-size 4M \
   --no-probe --format tsv
 ```
+
+Each run writes only its image under `/tmp/tiler-scratch` and
+removes `run-dmg` / `run-tar` plus its private runtime dir at the
+end. For the expanded columns, add `--keep --runtime-dir <dir>` (an
+absent or empty local dir) and walk `<dir>/data` twice after the
+purge (`sudo -n purge` when it is allowed).
 
 `hdiutil create` uses `-format ULFO -fs APFS`. tar uses `tar -czf`.
 Take `image_create` seconds, MiB/s, and the bytes column for the pack
@@ -82,56 +97,35 @@ table. Take `image_attach` seconds for the attach column. Take
 
 Needs `mksquashfs`, `mkfs.erofs`, and — for a rootless mount —
 `squashfuse_ll`, `erofsfuse`, and `fusermount3`. Same sizes and
-`--file-size 4M`. Generate the tree with squashfs, then pack erofs
-and tar from that `data/`:
+`--file-size 4M`. Every type packs its own freshly generated
+payload:
 
 ```sh
 SIZE=32
-work=$(mktemp -d /tmp/tiler-bench.XXXXXX)
-runtime=$(mktemp -d /tmp/tiler-bench-rt.XXXXXX)
+mkdir -p /tmp/tiler-scratch
 
-bin/tiler benchmark "$work" \
-  --bench-dir "$work/bench-squashfs" \
-  --runtime-dir "$runtime" \
-  --type squashfs --mode write \
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type squashfs --mode both \
+  --bench-dir run-squashfs \
   --size "${SIZE}M" --file-size 4M \
-  --no-probe --keep --format tsv
-
-bin/tiler benchmark "$work" \
-  --bench-dir "$work/bench-erofs" \
-  --runtime-dir "$runtime" \
-  --type erofs --mode write \
-  --src "$work/bench-squashfs/data" \
-  --no-probe --keep --format tsv
-
-bin/tiler benchmark "$work" \
-  --bench-dir "$work/bench-tar" \
-  --runtime-dir "$runtime" \
-  --type tar --mode write \
-  --src "$work/bench-squashfs/data" \
-  --no-probe --keep --format tsv
-
-# walk "$work/bench-squashfs/data" twice for the expanded columns
-# (after drop_caches when passwordless sudo allows it)
-
-bin/tiler benchmark "$work" \
-  --runtime-dir "$runtime" \
-  --type squashfs --mode read \
-  --image "$work/bench-squashfs/image.sqsh" \
   --no-probe --format tsv
 
-bin/tiler benchmark "$work" \
-  --runtime-dir "$runtime" \
-  --type erofs --mode read \
-  --image "$work/bench-erofs/image.erofs" \
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type erofs --mode both \
+  --bench-dir run-erofs \
+  --size "${SIZE}M" --file-size 4M \
   --no-probe --format tsv
 
-bin/tiler benchmark "$work" \
-  --runtime-dir "$runtime" \
-  --type tar --mode read \
-  --image "$work/bench-tar/image.tar.gz" \
+bin/tiler benchmark /tmp/tiler-scratch \
+  --type tar --mode both \
+  --bench-dir run-tar \
+  --size "${SIZE}M" --file-size 4M \
   --no-probe --format tsv
 ```
+
+For the expanded columns, add `--keep --runtime-dir <dir>` to one
+run and walk `<dir>/data` twice (after `drop_caches` when
+passwordless sudo allows it).
 
 squashfs packs with `mksquashfs -comp zstd -noappend`. erofs uses
 `mkfs.erofs` with a nil UUID and the best compressor that
@@ -345,18 +339,23 @@ root persistent flags such as `--images-dir`.
 
 ### Safety
 
-- Writable runs create files only under `--bench-dir`. The default is
-  a fresh `<path>/tiler-bench-<random>/`. They do not delete or rename
-  anything outside that directory. Pass an explicit empty directory
-  under `<path>` when you want a fixed location; an existing non-empty
-  `--bench-dir` is refused.
-- Mount and logs live under `--runtime-dir` on the **local** machine
-  (default: a private directory in the system temp area, removed at
-  the end). Attach never creates a directory on the NAS unless you
-  point `--runtime-dir` there. A user-supplied `--runtime-dir` is
-  kept; only the command's `mount/` and `logs/` children are removed.
-- The device probe writes `.tiler-bench-probe` under `--bench-dir` and
-  removes it. Skip it with `--no-probe`.
+- Writable runs create files only inside `<path>/<bench-dir>`.
+  `--bench-dir` is a relative name that tiler joins under `<path>`
+  (default `tiler-bench`); absolute paths, empty values, names
+  starting with `./` or `../`, and values containing a `..` element
+  are refused. The joined directory must not exist or must be empty,
+  and the whole directory is removed when the run ends; `--keep`
+  preserves it. `<path>` itself must already exist, is never removed,
+  and nothing else under it is deleted or renamed.
+- The runtime dir holds `mount/`, `logs/`, and the payload tree
+  (`--src`, default `data`) on the **local** machine — by default a
+  private directory in the system temp area. A `--runtime-dir` you
+  pass must not exist or must be an empty directory, and it is
+  removed entirely at the end (`--keep` preserves it together with
+  the bench dir). `--runtime-dir` and `<path>` must not contain each
+  other, so attach never creates a directory on the measured volume.
+- The device probe writes `.tiler-bench-probe` inside the bench dir
+  and removes it after sampling. Skip it with `--no-probe`.
 - If `<path>` is **not writable** (read-only mount), only this form
   is accepted:
 
@@ -369,22 +368,27 @@ root persistent flags such as `--images-dir`.
   ```
 
   That run attaches the image read-only, walks it, and writes
-  **nothing** under `<path>` (mount and logs stay under
-  `--runtime-dir`). Pass `--mode read`: the default mode is `both`,
-  and `--readonly` with `write` or `both` is refused. `--bench-dir`
-  and a probe are also refused. Prefer omitting `--runtime-dir` (or
-  pass a local directory); `--runtime-dir` and `<path>` must not
-  contain each other, so a runtime directory on the read-only volume
-  under test is refused.
+  **nothing** under `<path>` (mount and logs stay under the local
+  runtime dir). Pass `--mode read`: the default mode is `both`,
+  and `--readonly` with `write` or `both` is refused. An explicit
+  `--bench-dir` or `--src` is refused too — the defaults are
+  silently ignored — and so is a probe. Prefer omitting
+  `--runtime-dir` (or pass a local directory); `--runtime-dir` and
+  `<path>` must not contain each other, so a runtime directory on
+  the read-only volume under test is refused.
 - On a writable volume, `--mode read --image FILE` also requires
-  `--no-probe` so the read benchmark cannot leave a probe file behind.
+  `--no-probe` so the read benchmark cannot leave a probe file
+  behind, and it refuses an explicit `--bench-dir` or `--src`
+  because it creates no image.
 
 ### Writable share examples
 
 ```sh
 # macOS: NAS share already mounted under /Volumes.
-# Default --bench-dir is <path>/tiler-bench-<random>/; omit --runtime-dir
-# for a private local temp parent (mount/ and logs/ underneath).
+# The default --bench-dir is the relative name tiler-bench, joined
+# under <path>; omit --runtime-dir for a private local temp dir
+# (mount/, logs/, and the payload tree underneath). Both directories
+# are removed when the run ends.
 tiler benchmark /Volumes/share/bench \
   --type dmg \
   --mode both \
@@ -392,23 +396,23 @@ tiler benchmark /Volumes/share/bench \
   --file-size 4M \
   --probe-ops 2000
 
-# Create the image on the share, then re-read it. Keep a fixed
-# --bench-dir so the dmg path is known. Attach mounts onto the local
-# disk via --runtime-dir; the read walk uses that local mount, not a
+# Create the image on the share and keep it, then re-read it in a
+# later run. --bench-dir is relative, so the image lands at
+# <path>/run-dmg/image.dmg. Attach mounts onto the local disk via
+# the runtime dir; the read walk uses that local mount, not a
 # directory on the share.
 tiler benchmark /Volumes/share/bench \
-  --bench-dir /Volumes/share/bench/tiler-bench-run \
-  --mode write \
   --type dmg \
+  --mode write \
+  --bench-dir run-dmg \
   --size 256M \
   --file-size 4M \
   --keep
-mkdir -p /tmp/tiler-bench-runtime
+
 tiler benchmark /Volumes/share/bench \
-  --runtime-dir /tmp/tiler-bench-runtime \
   --type dmg \
   --mode read \
-  --image /Volumes/share/bench/tiler-bench-run/image.dmg \
+  --image /Volumes/share/bench/run-dmg/image.dmg \
   --no-probe
 ```
 
@@ -416,27 +420,36 @@ tiler benchmark /Volumes/share/bench \
 `--image` still creates an image first (setup) and needs a writable
 `<path>`. `--mode both` times create and both read passes. `--type tar`
 packs with `tar -czf` and reads by streaming member bytes; it does not
-mount. `--src DIR` packs an existing directory instead of generating a
-new one. `--size` and `--file-size` use the same byte-size syntax as the
+mount. `--src DIR` names the payload directory: a relative path,
+joined under the runtime dir (default `data`), where tiler generates
+the random tree it packs; it is only valid when creating an image.
+`--size` and `--file-size` use the same byte-size syntax as the
 rest of tiler (`128M`, `4M`, bare integers are bytes). For dmg,
 `--compress` is `ULFO` (default), `ULMO`, or `UDRO`. For squashfs it
 is `zstd` (default), `gzip`, `lz4`, or `xz`; for erofs it is `zstd`,
 `lz4`, or `gzip`, defaulting to the best compressor the host's
 `mkfs.erofs` lists. tar rejects `--compress`. `--probe-ops` defaults
-to 2000. `--keep` leaves `--bench-dir` in place. `--format` selects
-the report shape: `table` (default) is the human layout, `tsv`
-prints only step rows for scripts that build a larger table, and
-`json` writes one object with metadata, probe, and steps after a
-successful run. Payload bytes are random and incompressible.
+to 2000. `--bench-dir` and `--runtime-dir` must not exist or must be
+empty, and both are removed when the run ends; `--keep` preserves
+both directories, the payload tree included. Images land at
+`<path>/<bench-dir>/image.dmg`, `image.sqsh`, `image.erofs`, or
+`image.tar.gz`. `--format` selects the report shape: `table`
+(default) is the human layout, `tsv` prints only step rows for
+scripts that build a larger table, and `json` writes one object with
+metadata, probe, and steps after a successful run. Payload bytes are
+random and incompressible.
 
 On Linux the same `<path>` pattern works with `--type squashfs` and
 `--type erofs`:
 
 ```sh
-# squashfs on a NAS share, create and both read passes
+# squashfs on a NAS share, create and both read passes; the image
+# is written to /mnt/share/bench/run-squashfs/ and the bench dir is
+# removed at the end
 tiler benchmark /mnt/share/bench \
   --type squashfs \
   --mode both \
+  --bench-dir run-squashfs \
   --size 512M \
   --file-size 4M
 
