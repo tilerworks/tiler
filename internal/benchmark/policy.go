@@ -181,7 +181,7 @@ func decideReadonly(mode string, opts Options) (actions, error) {
 	if !opts.NoProbe {
 		return actions{}, usagef("benchmark: --readonly requires --no-probe")
 	}
-	if strings.TrimSpace(opts.BenchDir) != "" {
+	if opts.BenchDirSet {
 		return actions{}, usagef("benchmark: --readonly cannot be combined with --bench-dir")
 	}
 	if mode != "read" {

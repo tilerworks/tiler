@@ -41,22 +41,64 @@ func ensureWritable(files FS, path string, readonly bool) error {
 	return nil
 }
 
-func placeBench(files FS, path, bench string, act actions) (string, error) {
+// defaultBenchDir is the --bench-dir name used when the flag was not
+// set explicitly. The --src default reuses payloadDir. Plan joins it
+// under the benchmark path.
+const defaultBenchDir = "tiler-bench"
+
+// relativeSub validates a relative subdirectory passed via flag and
+// returns its cleaned form. It rejects empty values, absolute paths,
+// paths starting with ./ or ../ (including a bare . or ..), paths
+// that clean to the current directory, and paths with any .. element,
+// so a joined result always stays inside its parent.
+func relativeSub(flag, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", usagef("benchmark: %s must not be empty", flag)
+	}
+	if filepath.IsAbs(raw) {
+		return "", usagef("benchmark: %s must be a relative path", flag)
+	}
+	sep := string(filepath.Separator)
+	if raw == "." || raw == ".." ||
+		strings.HasPrefix(raw, "."+sep) || strings.HasPrefix(raw, ".."+sep) {
+		return "", usagef("benchmark: %s must not start with ./ or ../", flag)
+	}
+	// Scan the raw elements so an embedded .. such as a/../b is
+	// refused too, even though Clean would fold it away.
+	for _, elem := range strings.Split(raw, sep) {
+		if elem == ".." {
+			return "", usagef("benchmark: %s must not contain ..", flag)
+		}
+	}
+	cleaned := filepath.Clean(raw)
+	if cleaned == "." {
+		return "", usagef("benchmark: %s must name a subdirectory", flag)
+	}
+	return cleaned, nil
+}
+
+// placeBench resolves the relative --bench-dir under the benchmark
+// path and requires the joined directory to be absent or empty. The
+// default applies when the flag was not set explicitly. When the run
+// uses no bench dir, an explicit flag is a usage error while the
+// default is silently dropped.
+func placeBench(files FS, path, bench string, benchSet bool, act actions) (string, error) {
 	bench = strings.TrimSpace(bench)
-	if bench == "" {
-		return "", nil
+	if bench == "" && !benchSet {
+		bench = defaultBenchDir
 	}
-	if !act.usesBench() {
-		return "", usagef("benchmark: --bench-dir is only used when creating or probing")
-	}
-	abs, err := absPath(bench)
+	rel, err := relativeSub("--bench-dir", bench)
 	if err != nil {
 		return "", err
 	}
-	if !strictChild(path, abs) {
-		return "", usagef("benchmark: --bench-dir must be inside %s and must not equal it", path)
+	if !act.usesBench() {
+		if benchSet {
+			return "", usagef("benchmark: --bench-dir is only used when creating or probing")
+		}
+		return "", nil
 	}
-	return emptyDir(files, abs, "--bench-dir")
+	return emptyDir(files, filepath.Join(path, rel), "--bench-dir")
 }
 
 func placeRuntime(files FS, path, runtime string) (string, bool, error) {
@@ -71,42 +113,36 @@ func placeRuntime(files FS, path, runtime string) (string, bool, error) {
 		return "", false, usagef(
 			"benchmark: --runtime-dir and the path must not contain each other")
 	}
-	info, err := files.stat(abs)
-	if errors.Is(err, fs.ErrNotExist) {
-		return abs, false, nil
-	}
+	// The run removes the runtime dir at the end, so an existing one
+	// must be an empty directory; emptyDir also covers stat failures
+	// and a non-directory at that location.
+	abs, err = emptyDir(files, abs, "--runtime-dir")
 	if err != nil {
 		return "", false, err
-	}
-	if !info.IsDir() {
-		return "", false, usagef("benchmark: --runtime-dir %s must be a directory", abs)
 	}
 	return abs, false, nil
 }
 
-func placeSrc(files FS, src string, create bool) (string, error) {
+// placeSrc validates the relative --src name under the runtime dir.
+// The directory itself is created during the run, so nothing is
+// stat'ed here. When the run creates no image, an explicit flag is a
+// usage error while the default is silently dropped.
+func placeSrc(src string, srcSet, create bool) (string, error) {
 	src = strings.TrimSpace(src)
-	if src == "" {
-		return "", nil
+	if src == "" && !srcSet {
+		src = payloadDir
+	}
+	rel, err := relativeSub("--src", src)
+	if err != nil {
+		return "", err
 	}
 	if !create {
-		return "", usagef("benchmark: --src is only valid when creating an image")
+		if srcSet {
+			return "", usagef("benchmark: --src is only valid when creating an image")
+		}
+		return "", nil
 	}
-	abs, err := absPath(src)
-	if err != nil {
-		return "", err
-	}
-	info, err := files.stat(abs)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", usagef("benchmark: --src %s does not exist", abs)
-	}
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", usagef("benchmark: --src %s must be a directory", abs)
-	}
-	return abs, nil
+	return rel, nil
 }
 
 func placeImage(image string) (string, error) {
