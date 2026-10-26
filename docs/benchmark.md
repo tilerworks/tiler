@@ -1,62 +1,148 @@
 # Image pack benchmarks
 
-Prefer `tiler benchmark <path>` for a single image size on a chosen
-volume (external disk or NAS). The scripts below stay as standalone
-helpers: they are not part of `make test`, and
-`bench-img-vs-tar.sh` still drives the multi-size image-vs-tar tables
-in this document.
+`tiler benchmark <path>` measures one image size on a chosen volume
+(external disk or NAS). The tables below keep the same sizes and
+columns as before: 32, 128, 256, and 512 MiB, each split into 4 MiB
+files, with pack time, output size, cold and warm reads, and (where
+the format mounts) attach time. Repeat the procedure once per size.
+Build with `make build` and call `bin/tiler`, or any `tiler` on
+`PATH`.
 
-| Tool | Role |
-|------|------|
-| `tiler benchmark <path>` | Create and read one image on a chosen path; probe the volume for IOPS and latency |
-| [bench-img-path.py](bench-img-path.py) | Standalone Python helper with the same path-level workflow (kept for comparison and scripting outside the binary) |
-| [bench-img-vs-tar.sh](bench-img-vs-tar.sh) | Standalone multi-size helper: image pack vs `tar+gzip`, then expanded-tree read vs image mount read |
+## Procedure
 
-`bench-img-path.py` detects the host OS. macOS defaults to `--type dmg`.
-`--type tar` (gzip tar) runs on macOS and Linux. `--type squashfs` and
-`--type erofs` run on Linux: they pack with `mksquashfs` and
-`mkfs.erofs` (the same argv tiler uses) and attach read-only with
-`squashfuse_ll` and `erofsfuse`, the FUSE clients tiler mounts with. A
-root run without the FUSE clients falls back to kernel loop mounts.
-Image create and read always go through that program, including tar.gz.
-`bench-img-vs-tar.sh` calls it for the image and tar pack/read steps —
-dmg on macOS, squashfs and erofs on Linux — and times the expanded-tree
-reads itself.
+Use a scratch directory as `<path>`. Put `--runtime-dir` next to it,
+not inside it: the two paths must not contain each other. Each type
+needs its own empty `--bench-dir`. The first type writes `data/`;
+later types pack that same tree with `--src`. `--no-probe` skips the
+4 KiB IOPS probe so the rows match these tables. `--format tsv`
+prints only step rows (`image_create`, `image_attach` when the type
+mounts, `read_image_1`, `read_image_2`). `--keep` leaves the bench
+directory so the image and `data/` stay for the read passes.
+
+Payload bytes are urandom. Pack MiB/s is input size over wall time.
+Read MiB/s is bytes read over wall time. Attach time is its own row
+and is not included in the read rate. `read_image_2` is a second pass
+on a warm cache. tar reads stream member bytes and do not extract
+onto `<path>`.
+
+Cold image reads drop the cache inside `tiler benchmark` when
+passwordless sudo works (`sudo -n purge` on macOS,
+`drop_caches` on Linux). The `purge=` note says whether it worked.
+
+The **expanded** columns are not a `tiler benchmark` step. After the
+packs, and after the same passwordless purge, walk `data/` twice in
+1 MiB reads, skipping names that start with `.`. The first walk is
+"expanded, first"; the second is "expanded, warm".
+
+### macOS (dmg and tar)
+
+Needs `hdiutil`. For each `SIZE` in `32`, `128`, `256`, `512`:
+
+```sh
+SIZE=32
+work=$(mktemp -d "${TMPDIR:-/tmp}/tiler-bench.XXXXXX")
+runtime=$(mktemp -d "${TMPDIR:-/tmp}/tiler-bench-rt.XXXXXX")
+
+bin/tiler benchmark "$work" \
+  --bench-dir "$work/bench-dmg" \
+  --runtime-dir "$runtime" \
+  --type dmg --mode write \
+  --size "${SIZE}M" --file-size 4M \
+  --no-probe --keep --format tsv
+
+bin/tiler benchmark "$work" \
+  --bench-dir "$work/bench-tar" \
+  --runtime-dir "$runtime" \
+  --type tar --mode write \
+  --src "$work/bench-dmg/data" \
+  --no-probe --keep --format tsv
+
+# expanded, first then warm (after sudo -n purge when it is allowed)
+# walk "$work/bench-dmg/data" twice
+
+bin/tiler benchmark "$work" \
+  --runtime-dir "$runtime" \
+  --type dmg --mode read \
+  --image "$work/bench-dmg/image.dmg" \
+  --no-probe --format tsv
+
+bin/tiler benchmark "$work" \
+  --runtime-dir "$runtime" \
+  --type tar --mode read \
+  --image "$work/bench-tar/image.tar.gz" \
+  --no-probe --format tsv
+```
+
+`hdiutil create` uses `-format ULFO -fs APFS`. tar uses `tar -czf`.
+Take `image_create` seconds, MiB/s, and the bytes column for the pack
+table. Take `image_attach` seconds for the attach column. Take
+`read_image_1` / `read_image_2` for the DMG and tar.gz read columns.
+
+### Linux (squashfs, erofs, and tar)
+
+Needs `mksquashfs`, `mkfs.erofs`, and — for a rootless mount —
+`squashfuse_ll`, `erofsfuse`, and `fusermount3`. Same sizes and
+`--file-size 4M`. Generate the tree with squashfs, then pack erofs
+and tar from that `data/`:
+
+```sh
+SIZE=32
+work=$(mktemp -d /tmp/tiler-bench.XXXXXX)
+runtime=$(mktemp -d /tmp/tiler-bench-rt.XXXXXX)
+
+bin/tiler benchmark "$work" \
+  --bench-dir "$work/bench-squashfs" \
+  --runtime-dir "$runtime" \
+  --type squashfs --mode write \
+  --size "${SIZE}M" --file-size 4M \
+  --no-probe --keep --format tsv
+
+bin/tiler benchmark "$work" \
+  --bench-dir "$work/bench-erofs" \
+  --runtime-dir "$runtime" \
+  --type erofs --mode write \
+  --src "$work/bench-squashfs/data" \
+  --no-probe --keep --format tsv
+
+bin/tiler benchmark "$work" \
+  --bench-dir "$work/bench-tar" \
+  --runtime-dir "$runtime" \
+  --type tar --mode write \
+  --src "$work/bench-squashfs/data" \
+  --no-probe --keep --format tsv
+
+# walk "$work/bench-squashfs/data" twice for the expanded columns
+# (after drop_caches when passwordless sudo allows it)
+
+bin/tiler benchmark "$work" \
+  --runtime-dir "$runtime" \
+  --type squashfs --mode read \
+  --image "$work/bench-squashfs/image.sqsh" \
+  --no-probe --format tsv
+
+bin/tiler benchmark "$work" \
+  --runtime-dir "$runtime" \
+  --type erofs --mode read \
+  --image "$work/bench-erofs/image.erofs" \
+  --no-probe --format tsv
+
+bin/tiler benchmark "$work" \
+  --runtime-dir "$runtime" \
+  --type tar --mode read \
+  --image "$work/bench-tar/image.tar.gz" \
+  --no-probe --format tsv
+```
+
+squashfs packs with `mksquashfs -comp zstd -noappend`. erofs uses
+`mkfs.erofs` with a nil UUID and the best compressor that
+`mkfs.erofs` lists (zstd, then lz4, then gzip). Ubuntu 24.04's
+erofs-utils has no zstd, so the table below packed with lz4. Reads
+attach read-only with `squashfuse_ll` / `erofsfuse` and walk the
+mount twice.
 
 ---
 
 ## Linux: squashfs and erofs vs tar+gzip
-
-```sh
-docs/benchmark/bench-img-vs-tar.sh
-```
-
-Same defaults and overrides as the macOS section (`BENCH_SIZES_MIB`,
-`BENCH_FILE_MIB`, `BENCH_ROOT`). Needs `python3`, `tar`, `mksquashfs`,
-`mkfs.erofs`, and — for a rootless mount — `squashfuse_ll`,
-`erofsfuse`, and `fusermount3`. Every size packs one payload tree as
-squashfs, as erofs, and as tar.gz, then reads each artifact back.
-
-### Method
-
-- Payload bytes are `os.urandom`, so no packer can collapse the tree
-  into a tiny archive of zeros.
-- Packing goes through `bench-img-path.py` with the argv tiler uses:
-  `mksquashfs -comp zstd -noappend` and `mkfs.erofs -U <nil-uuid>
-  -zlz4`. The erofs compressor defaults to the best one the host's
-  `mkfs.erofs` offers (zstd, then lz4, then gzip/deflate); Ubuntu
-  24.04's build has no zstd, so the run below packed with lz4. tar
-  packs the same tree with `tar -czf`.
-- Reads attach the image read-only with `squashfuse_ll` / `erofsfuse`
-  and walk the mount twice. Attach took 3–8 ms for both formats and is
-  reported separately from the read rates.
-- Before each cold pass the benchmark drops caches when passwordless
-  sudo is available (`sync; echo 3 > /proc/sys/vm/drop_caches`;
-  `purge=yes` in the notes). The `*_2` passes repeat the walk with no
-  purge in between and hit the page cache.
-- MiB/s for a pack step is input size over wall time; for a read step,
-  bytes read over wall time. Reading the tar.gz streams member bytes
-  and does not extract onto the volume under test.
 
 ### Result
 
@@ -104,72 +190,48 @@ single-digit milliseconds.
 
 ## macOS: dmg vs tar+gzip
 
-```sh
-docs/benchmark/bench-img-vs-tar.sh
-```
-
-Defaults are totals of 32, 128, 256, and 512 MiB, split into 4 MiB
-files. Override with `BENCH_SIZES_MIB`, `BENCH_FILE_MIB`, and
-`BENCH_ROOT`. Needs `python3`, `tar`, and `hdiutil`.
-
-### Method
-
-- Payload bytes are `os.urandom`, so neither packer can collapse the
-  tree into a tiny archive of zeros.
-- Packing uses `hdiutil create -format ULFO -fs APFS` (the same format
-  tiler uses for a new dmg) and `tar -czf`, both through
-  `bench-img-path.py` (`--type dmg` and `--type tar`). The tar archive
-  is built from the same payload tree as the dmg (`--src`).
-- Reading the tar streams member bytes with `tarfile` (`tar/read_image_*`).
-  That does not extract onto the volume under test. `read_expanded_*`
-  is still a direct walk of the unpacked tree in this shell script.
-- Before the expanded-tree read the script runs `sudo -n purge` when
-  passwordless sudo is available. `read_expanded_1` is a cold read
-  only when the notes say `purge=yes`.
-- `read_image_1` is the first walk of the attached volume. It includes
-  UDIF decompression. `read_image_2` and `read_expanded_2` repeat that
-  walk with no purge in between, so they hit the page cache.
-- MiB/s for a pack step is input size over wall time. MiB/s for a read
-  step is bytes read over wall time. Attach time is reported separately
-  and is not included in the read rates.
+Follow the macOS procedure above for 32, 128, 256, and 512 MiB.
 
 ### Result
 
 Host: Mac15,6, Apple M3 Pro, 36 GiB RAM, macOS 27.0.1, arm64.
-Date: 2026-10-22. `purge=yes` for every size.
+Date: 2026-10-26. `purge=yes` for every size. Measured with
+`tiler benchmark` using the procedure above.
 
 #### Pack
 
 | MiB | hdiutil create | tar+gzip | hdiutil out | tar.gz out |
 |-----|----------------|----------|-------------|------------|
-| 32 | 5.071 s (6.4 MiB/s) | 0.661 s (48.5 MiB/s) | 34264363 | 33569792 |
-| 128 | 5.085 s (25.8 MiB/s) | 2.486 s (51.5 MiB/s) | 137603685 | 134272119 |
-| 256 | 7.078 s (36.9 MiB/s) | 4.892 s (52.4 MiB/s) | 274177330 | 268544148 |
-| 512 | 8.085 s (64.2 MiB/s) | 9.707 s (52.8 MiB/s) | 544298255 | 537088118 |
+| 32 | 7.888 s (4.1 MiB/s) | 0.654 s (48.9 MiB/s) | 34264095 | 33568140 |
+| 128 | 6.835 s (18.7 MiB/s) | 2.504 s (51.1 MiB/s) | 137604398 | 134272096 |
+| 256 | 8.056 s (31.8 MiB/s) | 4.995 s (51.3 MiB/s) | 273171290 | 268544069 |
+| 512 | 10.019 s (51.1 MiB/s) | 9.967 s (51.4 MiB/s) | 544298150 | 537088012 |
 
-`hdiutil create` spends about five seconds before the payload size
+`hdiutil create` spends several seconds before the payload size
 matters, so it is slower than tar on the smaller trees. At 512 MiB
-that fixed cost is amortized and ULFO finishes ahead of gzip. Both
-outputs stay near the input size because the payload is incompressible.
+that fixed cost is amortized and ULFO is roughly even with gzip
+(~51 MiB/s). Both outputs stay near the input size because the
+payload is incompressible.
 
 #### Read
 
 | MiB | expanded, first | DMG, first | tar.gz, first | expanded, warm | DMG, warm | tar.gz, warm | attach |
 |-----|-----------------|------------|---------------|----------------|-----------|--------------|--------|
-| 32 | 0.016 s (2000.0 MiB/s) | 0.083 s (384.3 MiB/s) | 0.016 s (2022.8 MiB/s) | 0.003 s | 0.003 s | 0.007 s | 3.413 s |
-| 128 | 0.067 s (1910.4 MiB/s) | 0.341 s (375.5 MiB/s) | 0.042 s (3029.4 MiB/s) | 0.011 s | 0.010 s | 0.034 s | 3.322 s |
-| 256 | 0.147 s (1741.5 MiB/s) | 0.668 s (383.5 MiB/s) | 0.073 s (3510.8 MiB/s) | 0.023 s | 0.020 s | 0.056 s | 2.982 s |
-| 512 | 0.234 s (2188.0 MiB/s) | 1.319 s (388.2 MiB/s) | 0.149 s (3429.6 MiB/s) | 0.042 s | 0.043 s | 0.121 s | 3.197 s |
+| 32 | 0.018 s (1777.8 MiB/s) | 0.094 s (341.6 MiB/s) | 0.033 s (965.5 MiB/s) | 0.003 s | 0.004 s | 0.014 s | 3.448 s |
+| 128 | 0.055 s (2327.3 MiB/s) | 0.347 s (369.4 MiB/s) | 0.072 s (1768.9 MiB/s) | 0.012 s | 0.013 s | 0.050 s | 2.842 s |
+| 256 | 0.112 s (2285.7 MiB/s) | 0.664 s (385.3 MiB/s) | 0.127 s (2010.8 MiB/s) | 0.021 s | 0.027 s | 0.093 s | 3.609 s |
+| 512 | 0.249 s (2056.2 MiB/s) | 1.351 s (379.0 MiB/s) | 0.232 s (2206.4 MiB/s) | 0.046 s | 0.055 s | 0.182 s | 2.643 s |
 
-The first read through the mounted dmg stays near 380 MiB/s, about
-one fifth of the cold read of the expanded directory. Streaming the
-tar.gz after the same purge is as fast as the expanded tree at 32 MiB
-and faster at the larger sizes, because it is one sequential inflate
-rather than a walk of many files. The second pass of the expanded
-tree and the mounted dmg is limited by the page cache and lands at
-the same rate. The warm tar.gz pass stays slower: the archive is
-cached, but gzip still inflates every byte. Attach itself is about
-3 seconds and does not scale cleanly with size.
+The first read through the mounted dmg stays near 340–385 MiB/s,
+about one sixth to one seventh of the cold read of the expanded
+directory. Streaming the tar.gz after the same purge is slower than
+the expanded tree at 32 MiB and roughly matches it at 512 MiB,
+because it is one sequential inflate rather than a walk of many
+files. The second pass of the expanded tree and the mounted dmg is
+limited by the page cache and lands at the same rate. The warm
+tar.gz pass stays slower: the archive is cached, but gzip still
+inflates every byte. Attach itself is about 2.6–3.6 seconds and does
+not scale cleanly with size.
 
 ---
 
@@ -254,16 +316,18 @@ tiler benchmark /Volumes/share/bench \
 `--image` still creates an image first (setup) and needs a writable
 `<path>`. `--mode both` times create and both read passes. `--type tar`
 packs with `tar -czf` and reads by streaming member bytes; it does not
-mount. `--src DIR` packs an existing tree instead of generating a new
-one. `--size` and `--file-size` use the same byte-size syntax as the
+mount. `--src DIR` packs an existing directory instead of generating a
+new one. `--size` and `--file-size` use the same byte-size syntax as the
 rest of tiler (`128M`, `4M`, bare integers are bytes). For dmg,
 `--compress` is `ULFO` (default), `ULMO`, or `UDRO`. For squashfs it
 is `zstd` (default), `gzip`, `lz4`, or `xz`; for erofs it is `zstd`,
 `lz4`, or `gzip`, defaulting to the best compressor the host's
 `mkfs.erofs` lists. tar rejects `--compress`. `--probe-ops` defaults
-to 2000. `--keep` leaves `--bench-dir` in place. `--tsv` prints only
-step rows for scripts that build a larger table. Payload bytes are
-random and incompressible.
+to 2000. `--keep` leaves `--bench-dir` in place. `--format` selects
+the report shape: `table` (default) is the human layout, `tsv`
+prints only step rows for scripts that build a larger table, and
+`json` writes one object with metadata, probe, and steps after a
+successful run. Payload bytes are random and incompressible.
 
 On Linux the same `<path>` pattern works with `--type squashfs` and
 `--type erofs`:
