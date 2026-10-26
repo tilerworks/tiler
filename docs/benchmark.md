@@ -150,6 +150,106 @@ Host: Lima VM (Linux on macOS, Apple Virtualization framework) on an
 Apple silicon host, aarch64, 6 vCPU, 11 GiB RAM, Ubuntu 24.04.5 LTS,
 kernel 6.8.0-147-generic, ext4 scratch on virtio. squashfs-tools
 4.6.1, squashfuse 0.5.0, erofs-utils 1.7.1, GNU tar 1.35, gzip 1.12.
+Date: 2026-10-26. `purge=yes` for every read. The procedure ran twice
+and every row is the mean of the two run times, with its rate derived
+from that mean so a row stays internally consistent. tar+gzip is the
+baseline; the multiples below are against it.
+
+#### Pack
+
+| MiB | mksquashfs zstd | mkfs.erofs lz4 | tar+gzip | sqsh out | erofs out | tar.gz out |
+|-----|-----------------|----------------|----------|----------|-----------|------------|
+| 32 | 0.305 s (104.9 MiB/s) | 0.312 s (102.6 MiB/s) | 0.680 s (47.0 MiB/s) | 33558528 | 33558528 | 33560803 |
+| 128 | 1.068 s (119.9 MiB/s) | 1.168 s (109.5 MiB/s) | 2.789 s (45.9 MiB/s) | 134221824 | 134221824 | 134243430 |
+| 256 | 1.981 s (129.2 MiB/s) | 2.308 s (110.9 MiB/s) | 5.280 s (48.5 MiB/s) | 268439552 | 268443648 | 268487100 |
+| 512 | 3.780 s (135.4 MiB/s) | 4.565 s (112.2 MiB/s) | 11.810 s (43.4 MiB/s) | 536875008 | 536883200 | 536974194 |
+
+Both image packers thread their compressors and beat single-threaded
+gzip at every size: squashfs by 2.2–3.1x and erofs by 2.2–2.6x, with
+the advantage widening as the tree grows. Measured as wall time,
+squashfs zstd needs 2% less than erofs lz4 at 32 MiB and 17% less at
+512 MiB. All three outputs stay within 0.01% of the input because the
+payload is incompressible; the `tar.gz out` column is the run-1 value
+and drifts by a few hundred bytes between runs, while both image
+outputs are byte-identical across the two runs.
+
+This host's `mkfs.erofs` lists lz4, lz4hc, lzma, deflate, and
+libdeflate but no zstd, so the packer selected lz4 rather than the
+zstd default. A zstd-capable erofs-utils would move the erofs columns.
+
+#### Read
+
+| MiB | expanded, first | squashfs, first | erofs, first | tar.gz, first | expanded, warm | squashfs, warm | erofs, warm | tar.gz, warm |
+|-----|-----------------|-----------------|--------------|---------------|----------------|----------------|-------------|--------------|
+| 32 | 0.025 s (1280.0 MiB/s) | 0.029 s (1103.4 MiB/s) | 0.022 s (1454.5 MiB/s) | 0.017 s (1882.4 MiB/s) | 0.012 s | 0.008 s | 0.018 s | 0.015 s |
+| 128 | 0.060 s (2115.7 MiB/s) | 0.139 s (920.9 MiB/s) | 0.186 s (688.2 MiB/s) | 0.072 s (1777.8 MiB/s) | 0.037 s | 0.038 s | 0.081 s | 0.060 s |
+| 256 | 0.111 s (2316.7 MiB/s) | 0.179 s (1426.2 MiB/s) | 0.155 s (1646.3 MiB/s) | 0.140 s (1835.1 MiB/s) | 0.067 s | 0.059 s | 0.121 s | 0.115 s |
+| 512 | 0.311 s (1646.3 MiB/s) | 0.406 s (1261.1 MiB/s) | 0.320 s (1602.5 MiB/s) | 0.292 s (1750.4 MiB/s) | 0.138 s | 0.116 s | 0.242 s | 0.237 s |
+
+Warm rates, derived from the warm seconds: expanded 2667–3821 MiB/s,
+squashfs 3413–4395 MiB/s, erofs 1580–2116 MiB/s, tar.gz 2116–2226
+MiB/s. Both mounts attach read-only in 7–13 ms, so attach is not a
+factor here; tar never mounts, it streams member bytes.
+
+Cold, tar.gz is the fastest of the four at every size, and both FUSE
+mounts trail it: squashfs at 0.52–0.78x of tar and erofs at
+0.39–0.92x. That ranking is a property of this payload, not of the
+formats. Payload bytes are urandom, so gzip cannot compress them and
+emits stored blocks — `image.tar.gz` is larger than the tree it packs.
+Streaming it is a sequential read of one file plus a block copy, with
+no inflate arithmetic, no FUSE round trip, and no per-file open. On a
+compressible tree the single-threaded inflate would dominate instead
+and tar would fall behind both mounts.
+
+Warm reverses the ranking for squashfs, which reaches 1.61–2.04x of
+tar and 0.99–1.50x of the expanded warm tree, so it is the fastest
+read path in this run at three of four sizes. After the first pass the
+page cache holds the decompressed blocks, so zstd runs once. erofs
+shows no comparable lift, staying at 0.75–0.98x of tar, and tar itself
+stays near 2150 MiB/s, because erofsfuse re-decompresses lz4 and gzip
+re-reads its stored blocks on every pass. The expanded warm tree lands
+at 1.25–1.73x of tar.
+
+#### Variance and disagreement with the earlier run
+
+Read rows at 32 MiB are tens of milliseconds long, so their relative
+spread is the largest. The outlier is erofs cold at 128 MiB, where the
+two runs took 0.117 s and 0.255 s — a 2.18x spread that leaves its
+688.2 MiB/s mean, and the 0.39x it implies against tar, weakly
+supported. Every other read row agreed within 1.31x, and pack times
+within 1.16x (the widest was squashfs at 256 MiB). Read the 128 MiB
+erofs cold cell as indicative rather than precise.
+
+The earlier run below records tar.gz cold at 1076–1166 MiB/s, behind
+both mounts, which is the opposite ordering from this one at
+1750–1882 MiB/s. Comparing the two row by row does not isolate a
+single cause. tar is the only cold row that rose consistently at every
+size, by +53% to +69% cold and +62% to +82% warm. The expanded first
+pass fell consistently, by −5% to −52%, and the expanded warm pass
+scattered from −25% to +11%. squashfs warm rose +12% to +38% and erofs
+warm +3% to +15%, while the two cold mount rows scatter in both
+directions, −52% to +14%. The driver also changed between the runs,
+from a Python `tarfile` reader in the now-deleted `bench-img-path.py`
+to Go `archive/tar` in `internal/benchmark`. Re-running both readers
+back to back on one 512 MiB archive gave 1467 MiB/s for Python and
+1670 MiB/s for Go, so that change is worth about 14%, and Python still
+measures well above the 1076 MiB/s the earlier table records for that
+same reader. The driver change is therefore not the main cause, and
+the remainder is unexplained; the Lima VM shares its Apple host, so
+host-side load during the earlier run is a plausible contributor.
+Treat the earlier table as stale rather than contradicted.
+
+### Earlier run (2026-10-22)
+
+Kept for reference. Measured on the same host class with the
+`bench-img-vs-tar.sh` and `bench-img-path.py` drivers, both since
+removed in favour of `tiler benchmark`. Its tar rows disagree with the
+2026-10-26 run above; see the variance note.
+
+Host: Lima VM (Linux on macOS, Apple Virtualization framework) on an
+Apple silicon host, aarch64, 6 vCPU, 11 GiB RAM, Ubuntu 24.04.5 LTS,
+kernel 6.8.0-147-generic, ext4 scratch on virtio. squashfs-tools
+4.6.1, squashfuse 0.5.0, erofs-utils 1.7.1, GNU tar 1.35, gzip 1.12.
 Date: 2026-10-22. `purge=yes` for every size.
 
 #### Pack
