@@ -7,8 +7,8 @@
 #
 #   1. pack a bare squashfs outside images_dir,
 #   2. mount --file registers symlink + meta.yaml and mounts by library name,
-#   3. confirm the view is writable and build --incremental appends _incr,
-#   4. repeat mount --file with the same args is idempotent for the leaf,
+#   3. repeat mount --file with the same args is idempotent for the leaf,
+#   4. confirm the view is writable and build --incremental appends _incr,
 #   5. mount --file with a dmg (fake koly) is refused on Linux (exit 2).
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
@@ -106,6 +106,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file registers symlink m
 	test_grep -F "\"full_id\": \"$base_id\"" showj.out
 '
 
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount --file leaves meta unchanged' '
+	cp "$meta_file" meta.before &&
+	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >link2.out 2>link2.err &&
+	test_grep -E "^already mounted " link2.out &&
+	test_cmp meta.before "$meta_file"
+'
+
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --incremental grow the chain' '
 	echo from-incr >"$work_dir/extra.txt" &&
 	test_path_is_file "$work_dir/extra.txt" &&
@@ -119,13 +126,6 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --increm
 	test_grep -E "^id: \"?$base_id\"?$" "$meta_file" &&
 	"$tiler_bin" images show "$lib_name" >show.out 2>show.err &&
 	test_grep -E "^  chain +1$" show.out
-'
-
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount --file leaves meta unchanged' '
-	cp "$meta_file" meta.before &&
-	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >link2.out 2>link2.err &&
-	test_grep -E "^already mounted " link2.out &&
-	test_cmp meta.before "$meta_file"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file refuses a dmg source on Linux' '
@@ -144,9 +144,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 '
 
 # Simulate git core.symlinks=false: replace the leaf symlink with a
-# regular file whose content is the absolute NAS path.
+# regular file whose content is the absolute NAS path. The symlink
+# must be removed first, because ">" through it would truncate the
+# NAS source instead of the leaf.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'path-ref leaf mounts like a symlink' '
 	test_path_is_symlink "$payload" &&
+	rm "$payload" &&
 	printf "%s\n" "$img" >"$payload" &&
 	test_path_is_file "$payload" &&
 	! test -L "$payload" &&
