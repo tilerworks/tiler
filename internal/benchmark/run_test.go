@@ -17,8 +17,11 @@ import (
 func TestRunKeepLeavesBenchDir(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "bench")
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 	var out bytes.Buffer
 	d := baseDecision(vol, bench)
+	d.RuntimeDir = runtimeDir
+	d.OwnRuntime = false
 	d.Keep = true
 	d.Create = true
 	d.Read = true
@@ -39,16 +42,15 @@ func TestRunKeepLeavesBenchDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bench, "image.tar.gz")); err != nil {
 		t.Fatalf("image after keep: %v", err)
 	}
+	if _, err := os.Stat(runtimeDir); err != nil {
+		t.Fatalf("runtime after keep: %v", err)
+	}
 }
 
-func TestRunUserRuntimeDirKeepsParent(t *testing.T) {
+func TestRunRemovesUserRuntimeDir(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "bench")
-	runtimeDir := t.TempDir()
-	marker := filepath.Join(runtimeDir, "keep-me")
-	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
 	var out bytes.Buffer
 	d := baseDecision(vol, bench)
 	d.RuntimeDir = runtimeDir
@@ -66,20 +68,53 @@ func TestRunUserRuntimeDirKeepsParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if _, err := os.Stat(runtimeDir); err != nil {
-		t.Fatalf("runtime parent: %v", err)
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("runtime marker: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, "mount")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("mount after cleanup: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, "logs")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("logs after cleanup: %v", err)
+	if _, err := os.Stat(runtimeDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime after cleanup: %v", err)
 	}
 	if _, err := os.Stat(bench); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("bench should be removed: %v", err)
+		t.Fatalf("bench after cleanup: %v", err)
+	}
+	// <path> itself survives with no leftover entries.
+	if _, err := os.Stat(vol); err != nil {
+		t.Fatalf("path removed: %v", err)
+	}
+	if entries := listNames(t, vol); len(entries) != 0 {
+		t.Fatalf("path leftovers: %v", entries)
+	}
+}
+
+func TestRunPayloadUnderRuntimeNotBench(t *testing.T) {
+	vol := t.TempDir()
+	bench := filepath.Join(vol, "bench")
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	var out bytes.Buffer
+	d := baseDecision(vol, bench)
+	d.RuntimeDir = runtimeDir
+	d.OwnRuntime = false
+	d.Keep = true
+	d.Create = true
+	d.Read = false
+	d.Mode = "write"
+
+	err := Run(d, Env{
+		Command: tarPackCommand(t),
+		Purge:   func() string { return "no" },
+		Stdout:  &out,
+		Stderr:  io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// The payload tree is generated on local disk under the runtime
+	// dir, not on the measured volume.
+	if _, err := os.Stat(filepath.Join(runtimeDir, "data", "f00000")); err != nil {
+		t.Fatalf("payload under runtime: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bench, "data")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("payload under bench: %v", err)
+	}
+	if entries := listNames(t, bench); len(entries) != 1 || entries[0] != "image.tar.gz" {
+		t.Fatalf("bench entries = %v, want [image.tar.gz]", entries)
 	}
 }
 
@@ -296,21 +331,16 @@ func TestRunFailedAttachStillCleansUp(t *testing.T) {
 	}
 	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
 		// Mode read with image: Create and Probe are false, so
-		// prepareBench leaves removeBench false. Cleanup must still
-		// drop mount/ and logs/ under the user runtime.
+		// prepareBench adopts no bench dir and cleanup leaves the
+		// pre-existing bench and its image alone. The runtime dir
+		// this run created is removed as a whole.
 		t.Logf("bench remains for read-only image run: %v", statErr)
-	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, "mount")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("mount after failed attach: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, "logs")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("logs after failed attach: %v", err)
 	}
 	if _, err := os.Stat(image); err != nil {
 		t.Fatalf("image deleted after failed attach: %v", err)
 	}
-	if _, err := os.Stat(runtimeDir); err != nil {
-		t.Fatalf("runtime parent removed: %v", err)
+	if _, err := os.Stat(runtimeDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime after failed attach: %v", err)
 	}
 }
 
@@ -468,7 +498,7 @@ func TestRunMountedReadSyncsBeforeAttach(t *testing.T) {
 		Mode:       "read",
 		Size:       1,
 		FileSize:   1,
-		Keep:       true,
+		Keep:       false,
 		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
@@ -675,6 +705,7 @@ func baseDecision(vol, bench string) Decision {
 		Path:       vol,
 		BenchDir:   bench,
 		OwnRuntime: true,
+		Src:        "data",
 		Type:       "tar",
 		Mode:       "both",
 		Size:       64,

@@ -17,34 +17,42 @@ import (
 // Options are the benchmark flags after the command has read them.
 // Size and FileSize are the raw flag text; Plan parses them.
 // Empty Mode means both. Empty Type means dmg on darwin and a
-// usage error on every other host.
+// usage error on every other host. BenchDir and Src are relative
+// directory names that Plan joins under the benchmark path and the
+// runtime dir. BenchDirSet and SrcSet report whether the user passed
+// those flags explicitly; Plan refuses an explicit value it cannot
+// use and silently drops the default instead.
 type Options struct {
-	Path       string
-	ReadOnly   bool
-	Image      string
-	BenchDir   string
-	RuntimeDir string
-	Mode       string
-	Type       string
-	Size       string
-	FileSize   string
-	Compress   string
-	Src        string
-	ProbeOps   int
-	NoProbe    bool
-	Keep       bool
-	Format     string
+	Path        string
+	ReadOnly    bool
+	Image       string
+	BenchDir    string
+	BenchDirSet bool
+	RuntimeDir  string
+	Mode        string
+	Type        string
+	Size        string
+	FileSize    string
+	Compress    string
+	Src         string
+	SrcSet      bool
+	ProbeOps    int
+	NoProbe     bool
+	Keep        bool
+	Format      string
 }
 
 // Decision is what a later run will do. Create packs an image,
 // Read measures two reads, and Probe samples 4 KiB random I/O.
-// BenchDir is empty when the run does not use one, and when a
-// private directory under Path still has to be chosen. OwnRuntime
-// is true when RuntimeDir is empty and the run must create a
-// private directory under the system temp dir. Compress is a
-// container token: ulfo, ulmo, udro, or a squashfs or erofs name.
-// It stays empty for tar, and for erofs when --compress was unset,
-// so pack can choose from the mkfs.erofs help text.
+// BenchDir is the absolute directory Plan joined under Path; it is
+// empty when the run does not use one. Src is the payload directory
+// name relative to the runtime dir, non-empty only when Create is
+// true; Run joins it with the runtime dir. OwnRuntime is true when
+// RuntimeDir is empty and the run must create a private directory
+// under the system temp dir. Compress is a container token: ulfo,
+// ulmo, udro, or a squashfs or erofs name. It stays empty for tar,
+// and for erofs when --compress was unset, so pack can choose from
+// the mkfs.erofs help text.
 type Decision struct {
 	Create     bool
 	Read       bool
@@ -117,7 +125,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err := ensureWritable(files, path, opts.ReadOnly); err != nil {
 		return Decision{}, err
 	}
-	bench, err := placeBench(files, path, opts.BenchDir, act)
+	bench, err := placeBench(files, path, opts.BenchDir, opts.BenchDirSet, act)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -125,7 +133,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	src, err := placeSrc(files, opts.Src, act.Create)
+	src, err := placeSrc(opts.Src, opts.SrcSet, act.Create)
 	if err != nil {
 		return Decision{}, err
 	}

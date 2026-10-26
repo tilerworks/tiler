@@ -43,21 +43,23 @@ func newBenchmarkCmd() *cobra.Command {
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := benchmark.Options{
-				Path:       args[0],
-				ReadOnly:   readonly,
-				Image:      image,
-				BenchDir:   benchDir,
-				RuntimeDir: runtimeDir,
-				Mode:       mode,
-				Type:       typ,
-				Size:       size,
-				FileSize:   fileSize,
-				Compress:   compress,
-				Src:        src,
-				ProbeOps:   probeOps,
-				NoProbe:    noProbe,
-				Keep:       keep,
-				Format:     format,
+				Path:        args[0],
+				ReadOnly:    readonly,
+				Image:       image,
+				BenchDir:    benchDir,
+				BenchDirSet: cmd.Flags().Changed("bench-dir"),
+				RuntimeDir:  runtimeDir,
+				Mode:        mode,
+				Type:        typ,
+				Size:        size,
+				FileSize:    fileSize,
+				Compress:    compress,
+				Src:         src,
+				SrcSet:      cmd.Flags().Changed("src"),
+				ProbeOps:    probeOps,
+				NoProbe:     noProbe,
+				Keep:        keep,
+				Format:      format,
 			}
 			return runBenchmarkCmd(cmd, opts)
 		},
@@ -65,10 +67,11 @@ func newBenchmarkCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&readonly, "readonly", false,
 		"read an existing image without writing under <path>")
 	cmd.Flags().StringVar(&image, "image", "", "existing image file for read-only runs")
-	cmd.Flags().StringVar(&benchDir, "bench-dir", "",
-		"writable isolation directory under <path>")
+	cmd.Flags().StringVar(&benchDir, "bench-dir", benchmark.DefaultBenchDir,
+		"relative isolation directory created under <path>")
 	cmd.Flags().StringVar(&runtimeDir, "runtime-dir", "",
-		"local parent for mount and logs; default is a private temp dir")
+		"local dir for mount, logs, and payload; must be absent or empty "+
+			"and is removed at the end (default: a private temp dir)")
 	cmd.Flags().StringVar(&mode, "mode", "both", "write, read, or both")
 	cmd.Flags().StringVar(&typ, "type", "",
 		"image type: dmg, tar, squashfs, or erofs")
@@ -77,12 +80,13 @@ func newBenchmarkCmd() *cobra.Command {
 		"bytes per generated payload file")
 	cmd.Flags().StringVar(&compress, "compress", "",
 		"compression token for the selected type")
-	cmd.Flags().StringVar(&src, "src", "",
-		"pack an existing directory instead of a random tree")
+	cmd.Flags().StringVar(&src, "src", benchmark.DefaultPayloadDir,
+		"relative payload directory created under the runtime dir")
 	cmd.Flags().IntVar(&probeOps, "probe-ops", 2000,
 		"4 KiB random read and write operations")
 	cmd.Flags().BoolVar(&noProbe, "no-probe", false, "skip the filesystem probe")
-	cmd.Flags().BoolVar(&keep, "keep", false, "keep --bench-dir after the run")
+	cmd.Flags().BoolVar(&keep, "keep", false,
+		"keep --bench-dir and --runtime-dir after the run")
 	cmd.Flags().StringVar(&format, "format", "table",
 		"output format: table, tsv, or json")
 	// Omit inherited root persistent flags from help; prepare rejects

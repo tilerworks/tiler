@@ -11,7 +11,6 @@ import (
 const (
 	volPath = "/tiler-bench-plan/vol"
 	rtPath  = "/tiler-bench-plan/runtime"
-	srcPath = "/tiler-bench-plan/src"
 )
 
 func TestPlanWritableBothCreatesReadsAndProbes(t *testing.T) {
@@ -32,8 +31,12 @@ func TestPlanWritableBothCreatesReadsAndProbes(t *testing.T) {
 	if got.Mode != "both" || got.Size != 128<<20 || got.FileSize != 4<<20 {
 		t.Fatalf("mode/size/file-size = %s %d %d", got.Mode, got.Size, got.FileSize)
 	}
-	if !got.Keep || got.Format != FormatTSV || !got.OwnRuntime || got.RuntimeDir != "" || got.BenchDir != "" {
+	if !got.Keep || got.Format != FormatTSV || !got.OwnRuntime || got.RuntimeDir != "" {
 		t.Fatalf("placement = %+v", got)
+	}
+	if got.BenchDir != volPath+"/tiler-bench" || got.Src != "data" {
+		t.Fatalf("bench/src = %q %q, want %q %q",
+			got.BenchDir, got.Src, volPath+"/tiler-bench", "data")
 	}
 	if got.Type != "tar" || got.Compress != "" || got.ProbeOps != 2000 {
 		t.Fatalf("type/compress/ops = %s %q %d", got.Type, got.Compress, got.ProbeOps)
@@ -56,7 +59,7 @@ func TestPlanReadonlyImageReadsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if got.Create || !got.Read || got.Probe || got.BenchDir != "" {
+	if got.Create || !got.Read || got.Probe || got.BenchDir != "" || got.Src != "" {
 		t.Fatalf("decision = %+v", got)
 	}
 	if got.Image != "/tiler-bench-plan/app.tar" || !got.ReadOnly {
@@ -118,16 +121,17 @@ func TestPlanPlacesBenchDirAndRuntimeDir(t *testing.T) {
 		volPath:           {dir: true, writable: true},
 		volPath + "/work": {dir: true, writable: true},
 		rtPath:            {dir: true, writable: true},
-		srcPath:           {dir: true, writable: true},
 	}}
 	got, err := Plan(Options{
-		Path:       volPath,
-		BenchDir:   volPath + "/work",
-		RuntimeDir: rtPath,
-		Src:        srcPath,
-		Type:       "tar",
-		Size:       "128M",
-		FileSize:   "4M",
+		Path:        volPath,
+		BenchDir:    "work",
+		BenchDirSet: true,
+		RuntimeDir:  rtPath,
+		Src:         "payload",
+		SrcSet:      true,
+		Type:        "tar",
+		Size:        "128M",
+		FileSize:    "4M",
 	}, sys.FS("linux"))
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -135,15 +139,34 @@ func TestPlanPlacesBenchDirAndRuntimeDir(t *testing.T) {
 	if got.BenchDir != volPath+"/work" || got.RuntimeDir != rtPath || got.OwnRuntime {
 		t.Fatalf("dirs = bench %s runtime %s owned %v", got.BenchDir, got.RuntimeDir, got.OwnRuntime)
 	}
-	if got.Src != srcPath || !got.Create {
+	if got.Src != "payload" || !got.Create {
 		t.Fatalf("src = %+v", got)
 	}
 }
 
 func TestPlanAcceptsMissingBenchDir(t *testing.T) {
 	got, err := Plan(Options{
+		Path:        volPath,
+		BenchDir:    "fresh",
+		BenchDirSet: true,
+		Type:        "tar",
+		Size:        "1",
+		FileSize:    "1",
+	}, writableVol("linux"))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got.BenchDir != volPath+"/fresh" {
+		t.Fatalf("bench = %s", got.BenchDir)
+	}
+}
+
+func TestPlanReadImageIgnoresDefaultDirs(t *testing.T) {
+	got, err := Plan(Options{
 		Path:     volPath,
-		BenchDir: volPath + "/fresh",
+		Mode:     "read",
+		Image:    "/tiler-bench-plan/app.sqsh",
+		NoProbe:  true,
 		Type:     "tar",
 		Size:     "1",
 		FileSize: "1",
@@ -151,8 +174,8 @@ func TestPlanAcceptsMissingBenchDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if got.BenchDir != volPath+"/fresh" {
-		t.Fatalf("bench = %s", got.BenchDir)
+	if got.BenchDir != "" || got.Src != "" {
+		t.Fatalf("bench/src = %q %q, want empty defaults dropped", got.BenchDir, got.Src)
 	}
 }
 
@@ -226,7 +249,8 @@ func TestPlanUsageRefusals(t *testing.T) {
 				o.Image = "/tiler-bench-plan/app.tar"
 				o.NoProbe = true
 				o.Mode = "read"
-				o.BenchDir = volPath + "/work"
+				o.BenchDir = "work"
+				o.BenchDirSet = true
 			},
 			want: "--bench-dir",
 		},
@@ -316,23 +340,140 @@ func TestPlanUsageRefusals(t *testing.T) {
 			want: "--file-size",
 		},
 		{
-			name: "bench-dir equals path",
-			edit: func(o *Options) { o.BenchDir = volPath },
+			name: "bench-dir absolute path",
+			edit: func(o *Options) {
+				o.BenchDir = "/outside/bench"
+				o.BenchDirSet = true
+			},
 			want: "--bench-dir",
 		},
 		{
-			name: "bench-dir outside path",
-			edit: func(o *Options) { o.BenchDir = "/outside/bench" },
+			name: "bench-dir explicit empty",
+			edit: func(o *Options) {
+				o.BenchDir = ""
+				o.BenchDirSet = true
+			},
 			want: "--bench-dir",
+		},
+		{
+			name: "bench-dir dot slash",
+			edit: func(o *Options) {
+				o.BenchDir = "./x"
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
+		},
+		{
+			name: "bench-dir dot dot slash",
+			edit: func(o *Options) {
+				o.BenchDir = "../x"
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
+		},
+		{
+			name: "bench-dir dot",
+			edit: func(o *Options) {
+				o.BenchDir = "."
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
+		},
+		{
+			name: "bench-dir dot dot",
+			edit: func(o *Options) {
+				o.BenchDir = ".."
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
+		},
+		{
+			name: "bench-dir embedded dot dot",
+			edit: func(o *Options) {
+				o.BenchDir = "a/../b"
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
+		},
+		{
+			name: "src absolute path",
+			edit: func(o *Options) {
+				o.Src = "/outside/src"
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src explicit empty",
+			edit: func(o *Options) {
+				o.Src = ""
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src dot slash",
+			edit: func(o *Options) {
+				o.Src = "./x"
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src dot dot slash",
+			edit: func(o *Options) {
+				o.Src = "../x"
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src dot",
+			edit: func(o *Options) {
+				o.Src = "."
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src dot dot",
+			edit: func(o *Options) {
+				o.Src = ".."
+				o.SrcSet = true
+			},
+			want: "--src",
+		},
+		{
+			name: "src embedded dot dot",
+			edit: func(o *Options) {
+				o.Src = "a/../b"
+				o.SrcSet = true
+			},
+			want: "--src",
 		},
 		{
 			name: "bench-dir not empty",
-			edit: func(o *Options) { o.BenchDir = volPath + "/work" },
+			edit: func(o *Options) {
+				o.BenchDir = "work"
+				o.BenchDirSet = true
+			},
 			fs: memFS{nodes: map[string]node{
 				volPath:           {dir: true, writable: true},
 				volPath + "/work": {dir: true, names: []string{"old"}},
 			}}.FS("linux"),
 			want: "not empty",
+		},
+		{
+			name: "bench-dir is a file",
+			edit: func(o *Options) {
+				o.BenchDir = "work"
+				o.BenchDirSet = true
+			},
+			fs: memFS{nodes: map[string]node{
+				volPath:           {dir: true, writable: true},
+				volPath + "/work": {dir: false},
+			}}.FS("linux"),
+			want: "must be a directory",
 		},
 		{
 			name: "runtime-dir inside path",
@@ -361,6 +502,24 @@ func TestPlanUsageRefusals(t *testing.T) {
 			want: "--runtime-dir",
 		},
 		{
+			name: "runtime-dir not empty",
+			edit: func(o *Options) { o.RuntimeDir = rtPath },
+			fs: memFS{nodes: map[string]node{
+				volPath: {dir: true, writable: true},
+				rtPath:  {dir: true, names: []string{"marker"}},
+			}}.FS("linux"),
+			want: "not empty",
+		},
+		{
+			name: "runtime-dir is a file",
+			edit: func(o *Options) { o.RuntimeDir = rtPath },
+			fs: memFS{nodes: map[string]node{
+				volPath: {dir: true, writable: true},
+				rtPath:  {dir: false},
+			}}.FS("linux"),
+			want: "must be a directory",
+		},
+		{
 			name: "unwritable path",
 			fs: memFS{nodes: map[string]node{
 				volPath: {dir: true, writable: false},
@@ -374,7 +533,8 @@ func TestPlanUsageRefusals(t *testing.T) {
 				o.Image = "/tiler-bench-plan/app.tar"
 				o.NoProbe = true
 				o.Mode = "read"
-				o.Src = srcPath
+				o.Src = "payload"
+				o.SrcSet = true
 			},
 			want: "--src",
 		},
@@ -384,9 +544,21 @@ func TestPlanUsageRefusals(t *testing.T) {
 				o.Mode = "read"
 				o.Image = "/tiler-bench-plan/app.tar"
 				o.NoProbe = true
-				o.Src = srcPath
+				o.Src = "payload"
+				o.SrcSet = true
 			},
 			want: "--src",
+		},
+		{
+			name: "bench-dir while reading an image",
+			edit: func(o *Options) {
+				o.Mode = "read"
+				o.Image = "/tiler-bench-plan/app.tar"
+				o.NoProbe = true
+				o.BenchDir = "work"
+				o.BenchDirSet = true
+			},
+			want: "--bench-dir",
 		},
 		{
 			name: "type required off darwin",
