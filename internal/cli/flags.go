@@ -25,19 +25,36 @@ type flagSet struct {
 	logLevel              string
 }
 
+// rootPersistentFlagNames is filled by bindFlags so benchmark's
+// reject list cannot drift from the root persistent set.
+var rootPersistentFlagNames []string
+
 func bindFlags(cmd *cobra.Command, flags *flagSet) {
 	set := cmd.PersistentFlags()
-	set.StringVar(&flags.imagesDir, "images-dir", "", "directory for read-only images")
-	set.StringVar(&flags.sessionsDir, "sessions-dir", "", "directory for session records and per-session runtime")
-	set.StringVar(&flags.cacheDir, "cache-dir", "", "directory for a later image cache copy")
-	set.IntVar(&flags.keepVersions, "keep-versions", 0, "image versions to retain; zero means unlimited")
-	set.StringVar(&flags.maxAge, "max-age", "", "maximum image age; zero means unlimited")
-	set.StringVar(&flags.sessionMaxAge, "session-max-age", "", "maximum session age; zero disables age cleanup")
-	set.BoolVar(&flags.sessionAutocloseStale, "session-autoclose-stale", false, "close aged active sessions without a healthy mount")
-	set.StringVar(&flags.squashfsOptions, "squashfs-options", "", "opaque squashfs mount options")
-	set.StringVar(&flags.fuseOptions, "fuse-options", "", "opaque FUSE mount options")
-	set.BoolVar(&flags.cache, "cache", false, "copy images into the cache directory later")
-	set.StringVar(&flags.logLevel, "log-level", "", "log level: debug, info, warn, or error")
+	rootPersistentFlagNames = nil
+	bindString := func(p *string, name, value, usage string) {
+		set.StringVar(p, name, value, usage)
+		rootPersistentFlagNames = append(rootPersistentFlagNames, name)
+	}
+	bindInt := func(p *int, name string, value int, usage string) {
+		set.IntVar(p, name, value, usage)
+		rootPersistentFlagNames = append(rootPersistentFlagNames, name)
+	}
+	bindBool := func(p *bool, name string, value bool, usage string) {
+		set.BoolVar(p, name, value, usage)
+		rootPersistentFlagNames = append(rootPersistentFlagNames, name)
+	}
+	bindString(&flags.imagesDir, "images-dir", "", "directory for read-only images")
+	bindString(&flags.sessionsDir, "sessions-dir", "", "directory for session records and per-session runtime")
+	bindString(&flags.cacheDir, "cache-dir", "", "directory for a later image cache copy")
+	bindInt(&flags.keepVersions, "keep-versions", 0, "image versions to retain; zero means unlimited")
+	bindString(&flags.maxAge, "max-age", "", "maximum image age; zero means unlimited")
+	bindString(&flags.sessionMaxAge, "session-max-age", "", "maximum session age; zero disables age cleanup")
+	bindBool(&flags.sessionAutocloseStale, "session-autoclose-stale", false, "close aged active sessions without a healthy mount")
+	bindString(&flags.squashfsOptions, "squashfs-options", "", "opaque squashfs mount options")
+	bindString(&flags.fuseOptions, "fuse-options", "", "opaque FUSE mount options")
+	bindBool(&flags.cache, "cache", false, "copy images into the cache directory later")
+	bindString(&flags.logLevel, "log-level", "", "log level: debug, info, warn, or error")
 }
 
 func commandPatch(cmd *cobra.Command, flags *flagSet) (config.Patch, error) {
