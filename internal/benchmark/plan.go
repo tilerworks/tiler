@@ -1,7 +1,8 @@
 // Package benchmark plans and measures one path-level image benchmark.
 // Plan is pure: directory facts come from an injected seam. Payload
-// trees, the 4 KiB probe, tree reads, and the step table do not pack,
-// mount, or start a process.
+// trees, the 4 KiB probe, tree reads, and the step table do not start
+// a process. Pack and read-only attach run only through an injected
+// command and the container argument vectors.
 package benchmark
 
 import (
