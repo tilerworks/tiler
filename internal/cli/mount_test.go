@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -614,6 +615,122 @@ func TestMountCorruptMetaIsRuntimeError(t *testing.T) {
 	}
 }
 
+func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("squashfs external link is Linux policy; Darwin format refusal is tested separately")
+	}
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	nas := filepath.Join(work, "nas")
+	external := filepath.Join(nas, "vendor.sqsh")
+	writeSquashFile(t, external)
+	view := filepath.Join(work, "view")
+	const libName = "nas/vendor"
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "mount", "--file", external, libName, view)...)
+	if err != nil {
+		t.Fatalf("mount: %v\n%s", err, stderr)
+	}
+	name, rest, ok := parseNewSessionCreated(stdout)
+	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	repoDir := filepath.Join(imagesDir, "nas", "vendor")
+	payload := filepath.Join(repoDir, image.ImageFile)
+	target, err := os.Readlink(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != external {
+		t.Fatalf("symlink target = %q, want %q", target, external)
+	}
+	meta, err := image.Load(filepath.Join(repoDir, "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Builder != Version {
+		t.Fatalf("builder = %q, want %q", meta.Builder, Version)
+	}
+	if len(f.mountReqs) != 1 {
+		t.Fatalf("engine calls = %d", len(f.mountReqs))
+	}
+	req := f.mountReqs[0]
+	if req.Full != payload || req.FullFSName != "" || req.Format != image.FormatSquashfs {
+		t.Errorf("library stack = %+v", req)
+	}
+	rec := loadSessionRecord(t, sessionsDir(home), name)
+	if len(rec.Actions) != 1 {
+		t.Fatalf("actions = %+v", rec.Actions)
+	}
+	action := rec.Actions[0]
+	if action.Name != libName || action.FullID != meta.ID || action.Image != libName {
+		t.Errorf("recorded action = %+v, want library identity", action)
+	}
+}
+
+func TestMountFileFlagMutualExclusion(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("squashfs external link is Linux policy")
+	}
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	external := filepath.Join(work, "nas", "vendor.sqsh")
+	writeSquashFile(t, external)
+	existing := filepath.Join(work, "bare.sqsh")
+	writeSquashFile(t, existing)
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", "--file", external, existing, view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "file-path image argument") {
+		t.Fatalf("ExitCode(%v) = %d, want usage mutual exclusion", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
+func TestMountFileFlagRefusesDMGOnLinux(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("dmg registration is allowed on macOS")
+	}
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	external := filepath.Join(work, "disk.dmg")
+	writeKolyFile(t, external)
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", "--file", external, "alice/app", view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "dmg is not available") {
+		t.Fatalf("ExitCode(%v) = %d, want a format usage refusal", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
+func TestMountFileFlagRefusesSquashfsOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("needs macOS link policy")
+	}
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	external := filepath.Join(work, "vendor.sqsh")
+	writeSquashFile(t, external)
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", "--file", external, "alice/app", view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not available on macOS") {
+		t.Fatalf("ExitCode(%v) = %d, want a format usage refusal", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
 func TestMountFilePathDetectsErofs(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
@@ -639,6 +756,23 @@ func TestMountFilePathRefusesUnknownMagic(t *testing.T) {
 	view := filepath.Join(work, "view")
 
 	_, _, _, err := runCmd(t, append(lib, "mount", img, view)...)
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not detected") {
+		t.Fatalf("ExitCode(%v) = %d, want a usage refusal", err, ExitCode(err))
+	}
+	if len(f.mountReqs) != 0 {
+		t.Fatalf("the engine ran: %v", f.mountReqs)
+	}
+}
+
+func TestMountFileFlagRefusesUnknownMagic(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	img := filepath.Join(work, "plain.img")
+	writeTestFile(t, img, "not a container")
+	view := filepath.Join(work, "view")
+
+	_, _, _, err := runCmd(t, append(lib, "mount", "--file", img, "alice/app", view)...)
 	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "not detected") {
 		t.Fatalf("ExitCode(%v) = %d, want a usage refusal", err, ExitCode(err))
 	}

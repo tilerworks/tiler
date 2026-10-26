@@ -375,7 +375,11 @@ func blockPathAt(root, id, name string) (string, error) {
 // recorded facts: image.sqsh / image.dmg and _incr/<id>.sqsh.
 func stackMembersAt(root string, meta Meta) ([]Member, error) {
 	full := filepath.Join(root, activeImageName(meta.Format.Type))
-	if _, err := os.Stat(full); err != nil {
+	bytesPath, err := ResolvePayloadBytesPath(full)
+	if err != nil {
+		return nil, fmt.Errorf("mount: %w", err)
+	}
+	if _, err := os.Stat(bytesPath); err != nil {
 		return nil, fmt.Errorf("mount: %w", err)
 	}
 	members := []Member{{

@@ -57,6 +57,7 @@ type mountFlags struct {
 	verify   bool
 	session  string
 	rm       bool
+	file     string
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -72,7 +73,9 @@ func newMountCmd() *cobra.Command {
 			"default, or a read-only view with --read-only. <image> is the\n" +
 			"path of one squashfs or erofs file, or a 1-to-5 segment library\n" +
 			"name. When the cleaned path exists as a regular file, that\n" +
-			"file wins over a library name. Chain layers mount as a cascade,\n" +
+			"file wins over a library name unless --file registers an external\n" +
+			"image: --file <path> <library-name> <dir> symlinks the external\n" +
+			"file into the library and mounts by name. Chain layers mount as a cascade,\n" +
 			"--subdir exposes one image subdirectory as the mount root,\n" +
 			"and --verify re-hashes every recorded digest instead of the\n" +
 			"default quick check. <dir> must be an empty directory owned\n" +
@@ -101,6 +104,8 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flags.session, "session", "s", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
 		"remove the just-created session and purge its runtime when its last view unmounts")
+	cmd.Flags().StringVar(&flags.file, "file", "",
+		"register an external image file in the library before mounting by name")
 	return cmd
 }
 
@@ -131,6 +136,11 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	if err := workspace.CheckSubdir(flags.subdir); err != nil {
 		return usageError{err}
+	}
+	if flags.file != "" {
+		if err := linkMountFile(cfg, args[0], flags.file); err != nil {
+			return err
+		}
 	}
 	target, err := image.ResolveMount(cfg, args[0])
 	if err != nil {
@@ -557,6 +567,38 @@ func ownedLibrarySource(imagesDir string) func(string) bool {
 	}
 }
 
+// linkMountFile registers one external image under a library name
+// before the mount resolves that name. It refuses the combination
+// with a file-path first argument, which --file replaces.
+func linkMountFile(cfg config.Config, name, src string) error {
+	cleaned := filepath.Clean(name)
+	if info, err := os.Stat(cleaned); err == nil && info.Mode().IsRegular() {
+		return usageError{errors.New(
+			"mount: --file cannot be combined with a file-path image argument")}
+	}
+	if err := image.LinkExternal(cfg.ImagesDir, name, src, Version); err != nil {
+		if isLinkUsage(err) {
+			return usageError{err}
+		}
+		return fmt.Errorf("mount: %w", err)
+	}
+	return nil
+}
+
+// isLinkUsage reports whether LinkExternal failed on argument shape
+// or OS format policy, which mount treats as a usage problem.
+func isLinkUsage(err error) bool {
+	if isResolveUsage(err) {
+		return true
+	}
+	if errors.Is(err, container.ErrNotDetected) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "not available on macOS") ||
+		strings.Contains(msg, "dmg is not available on this host")
+}
+
 // isResolveUsage reports whether a resolve failure rejects the
 // argument shape itself, which is a command-line usage problem. A
 // library state failure stays a runtime error.
@@ -616,13 +658,21 @@ func mountRequest(
 	runtimeDir string,
 ) (workspace.Request, error) {
 	original := memberPaths(target)
-	format, err := resolveRequestFormat(target, original)
+	bytesPaths, err := payloadBytesPaths(original)
+	if err != nil {
+		return workspace.Request{}, err
+	}
+	format, err := resolveRequestFormat(target, bytesPaths)
 	if err != nil {
 		return workspace.Request{}, err
 	}
 	mounted := make([]string, 0, len(target.Members))
+	keepIdentity := cfg.CacheEnabled
 	for i, m := range target.Members {
-		path := original[i]
+		path := bytesPaths[i]
+		if path != original[i] {
+			keepIdentity = true
+		}
 		if cfg.CacheEnabled {
 			cached, _, err := ensureCache(cfg.CacheDir, m.Path, m.SHA256)
 			if err != nil {
@@ -649,11 +699,29 @@ func mountRequest(
 		MergedDir:       dir,
 		Run:             mountRun,
 	}
-	if cfg.CacheEnabled {
+	if keepIdentity {
 		req.FullFSName = original[0]
 		req.LayerFSNames = original[1:]
 	}
 	return req, nil
+}
+
+// payloadBytesPaths resolves each library leaf (symlink or path-ref)
+// to the container file FUSE or hdiutil should open.
+func payloadBytesPaths(paths []string) ([]string, error) {
+	out := make([]string, len(paths))
+	for i, path := range paths {
+		if path == "" {
+			out[i] = path
+			continue
+		}
+		bytesPath, err := image.ResolvePayloadBytesPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("mount: %w", err)
+		}
+		out[i] = bytesPath
+	}
+	return out, nil
 }
 
 // guardMountFormat refuses unknown or mismatched container magic
@@ -673,7 +741,12 @@ func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) 
 		}
 		return mounted, nil
 	}
-	_, err := resolveRequestFormat(target, memberPaths(target))
+	paths := memberPaths(target)
+	bytesPaths, err := payloadBytesPaths(paths)
+	if err != nil {
+		return nil, err
+	}
+	_, err = resolveRequestFormat(target, bytesPaths)
 	return nil, err
 }
 
@@ -772,7 +845,12 @@ func matchLibraryFormat(target image.Target, paths []string) (string, error) {
 
 // matchOneFormat reports when path is not the container want names.
 func matchOneFormat(path string, want container.Format) error {
-	got, err := container.DetectFile(path)
+	bytesPath, err := image.ResolvePayloadBytesPath(path)
+	if err != nil {
+		return fmt.Errorf("mount: %s does not match meta format %s: %w",
+			path, want.Type(), err)
+	}
+	got, err := container.DetectFile(bytesPath)
 	if err != nil {
 		return fmt.Errorf("mount: %s does not match meta format %s: %w",
 			path, want.Type(), err)
