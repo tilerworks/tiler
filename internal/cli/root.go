@@ -57,11 +57,15 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newUmountCmd())
 	root.AddCommand(newSessionCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newBenchmarkCmd())
 	return root
 }
 
 func prepare(cmd *cobra.Command, flags *flagSet) error {
 	silenceRuntimeUsage(cmd)
+	if cmd.Name() == "benchmark" {
+		return rejectBenchmarkRootFlags(cmd)
+	}
 	patch, err := commandPatch(cmd, flags)
 	if err != nil {
 		return err

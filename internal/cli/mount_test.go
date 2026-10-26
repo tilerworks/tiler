@@ -655,9 +655,14 @@ func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d", len(f.mountReqs))
 	}
+	// A symlink leaf opens the resolved external bytes while the
+	// mount-table identity stays on the library leaf, the same shape
+	// a cache copy or path-ref leaf produces.
 	req := f.mountReqs[0]
-	if req.Full != payload || req.FullFSName != "" || req.Format != image.FormatSquashfs {
-		t.Errorf("library stack = %+v", req)
+	if req.Full != external || req.FullFSName != payload ||
+		req.Format != image.FormatSquashfs {
+		t.Errorf("library stack = %+v, want Full %s with fsname %s",
+			req, external, payload)
 	}
 	rec := loadSessionRecord(t, sessionsDir(home), name)
 	if len(rec.Actions) != 1 {
