@@ -15,7 +15,7 @@ func TestProbeCountsReadsWritesAndRemovesFile(t *testing.T) {
 	dir := t.TempDir()
 	const ops = 4
 	var stdout, stderr bytes.Buffer
-	stats, err := Probe(dir, ops, "yes", false, &stdout, &stderr)
+	stats, err := Probe(dir, ops, "yes", FormatTable, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestProbeCountsReadsWritesAndRemovesFile(t *testing.T) {
 func TestProbeLinesGoToStderrWhenTSV(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	stats, err := Probe(dir, 2, "", true, &stdout, &stderr)
+	stats, err := Probe(dir, 2, "", FormatTSV, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
@@ -101,8 +101,23 @@ func TestProbeBlockCount(t *testing.T) {
 
 func TestProbeRejectsMissingDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
-	if _, err := Probe(dir, 1, "no", false, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+	if _, err := Probe(dir, 1, "no", FormatTable, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("missing bench dir was accepted")
+	}
+}
+
+func TestProbeSilentWhenJSON(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	stats, err := Probe(dir, 2, "yes", FormatJSON, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if stats.Read.Ops != 2 || stats.Purge != "yes" {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("json probe wrote stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 

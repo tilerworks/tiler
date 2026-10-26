@@ -16,6 +16,15 @@ type actions struct {
 
 func (a actions) usesBench() bool { return a.Create || a.Probe }
 
+const (
+	// FormatTable is the default human-readable step table.
+	FormatTable = "table"
+	// FormatTSV is tab-separated step rows with no header.
+	FormatTSV = "tsv"
+	// FormatJSON is one JSON object after a successful run.
+	FormatJSON = "json"
+)
+
 func parseMode(mode string) (string, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -26,6 +35,19 @@ func parseMode(mode string) (string, error) {
 		return mode, nil
 	default:
 		return "", usagef("benchmark: --mode %q must be write, read, or both", mode)
+	}
+}
+
+func parseFormat(format string) (string, error) {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		return FormatTable, nil
+	}
+	switch format {
+	case FormatTable, FormatTSV, FormatJSON:
+		return format, nil
+	default:
+		return "", usagef("benchmark: --format %q must be table, tsv, or json", format)
 	}
 }
 

@@ -21,7 +21,7 @@ func TestPlanWritableBothCreatesReadsAndProbes(t *testing.T) {
 		Size:     "128M",
 		FileSize: "4M",
 		Keep:     true,
-		TSV:      true,
+		Format:   FormatTSV,
 	}, writableVol("linux"))
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -32,7 +32,7 @@ func TestPlanWritableBothCreatesReadsAndProbes(t *testing.T) {
 	if got.Mode != "both" || got.Size != 128<<20 || got.FileSize != 4<<20 {
 		t.Fatalf("mode/size/file-size = %s %d %d", got.Mode, got.Size, got.FileSize)
 	}
-	if !got.Keep || !got.TSV || !got.OwnRuntime || got.RuntimeDir != "" || got.BenchDir != "" {
+	if !got.Keep || got.Format != FormatTSV || !got.OwnRuntime || got.RuntimeDir != "" || got.BenchDir != "" {
 		t.Fatalf("placement = %+v", got)
 	}
 	if got.Type != "tar" || got.Compress != "" || got.ProbeOps != 2000 {
@@ -262,6 +262,11 @@ func TestPlanUsageRefusals(t *testing.T) {
 			name: "tar with compress",
 			edit: func(o *Options) { o.Compress = "gzip" },
 			want: "--compress",
+		},
+		{
+			name: "bad format",
+			edit: func(o *Options) { o.Format = "xml" },
+			want: "--format",
 		},
 		{
 			name: "bad dmg compress",

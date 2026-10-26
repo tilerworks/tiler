@@ -31,7 +31,7 @@ func newBenchmarkCmd() *cobra.Command {
 		probeOps   int
 		noProbe    bool
 		keep       bool
-		tsv        bool
+		format     string
 	)
 	cmd := &cobra.Command{
 		Use:   "benchmark <path>",
@@ -57,7 +57,7 @@ func newBenchmarkCmd() *cobra.Command {
 				ProbeOps:   probeOps,
 				NoProbe:    noProbe,
 				Keep:       keep,
-				TSV:        tsv,
+				Format:     format,
 			}
 			return runBenchmarkCmd(cmd, opts)
 		},
@@ -83,7 +83,8 @@ func newBenchmarkCmd() *cobra.Command {
 		"4 KiB random read and write operations")
 	cmd.Flags().BoolVar(&noProbe, "no-probe", false, "skip the filesystem probe")
 	cmd.Flags().BoolVar(&keep, "keep", false, "keep --bench-dir after the run")
-	cmd.Flags().BoolVar(&tsv, "tsv", false, "print step rows as TSV only")
+	cmd.Flags().StringVar(&format, "format", "table",
+		"output format: table, tsv, or json")
 	// Omit inherited root persistent flags from help; prepare rejects
 	// them, and Long already says they are not accepted.
 	cmd.SetUsageTemplate(benchmarkUsageTemplate)

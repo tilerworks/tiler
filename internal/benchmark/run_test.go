@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -99,7 +100,7 @@ func TestRunReadonlyCreatesNothingUnderPath(t *testing.T) {
 		Size:       1,
 		FileSize:   1,
 		OwnRuntime: true,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
 		Command: func(string, []string, ...string) ([]byte, error) {
@@ -153,6 +154,103 @@ func TestRunTarHasNoAttachRow(t *testing.T) {
 	}
 }
 
+func TestRunJSONIncludesStepsAndProbe(t *testing.T) {
+	vol := t.TempDir()
+	bench := filepath.Join(vol, "bench")
+	var out, errBuf bytes.Buffer
+	d := baseDecision(vol, bench)
+	d.Create = true
+	d.Read = true
+	d.Probe = true
+	d.ProbeOps = 2
+	d.Mode = "both"
+	d.Format = FormatJSON
+
+	err := Run(d, Env{
+		Command: tarPackCommand(t),
+		Purge:   func() string { return "yes" },
+		Stdout:  &out,
+		Stderr:  &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if errBuf.Len() != 0 {
+		t.Fatalf("json probe on stderr: %q", errBuf.String())
+	}
+	var got jsonReport
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	}
+	if !got.ProbeEnabled || got.Probe == nil || got.Probe.Ops != 2 {
+		t.Fatalf("probe = enabled=%v %+v", got.ProbeEnabled, got.Probe)
+	}
+	if got.Type != "tar" || got.Path != vol || got.Device.VolumeDevice == "" {
+		t.Fatalf("meta = %+v", got)
+	}
+	if len(got.Steps) < 3 {
+		t.Fatalf("steps = %+v", got.Steps)
+	}
+	names := make([]string, len(got.Steps))
+	for i, s := range got.Steps {
+		names[i] = s.Step
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "image_create") || !strings.Contains(joined, "read_image_1") {
+		t.Fatalf("steps = %v", names)
+	}
+	if strings.Contains(joined, "image_attach") {
+		t.Fatalf("tar json has attach: %v", names)
+	}
+}
+
+func TestRunJSONOmitsOutputOnFailure(t *testing.T) {
+	vol := t.TempDir()
+	bench := filepath.Join(vol, "bench")
+	runtimeDir := t.TempDir()
+	typ := attachTypeForGOOS()
+	image := filepath.Join(bench, imageNames[typ])
+	if err := os.MkdirAll(bench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(image, []byte("not-a-real-image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	d := Decision{
+		Read:       true,
+		Path:       vol,
+		BenchDir:   bench,
+		RuntimeDir: runtimeDir,
+		OwnRuntime: false,
+		Image:      image,
+		Type:       typ,
+		Mode:       "read",
+		Size:       1,
+		FileSize:   1,
+		Keep:       true,
+		Format:     FormatJSON,
+	}
+	err := Run(d, Env{
+		Command: func(string, []string, ...string) ([]byte, error) {
+			return nil, errors.New("attach failed")
+		},
+		Host: Host{
+			LookPath: func(string) (string, error) { return "/bin/true", nil },
+			Euid:     func() int { return 1000 },
+		},
+		Purge:  func() string { return "no" },
+		Stdout: &out,
+		Stderr: io.Discard,
+	})
+	if err == nil {
+		t.Fatal("Run succeeded, want attach failure")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("json written on failure: %q", out.String())
+	}
+}
+
 func TestRunFailedAttachStillCleansUp(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "bench")
@@ -179,7 +277,7 @@ func TestRunFailedAttachStillCleansUp(t *testing.T) {
 		Size:       1,
 		FileSize:   1,
 		Keep:       false,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
 		Command: func(string, []string, ...string) ([]byte, error) {
@@ -234,7 +332,7 @@ func TestRunFailedAttachCleansOwnedBench(t *testing.T) {
 		Mode:       "both",
 		Size:       64,
 		FileSize:   64,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
 		Command: func(name string, _ []string, args ...string) ([]byte, error) {
@@ -320,7 +418,7 @@ func TestRunColdReadSyncsAfterPurge(t *testing.T) {
 		Size:       1,
 		FileSize:   1,
 		OwnRuntime: true,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
 		Command: func(string, []string, ...string) ([]byte, error) {
@@ -371,7 +469,7 @@ func TestRunMountedReadSyncsBeforeAttach(t *testing.T) {
 		Size:       1,
 		FileSize:   1,
 		Keep:       true,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
 		Command: func(string, []string, ...string) ([]byte, error) {
@@ -416,7 +514,7 @@ func TestMountedReadWritesAttachLog(t *testing.T) {
 		mount: t.TempDir(),
 		image: image,
 	}
-	rep, err := NewReporter(true, &bytes.Buffer{})
+	rep, err := NewReporter(FormatTSV, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +679,7 @@ func baseDecision(vol, bench string) Decision {
 		Mode:       "both",
 		Size:       64,
 		FileSize:   32,
-		TSV:        true,
+		Format:     FormatTSV,
 	}
 }
 

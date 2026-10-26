@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func writeMetadata(d Decision, runtimeDir string, w io.Writer) error {
+func writeMetadata(d Decision, runtimeDir string, device deviceInfo, w io.Writer) error {
 	writable := "no"
 	if dirWritable(d.Path) {
 		writable = "yes"
@@ -39,32 +39,62 @@ func writeMetadata(d Decision, runtimeDir string, w io.Writer) error {
 			return fmt.Errorf("benchmark: write metadata: %w", err)
 		}
 	}
-	if err := writeDeviceInfo(d.Path, w); err != nil {
+	if err := writeDeviceInfo(device, w); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(w)
 	return err
 }
 
-func writeDeviceInfo(path string, w io.Writer) error {
+func collectDeviceInfo(path string) (deviceInfo, error) {
 	out, err := exec.Command("df", "-P", path).Output()
 	if err != nil {
-		return fmt.Errorf("benchmark: df %s: %w", path, err)
+		return deviceInfo{}, fmt.Errorf("benchmark: df %s: %w", path, err)
 	}
 	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	if len(lines) < 2 {
-		return fmt.Errorf("benchmark: df %s returned no rows", path)
+		return deviceInfo{}, fmt.Errorf("benchmark: df %s returned no rows", path)
 	}
 	fields := strings.Fields(lines[1])
 	if len(fields) < 1 {
-		return fmt.Errorf("benchmark: df %s row is empty", path)
+		return deviceInfo{}, fmt.Errorf("benchmark: df %s row is empty", path)
 	}
 	dev := fields[0]
-	if _, err := fmt.Fprintf(w, "volume_device: %s\n", dev); err != nil {
+	info := deviceInfo{
+		VolumeDevice: dev,
+		DF:           lines[1],
+	}
+	extras, err := diskutilExtras(dev)
+	if err != nil {
+		return deviceInfo{}, err
+	}
+	info.DeviceID = extras.DeviceID
+	info.VolumeName = extras.VolumeName
+	info.MountPoint = extras.MountPoint
+	return info, nil
+}
+
+func writeDeviceInfo(device deviceInfo, w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "volume_device: %s\n", device.VolumeDevice); err != nil {
 		return fmt.Errorf("benchmark: write metadata: %w", err)
 	}
-	if _, err := fmt.Fprintf(w, "df: %s\n", lines[1]); err != nil {
+	if _, err := fmt.Fprintf(w, "df: %s\n", device.DF); err != nil {
 		return fmt.Errorf("benchmark: write metadata: %w", err)
 	}
-	return writeDiskutilInfo(dev, w)
+	if device.DeviceID != "" {
+		if _, err := fmt.Fprintf(w, "device_id: %s\n", device.DeviceID); err != nil {
+			return fmt.Errorf("benchmark: write metadata: %w", err)
+		}
+	}
+	if device.VolumeName != "" {
+		if _, err := fmt.Fprintf(w, "volume_name: %s\n", device.VolumeName); err != nil {
+			return fmt.Errorf("benchmark: write metadata: %w", err)
+		}
+	}
+	if device.MountPoint != "" {
+		if _, err := fmt.Fprintf(w, "mount_point: %s\n", device.MountPoint); err != nil {
+			return fmt.Errorf("benchmark: write metadata: %w", err)
+		}
+	}
+	return nil
 }

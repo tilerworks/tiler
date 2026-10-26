@@ -33,7 +33,7 @@ type Options struct {
 	ProbeOps   int
 	NoProbe    bool
 	Keep       bool
-	TSV        bool
+	Format     string
 }
 
 // Decision is what a later run will do. Create packs an image,
@@ -63,7 +63,7 @@ type Decision struct {
 	ProbeOps   int
 	ReadOnly   bool
 	Keep       bool
-	TSV        bool
+	Format     string
 }
 
 // UsageError is a flag or directory policy problem. Callers map it
@@ -137,6 +137,10 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
+	format, err := parseFormat(opts.Format)
+	if err != nil {
+		return Decision{}, err
+	}
 	return Decision{
 		Create:     act.Create,
 		Read:       act.Read,
@@ -155,7 +159,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 		ProbeOps:   ops,
 		ReadOnly:   opts.ReadOnly,
 		Keep:       opts.Keep,
-		TSV:        opts.TSV,
+		Format:     format,
 	}, nil
 }
 

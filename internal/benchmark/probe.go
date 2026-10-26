@@ -47,17 +47,18 @@ type probeIO interface {
 // Probe writes .tiler-bench-probe under dir, fsyncs it, samples ops
 // random 4 KiB reads and then the same number of writes, and deletes
 // the probe file. Each write is fsynced. purge is printed as
-// probe_purge (empty means no). When tsv is set, the lines go to
-// stderr; otherwise they go to stdout. A nil writer uses the
-// corresponding standard stream.
-func Probe(dir string, ops int, purge string, tsv bool, stdout, stderr io.Writer) (ProbeStats, error) {
-	return probeDir(dir, ops, func() string { return purge }, tsv, stdout, stderr)
+// probe_purge (empty means no). Format controls where lines go:
+// table writes to stdout, tsv to stderr, and json writes nothing
+// (the caller embeds ProbeStats). A nil writer uses the matching
+// standard stream.
+func Probe(dir string, ops int, purge string, format string, stdout, stderr io.Writer) (ProbeStats, error) {
+	return probeDir(dir, ops, func() string { return purge }, format, stdout, stderr)
 }
 
 // probeDir fsyncs the probe file before purge runs, then measures.
 // purge owns the cache drop so the sample is not taken while that
 // file is still warm. A nil purge records probe_purge=no.
-func probeDir(dir string, ops int, purge func() string, tsv bool, stdout, stderr io.Writer) (ProbeStats, error) {
+func probeDir(dir string, ops int, purge func() string, format string, stdout, stderr io.Writer) (ProbeStats, error) {
 	path := filepath.Join(dir, probeFileName)
 	f, blocks, err := createProbe(path, ops)
 	if err != nil {
@@ -76,7 +77,10 @@ func probeDir(dir string, ops int, purge func() string, tsv bool, stdout, stderr
 		return ProbeStats{}, err
 	}
 	stats.Purge = purgeLabel(label)
-	if err := writeProbeLines(stats, tsv, stdout, stderr); err != nil {
+	if format == FormatJSON {
+		return stats, nil
+	}
+	if err := writeProbeLines(stats, format == FormatTSV, stdout, stderr); err != nil {
 		return ProbeStats{}, err
 	}
 	return stats, nil

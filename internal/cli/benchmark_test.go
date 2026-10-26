@@ -109,6 +109,37 @@ func TestBenchmarkValidatesWithoutProjectConfig(t *testing.T) {
 	}
 }
 
+func TestBenchmarkFormatJSONPassedToPlan(t *testing.T) {
+	_, work := withWorkspace(t)
+	got, ok := captureBenchmarkRun(t)
+	_, _, _, err := runCmd(t, "benchmark", work,
+		"--type", "tar", "--size", "1", "--file-size", "1",
+		"--no-probe", "--mode", "write", "--format", "json")
+	if err != nil {
+		t.Fatalf("benchmark --format json: %v", err)
+	}
+	if !ok() {
+		t.Fatal("runBenchmark was not called")
+	}
+	if got().Format != benchmark.FormatJSON {
+		t.Fatalf("format = %q, want json", got().Format)
+	}
+}
+
+func TestBenchmarkBadFormatExit2(t *testing.T) {
+	_, work := withWorkspace(t)
+	stubBenchmarkRun(t)
+	_, _, _, err := runCmd(t, "benchmark", work,
+		"--type", "tar", "--size", "1", "--file-size", "1",
+		"--no-probe", "--mode", "write", "--format", "xml")
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
+	}
+	if err == nil || !strings.Contains(err.Error(), "--format") {
+		t.Fatalf("error = %v, want --format mention", err)
+	}
+}
+
 func TestBenchmarkReservedCwdStillRuns(t *testing.T) {
 	home, _ := withWorkspace(t)
 	inside := filepath.Join(home, ".tiler", "images")

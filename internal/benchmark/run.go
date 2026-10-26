@@ -27,6 +27,7 @@ type Env struct {
 // The probe file is fsynced before purge. Purge failures become
 // purge=no and do not fail the run. A process sync follows each
 // purge. Cleanup always runs, including after a failed attach.
+// --format json writes one object only after a successful run.
 func Run(d Decision, env Env) error {
 	env = env.withDefaults()
 	state, err := prepareRun(d)
@@ -35,17 +36,35 @@ func Run(d Decision, env Env) error {
 	}
 	defer state.cleanup(logCommand(env.Command, state.logs, detachLogName))
 
-	if !d.TSV {
-		if err := writeMetadata(d, state.runtime, env.Stdout); err != nil {
+	var device deviceInfo
+	switch d.Format {
+	case FormatJSON:
+		device, err = collectDeviceInfo(d.Path)
+		if err != nil {
+			return err
+		}
+	case FormatTable, "":
+		device, err = collectDeviceInfo(d.Path)
+		if err != nil {
+			return err
+		}
+		if err := writeMetadata(d, state.runtime, device, env.Stdout); err != nil {
 			return err
 		}
 	}
+
+	var probe *ProbeStats
 	if d.Probe {
-		if err := runProbe(d, state.bench, env); err != nil {
-			return err
+		stats, probeErr := runProbe(d, state.bench, env)
+		if probeErr != nil {
+			return probeErr
+		}
+		if d.Format == FormatJSON {
+			probe = &stats
 		}
 	}
-	rep, err := NewReporter(d.TSV, env.Stdout)
+
+	rep, err := NewReporter(d.Format, env.Stdout)
 	if err != nil {
 		return err
 	}
@@ -55,7 +74,12 @@ func Run(d Decision, env Env) error {
 		}
 	}
 	if d.Read {
-		return runRead(d, state, env, rep)
+		if err := runRead(d, state, env, rep); err != nil {
+			return err
+		}
+	}
+	if d.Format == FormatJSON {
+		return writeJSONReport(d, state.runtime, device, probe, rep.Steps(), env.Stdout)
 	}
 	return nil
 }
@@ -90,18 +114,19 @@ func purgeCaches(env Env) string {
 	return purged
 }
 
-func runProbe(d Decision, bench string, env Env) error {
-	_, err := probeDir(bench, d.ProbeOps, func() string {
+func runProbe(d Decision, bench string, env Env) (ProbeStats, error) {
+	stats, err := probeDir(bench, d.ProbeOps, func() string {
 		return purgeCaches(env)
-	}, d.TSV, env.Stdout, env.Stderr)
+	}, d.Format, env.Stdout, env.Stderr)
 	if err != nil {
-		return err
+		return ProbeStats{}, err
 	}
-	if d.TSV {
-		return nil
+	if d.Format == FormatTable || d.Format == "" {
+		if _, err := fmt.Fprintln(env.Stdout); err != nil {
+			return ProbeStats{}, err
+		}
 	}
-	_, err = fmt.Fprintln(env.Stdout)
-	return err
+	return stats, nil
 }
 
 func runCreate(d Decision, state *runState, env Env, rep *Reporter) error {

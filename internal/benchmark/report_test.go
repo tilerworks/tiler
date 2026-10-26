@@ -2,13 +2,14 @@ package benchmark
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func TestReporterHumanTableColumnOrder(t *testing.T) {
 	var buf bytes.Buffer
-	r := mustReporter(t, false, &buf)
+	r := mustReporter(t, FormatTable, &buf)
 	mustRow(t, r, Step{
 		Name:      "image_create",
 		Seconds:   1,
@@ -34,7 +35,7 @@ func TestReporterHumanTableColumnOrder(t *testing.T) {
 
 func TestReporterTSVColumnOrder(t *testing.T) {
 	var buf bytes.Buffer
-	r := mustReporter(t, true, &buf)
+	r := mustReporter(t, FormatTSV, &buf)
 	mustRow(t, r, Step{
 		Name:      "image_create",
 		Seconds:   1,
@@ -59,9 +60,59 @@ func TestReporterTSVColumnOrder(t *testing.T) {
 	}
 }
 
-func mustReporter(t *testing.T, tsv bool, buf *bytes.Buffer) *Reporter {
+func TestReporterJSONBuffersUntilEncode(t *testing.T) {
+	var buf bytes.Buffer
+	r := mustReporter(t, FormatJSON, &buf)
+	mustRow(t, r, Step{
+		Name:      "image_create",
+		Seconds:   1,
+		Bytes:     i64(2048),
+		RateBytes: i64(chunkSize),
+		Notes:     "tar.gz",
+	})
+	mustRow(t, r, Step{Name: "image_attach", Seconds: 0.5, Notes: "readonly"})
+	mustRow(t, r, Step{Name: "read_image_1", Seconds: 0, Bytes: i64(chunkSize), Notes: "purge=yes"})
+	if buf.Len() != 0 {
+		t.Fatalf("json reporter wrote early: %q", buf.String())
+	}
+	err := writeJSONReport(Decision{
+		Type:     "tar",
+		Path:     "/vol",
+		Mode:     "both",
+		Size:     chunkSize,
+		FileSize: 4,
+		Format:   FormatJSON,
+	}, "/tmp/rt", deviceInfo{VolumeDevice: "/dev/disk1", DF: "/dev/disk1 1 2 3 4% /vol"}, nil, r.Steps(), &buf)
+	if err != nil {
+		t.Fatalf("writeJSONReport: %v", err)
+	}
+	var got jsonReport
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
+	}
+	if got.Type != "tar" || got.Path != "/vol" || got.Device.VolumeDevice != "/dev/disk1" {
+		t.Fatalf("meta = %+v", got)
+	}
+	if got.Probe != nil || got.ProbeEnabled {
+		t.Fatalf("probe = %+v enabled=%v", got.Probe, got.ProbeEnabled)
+	}
+	if len(got.Steps) != 3 {
+		t.Fatalf("steps = %+v", got.Steps)
+	}
+	if got.Steps[0].MiBS == nil || *got.Steps[0].MiBS != 1.0 {
+		t.Fatalf("create mib_s = %v", got.Steps[0].MiBS)
+	}
+	if got.Steps[1].Bytes != nil || got.Steps[1].MiBS != nil {
+		t.Fatalf("attach should be null: %+v", got.Steps[1])
+	}
+	if got.Steps[2].MiBS != nil {
+		t.Fatalf("zero-second read mib_s = %v, want null", got.Steps[2].MiBS)
+	}
+}
+
+func mustReporter(t *testing.T, format string, buf *bytes.Buffer) *Reporter {
 	t.Helper()
-	r, err := NewReporter(tsv, buf)
+	r, err := NewReporter(format, buf)
 	if err != nil {
 		t.Fatalf("NewReporter: %v", err)
 	}

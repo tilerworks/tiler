@@ -4,7 +4,6 @@ package benchmark
 
 import (
 	"fmt"
-	"io"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -12,16 +11,17 @@ import (
 
 func goosName() string { return runtime.GOOS }
 
-func writeDiskutilInfo(dev string, w io.Writer) error {
+func diskutilExtras(dev string) (deviceInfo, error) {
 	out, err := exec.Command("diskutil", "info", dev).Output()
 	if err != nil {
-		return fmt.Errorf("benchmark: diskutil info %s: %w", dev, err)
+		return deviceInfo{}, fmt.Errorf("benchmark: diskutil info %s: %w", dev, err)
 	}
 	wanted := map[string]string{
 		"Device Identifier": "device_id",
 		"Volume Name":       "volume_name",
 		"Mount Point":       "mount_point",
 	}
+	var info deviceInfo
 	for _, line := range strings.Split(string(out), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -31,9 +31,15 @@ func writeDiskutilInfo(dev string, w io.Writer) error {
 		if !match {
 			continue
 		}
-		if _, err := fmt.Fprintf(w, "%s: %s\n", label, strings.TrimSpace(value)); err != nil {
-			return fmt.Errorf("benchmark: write metadata: %w", err)
+		value = strings.TrimSpace(value)
+		switch label {
+		case "device_id":
+			info.DeviceID = value
+		case "volume_name":
+			info.VolumeName = value
+		case "mount_point":
+			info.MountPoint = value
 		}
 	}
-	return nil
+	return info, nil
 }

@@ -2,11 +2,8 @@
 
 package benchmark
 
-import (
-	"io"
-	"runtime"
-)
+import "runtime"
 
 func goosName() string { return runtime.GOOS }
 
-func writeDiskutilInfo(string, io.Writer) error { return nil }
+func diskutilExtras(string) (deviceInfo, error) { return deviceInfo{}, nil }
