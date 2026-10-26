@@ -51,6 +51,13 @@ type probeIO interface {
 // stderr; otherwise they go to stdout. A nil writer uses the
 // corresponding standard stream.
 func Probe(dir string, ops int, purge string, tsv bool, stdout, stderr io.Writer) (ProbeStats, error) {
+	return probeDir(dir, ops, func() string { return purge }, tsv, stdout, stderr)
+}
+
+// probeDir fsyncs the probe file before purge runs, then measures.
+// purge owns the cache drop so the sample is not taken while that
+// file is still warm. A nil purge records probe_purge=no.
+func probeDir(dir string, ops int, purge func() string, tsv bool, stdout, stderr io.Writer) (ProbeStats, error) {
 	path := filepath.Join(dir, probeFileName)
 	f, blocks, err := createProbe(path, ops)
 	if err != nil {
@@ -60,11 +67,15 @@ func Probe(dir string, ops int, purge string, tsv bool, stdout, stderr io.Writer
 		_ = f.Close()
 		_ = os.Remove(path)
 	}()
+	label := ""
+	if purge != nil {
+		label = purge()
+	}
 	stats, err := measureProbe(f, blocks, ops)
 	if err != nil {
 		return ProbeStats{}, err
 	}
-	stats.Purge = purgeLabel(purge)
+	stats.Purge = purgeLabel(label)
 	if err := writeProbeLines(stats, tsv, stdout, stderr); err != nil {
 		return ProbeStats{}, err
 	}
