@@ -52,12 +52,9 @@ func TestBuildFullSplitSizeSelectsBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Blocks) != 3 {
-		t.Fatalf("SplitSize blocks = %+v, want 3", loaded.Blocks)
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(rootOf(loaded).Blocks) != 3 {
+		t.Fatalf("SplitSize blocks = %+v, want 3", rootOf(loaded).Blocks)
 	}
 	blocksDir, err := repo.BlocksDirPath(res.ID)
 	if err != nil {
@@ -99,12 +96,9 @@ func TestBuildFullZeroSplitSizeSingleFile(t *testing.T) {
 	if _, err := os.Stat(repo.ImagePath()); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Blocks) != 0 {
-		t.Fatalf("single-file meta has blocks: %+v", loaded.Blocks)
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(rootOf(loaded).Blocks) != 0 {
+		t.Fatalf("single-file meta has blocks: %+v", rootOf(loaded).Blocks)
 	}
 }
 
@@ -143,14 +137,11 @@ func TestBuildBlocksPublishesSplitPayload(t *testing.T) {
 	if string(view) != "blk.000\nblk.001\nblk.002\n" {
 		t.Fatalf("concat view = %q", view)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(rootOf(loaded).Blocks) != len(parts) {
+		t.Fatalf("manifest = %+v", rootOf(loaded).Blocks)
 	}
-	if len(loaded.Blocks) != len(parts) {
-		t.Fatalf("manifest = %+v", loaded.Blocks)
-	}
-	for i, entry := range loaded.Blocks {
+	for i, entry := range rootOf(loaded).Blocks {
 		sum := sha256.Sum256(parts[i])
 		if entry.Name != fmt.Sprintf(blockNameFmt, i) ||
 			entry.Size != int64(len(parts[i])) ||
@@ -165,12 +156,13 @@ func TestBuildBlocksPublishesSplitPayload(t *testing.T) {
 			t.Fatalf("blocks[%d].mtime = %d", i, entry.MtimeUnix)
 		}
 	}
-	if loaded.Size != int64(len(body)) || loaded.SHA256 != res.SHA256 ||
-		loaded.ID != res.ID {
+	root := rootOf(loaded)
+	if root.Size != int64(len(body)) || root.SHA256 != res.SHA256 ||
+		root.ID != res.ID {
 		t.Fatalf("meta payload = %+v", loaded)
 	}
-	if loaded.Kind != KindFull || len(loaded.Chain) != 0 ||
-		!loaded.CreatedAt.Equal(fixedNow()) || loaded.Builder != "test" {
+	if root.Kind != KindFull || len(loaded.Images) != 1 ||
+		!root.CreatedAt.Equal(fixedNow()) || root.Builder != "test" {
 		t.Fatalf("meta provenance = %+v", loaded)
 	}
 	// The published document is a single-node v2 manifest whose root
@@ -228,22 +220,19 @@ func TestBuildBlocksBoundaryShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			loaded, err := Load(repo.MetaPath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(loaded.Blocks) != len(tc.wantSizes) {
-				t.Fatalf("manifest = %+v", loaded.Blocks)
+			loaded := mustLoadManifest(t, repo.MetaPath())
+			if len(rootOf(loaded).Blocks) != len(tc.wantSizes) {
+				t.Fatalf("manifest = %+v", rootOf(loaded).Blocks)
 			}
 			for i, want := range tc.wantSizes {
-				if loaded.Blocks[i].Size != want {
+				if rootOf(loaded).Blocks[i].Size != want {
 					t.Fatalf("blocks[%d].size = %d, want %d",
-						i, loaded.Blocks[i].Size, want)
+						i, rootOf(loaded).Blocks[i].Size, want)
 				}
 			}
 			whole := sha256.Sum256(body)
-			if res.ID != ID(whole) || loaded.Size != int64(tc.size) {
-				t.Fatalf("whole = %s size = %d", res.ID, loaded.Size)
+			if res.ID != ID(whole) || rootOf(loaded).Size != int64(tc.size) {
+				t.Fatalf("whole = %s size = %d", res.ID, rootOf(loaded).Size)
 			}
 			assertNoTemps(t, repo.Dir)
 			assertNoStaging(t, cfg.CacheDir)
@@ -492,12 +481,9 @@ func TestBuildBlocksPacksRequestedFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadManifest(t, repo.MetaPath())
 	if loaded.Format.Type != FormatErofs || loaded.Format.Compression != "gzip" ||
-		loaded.ID != res.ID || len(loaded.Blocks) == 0 {
+		rootID(loaded) != res.ID || len(rootOf(loaded).Blocks) == 0 {
 		t.Fatalf("meta = %+v", loaded)
 	}
 }

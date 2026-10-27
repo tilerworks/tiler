@@ -11,47 +11,48 @@ import (
 func TestResolvePinnedActiveHit(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 1)
+	manifest := seedChain(t, repo, 1)
+	root := rootOf(manifest)
 
-	got, err := ResolvePinned(cfg, "alice/app", meta.ID)
+	got, err := ResolvePinned(cfg, "alice/app", root.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Library || got.Name != "alice/app" || got.ID != meta.ID {
+	if !got.Library || got.Name != "alice/app" || got.ID != root.ID {
 		t.Fatalf("target = %+v", got)
 	}
-	layer, err := repo.IncrPath(meta.Chain[0].ID)
+	layer, err := repo.IncrPath(manifest.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.Chain[0].ID,
+		ID:      root.ID,
+		Tip:     manifest.Images[1].ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
-				Size:      meta.Size,
-				MtimeUnix: meta.MtimeUnix,
-				SHA256:    meta.SHA256,
+				Size:      root.Size,
+				MtimeUnix: root.MtimeUnix,
+				SHA256:    root.SHA256,
 			},
 			{
 				Path:      layer,
-				Size:      meta.Chain[0].Size,
-				MtimeUnix: meta.Chain[0].MtimeUnix,
-				SHA256:    meta.Chain[0].SHA256,
+				Size:      manifest.Images[1].Size,
+				MtimeUnix: manifest.Images[1].MtimeUnix,
+				SHA256:    manifest.Images[1].SHA256,
 			},
 		},
 	})
-	prefix := meta.ID[:12]
+	prefix := root.ID[:12]
 	byPrefix, err := ResolvePinned(cfg, "alice/app", prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if byPrefix.ID != meta.ID {
-		t.Fatalf("prefix resolve id = %s, want %s", byPrefix.ID, meta.ID)
+	if byPrefix.ID != root.ID {
+		t.Fatalf("prefix resolve id = %s, want %s", byPrefix.ID, root.ID)
 	}
 }
 
@@ -59,17 +60,17 @@ func TestResolvePinnedHoldHitThroughIndex(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
 	heldBody := []byte("held-full")
-	held := metaFor(heldBody)
-	held.Name = "alice/app"
-	hold := seedPinnedHold(t, repo, held, heldBody)
+	heldManifest := manifestFor(heldBody)
+	held := rootOf(heldManifest)
+	hold := seedPinnedHold(t, repo, heldManifest, heldBody)
 	active := seedChain(t, repo, 0)
-	if active.ID == held.ID {
+	if rootID(active) == held.ID {
 		t.Fatal("active and hold ids collided")
 	}
 	// Length is neither 16 nor 64, so onDiskID is false and HoldPath
 	// fallback cannot apply. An index miss fails the test.
 	prefix := held.ID[:12]
-	if onDiskID(prefix) || strings.HasPrefix(active.ID, prefix) {
+	if onDiskID(prefix) || strings.HasPrefix(rootID(active), prefix) {
 		t.Fatalf("prefix %s is not a unique non-directory id reference", prefix)
 	}
 
@@ -93,8 +94,8 @@ func TestResolvePinnedHoldHitThroughIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.ID != active.ID || mount.Members[0].Path != repo.ImagePath() {
-		t.Fatalf("ResolveMount = %+v, want active %s", mount, active.ID)
+	if mount.ID != rootID(active) || mount.Members[0].Path != repo.ImagePath() {
+		t.Fatalf("ResolveMount = %+v, want active %s", mount, rootID(active))
 	}
 }
 
@@ -115,28 +116,28 @@ func TestResolvePinnedBlocksHoldPaths(t *testing.T) {
 	repo := mustRepo(t, cfg)
 	held := blocksFixture([][]byte{[]byte("held-a"), []byte("held-bb")})
 	layerBodies := [][]byte{[]byte("held-incr")}
-	entry := chainBlocksEntry(held.meta.ID, layerBodies)
-	held.meta.Chain = []ChainEntry{entry}
+	node := chainBlocksNode(held.id(), layerBodies)
+	held.manifest = withNode(held.manifest, node)
 	hold := seedPinnedBlocksHold(t, repo, held, layerBodies)
 
 	active := blocksFixture([][]byte{[]byte("new-active")})
-	if active.meta.ID == held.meta.ID {
+	if active.id() == held.id() {
 		t.Fatal("active and hold ids collided")
 	}
 	seedSplitActive(t, repo, active)
 
-	got, err := ResolvePinned(cfg, "alice/app", held.meta.ID)
+	got, err := ResolvePinned(cfg, "alice/app", held.id())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Form != PayloadBlocks || got.ID != held.meta.ID || got.Tip != entry.ID {
+	if got.Form != PayloadBlocks || got.ID != held.id() || got.Tip != node.ID {
 		t.Fatalf("target = %+v", got)
 	}
-	wantBlocksDir := filepath.Join(hold, dirBlocks, held.meta.ID)
+	wantBlocksDir := filepath.Join(hold, dirBlocks, held.id())
 	if got.BlocksDir != wantBlocksDir {
 		t.Fatalf("BlocksDir = %s, want %s", got.BlocksDir, wantBlocksDir)
 	}
-	holdMarker := filepath.Join(dirHold, held.meta.ID, dirBlocks)
+	holdMarker := filepath.Join(dirHold, held.id(), dirBlocks)
 	for _, member := range got.Members {
 		for _, block := range member.Blocks {
 			if !strings.Contains(block.Path, holdMarker) {
@@ -144,14 +145,14 @@ func TestResolvePinnedBlocksHoldPaths(t *testing.T) {
 			}
 		}
 	}
-	wantFull, err := blockPathAt(hold, held.meta.ID, "blk.000")
+	wantFull, err := blockPathAt(hold, held.id(), "blk.000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Members[0].Blocks[0].Path != wantFull {
 		t.Fatalf("full block = %s, want %s", got.Members[0].Blocks[0].Path, wantFull)
 	}
-	wantLayer, err := blockPathAt(hold, entry.ID, "blk.000")
+	wantLayer, err := blockPathAt(hold, node.ID, "blk.000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +164,10 @@ func TestResolvePinnedBlocksHoldPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.ID != active.meta.ID {
+	if mount.ID != active.id() {
 		t.Fatalf("ResolveMount id = %s, want active", mount.ID)
 	}
-	activeBlock, err := repo.BlockPath(active.meta.ID, "blk.000")
+	activeBlock, err := repo.BlockPath(active.id(), "blk.000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,21 +176,21 @@ func TestResolvePinnedBlocksHoldPaths(t *testing.T) {
 	}
 }
 
-// seedPinnedHold writes a single-file hold with meta and payload.
-func seedPinnedHold(t *testing.T, repo Repo, meta Meta, body []byte) string {
+// seedPinnedHold writes a single-file hold with manifest and payload.
+func seedPinnedHold(t *testing.T, repo Repo, manifest Manifest, body []byte) string {
 	t.Helper()
-	hold, err := repo.HoldPath(meta.ID)
+	hold, err := repo.HoldPath(rootID(manifest))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(hold, dirIncr), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(hold, activeImageName(meta.Format.Type))
+	path := filepath.Join(hold, activeImageName(manifest.Format.Type))
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(hold, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(hold, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
 	return hold
@@ -201,13 +202,13 @@ func seedPinnedHold(t *testing.T, repo Repo, meta Meta, body []byte) string {
 // fixture fails the test at once.
 func branchManifest(t *testing.T, body []byte, head string, nodes ...ImageMeta) Manifest {
 	t.Helper()
-	meta := metaFor(body)
+	base := manifestFor(body)
 	manifest := Manifest{
 		Version: ManifestVersion,
-		Name:    meta.Name,
-		Format:  meta.Format,
+		Name:    base.Name,
+		Format:  base.Format,
 		Head:    head,
-		Images:  append([]ImageMeta{rootNodeOf(meta)}, nodes...),
+		Images:  append([]ImageMeta{rootOf(base)}, nodes...),
 	}
 	if _, err := EncodeManifest(manifest); err != nil {
 		t.Fatal(err)
@@ -230,30 +231,30 @@ func TestResolveStackTipActiveBranchTip(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
 	body := []byte("tip-full")
-	meta := metaFor(body)
-	layerA := layerNodeOf(meta.ID, "aaaaaaaaaaaaaaaa")
+	root := rootOf(manifestFor(body))
+	layerA := layerNodeOf(root.ID, "aaaaaaaaaaaaaaaa")
 	layerB := layerNodeOf(layerA.ID, "bbbbbbbbbbbbbbbb")
 	layerC := layerNodeOf(layerA.ID, "cccccccccccccccc")
 	// The head moved to C, so B is a branch tip off the head path.
 	manifest := branchManifest(t, body, layerC.ID, layerA, layerB, layerC)
 	seedActiveManifest(t, repo, manifest)
 
-	got, err := ResolveStackTip(cfg, "alice/app", meta.ID, layerB.ID)
+	got, err := ResolveStackTip(cfg, "alice/app", root.ID, layerB.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
+		ID:      root.ID,
 		Tip:     layerB.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
-				Size:      meta.Size,
-				MtimeUnix: meta.MtimeUnix,
-				SHA256:    meta.SHA256,
+				Size:      root.Size,
+				MtimeUnix: root.MtimeUnix,
+				SHA256:    root.SHA256,
 			},
 			layerMember(repo.Dir, layerA),
 			layerMember(repo.Dir, layerB),
@@ -261,11 +262,11 @@ func TestResolveStackTipActiveBranchTip(t *testing.T) {
 	})
 
 	// The full id is its own tip: the stack holds the root alone.
-	fullOnly, err := ResolveStackTip(cfg, "alice/app", meta.ID, meta.ID)
+	fullOnly, err := ResolveStackTip(cfg, "alice/app", root.ID, root.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fullOnly.ID != meta.ID || fullOnly.Tip != meta.ID || len(fullOnly.Members) != 1 {
+	if fullOnly.ID != root.ID || fullOnly.Tip != root.ID || len(fullOnly.Members) != 1 {
 		t.Fatalf("full-only target = %+v", fullOnly)
 	}
 
@@ -274,8 +275,8 @@ func TestResolveStackTipActiveBranchTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.ID != meta.ID || mount.Tip != layerC.ID || len(mount.Members) != 3 {
-		t.Fatalf("ResolveMount = %+v, want the head stack rooted at %s", mount, meta.ID)
+	if mount.ID != root.ID || mount.Tip != layerC.ID || len(mount.Members) != 3 {
+		t.Fatalf("ResolveMount = %+v, want the head stack rooted at %s", mount, root.ID)
 	}
 }
 
@@ -286,35 +287,34 @@ func TestResolveStackTipBlocksBranchTip(t *testing.T) {
 	bodiesA := [][]byte{[]byte("tip-incr-a")}
 	bodiesB := [][]byte{[]byte("tip-incr-b")}
 	bodiesC := [][]byte{[]byte("tip-incr-c")}
-	entryA := chainBlocksEntry(fx.meta.ID, bodiesA)
-	entryB := chainBlocksEntry(entryA.ID, bodiesB)
-	entryC := chainBlocksEntry(entryA.ID, bodiesC)
+	nodeA := chainBlocksNode(fx.id(), bodiesA)
+	nodeB := chainBlocksNode(nodeA.ID, bodiesB)
+	nodeC := chainBlocksNode(nodeA.ID, bodiesC)
 	// The head moved to C, so B is a branch tip off the head path.
-	manifest := blocksBranchManifest(t, fx.meta, entryC.ID, entryA, entryB, entryC)
+	manifest := blocksBranchManifest(t, fx, nodeC.ID, nodeA, nodeB, nodeC)
 	seedActiveBlocksManifest(t, repo, manifest)
-	root := rootNodeOf(fx.meta)
-	nodeA, nodeB, nodeC := chainNodeOf(entryA), chainNodeOf(entryB), chainNodeOf(entryC)
+	root := fx.root()
 	seedNodeBlocks(t, repo, root, fx.bodies)
 	seedNodeBlocks(t, repo, nodeA, bodiesA)
 	seedNodeBlocks(t, repo, nodeB, bodiesB)
 	seedNodeBlocks(t, repo, nodeC, bodiesC)
 
-	got, err := ResolveStackTip(cfg, "alice/app", fx.meta.ID, entryB.ID)
+	got, err := ResolveStackTip(cfg, "alice/app", fx.id(), nodeB.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Form != PayloadBlocks {
 		t.Fatalf("form = %q, want the blocks payload", got.Form)
 	}
-	wantBlocksDir := filepath.Join(repo.Dir, dirBlocks, fx.meta.ID)
+	wantBlocksDir := filepath.Join(repo.Dir, dirBlocks, fx.id())
 	if got.BlocksDir != wantBlocksDir ||
 		got.ConcatView != filepath.Join(wantBlocksDir, fileConcatView) {
 		t.Fatalf("blocks location = (%q, %q), want dir %q",
 			got.BlocksDir, got.ConcatView, wantBlocksDir)
 	}
-	if got.Size != fx.meta.Size || got.SHA256 != fx.meta.SHA256 {
+	if got.Size != root.Size || got.SHA256 != root.SHA256 {
 		t.Fatalf("whole facts = (%d, %q), want (%d, %q)",
-			got.Size, got.SHA256, fx.meta.Size, fx.meta.SHA256)
+			got.Size, got.SHA256, root.Size, root.SHA256)
 	}
 	rootBlocks := nodeBlocks(t, repo.Dir, root)
 	if !slices.Equal(got.Blocks, rootBlocks) {
@@ -323,8 +323,8 @@ func TestResolveStackTipBlocksBranchTip(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      fx.meta.ID,
-		Tip:     entryB.ID,
+		ID:      fx.id(),
+		Tip:     nodeB.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			blocksMemberOf(root, rootBlocks),
@@ -338,8 +338,8 @@ func TestResolveStackTipBlocksBranchTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.ID != fx.meta.ID || mount.Tip != entryC.ID || len(mount.Members) != 3 {
-		t.Fatalf("ResolveMount = %+v, want the head stack tipped at %s", mount, entryC.ID)
+	if mount.ID != fx.id() || mount.Tip != nodeC.ID || len(mount.Members) != 3 {
+		t.Fatalf("ResolveMount = %+v, want the head stack tipped at %s", mount, nodeC.ID)
 	}
 }
 
@@ -348,8 +348,8 @@ func TestResolveStackTipHoldFallback(t *testing.T) {
 	repo := mustRepo(t, cfg)
 	active := seedChain(t, repo, 0)
 	body := []byte("held-full")
-	held := metaFor(body)
-	if held.ID == active.ID {
+	held := rootOf(manifestFor(body))
+	if held.ID == rootID(active) {
 		t.Fatal("active and hold ids collided")
 	}
 	layerA := layerNodeOf(held.ID, "aaaaaaaaaaaaaaaa")
@@ -385,8 +385,9 @@ func TestResolveStackTipHoldFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.ID != active.ID || mount.Tip != active.ID {
-		t.Fatalf("ResolveMount = (%q, %q), want active %s", mount.ID, mount.Tip, active.ID)
+	if mount.ID != rootID(active) || mount.Tip != rootID(active) {
+		t.Fatalf("ResolveMount = (%q, %q), want active %s",
+			mount.ID, mount.Tip, rootID(active))
 	}
 }
 
@@ -394,29 +395,29 @@ func TestResolveStackTipEmptyTipKeepsPinnedSemantics(t *testing.T) {
 	t.Run("active leaf", func(t *testing.T) {
 		cfg := buildConfig(t)
 		repo := mustRepo(t, cfg)
-		meta := seedChain(t, repo, 2)
-		got, err := ResolveStackTip(cfg, "alice/app", meta.ID, "")
+		manifest := seedChain(t, repo, 2)
+		got, err := ResolveStackTip(cfg, "alice/app", rootID(manifest), "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err := ResolvePinned(cfg, "alice/app", meta.ID)
+		want, err := ResolvePinned(cfg, "alice/app", rootID(manifest))
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertTarget(t, got, want)
-		if got.Tip != meta.Chain[1].ID {
-			t.Fatalf("tip = %q, want the chain tail %q", got.Tip, meta.Chain[1].ID)
+		if got.Tip != manifest.Head {
+			t.Fatalf("tip = %q, want the chain tail %q", got.Tip, manifest.Head)
 		}
 	})
 	t.Run("hold leaf", func(t *testing.T) {
 		cfg := buildConfig(t)
 		repo := mustRepo(t, cfg)
 		heldBody := []byte("held-full")
-		held := metaFor(heldBody)
-		held.Name = "alice/app"
-		seedPinnedHold(t, repo, held, heldBody)
+		heldManifest := manifestFor(heldBody)
+		held := rootOf(heldManifest)
+		seedPinnedHold(t, repo, heldManifest, heldBody)
 		active := seedChain(t, repo, 0)
-		if active.ID == held.ID {
+		if rootID(active) == held.ID {
 			t.Fatal("active and hold ids collided")
 		}
 		got, err := ResolveStackTip(cfg, "alice/app", held.ID, "")
@@ -438,15 +439,15 @@ func TestResolveStackTipUnknownTipFails(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
 	body := []byte("tip-full")
-	meta := metaFor(body)
-	layerA := layerNodeOf(meta.ID, "aaaaaaaaaaaaaaaa")
+	root := rootOf(manifestFor(body))
+	layerA := layerNodeOf(root.ID, "aaaaaaaaaaaaaaaa")
 	manifest := branchManifest(t, body, layerA.ID, layerA)
 	seedActiveManifest(t, repo, manifest)
 
 	// The full id matches the active root, but no leaf carries the
 	// requested tip.
 	unknown := strings.Repeat("e", sumHexLen)
-	_, err := ResolveStackTip(cfg, "alice/app", meta.ID, unknown)
+	_, err := ResolveStackTip(cfg, "alice/app", root.ID, unknown)
 	if err == nil {
 		t.Fatal("want refusal, got nil error")
 	}
@@ -468,64 +469,45 @@ func TestResolveStackTipUnknownTipFails(t *testing.T) {
 // under _hold/<id>/_blocks/<layer-id>/.
 func seedPinnedBlocksHold(t *testing.T, repo Repo, fx splitFixture, layerBodies [][]byte) string {
 	t.Helper()
-	hold, err := repo.HoldPath(fx.meta.ID)
+	hold, err := repo.HoldPath(fx.id())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(hold, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writePayloadDir(t, filepath.Join(hold, dirBlocks, fx.meta.ID), fx)
-	for i, entry := range fx.meta.Chain {
+	writePayloadDir(t, filepath.Join(hold, dirBlocks, fx.id()), fx)
+	for i, node := range fx.manifest.Images[1:] {
 		bodies := layerBodies
 		if i > 0 {
 			t.Fatal("seedPinnedBlocksHold supports one chain layer")
 		}
-		writePayloadDir(t, filepath.Join(hold, dirBlocks, entry.ID), splitFixture{
-			meta: Meta{Blocks: entry.Blocks}, bodies: bodies,
-		})
+		writePayloadDir(t, filepath.Join(hold, dirBlocks, node.ID),
+			blocksOnlyFixture(node.Blocks, bodies))
 	}
-	if err := Store(filepath.Join(hold, fileMeta), fx.meta); err != nil {
+	if err := StoreManifest(filepath.Join(hold, fileMeta), fx.manifest); err != nil {
 		t.Fatal(err)
 	}
 	return hold
 }
 
 // blocksBranchManifest builds a v2 blocks manifest: the full root of
-// meta plus the given chain entries as incremental nodes, headed by
-// head. The nodes may branch; EncodeManifest validates the result, so
-// a broken fixture fails the test at once.
-func blocksBranchManifest(t *testing.T, meta Meta, head string, entries ...ChainEntry) Manifest {
+// the fixture plus the given incremental nodes, headed by head. The
+// nodes may branch; EncodeManifest validates the result, so a broken
+// fixture fails the test at once.
+func blocksBranchManifest(t *testing.T, fx splitFixture, head string, nodes ...ImageMeta) Manifest {
 	t.Helper()
 	manifest := Manifest{
 		Version: ManifestVersion,
-		Name:    meta.Name,
-		Format:  meta.Format,
+		Name:    fx.manifest.Name,
+		Format:  fx.manifest.Format,
 		Head:    head,
-		Images:  []ImageMeta{rootNodeOf(meta)},
-	}
-	for _, entry := range entries {
-		manifest.Images = append(manifest.Images, chainNodeOf(entry))
+		Images:  append([]ImageMeta{fx.root()}, nodes...),
 	}
 	if _, err := EncodeManifest(manifest); err != nil {
 		t.Fatal(err)
 	}
 	return manifest
-}
-
-// chainNodeOf converts one v1 chain entry into the incremental
-// manifest node a v2 document carries.
-func chainNodeOf(entry ChainEntry) ImageMeta {
-	return ImageMeta{
-		ID:        entry.ID,
-		Kind:      KindIncremental,
-		Parent:    entry.Parent,
-		Size:      entry.Size,
-		SHA256:    entry.SHA256,
-		MtimeUnix: entry.MtimeUnix,
-		CreatedAt: entry.CreatedAt,
-		Blocks:    entry.Blocks,
-	}
 }
 
 // seedActiveBlocksManifest writes a v2 blocks manifest into the
@@ -552,9 +534,8 @@ func seedActiveBlocksManifest(t *testing.T, repo Repo, manifest Manifest) {
 // block digests and mtimes.
 func seedNodeBlocks(t *testing.T, repo Repo, node ImageMeta, bodies [][]byte) {
 	t.Helper()
-	writePayloadDir(t, mustBlocksDir(t, repo, node.ID), splitFixture{
-		meta: Meta{Blocks: node.Blocks}, bodies: bodies,
-	})
+	writePayloadDir(t, mustBlocksDir(t, repo, node.ID),
+		blocksOnlyFixture(node.Blocks, bodies))
 }
 
 // nodeBlocks resolves the manifest blocks of one node into the

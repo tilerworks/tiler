@@ -10,53 +10,53 @@ func TestValidateSingleChainRejectsBlocks(t *testing.T) {
 	meta := validMeta()
 	entry := validEntry(meta.ID, "fedcba9876543210")
 	entry.Blocks = blocksSeq(1)
-	meta.Chain = []ChainEntry{entry}
+	meta.Chain = []chainEntryV1{entry}
 	assertIssues(t, meta, []string{"chain[0].blocks: must be empty for single payloads"})
 }
 
 func TestValidateBlocksManifestRules(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(*Meta)
+		mutate func(*metaV1)
 		wants  []string
 	}{
 		{
 			name:   "valid blocks manifest",
-			mutate: func(*Meta) {},
+			mutate: func(*metaV1) {},
 		},
 		{
 			name:   "incremental kind is refused",
-			mutate: func(m *Meta) { m.Kind = KindIncremental },
+			mutate: func(m *metaV1) { m.Kind = KindIncremental },
 			wants:  []string{"kind: must be full for split payloads"},
 		},
 		{
 			name: "chain with blocks is valid",
-			mutate: func(m *Meta) {
+			mutate: func(m *metaV1) {
 				entry := validEntry(m.ID, "fedcba9876543210")
 				entry.Blocks = blocksSeq(1)
-				m.Chain = []ChainEntry{entry}
+				m.Chain = []chainEntryV1{entry}
 			},
 		},
 		{
 			name: "chain entry missing blocks",
-			mutate: func(m *Meta) {
-				m.Chain = []ChainEntry{validEntry(m.ID, "fedcba9876543210")}
+			mutate: func(m *metaV1) {
+				m.Chain = []chainEntryV1{validEntry(m.ID, "fedcba9876543210")}
 			},
 			wants: []string{"chain[0].blocks: must be set for blocks payloads"},
 		},
 		{
 			name:   "foreign name format",
-			mutate: func(m *Meta) { m.Blocks[0].Name = "part.000" },
+			mutate: func(m *metaV1) { m.Blocks[0].Name = "part.000" },
 			wants:  []string{"blocks[0].name: must be blk.000"},
 		},
 		{
 			name:   "duplicate name breaks the sequence",
-			mutate: func(m *Meta) { m.Blocks[0].Name = "blk.001" },
+			mutate: func(m *metaV1) { m.Blocks[0].Name = "blk.001" },
 			wants:  []string{"blocks[0].name: must be blk.000"},
 		},
 		{
 			name: "out of order names",
-			mutate: func(m *Meta) {
+			mutate: func(m *metaV1) {
 				m.Blocks[0].Name, m.Blocks[1].Name = "blk.001", "blk.000"
 			},
 			wants: []string{
@@ -66,26 +66,26 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 		},
 		{
 			name:   "zero block size",
-			mutate: func(m *Meta) { m.Blocks[1].Size = 0 },
+			mutate: func(m *metaV1) { m.Blocks[1].Size = 0 },
 			wants:  []string{"blocks[1].size: must be greater than 0"},
 		},
 		{
 			name:   "uppercase block digest",
-			mutate: func(m *Meta) { m.Blocks[0].SHA256 = strings.Repeat("AB", 32) },
+			mutate: func(m *metaV1) { m.Blocks[0].SHA256 = strings.Repeat("AB", 32) },
 			wants:  []string{"blocks[0].sha256: must be 64 lowercase hex digits"},
 		},
 		{
 			name:   "short block digest",
-			mutate: func(m *Meta) { m.Blocks[0].SHA256 = "abcd" },
+			mutate: func(m *metaV1) { m.Blocks[0].SHA256 = "abcd" },
 			wants:  []string{"blocks[0].sha256: must be 64 lowercase hex digits"},
 		},
 		{
 			name:   "manifest at capacity is valid",
-			mutate: func(m *Meta) { m.Blocks = blocksSeq(maxBlocks) },
+			mutate: func(m *metaV1) { m.Blocks = blocksSeq(maxBlocks) },
 		},
 		{
 			name:   "manifest over capacity",
-			mutate: func(m *Meta) { m.Blocks = blocksSeq(maxBlocks + 1) },
+			mutate: func(m *metaV1) { m.Blocks = blocksSeq(maxBlocks + 1) },
 			wants:  []string{"blocks: must hold at most 999 entries"},
 		},
 	}
@@ -99,15 +99,22 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 }
 
 func TestPayloadKindDispatch(t *testing.T) {
+	single := validManifest()
+	single.Images = single.Images[:1]
+	single.Head = single.Images[0].ID
+	blocks := validManifest()
+	for i := range blocks.Images {
+		blocks.Images[i].Blocks = blocksSeq(2)
+	}
 	cases := []struct {
-		meta Meta
-		want string
+		manifest Manifest
+		want     string
 	}{
-		{validMeta(), PayloadSingle},
-		{validBlocksMeta(), PayloadBlocks},
+		{single, PayloadSingle},
+		{blocks, PayloadBlocks},
 	}
 	for _, tc := range cases {
-		if got := PayloadKind(tc.meta); got != tc.want {
+		if got := tc.manifest.PayloadKind(); got != tc.want {
 			t.Errorf("PayloadKind = %s, want %s", got, tc.want)
 		}
 	}
@@ -133,9 +140,9 @@ func TestTempPayloadDirNamesFollowTempPattern(t *testing.T) {
 
 // assertIssues validates meta and requires every wanted message. An
 // empty wants slice requires a valid meta.
-func assertIssues(t *testing.T, meta Meta, wants []string) {
+func assertIssues(t *testing.T, meta metaV1, wants []string) {
 	t.Helper()
-	err := meta.Validate()
+	err := meta.validate()
 	if len(wants) == 0 {
 		if err != nil {
 			t.Fatalf("expected a valid meta: %v", err)
@@ -152,7 +159,7 @@ func assertIssues(t *testing.T, meta Meta, wants []string) {
 	}
 }
 
-func validBlocksMeta() Meta {
+func validBlocksMeta() metaV1 {
 	meta := validMeta()
 	meta.Blocks = blocksSeq(2)
 	return meta

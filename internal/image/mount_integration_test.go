@@ -131,13 +131,10 @@ func TestIncrementalWorkspaceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 2 || loaded.Chain[0].ID != inc1.ID ||
-		loaded.Chain[1].ID != inc2.ID || loaded.Chain[1].Parent != inc1.ID {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 3 || loaded.Images[1].ID != inc1.ID ||
+		loaded.Images[2].ID != inc2.ID || loaded.Images[2].Parent != inc1.ID {
+		t.Fatalf("chain = %+v", loaded.Images)
 	}
 	if err := w2.Unmount(); err != nil {
 		t.Fatal(err)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +20,8 @@ const (
 	goldenHoldID    = "3333333333333333333333333333333333333333333333333333333333333333"
 	goldenBobSum    = "4444444444444444444444444444444444444444444444444444444444444444"
 	goldenBobID     = goldenBobSum
+	goldenBranchSum = "5555555555555555555555555555555555555555555555555555555555555555"
+	goldenBranchID  = goldenBranchSum
 )
 
 func TestImagesListJSONGoldens(t *testing.T) {
@@ -44,10 +45,14 @@ func TestImagesListJSONGoldens(t *testing.T) {
 		if len(alice.Archives) != 0 || len(alice.Holds) != 0 {
 			t.Fatal("archives and holds must stay empty without the flag")
 		}
-		if alice.Active.ID != goldenActiveID || len(alice.Active.Chain) != 1 ||
-			alice.Active.Chain[0].ID != goldenChainID {
+		if alice.Active.ID != goldenActiveID || alice.Active.Head != goldenChainID ||
+			len(alice.Active.Chain) != 1 || alice.Active.Chain[0].ID != goldenChainID {
 			t.Fatalf("alice active = %+v, want the fixture image with one chain entry",
 				alice.Active)
+		}
+		if alice.Active.Branches != 1 || bob.Active.Branches != 0 {
+			t.Fatalf("branches = %d, %d, want 1, 0",
+				alice.Active.Branches, bob.Active.Branches)
 		}
 	})
 
@@ -129,16 +134,18 @@ func TestImagesListHumanRecord(t *testing.T) {
 	withBuildSeams(t, nil)
 	writeGoldenLibrary(t, imagesDir)
 
-	idPad := strings.Repeat(" ", listIDHex-len("ID"))
 	want := "" +
-		"NAME       ID" + idPad + "  CREATED     SIZE   CHAIN  FORM    ARCH  HOLD\n" +
-		"alice/app  " + listID(goldenActiveID) + "  2026-03-04  2 KiB  1      single  1     1\n" +
-		"bob/tool   " + listID(goldenBobID) + "  2026-03-04  4 KiB  0      single  0     0\n"
+		"NAME       ID          HEAD        CREATED     SIZE   CHAIN  BRANCH  FORM    ARCH  HOLD\n" +
+		"alice/app  " + listID(goldenActiveID) + "  " + listID(goldenChainID) +
+		"  2026-03-04  2 KiB  1      1       single  1     1\n" +
+		"bob/tool   " + listID(goldenBobID) + "  " + listID(goldenBobID) +
+		"  2026-03-04  4 KiB  0      0       single  0     0\n"
 	if out := mustList(t, lib); out != want {
 		t.Fatalf("ls all:\n%s\nwant:\n%s", out, want)
 	}
 	want = "alice/app\n" +
 		"  id          " + goldenActiveID + "\n" +
+		"  head        " + goldenChainID + "\n" +
 		"  created     2026-03-04T05:06:07Z\n" +
 		"  size        2048 (2 KiB)\n" +
 		"  sha256      " + goldenActiveSum + "\n" +
@@ -146,6 +153,7 @@ func TestImagesListHumanRecord(t *testing.T) {
 		"  format      squashfs/zstd\n" +
 		"  builder     tiler golden\n" +
 		"  chain       1\n" +
+		"  branches    1\n" +
 		"    " + goldenChainID + "  parent=" + goldenActiveID + "  1 KiB  2026-03-04T04:06:07Z\n" +
 		"  archives    1\n" +
 		"    " + goldenArchiveID + "\n" +
@@ -157,33 +165,44 @@ func TestImagesListHumanRecord(t *testing.T) {
 }
 
 // writeGoldenLibrary lays out a deterministic image library:
-// alice/app with an active image, one chain layer, one archived and
-// one held chain; bob/tool with a plain active image; carol/old
-// without an active image.
+// alice/app with a full root, a head chain layer, one branch layer
+// off the root, one archived and one held chain; bob/tool with a
+// plain single-node active image; carol/old without an active image.
 func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	t.Helper()
 	createdAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	format := image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}
-	alice := image.Meta{
-		ID: goldenActiveID, Name: "alice/app", Version: image.MetaVersion,
-		Kind: image.KindFull, Format: format,
-		Size: 2048, SHA256: goldenActiveSum, MtimeUnix: 1772600767,
-		CreatedAt: createdAt, Builder: "tiler golden",
-		Chain: []image.ChainEntry{{
-			ID: goldenChainID, Parent: goldenActiveID, Size: 1024,
-			SHA256: goldenChainSum, MtimeUnix: 1772600000,
-			CreatedAt: createdAt.Add(-time.Hour),
-		}},
+	alice := image.Manifest{
+		Name: "alice/app", Format: format, Head: goldenChainID,
+		Images: []image.ImageMeta{
+			{
+				ID: goldenActiveID, Kind: image.KindFull,
+				Size: 2048, SHA256: goldenActiveSum, MtimeUnix: 1772600767,
+				CreatedAt: createdAt, Builder: "tiler golden",
+			},
+			{
+				ID: goldenChainID, Kind: image.KindIncremental, Parent: goldenActiveID,
+				Size: 1024, SHA256: goldenChainSum, MtimeUnix: 1772600000,
+				CreatedAt: createdAt.Add(-time.Hour),
+			},
+			{
+				ID: goldenBranchID, Kind: image.KindIncremental, Parent: goldenActiveID,
+				Size: 512, SHA256: goldenBranchSum, MtimeUnix: 1772599000,
+				CreatedAt: createdAt.Add(-2 * time.Hour),
+			},
+		},
 	}
 	aliceDir := filepath.Join(imagesDir, "alice", "app")
 	storeGoldenRepo(t, aliceDir, alice)
 	writeGoldenChainDir(t, aliceDir, "_archives", goldenArchiveID)
 	writeGoldenChainDir(t, aliceDir, "_hold", goldenHoldID)
-	bob := image.Meta{
-		ID: goldenBobID, Name: "bob/tool", Version: image.MetaVersion,
-		Kind: image.KindFull, Format: format,
-		Size: 4096, SHA256: goldenBobSum, MtimeUnix: 1772600767,
-		CreatedAt: createdAt.Add(2 * time.Hour), Builder: "tiler golden",
+	bob := image.Manifest{
+		Name: "bob/tool", Format: format, Head: goldenBobID,
+		Images: []image.ImageMeta{{
+			ID: goldenBobID, Kind: image.KindFull,
+			Size: 4096, SHA256: goldenBobSum, MtimeUnix: 1772600767,
+			CreatedAt: createdAt.Add(2 * time.Hour), Builder: "tiler golden",
+		}},
 	}
 	storeGoldenRepo(t, filepath.Join(imagesDir, "bob", "tool"), bob)
 	if err := os.MkdirAll(filepath.Join(imagesDir, "carol", "old"), 0o755); err != nil {
@@ -193,12 +212,12 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 
 // storeGoldenRepo writes one repository directory with the fixed
 // metadata and a placeholder image file.
-func storeGoldenRepo(t *testing.T, dir string, meta image.Meta) {
+func storeGoldenRepo(t *testing.T, dir string, manifest image.Manifest) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
+	if err := image.StoreManifest(filepath.Join(dir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "image.sqsh"), []byte("golden"), 0o644); err != nil {

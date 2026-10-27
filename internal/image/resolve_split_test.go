@@ -21,24 +21,24 @@ func TestResolveMountBlocksForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Library || got.Name != "alice/app" || got.ID != fx.meta.ID ||
-		got.Tip != fx.meta.ID || got.Format != FormatSquashfs {
+	if !got.Library || got.Name != "alice/app" || got.ID != fx.id() ||
+		got.Tip != fx.id() || got.Format != FormatSquashfs {
 		t.Fatalf("target identity = %+v", got)
 	}
 	if got.Form != PayloadBlocks {
 		t.Fatalf("form = %q", got.Form)
 	}
-	if got.Size != fx.meta.Size || got.SHA256 != fx.meta.SHA256 {
+	if got.Size != fx.root().Size || got.SHA256 != fx.root().SHA256 {
 		t.Fatalf("whole facts = %d %s", got.Size, got.SHA256)
 	}
-	if len(got.Members) != 1 || got.Members[0].ID != fx.meta.ID {
+	if len(got.Members) != 1 || got.Members[0].ID != fx.id() {
 		t.Fatalf("stack members = %+v, want one full layer", got.Members)
 	}
-	if len(got.Blocks) != len(fx.meta.Blocks) {
+	if len(got.Blocks) != len(fx.root().Blocks) {
 		t.Fatalf("blocks = %+v", got.Blocks)
 	}
-	for i, entry := range fx.meta.Blocks {
-		want, err := repo.BlockPath(fx.meta.ID, entry.Name)
+	for i, entry := range fx.root().Blocks {
+		want, err := repo.BlockPath(fx.id(), entry.Name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +59,7 @@ func TestResolveMountBlocksMissingFileNamesEntry(t *testing.T) {
 	fx := blocksFixture([][]byte{[]byte("resolve-a"), []byte("resolve-bb")})
 	repo := mustRepo(t, cfg)
 	seedSplitActive(t, repo, fx)
-	missing, err := repo.BlockPath(fx.meta.ID, "blk.001")
+	missing, err := repo.BlockPath(fx.id(), "blk.001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,11 @@ func TestResolveMountBlocksWithChainExpandsStack(t *testing.T) {
 	fx := blocksFixture([][]byte{[]byte("full-a"), []byte("full-bb")})
 	repo := mustRepo(t, cfg)
 	layerBodies := [][]byte{[]byte("incr-a"), []byte("incr-bb")}
-	entry := chainBlocksEntry(fx.meta.ID, layerBodies)
-	fx.meta.Chain = []ChainEntry{entry}
+	node := chainBlocksNode(fx.id(), layerBodies)
+	fx.manifest = withNode(fx.manifest, node)
 	seedSplitActive(t, repo, fx)
-	writePayloadDir(t, mustBlocksDir(t, repo, entry.ID), splitFixture{
-		meta: Meta{Blocks: entry.Blocks}, bodies: layerBodies,
-	})
+	writePayloadDir(t, mustBlocksDir(t, repo, node.ID),
+		blocksOnlyFixture(node.Blocks, layerBodies))
 
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
@@ -91,18 +90,18 @@ func TestResolveMountBlocksWithChainExpandsStack(t *testing.T) {
 	if len(got.Members) != 2 {
 		t.Fatalf("members = %+v, want full + chain", got.Members)
 	}
-	if got.ID != fx.meta.ID || got.Tip != entry.ID {
+	if got.ID != fx.id() || got.Tip != node.ID {
 		t.Fatalf("target ids = (%q, %q), want (%q, %q)",
-			got.ID, got.Tip, fx.meta.ID, entry.ID)
+			got.ID, got.Tip, fx.id(), node.ID)
 	}
-	if got.Members[0].ID != fx.meta.ID || len(got.Members[0].Blocks) != 2 {
+	if got.Members[0].ID != fx.id() || len(got.Members[0].Blocks) != 2 {
 		t.Fatalf("full layer = %+v", got.Members[0])
 	}
-	if got.Members[1].ID != entry.ID || got.Members[1].SHA256 != entry.SHA256 ||
+	if got.Members[1].ID != node.ID || got.Members[1].SHA256 != node.SHA256 ||
 		len(got.Members[1].Blocks) != 2 {
 		t.Fatalf("chain layer = %+v", got.Members[1])
 	}
-	want, err := repo.BlockPath(entry.ID, "blk.001")
+	want, err := repo.BlockPath(node.ID, "blk.001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +115,12 @@ func TestResolveMountBlocksChainMissingFileNamesLayer(t *testing.T) {
 	fx := blocksFixture([][]byte{[]byte("full-a")})
 	repo := mustRepo(t, cfg)
 	layerBodies := [][]byte{[]byte("incr-only")}
-	entry := chainBlocksEntry(fx.meta.ID, layerBodies)
-	fx.meta.Chain = []ChainEntry{entry}
+	node := chainBlocksNode(fx.id(), layerBodies)
+	fx.manifest = withNode(fx.manifest, node)
 	seedSplitActive(t, repo, fx)
-	writePayloadDir(t, mustBlocksDir(t, repo, entry.ID), splitFixture{
-		meta: Meta{Blocks: entry.Blocks}, bodies: layerBodies,
-	})
-	missing, err := repo.BlockPath(entry.ID, "blk.000")
+	writePayloadDir(t, mustBlocksDir(t, repo, node.ID),
+		blocksOnlyFixture(node.Blocks, layerBodies))
+	missing, err := repo.BlockPath(node.ID, "blk.000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +128,7 @@ func TestResolveMountBlocksChainMissingFileNamesLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = ResolveMount(cfg, "alice/app")
-	if err == nil || !strings.Contains(err.Error(), entry.ID) ||
+	if err == nil || !strings.Contains(err.Error(), node.ID) ||
 		!strings.Contains(err.Error(), "blk.000") {
 		t.Fatalf("err = %v", err)
 	}
@@ -148,7 +146,7 @@ func TestResolveBlocksChainMissingBlocksManifest(t *testing.T) {
 	layer := ImageMeta{
 		ID:        "abcdef0123456789",
 		Kind:      KindIncremental,
-		Parent:    fx.meta.ID,
+		Parent:    fx.id(),
 		Size:      9,
 		SHA256:    strings.Repeat("ab", 32),
 		MtimeUnix: 1710000002,
@@ -157,9 +155,9 @@ func TestResolveBlocksChainMissingBlocksManifest(t *testing.T) {
 	manifest := Manifest{
 		Version: ManifestVersion,
 		Name:    "alice/app",
-		Format:  fx.meta.Format,
+		Format:  fx.manifest.Format,
 		Head:    layer.ID,
-		Images:  []ImageMeta{rootNodeOf(fx.meta), layer},
+		Images:  []ImageMeta{fx.root(), layer},
 	}
 
 	_, err := resolveBlocks(repo, "alice/app", manifest)
@@ -169,30 +167,32 @@ func TestResolveBlocksChainMissingBlocksManifest(t *testing.T) {
 	}
 }
 
-// chainBlocksEntry builds one chain layer whose Blocks digest the
-// concatenated bodies, matching a real blocks incr publish.
-func chainBlocksEntry(parent string, bodies [][]byte) ChainEntry {
+// chainBlocksNode builds one incremental blocks node whose Blocks
+// digest the concatenated bodies, matching a real blocks incr
+// publish.
+func chainBlocksNode(parent string, bodies [][]byte) ImageMeta {
 	var all []byte
-	entry := ChainEntry{
+	node := ImageMeta{
+		Kind:      KindIncremental,
 		Parent:    parent,
 		MtimeUnix: 1710000002,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
 	}
 	for i, body := range bodies {
 		sum := sha256.Sum256(body)
-		entry.Blocks = append(entry.Blocks, BlockEntry{
+		node.Blocks = append(node.Blocks, BlockEntry{
 			Name:      fmt.Sprintf(blockNameFmt, i),
 			Size:      int64(len(body)),
 			SHA256:    hex.EncodeToString(sum[:]),
-			MtimeUnix: entry.MtimeUnix + int64(i),
+			MtimeUnix: node.MtimeUnix + int64(i),
 		})
 		all = append(all, body...)
 	}
 	whole := sha256.Sum256(all)
-	entry.SHA256 = hex.EncodeToString(whole[:])
-	entry.ID = ID(whole)
-	entry.Size = int64(len(all))
-	return entry
+	node.SHA256 = hex.EncodeToString(whole[:])
+	node.ID = ID(whole)
+	node.Size = int64(len(all))
+	return node
 }
 
 // mustBlocksDir returns _blocks/<id>/ or fails the test.
@@ -209,12 +209,12 @@ func TestResolveMountSplitArchivesNeverParticipate(t *testing.T) {
 	cfg := buildConfig(t)
 	fx := blocksFixture([][]byte{[]byte("archived-a")})
 	repo := mustRepo(t, cfg)
-	arch, err := repo.ArchivePath(fx.meta.ID)
+	arch, err := repo.ArchivePath(fx.id())
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePayloadDir(t, holdPayloadPath(arch, fx.meta), fx)
-	if err := Store(filepath.Join(arch, fileMeta), fx.meta); err != nil {
+	writePayloadDir(t, holdPayload(t, arch, fx.manifest), fx)
+	if err := StoreManifest(filepath.Join(arch, fileMeta), fx.manifest); err != nil {
 		t.Fatal(err)
 	}
 	_, err = ResolveMount(cfg, "alice/app")
@@ -226,7 +226,8 @@ func TestResolveMountSplitArchivesNeverParticipate(t *testing.T) {
 func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	manifest := seedChain(t, repo, 0)
+	root := rootOf(manifest)
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
 		t.Fatal(err)
@@ -237,14 +238,14 @@ func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.ID,
+		ID:      root.ID,
+		Tip:     root.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
-			Size:      meta.Size,
-			MtimeUnix: meta.MtimeUnix,
-			SHA256:    meta.SHA256,
+			Size:      root.Size,
+			MtimeUnix: root.MtimeUnix,
+			SHA256:    root.SHA256,
 		}},
 	})
 }

@@ -250,34 +250,18 @@ func sameIdleFull(existing, next Manifest) bool {
 		oldRoot.ID == newRoot.ID && oldRoot.SHA256 == newRoot.SHA256
 }
 
-// loadActive reads the active manifest and converts it into the v1
-// Meta shape for readers that predate the DAG (gc, list, remove).
-// The v1 chain is the linearized head stack, so branch nodes are
-// invisible in this view; graph-aware callers use loadActiveManifest.
-func loadActive(repo Repo) (Meta, bool, error) {
-	manifest, exists, err := loadActiveManifest(repo)
-	if err != nil || !exists {
-		return Meta{}, exists, err
-	}
-	meta, err := metaFromManifest(manifest)
-	if err != nil {
-		return Meta{}, false, fmt.Errorf("publish: %w", err)
-	}
-	return meta, true, nil
-}
-
 // payloadWithoutMeta handles a slot without an active meta. Any
 // payload form resting there is an orphan; a truly empty slot reports
 // no active image.
-func payloadWithoutMeta(repo Repo) (Meta, bool, error) {
+func payloadWithoutMeta(repo Repo) (Manifest, bool, error) {
 	there, err := anyPayloadExists(repo.Dir)
 	if err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
 	if there {
-		return Meta{}, false, ErrMetaMissing
+		return Manifest{}, false, ErrMetaMissing
 	}
-	return Meta{}, false, nil
+	return Manifest{}, false, nil
 }
 
 // singleFileNames lists the single-file payload names that count in
@@ -328,15 +312,6 @@ func payloadPresent(dir, formatType string) (bool, error) {
 	return false, nil
 }
 
-// activePayloadPath is where the payload of the kind of meta rests
-// in the active slot.
-func activePayloadPath(repo Repo, meta Meta) (string, error) {
-	if PayloadKind(meta) == PayloadBlocks {
-		return repo.BlocksDirPath(meta.ID)
-	}
-	return filepath.Join(repo.Dir, activeImageName(meta.Format.Type)), nil
-}
-
 // payloadRoot is the outermost file or directory that carries the
 // payload of the manifest's kind inside a directory preserving the
 // active layout. Moving the root as a whole keeps the layout
@@ -352,15 +327,19 @@ func payloadRoot(dir string, manifest Manifest) string {
 	return filepath.Join(dir, activeImageName(manifest.Format.Type))
 }
 
-// holdPayloadPath is where the payload of the kind of meta rests
+// holdPayloadPath is where the payload of the manifest's kind rests
 // inside a hold directory; holds preserve the active layout. The
 // single-file name follows the format, so a dmg hold keeps
 // image.dmg.
-func holdPayloadPath(hold string, meta Meta) string {
-	if PayloadKind(meta) == PayloadBlocks {
-		return filepath.Join(hold, dirBlocks, meta.ID)
+func holdPayloadPath(hold string, manifest Manifest) (string, error) {
+	root, err := manifest.Full()
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(hold, activeImageName(meta.Format.Type))
+	if manifest.PayloadKind() == PayloadBlocks {
+		return filepath.Join(hold, dirBlocks, root.ID), nil
+	}
+	return filepath.Join(hold, activeImageName(manifest.Format.Type)), nil
 }
 
 func stage(dir string, data []byte, manifest Manifest, seam hooks) (string, string, error) {
@@ -1173,11 +1152,11 @@ func repairTornActive(repo Repo, seam hooks, keep string) error {
 	// With no meta, either single-file name is still a payload.
 	formatType := ""
 	if metaExists {
-		meta, err := Load(repo.MetaPath())
+		manifest, err := LoadManifest(repo.MetaPath())
 		if err != nil {
 			return err
 		}
-		formatType = meta.Format.Type
+		formatType = manifest.Format.Type
 	}
 	payloadExists, err := payloadPresent(repo.Dir, formatType)
 	if err != nil {
@@ -1229,20 +1208,28 @@ func sweepStrayPayloadTemps(repo Repo, seam hooks, keep string) error {
 }
 
 func repairMissingImage(repo Repo, seam hooks) error {
-	meta, err := Load(repo.MetaPath())
+	manifest, err := LoadManifest(repo.MetaPath())
 	if err != nil {
 		return err
 	}
-	hold, err := repo.HoldPath(meta.ID)
+	root, err := manifest.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	hold, err := repo.HoldPath(root.ID)
 	if err != nil {
 		return err
 	}
-	heldPayload, err := pathExists(holdPayloadPath(hold, meta))
+	heldPath, err := holdPayloadPath(hold, manifest)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	heldPayload, err := pathExists(heldPath)
 	if err != nil {
 		return err
 	}
 	if heldPayload {
-		return restoreHold(repo, meta.ID, seam)
+		return restoreHold(repo, root.ID, seam)
 	}
 	// The meta was published and its payload was deleted. Nothing in
 	// hold can supply that payload, so drop the meta and publish
@@ -1294,19 +1281,23 @@ func repairMismatchedMeta(repo Repo, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	active, err := Load(repo.MetaPath())
+	active, err := LoadManifest(repo.MetaPath())
 	if err != nil {
 		return err
 	}
+	root, err := active.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
 	if len(partial) == 0 {
-		return restoreLeftoverIncr(repo, active.ID)
+		return restoreLeftoverIncr(repo, root.ID)
 	}
 	match, err := payloadMatchesMeta(repo, active)
 	if err != nil {
 		return err
 	}
 	if match {
-		return restoreLeftoverIncr(repo, active.ID)
+		return restoreLeftoverIncr(repo, root.ID)
 	}
 	id, ok, err := matchingPartialHold(repo)
 	if err != nil {
@@ -1330,13 +1321,13 @@ func partialHoldIDs(repo Repo) ([]string, error) {
 			return nil, err
 		}
 		metaPath := filepath.Join(hold, fileMeta)
-		meta, loadErr := Load(metaPath)
+		manifest, loadErr := LoadManifest(metaPath)
 		if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
 			return nil, loadErr
 		}
 		formatType := ""
 		if loadErr == nil {
-			formatType = meta.Format.Type
+			formatType = manifest.Format.Type
 		}
 		payloadThere, err := payloadPresent(hold, formatType)
 		if err != nil {
@@ -1364,11 +1355,11 @@ func matchingPartialHold(repo Repo) (string, bool, error) {
 		if err != nil {
 			return "", false, err
 		}
-		meta, err := Load(filepath.Join(hold, fileMeta))
+		manifest, err := LoadManifest(filepath.Join(hold, fileMeta))
 		if err != nil {
 			return "", false, err
 		}
-		ok, err := payloadMatchesMeta(repo, meta)
+		ok, err := payloadMatchesMeta(repo, manifest)
 		if err != nil {
 			return "", false, err
 		}
@@ -1467,21 +1458,25 @@ func pathExists(path string) (bool, error) {
 }
 
 // payloadMatchesMeta reports whether the payload resting in the
-// active slot matches meta: the whole-file digest for the single
-// form, or per-block digests for blocks. The single file is
+// active slot matches the manifest: the whole-file digest for the
+// single form, or per-block digests for blocks. The single file is
 // image.dmg when the format is dmg, and image.sqsh for squashfs and
 // erofs. A payload that is absent or incomplete is a mismatch rather
 // than an error, so repair keeps going; only genuine IO failures
 // propagate.
-func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
-	if PayloadKind(meta) == PayloadBlocks {
-		dir, err := repo.BlocksDirPath(meta.ID)
+func payloadMatchesMeta(repo Repo, manifest Manifest) (bool, error) {
+	root, err := manifest.Full()
+	if err != nil {
+		return false, err
+	}
+	if manifest.PayloadKind() == PayloadBlocks {
+		dir, err := repo.BlocksDirPath(root.ID)
 		if err != nil {
 			return false, err
 		}
-		return dirMatchesBlocks(dir, meta.Blocks)
+		return dirMatchesBlocks(dir, root.Blocks)
 	}
-	path, err := activePayloadPath(repo, meta)
+	path, err := manifestPayloadPath(repo, manifest)
 	if err != nil {
 		return false, err
 	}
@@ -1493,7 +1488,7 @@ func payloadMatchesMeta(repo Repo, meta Meta) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return fileMatchesMeta(bytesPath, meta)
+	return fileMatches(bytesPath, root.Size, root.SHA256)
 }
 
 // dirMatchesBlocks re-hashes every manifest block under dir. The
@@ -1514,10 +1509,6 @@ func dirMatchesBlocks(dir string, blocks []BlockEntry) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-func fileMatchesMeta(path string, meta Meta) (bool, error) {
-	return fileMatches(path, meta.Size, meta.SHA256)
 }
 
 // fileMatches streams a file through sha256 and compares the digest
@@ -1550,14 +1541,14 @@ func restoreSingleName(repo Repo, hold string) (string, error) {
 		repo.MetaPath(),
 	}
 	for _, path := range paths {
-		meta, err := Load(path)
+		manifest, err := LoadManifest(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		return activeImageName(meta.Format.Type), nil
+		return activeImageName(manifest.Format.Type), nil
 	}
 	return fileImage, nil
 }

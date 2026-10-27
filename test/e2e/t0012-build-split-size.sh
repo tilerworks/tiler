@@ -90,7 +90,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'full --split 64k publishes more 
 	"$tiler_bin" images show alice/split >ls.out 2>ls.err &&
 	test_grep -E "^  form +blocks$" ls.out &&
 	test_grep -E "^  blocks +[2-9][0-9]*$" ls.out &&
-	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
+	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
 	echo "$id1" >full.id
 '
 
@@ -151,8 +151,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split cha
 	test -n "$id2" &&
 	test "$id2" != "$id1" &&
 	test "$id2" != "$layer" &&
-	test_grep -E "^id: \"?$id2\"?$" "$meta_file" &&
-	test_grep ! "^chain:" "$meta_file" &&
+	test_grep -E "^head: \"?$id2\"?$" "$meta_file" &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
 	test_path_is_dir "$img_dir/_blocks/$id2" &&
 	test_path_is_file "$img_dir/_blocks/$id2/blk.000" &&
 	test_path_is_missing "$img_dir/_blocks/$id1" &&

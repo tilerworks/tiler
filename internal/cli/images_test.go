@@ -124,16 +124,22 @@ func TestFormatSizeUsesBinaryUnits(t *testing.T) {
 func TestImageTableSuffixAndDetail(t *testing.T) {
 	created := time.Date(2026, 10, 20, 9, 14, 3, 0, time.UTC)
 	state := image.State{
-		Active: image.Meta{
-			ID: "0123456789abcdef", Size: 128 << 20,
-			SHA256:     strings.Repeat("ab", 32),
-			CreatedAt:  created,
-			Builder:    "dev",
-			Deprecated: true,
-			Chain: []image.ChainEntry{{
-				ID: "1111111111111111", Parent: "0123456789abcdef",
-				Size: 12 << 20, CreatedAt: created.Add(time.Hour),
-			}},
+		Active: image.Manifest{
+			Head: "1111111111111111",
+			Images: []image.ImageMeta{
+				{
+					ID: "0123456789abcdef", Kind: image.KindFull, Size: 128 << 20,
+					SHA256:     strings.Repeat("ab", 32),
+					CreatedAt:  created,
+					Builder:    "dev",
+					Deprecated: true,
+				},
+				{
+					ID: "1111111111111111", Kind: image.KindIncremental,
+					Parent: "0123456789abcdef",
+					Size:   12 << 20, CreatedAt: created.Add(time.Hour),
+				},
+			},
 		},
 		HasActive: true,
 		Archives:  []string{"2222222222222222"},
@@ -492,12 +498,13 @@ func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			meta, err := image.Load(repo.MetaPath())
+			manifest, err := image.LoadManifest(repo.MetaPath())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if meta.Name != name || meta.ID != id1 {
-				t.Fatalf("meta name=%q id=%s, want %s %s", meta.Name, meta.ID, name, id1)
+			if manifest.Name != name || manifestRootID(manifest) != id1 {
+				t.Fatalf("meta name=%q id=%s, want %s %s",
+					manifest.Name, manifestRootID(manifest), name, id1)
 			}
 			if _, err := os.Stat(filepath.Join(repo.Dir, "image.sqsh")); err != nil {
 				t.Fatal(err)
@@ -579,11 +586,11 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 			t.Fatalf("stderr %q missing %q", stderr, want)
 		}
 	}
-	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Deprecated {
+	if manifestRoot(manifest).Deprecated {
 		t.Fatal("referenced target was deprecated")
 	}
 

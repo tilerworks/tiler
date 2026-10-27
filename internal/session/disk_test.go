@@ -384,6 +384,25 @@ func TestDiskMatchResolvesMountPointNotImageOrShadow(t *testing.T) {
 	}
 }
 
+// dmgTestManifest builds a single-node dmg/ulfo manifest whose full
+// root carries the given id, payload digest, and size.
+func dmgTestManifest(id, sha string, size int64) image.Manifest {
+	return image.Manifest{
+		Name:   "alice/app",
+		Format: image.Format{Type: image.FormatDMG, Compression: "ulfo"},
+		Head:   id,
+		Images: []image.ImageMeta{{
+			ID:        id,
+			Kind:      image.KindFull,
+			Size:      size,
+			SHA256:    sha,
+			MtimeUnix: 1710000000,
+			CreatedAt: time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC),
+			Builder:   "dev",
+		}},
+	}
+}
+
 func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	images := t.TempDir()
@@ -394,19 +413,8 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	meta := image.Meta{
-		ID:        sum,
-		Name:      "alice/app",
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
-		Size:      4,
-		SHA256:    sum,
-		MtimeUnix: 1710000000,
-		CreatedAt: time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC),
-		Builder:   "dev",
-	}
-	if err := image.Store(repo.MetaPath(), meta); err != nil {
+	manifest := dmgTestManifest(sum, sum, 4)
+	if err := image.StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	cache := t.TempDir()
@@ -473,17 +481,10 @@ func TestRecordedImageAndLibraryDigestFollowHoldPin(t *testing.T) {
 	}
 	heldSum := strings.Repeat("a", 64)
 	activeSum := strings.Repeat("b", 64)
-	held := image.Meta{
-		ID: heldSum, Name: "alice/app", Version: image.MetaVersion, Kind: image.KindFull,
-		Format: image.Format{Type: image.FormatDMG, Compression: "ulfo"},
-		Size:   8, SHA256: heldSum, MtimeUnix: 1710000000,
-		CreatedAt: time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC), Builder: "dev",
-	}
-	active := held
-	active.ID, active.SHA256 = activeSum, activeSum
-	active.Size = 9
+	held := dmgTestManifest(heldSum, heldSum, 8)
+	active := dmgTestManifest(activeSum, activeSum, 9)
 
-	hold, err := repo.HoldPath(held.ID)
+	hold, err := repo.HoldPath(heldSum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,20 +495,20 @@ func TestRecordedImageAndLibraryDigestFollowHoldPin(t *testing.T) {
 	if err := os.WriteFile(holdDMG, []byte("held-dmg"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := image.Store(filepath.Join(hold, "meta.yaml"), held); err != nil {
+	if err := image.StoreManifest(filepath.Join(hold, "meta.yaml"), held); err != nil {
 		t.Fatal(err)
 	}
 	activeDMG := filepath.Join(repo.Dir, "image.dmg")
 	if err := os.WriteFile(activeDMG, []byte("active-dmg"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := image.Store(repo.MetaPath(), active); err != nil {
+	if err := image.StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 
 	pinned := Action{
 		Type: TypeMount, Image: "alice/app", Name: "alice/app",
-		FullID: held.ID, Mountpoint: "/ws/lib", Mode: ModeRO,
+		FullID: heldSum, Mountpoint: "/ws/lib", Mode: ModeRO,
 	}
 	if got := recordedImage(pinned, images); got != holdDMG {
 		t.Fatalf("recordedImage pin = %s, want %s", got, holdDMG)

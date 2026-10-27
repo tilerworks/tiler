@@ -49,22 +49,20 @@ func TestLinkExternalSuccess(t *testing.T) {
 	if target != src {
 		t.Fatalf("symlink target = %q, want %q", target, src)
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	manifest := mustLoadManifest(t, repo.MetaPath())
+	root := rootOf(manifest)
 	sum := sha256.Sum256(append([]byte("hsqs"), []byte("vendor-payload")...))
 	want := hex.EncodeToString(sum[:])
-	if meta.SHA256 != want || meta.ID != want {
-		t.Fatalf("meta digest = %s id = %s", meta.SHA256, meta.ID)
+	if root.SHA256 != want || root.ID != want {
+		t.Fatalf("meta digest = %s id = %s", root.SHA256, root.ID)
 	}
-	if meta.Format.Type != FormatSquashfs || meta.Builder != "test-builder" {
-		t.Fatalf("meta = %+v", meta)
+	if manifest.Format.Type != FormatSquashfs || root.Builder != "test-builder" {
+		t.Fatalf("meta = %+v", manifest)
 	}
-	if len(meta.Chain) != 0 {
-		t.Fatalf("chain = %+v", meta.Chain)
+	if len(manifest.Images) != 1 {
+		t.Fatalf("chain = %+v", manifest.Images)
 	}
-	rel, err := lookupSHA256(repo, meta.SHA256)
+	rel, err := lookupSHA256(repo, root.SHA256)
 	if err != nil || rel != indexRelActive {
 		t.Fatalf("index lookup = %q, %v", rel, err)
 	}
@@ -93,11 +91,8 @@ func TestLinkExternalIdleRebuildsMissingIndexes(t *testing.T) {
 	if !indexesPresent(repo) {
 		t.Fatal("idle link did not rebuild missing indexes")
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rel, err := lookupSHA256(repo, meta.SHA256)
+	manifest := mustLoadManifest(t, repo.MetaPath())
+	rel, err := lookupSHA256(repo, rootOf(manifest).SHA256)
 	if err != nil || rel != indexRelActive {
 		t.Fatalf("index lookup = %q, %v", rel, err)
 	}
@@ -145,13 +140,10 @@ func TestLinkExternalIdempotentWithChain(t *testing.T) {
 	}
 	// Grow the active image with one incremental layer, the way a
 	// build --incremental inside the linked view does.
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	manifest := mustLoadManifest(t, repo.MetaPath())
 	layer := testID("abc1234567890def")
-	meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	manifest = withNode(manifest, validNode(rootID(manifest), layer))
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	incr, err := repo.IncrPath(layer)
@@ -181,8 +173,8 @@ func TestLinkExternalIdempotentWithChain(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatal("idempotent link rewrote meta")
 	}
-	if got, err := Load(repo.MetaPath()); err != nil || len(got.Chain) != 1 {
-		t.Fatalf("chain after re-link = %+v (%v)", got.Chain, err)
+	if got := mustLoadManifest(t, repo.MetaPath()); len(got.Images) != 2 {
+		t.Fatalf("chain after re-link = %+v", got.Images)
 	}
 	// A different external file still hits the chain guard.
 	other := writeFakeSquashfs(t, nas, []byte("other-bytes"))
@@ -319,14 +311,11 @@ func TestLinkExternalFixedNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	manifest := mustLoadManifest(t, repo.MetaPath())
+	if !rootOf(manifest).CreatedAt.Equal(linkNow()) {
+		t.Fatalf("created_at = %v", rootOf(manifest).CreatedAt)
 	}
-	if !meta.CreatedAt.Equal(linkNow()) {
-		t.Fatalf("created_at = %v", meta.CreatedAt)
-	}
-	if meta.Format.Compression != CompressionZstd {
-		t.Fatalf("compression = %q", meta.Format.Compression)
+	if manifest.Format.Compression != CompressionZstd {
+		t.Fatalf("compression = %q", manifest.Format.Compression)
 	}
 }

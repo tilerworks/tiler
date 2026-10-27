@@ -22,7 +22,7 @@ func assembleFixture(t *testing.T, fx splitFixture) ([]BlockFile, []byte) {
 	writePayloadDir(t, dir, fx)
 	var blocks []BlockFile
 	var whole []byte
-	for i, entry := range fx.meta.Blocks {
+	for i, entry := range fx.root().Blocks {
 		blocks = append(blocks, BlockFile{
 			Path:      filepath.Join(dir, entry.Name),
 			Name:      entry.Name,

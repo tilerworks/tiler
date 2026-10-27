@@ -107,27 +107,25 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 	if filepath.Dir(call[2]) != repo.Dir || !strings.HasPrefix(filepath.Base(call[2]), ".") {
 		t.Fatalf("temp output %s is outside the repository dir", call[2])
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	root := rootOf(loaded)
 	info, err := os.Stat(repo.ImagePath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "alice/app" || loaded.Version != MetaVersion {
+	if loaded.Name != "alice/app" || loaded.Version != ManifestVersion {
 		t.Fatalf("meta identity = %+v", loaded)
 	}
-	if loaded.Kind != KindFull || loaded.Format.Type != FormatSquashfs ||
+	if root.Kind != KindFull || loaded.Format.Type != FormatSquashfs ||
 		loaded.Format.Compression != CompressionZstd {
 		t.Fatalf("meta format = %+v", loaded)
 	}
-	if loaded.Size != int64(len(body)) || loaded.SHA256 != hex.EncodeToString(sum[:]) ||
-		loaded.ID != ID(sum) || loaded.MtimeUnix != info.ModTime().Unix() {
+	if root.Size != int64(len(body)) || root.SHA256 != hex.EncodeToString(sum[:]) ||
+		root.ID != ID(sum) || root.MtimeUnix != info.ModTime().Unix() {
 		t.Fatalf("meta payload = %+v", loaded)
 	}
-	if loaded.Builder != "test" ||
-		!loaded.CreatedAt.Equal(fixedNow()) || len(loaded.Chain) != 0 {
+	if root.Builder != "test" ||
+		!root.CreatedAt.Equal(fixedNow()) || len(loaded.Images) != 1 {
 		t.Fatalf("meta provenance = %+v", loaded)
 	}
 	// The published document is a single-node v2 manifest: the full
@@ -433,11 +431,8 @@ func TestBuildFullSameBytesIsIdle(t *testing.T) {
 			t.Fatalf("%s err = %v", dir, statErr)
 		}
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.CreatedAt.Equal(fixedNow()) {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if !rootOf(loaded).CreatedAt.Equal(fixedNow()) {
 		t.Fatalf("idle rebuild rewrote meta: %+v", loaded)
 	}
 	assertNoTemps(t, repo.Dir)
@@ -481,18 +476,12 @@ func TestBuildFullSameBytesWithChainRebuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), body)
-	archived, err := Load(filepath.Join(arch, fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(archived.Chain) != 1 {
+	archived := mustLoadManifest(t, filepath.Join(arch, fileMeta))
+	if len(archived.Images) != 2 {
 		t.Fatalf("archived meta = %+v", archived)
 	}
-	active, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(active.Chain) != 0 {
+	active := mustLoadManifest(t, repo.MetaPath())
+	if len(active.Images) != 1 {
 		t.Fatalf("active meta = %+v", active)
 	}
 	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold)); !errors.Is(statErr, os.ErrNotExist) {
@@ -556,17 +545,17 @@ func TestVerifySHA256DetectsTampering(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	meta := metaFor(data)
-	if err := VerifySHA256(meta, path); err != nil {
+	node := rootOf(manifestFor(data))
+	if err := VerifySHA256(node, path); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("verifIed-image"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifySHA256(meta, path); err == nil {
+	if err := VerifySHA256(node, path); err == nil {
 		t.Fatal("expected digest mismatch")
 	}
-	if err := VerifySHA256(meta, filepath.Join(dir, "absent")); err == nil {
+	if err := VerifySHA256(node, filepath.Join(dir, "absent")); err == nil {
 		t.Fatal("expected missing file error")
 	}
 }
@@ -582,17 +571,17 @@ func TestQuickCheckDetectsChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := metaFor(data)
-	meta.MtimeUnix = info.ModTime().Unix()
-	if err := QuickCheck(meta, path); err != nil {
+	node := rootOf(manifestFor(data))
+	node.MtimeUnix = info.ModTime().Unix()
+	if err := QuickCheck(node, path); err != nil {
 		t.Fatal(err)
 	}
-	wrongSize := meta
+	wrongSize := node
 	wrongSize.Size++
 	if err := QuickCheck(wrongSize, path); err == nil {
 		t.Fatal("expected size mismatch")
 	}
-	wrongMtime := meta
+	wrongMtime := node
 	wrongMtime.MtimeUnix++
 	if err := QuickCheck(wrongMtime, path); err == nil {
 		t.Fatal("expected mtime mismatch")
@@ -729,13 +718,10 @@ func TestBuildFullPacksRequestedContainer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			loaded, err := Load(repo.MetaPath())
-			if err != nil {
-				t.Fatal(err)
-			}
+			loaded := mustLoadManifest(t, repo.MetaPath())
 			if loaded.Format.Type != tc.metaType || loaded.Format.Compression != tc.metaComp ||
-				loaded.ID != res.ID {
-				t.Fatalf("meta format = %+v id %s", loaded.Format, loaded.ID)
+				rootID(loaded) != res.ID {
+				t.Fatalf("meta format = %+v id %s", loaded.Format, rootID(loaded))
 			}
 		})
 	}

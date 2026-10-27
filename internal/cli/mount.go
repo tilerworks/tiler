@@ -632,12 +632,12 @@ func verifyTarget(target image.Target, verify bool) error {
 // default, the full sha256 re-hash with --verify.
 func verifyMembers(target image.Target, verify bool) error {
 	for _, m := range target.Members {
-		meta := image.Meta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
+		node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
 		var err error
 		if verify {
-			err = image.VerifySHA256(meta, m.Path)
+			err = image.VerifySHA256(node, m.Path)
 		} else {
-			err = image.QuickCheck(meta, m.Path)
+			err = image.QuickCheck(node, m.Path)
 		}
 		if err != nil {
 			return fmt.Errorf("mount: %w", err)

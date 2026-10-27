@@ -43,18 +43,22 @@ func RemoveTarget(cfg config.Config, target string, refs Refs) (string, error) {
 // formats do not call attached. Image files and archives are the
 // only paths this removes.
 func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attached) (string, error) {
-	rt, meta, err := resolveRemoveTarget(cfg, target)
+	rt, manifest, err := resolveRemoveTarget(cfg, target)
 	if err != nil {
 		return "", err
 	}
 	if err := rt.rejectReferenced(refs); err != nil {
 		return "", err
 	}
-	if err := rt.rejectAttached(meta, attached); err != nil {
+	if err := rt.rejectAttached(manifest, attached); err != nil {
 		return "", err
 	}
-	if !meta.Deprecated {
-		if err := rt.markDeprecated(meta); err != nil {
+	root, err := manifest.Full()
+	if err != nil {
+		return "", fmt.Errorf("remove: %w", err)
+	}
+	if !root.Deprecated {
+		if err := rt.markDeprecated(manifest); err != nil {
 			return "", err
 		}
 		return OutcomeDeprecated, nil
@@ -67,9 +71,9 @@ func RemoveChecked(cfg config.Config, target string, refs Refs, attached Attache
 
 // resolveRemoveTarget parses the two accepted target shapes: a
 // 1-to-5 segment library name, or <name>/_archives/<id> where id is
-// a full sha256 or a unique prefix, and loads the meta that carries
-// the deprecated flag.
-func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, error) {
+// a full sha256 or a unique prefix, and loads the manifest that
+// carries the deprecated flag.
+func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Manifest, error) {
 	parts := strings.Split(cleanImageName(target), "/")
 	archIdx := -1
 	for i, p := range parts {
@@ -110,15 +114,15 @@ func resolveRemoveTarget(cfg config.Config, target string) (rmTarget, Meta, erro
 	}
 	if err != nil {
 		if errors.Is(err, ErrInvalidName) || errors.Is(err, ErrInvalidPath) {
-			return rmTarget{}, Meta{}, invalidTarget(target)
+			return rmTarget{}, Manifest{}, invalidTarget(target)
 		}
-		return rmTarget{}, Meta{}, err
+		return rmTarget{}, Manifest{}, err
 	}
-	meta, err := Load(filepath.Join(rt.dir, fileMeta))
+	manifest, err := LoadManifest(filepath.Join(rt.dir, fileMeta))
 	if err != nil {
-		return rmTarget{}, Meta{}, fmt.Errorf("remove: %w", err)
+		return rmTarget{}, Manifest{}, fmt.Errorf("remove: %w", err)
 	}
-	return rt, meta, nil
+	return rt, manifest, nil
 }
 
 // resolveArchiveRef matches ref against archive directory names and
@@ -168,11 +172,11 @@ func (t rmTarget) rejectReferenced(refs Refs) error {
 }
 
 // rejectAttached refuses both rm stages while a dmg in the target
-// directory is attached. A nil checker or a non-dmg meta skips the
-// question. The checker sees the repository or archive directory,
-// never a session runtime.
-func (t rmTarget) rejectAttached(meta Meta, attached Attached) error {
-	if attached == nil || meta.Format.Type != FormatDMG {
+// directory is attached. A nil checker or a non-dmg manifest skips
+// the question. The checker sees the repository or archive
+// directory, never a session runtime.
+func (t rmTarget) rejectAttached(manifest Manifest, attached Attached) error {
+	if attached == nil || manifest.Format.Type != FormatDMG {
 		return nil
 	}
 	hit, err := attached(t.dir)
@@ -232,12 +236,16 @@ func (t rmTarget) referenced(refs Refs) (bool, error) {
 // take with it: the active image, the holds, and the archives.
 func (t rmTarget) repoFullIDs() ([]string, error) {
 	var ids []string
-	active, exists, err := loadActive(t.repo)
+	active, exists, err := loadActiveManifest(t.repo)
 	if err != nil {
 		return nil, err
 	}
 	if exists {
-		ids = append(ids, active.ID)
+		root, err := active.Full()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, root.ID)
 	}
 	holdIDs, err := listHoldIDs(t.repo)
 	if err != nil {
@@ -253,10 +261,19 @@ func (t rmTarget) repoFullIDs() ([]string, error) {
 }
 
 // markDeprecated writes the flag back through a temporary file and
-// a rename, so a reader never sees a half-written meta.
-func (t rmTarget) markDeprecated(meta Meta) error {
-	meta.Deprecated = true
-	body, err := Encode(meta)
+// a rename, so a reader never sees a half-written meta. The flag is
+// a fact of the full root; a lazily migrated v1 document upgrades
+// to the manifest layout on this rewrite.
+func (t rmTarget) markDeprecated(manifest Manifest) error {
+	next := manifest
+	next.Images = make([]ImageMeta, len(manifest.Images))
+	copy(next.Images, manifest.Images)
+	for i := range next.Images {
+		if next.Images[i].Kind == KindFull {
+			next.Images[i].Deprecated = true
+		}
+	}
+	body, err := EncodeManifest(next)
 	if err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}

@@ -9,8 +9,10 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 )
 
-// Validate reports every rule violation in one error.
-func (m Meta) Validate() error {
+// validate reports every v1 rule violation in one error. Only the
+// legacy decoder calls it: a v1 document must satisfy the rules it
+// was written under before it converts into a DAG.
+func (m metaV1) validate() error {
 	var list issueList
 	m.checkIdentity(&list)
 	m.checkPayload(&list)
@@ -192,7 +194,7 @@ func (m Manifest) checkWalks(index map[string]int, list *issueList) {
 	}
 }
 
-func (m Meta) checkIdentity(list *issueList) {
+func (m metaV1) checkIdentity(list *issueList) {
 	checkDigest(m.ID, m.SHA256, "", list)
 	checkNameField(m.Name, list)
 	if m.Version != MetaVersion {
@@ -218,7 +220,7 @@ func checkNameField(name string, list *issueList) {
 // checkPayload checks the active container and the payload facts.
 // The active format covers the chain: layers do not store a separate
 // type or compression, so every member stays on this container.
-func (m Meta) checkPayload(list *issueList) {
+func (m metaV1) checkPayload(list *issueList) {
 	checkContainer(m.Format, list)
 	checkSize("size", m.Size, list)
 	checkMtime("mtime_unix", m.MtimeUnix, list)
@@ -250,7 +252,7 @@ func checkContainer(format Format, list *issueList) {
 	}
 }
 
-func (m Meta) checkChain(list *issueList) {
+func (m metaV1) checkChain(list *issueList) {
 	seen := map[string]struct{}{}
 	if m.ID != "" {
 		seen[m.ID] = struct{}{}
@@ -282,7 +284,7 @@ func (m Meta) checkChain(list *issueList) {
 // checkSplit validates the split payload manifests. The single-file
 // form carries no manifest, so its rules stay untouched. Blocks may
 // carry a chain whose entries each hold their own Blocks list.
-func (m Meta) checkSplit(list *issueList) {
+func (m metaV1) checkSplit(list *issueList) {
 	if len(m.Blocks) == 0 {
 		return
 	}

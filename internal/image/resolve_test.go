@@ -34,16 +34,15 @@ func layerHexID(i int) string {
 // seedChain publishes a full image plus a chain of that many layers.
 // Every layer file is written, so callers remove files to simulate
 // broken stacks.
-func seedChain(t *testing.T, repo Repo, layers int) Meta {
+func seedChain(t *testing.T, repo Repo, layers int) Manifest {
 	t.Helper()
 	data := []byte("full-image")
-	meta := metaFor(data)
-	parent := meta.ID
+	manifest := manifestFor(data)
+	parent := manifest.Head
 	for i := 1; i <= layers; i++ {
-		id := layerHexID(i)
-		entry := validEntry(parent, id)
-		meta.Chain = append(meta.Chain, entry)
-		parent = entry.ID
+		node := validNode(parent, layerHexID(i))
+		manifest = withNode(manifest, node)
+		parent = node.ID
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -51,13 +50,19 @@ func seedChain(t *testing.T, repo Repo, layers int) Meta {
 	if err := os.WriteFile(repo.ImagePath(), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	// Deliberately bypass EncodeManifest validation: callers seed
+	// over-deep stacks to exercise the resolution guards.
+	body, err := yaml.Marshal(manifest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range meta.Chain {
-		writeLayer(t, repo, entry.ID, []byte("layer-"+entry.ID))
+	if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	return meta
+	for _, node := range manifest.Images[1:] {
+		writeLayer(t, repo, node.ID, []byte("layer-"+node.ID))
+	}
+	return manifest
 }
 
 // seedRetired parks a full image with one layer under kind/<id> so
@@ -72,7 +77,7 @@ func seedRetired(t *testing.T, repo Repo, kind, id string) {
 	if err := os.WriteFile(filepath.Join(dir, fileImage), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), metaFor(body)); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifestFor(body)); err != nil {
 		t.Fatal(err)
 	}
 	layer := filepath.Join(dir, dirIncr, "cccccccccccccccc"+squashExt)
@@ -103,23 +108,6 @@ func memberEqual(got, want Member) bool {
 	return got.Path == want.Path && got.ID == want.ID &&
 		got.Size == want.Size && got.MtimeUnix == want.MtimeUnix &&
 		got.SHA256 == want.SHA256 && slices.Equal(got.Blocks, want.Blocks)
-}
-
-// rootNodeOf converts the facts of a v1 fixture meta into the full
-// root node of a test manifest.
-func rootNodeOf(meta Meta) ImageMeta {
-	return ImageMeta{
-		ID:            meta.ID,
-		Kind:          KindFull,
-		Size:          meta.Size,
-		SHA256:        meta.SHA256,
-		MtimeUnix:     meta.MtimeUnix,
-		CreatedAt:     meta.CreatedAt,
-		Builder:       meta.Builder,
-		Deprecated:    meta.Deprecated,
-		ContentSHA256: meta.ContentSHA256,
-		Blocks:        meta.Blocks,
-	}
 }
 
 // layerNodeOf builds one valid single-file incremental node for a
@@ -335,7 +323,7 @@ func assertFileFormError(t *testing.T, err error, tc fileFormCase) {
 func TestResolveMountLibraryFullOnly(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	manifest := seedChain(t, repo, 0)
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
 		t.Fatal(err)
@@ -343,14 +331,14 @@ func TestResolveMountLibraryFullOnly(t *testing.T) {
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.ID,
+		ID:      rootID(manifest),
+		Tip:     rootID(manifest),
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
-			Size:      meta.Size,
-			MtimeUnix: meta.MtimeUnix,
-			SHA256:    meta.SHA256,
+			Size:      rootOf(manifest).Size,
+			MtimeUnix: rootOf(manifest).MtimeUnix,
+			SHA256:    rootOf(manifest).SHA256,
 		}},
 	}
 	assertTarget(t, got, want)
@@ -359,14 +347,14 @@ func TestResolveMountLibraryFullOnly(t *testing.T) {
 func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 3)
+	manifest := seedChain(t, repo, 3)
 	members := []Member{{
 		Path:      repo.ImagePath(),
-		Size:      meta.Size,
-		MtimeUnix: meta.MtimeUnix,
-		SHA256:    meta.SHA256,
+		Size:      rootOf(manifest).Size,
+		MtimeUnix: rootOf(manifest).MtimeUnix,
+		SHA256:    rootOf(manifest).SHA256,
 	}}
-	for _, entry := range meta.Chain {
+	for _, entry := range manifest.Images[1:] {
 		path, err := repo.IncrPath(entry.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -383,8 +371,8 @@ func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTarget(t, got, Target{
-		Library: true, Name: "alice/app", ID: meta.ID,
-		Tip: meta.Chain[len(meta.Chain)-1].ID, Format: FormatSquashfs, Members: members,
+		Library: true, Name: "alice/app", ID: rootID(manifest),
+		Tip: manifest.Head, Format: FormatSquashfs, Members: members,
 	})
 }
 
@@ -427,35 +415,35 @@ func TestResolveStackAtRefusesOverDeepInMemoryManifest(t *testing.T) {
 func TestResolveMountIgnoresArchivesAndHolds(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 1)
+	manifest := seedChain(t, repo, 1)
 	seedRetired(t, repo, dirArchives, "aaaaaaaaaaaaaaaa")
 	seedRetired(t, repo, dirHold, "bbbbbbbbbbbbbbbb")
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	layerPath, err := repo.IncrPath(meta.Chain[0].ID)
+	layerPath, err := repo.IncrPath(manifest.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.Chain[0].ID,
+		ID:      rootID(manifest),
+		Tip:     manifest.Images[1].ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
-				Size:      meta.Size,
-				MtimeUnix: meta.MtimeUnix,
-				SHA256:    meta.SHA256,
+				Size:      rootOf(manifest).Size,
+				MtimeUnix: rootOf(manifest).MtimeUnix,
+				SHA256:    rootOf(manifest).SHA256,
 			},
 			{
 				Path:      layerPath,
-				Size:      meta.Chain[0].Size,
-				MtimeUnix: meta.Chain[0].MtimeUnix,
-				SHA256:    meta.Chain[0].SHA256,
+				Size:      manifest.Images[1].Size,
+				MtimeUnix: manifest.Images[1].MtimeUnix,
+				SHA256:    manifest.Images[1].SHA256,
 			},
 		},
 	}
@@ -472,8 +460,8 @@ func TestResolveMountHeadStackRootFirst(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
 	body := []byte("branch-full")
-	meta := metaFor(body)
-	layerA := layerNodeOf(meta.ID, "aaaaaaaaaaaaaaaa")
+	root := rootOf(manifestFor(body))
+	layerA := layerNodeOf(root.ID, "aaaaaaaaaaaaaaaa")
 	layerB := layerNodeOf(layerA.ID, "bbbbbbbbbbbbbbbb")
 	// The head stops mid-stack: layerB rests on disk but must not
 	// join the resolved head stack.
@@ -487,15 +475,15 @@ func TestResolveMountHeadStackRootFirst(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
+		ID:      root.ID,
 		Tip:     layerA.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
-				Size:      meta.Size,
-				MtimeUnix: meta.MtimeUnix,
-				SHA256:    meta.SHA256,
+				Size:      root.Size,
+				MtimeUnix: root.MtimeUnix,
+				SHA256:    root.SHA256,
 			},
 			layerMember(repo.Dir, layerA),
 		},
@@ -553,9 +541,9 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 			prepare: func(t *testing.T) config.Config {
 				cfg := buildConfig(t)
 				repo := mustRepo(t, cfg)
-				meta := seedChain(t, repo, 0)
-				meta.Builder = ""
-				body, err := yaml.Marshal(meta)
+				manifest := seedChain(t, repo, 0)
+				manifest.Images[0].Builder = ""
+				body, err := yaml.Marshal(manifest)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -585,7 +573,7 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 				cfg := buildConfig(t)
 				repo := mustRepo(t, cfg)
 				fx := blocksFixture([][]byte{[]byte("resting-a")})
-				manifest := blocksBranchManifest(t, fx.meta, fx.meta.ID)
+				manifest := blocksBranchManifest(t, fx, fx.id())
 				// The manifest names the blocks form, but no
 				// _blocks/<root-id>/ directory rests beneath it.
 				seedActiveBlocksManifest(t, repo, manifest)
@@ -690,7 +678,7 @@ func TestResolveMountExistingFileWinsWithoutLibrary(t *testing.T) {
 func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	manifest := seedChain(t, repo, 0)
 	work := t.TempDir()
 	t.Chdir(work)
 	got, err := ResolveMount(cfg, "alice/app")
@@ -700,14 +688,14 @@ func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.ID,
+		ID:      rootID(manifest),
+		Tip:     rootID(manifest),
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
-			Size:      meta.Size,
-			MtimeUnix: meta.MtimeUnix,
-			SHA256:    meta.SHA256,
+			Size:      rootOf(manifest).Size,
+			MtimeUnix: rootOf(manifest).MtimeUnix,
+			SHA256:    rootOf(manifest).SHA256,
 		}},
 	})
 }
@@ -715,7 +703,7 @@ func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
 func TestResolveMountDirectoryFallsThroughToLibrary(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	manifest := seedChain(t, repo, 0)
 	work := t.TempDir()
 	t.Chdir(work)
 	if err := os.MkdirAll(filepath.Join("alice", "app"), 0o755); err != nil {
@@ -731,14 +719,14 @@ func TestResolveMountDirectoryFallsThroughToLibrary(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
-		ID:      meta.ID,
-		Tip:     meta.ID,
+		ID:      rootID(manifest),
+		Tip:     rootID(manifest),
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
-			Size:      meta.Size,
-			MtimeUnix: meta.MtimeUnix,
-			SHA256:    meta.SHA256,
+			Size:      rootOf(manifest).Size,
+			MtimeUnix: rootOf(manifest).MtimeUnix,
+			SHA256:    rootOf(manifest).SHA256,
 		}},
 	})
 }

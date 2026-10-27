@@ -114,12 +114,9 @@ func TestBuildDMGDirectoryUsesSrcfolder(t *testing.T) {
 	if _, statErr := os.Stat(repo.ImagePath()); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatal("directory build wrote image.sqsh")
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.ID != res.ID || meta.Format.Type != FormatDMG || meta.Format.Compression != "ulmo" ||
-		len(meta.Chain) != 0 || meta.SHA256 != res.SHA256 {
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootID(meta) != res.ID || meta.Format.Type != FormatDMG || meta.Format.Compression != "ulmo" ||
+		len(meta.Images) != 1 || rootOf(meta).SHA256 != res.SHA256 {
 		t.Fatalf("meta = %+v", meta)
 	}
 	// The published document is a single-node v2 manifest.
@@ -186,13 +183,10 @@ func TestBakeDMGUsesShadowAndArchivesPrevious(t *testing.T) {
 		t.Fatalf("temp survived: %v", statErr)
 	}
 	assertBytes(t, base, baked)
-	arch := filepath.Join(repo.Dir, "_archives", old.ID, ImageDMG)
+	arch := filepath.Join(repo.Dir, "_archives", rootID(old), ImageDMG)
 	assertBytes(t, arch, oldBody)
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.ID != res.ID || meta.ID == old.ID || len(meta.Chain) != 0 ||
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootID(meta) != res.ID || rootID(meta) == rootID(old) || len(meta.Images) != 1 ||
 		meta.Format.Compression != "ulfo" {
 		t.Fatalf("meta = %+v", meta)
 	}
@@ -210,17 +204,17 @@ func TestBakeDMGKeepsReferencedBaseInHold(t *testing.T) {
 	runner := &dmgRunner{body: []byte("next-dmg")}
 	if _, err := BuildDMG(DMGRequest{
 		Config: cfg, Name: "alice/app", Shadow: shadow, Builder: "test",
-		Refs: holdSet{ids: map[string]bool{old.ID: true}}, Run: runner.run,
+		Refs: holdSet{ids: map[string]bool{rootID(old): true}}, Run: runner.run,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(hold, ImageDMG), oldBody)
 	assertBytes(t, shadow, []byte("keep"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, "_archives", old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, "_archives", rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("referenced base was archived: %v", statErr)
 	}
 }
@@ -235,10 +229,10 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 	old := seedDMGActive(t, repo, oldBody)
 	shadowBody := []byte("live-shadow")
 	shadow := writeShadow(t, cfg.SessionsDir, "dev", 1, shadowBody)
-	pins := map[string]bool{old.ID: true}
+	pins := map[string]bool{rootID(old): true}
 	runner := &dmgRunner{body: []byte("first-bake")}
 	first := DMGRequest{
-		Config: cfg, Name: "alice/app", Shadow: shadow, MountedID: old.ID,
+		Config: cfg, Name: "alice/app", Shadow: shadow, MountedID: rootID(old),
 		Builder: "test", Refs: holdSet{ids: pins}, Run: runner.run,
 	}
 	if _, err := BuildDMG(first); err != nil {
@@ -251,11 +245,8 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 	// A newer session can pin the image the first bake published.
 	// This shadow still belongs to the held base. Change the shadow
 	// so the idle fingerprint misses and convert runs again.
-	published, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pins[published.ID] = true
+	published := mustLoadManifest(t, repo.MetaPath())
+	pins[rootID(published)] = true
 	shadowBody = []byte("live-shadow-again")
 	if err := os.WriteFile(shadow, shadowBody, 0o644); err != nil {
 		t.Fatal(err)
@@ -264,7 +255,7 @@ func TestBakeDMGAgainConvertsHeldBase(t *testing.T) {
 	if _, err := BuildDMG(first); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,23 +287,20 @@ func TestBakeDMGIdleSkipsConvertWhenShadowUnchanged(t *testing.T) {
 	runner := &dmgRunner{body: []byte("first-bake"), afterConvertShadow: postShadow}
 	req := DMGRequest{
 		Config: cfg, Name: "alice/app", Shadow: shadow,
-		MountedID: old.ID, Builder: "test",
-		Refs: holdSet{ids: map[string]bool{old.ID: true}}, Run: runner.run,
+		MountedID: rootID(old), Builder: "test",
+		Refs: holdSet{ids: map[string]bool{rootID(old): true}}, Run: runner.run,
 	}
 	first, err := BuildDMG(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta := mustLoadManifest(t, repo.MetaPath())
 	wantContent, err := shadowContentSHA256(shadow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ContentSHA256 != wantContent {
-		t.Fatalf("content_sha256 = %s, want post-convert %s", meta.ContentSHA256, wantContent)
+	if rootOf(meta).ContentSHA256 != wantContent {
+		t.Fatalf("content_sha256 = %s, want post-convert %s", rootOf(meta).ContentSHA256, wantContent)
 	}
 	assertBytes(t, shadow, postShadow)
 	runner.body = []byte("must-not-publish")
@@ -366,11 +354,8 @@ func TestBuildDMGCreateIdleSkipsNonDeterministicPacker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.ContentSHA256 == "" {
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootOf(meta).ContentSHA256 == "" {
 		t.Fatal("create left content_sha256 empty")
 	}
 	before, err := os.ReadFile(repo.MetaPath())
@@ -422,12 +407,9 @@ func TestBakeDMGFailureLeavesImageAndShadow(t *testing.T) {
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), oldBody)
 	assertBytes(t, shadow, shadowBody)
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.ID != old.ID {
-		t.Fatalf("meta id = %s, want %s", meta.ID, old.ID)
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootID(meta) != rootID(old) {
+		t.Fatalf("meta id = %s, want %s", rootID(meta), rootID(old))
 	}
 	assertNoDMGTemp(t, repo.Dir)
 }
@@ -467,9 +449,9 @@ func TestBuildDMGConstructorErrorIsNotExecuted(t *testing.T) {
 		t.Fatalf("err = %v calls = %q", err, runner.calls)
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), []byte("untouched"))
-	meta, loadErr := Load(repo.MetaPath())
-	if loadErr != nil || meta.ID != old.ID {
-		t.Fatalf("meta = %+v %v", meta, loadErr)
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootID(meta) != rootID(old) {
+		t.Fatalf("meta = %+v", meta)
 	}
 }
 
@@ -542,7 +524,7 @@ func TestGCDoesNotDeleteSessionShadow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Action != GCActionRemoved || events[0].FullID != retired.ID {
+	if len(events) != 1 || events[0].Action != GCActionRemoved || events[0].FullID != rootID(retired) {
 		t.Fatalf("events = %+v", events)
 	}
 	assertBytes(t, shadow, []byte("keep-shadow"))
@@ -569,11 +551,8 @@ func TestRemoveRefusesAttachedDMG(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("attach checks = %d", calls)
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.Deprecated {
+	meta := mustLoadManifest(t, repo.MetaPath())
+	if rootOf(meta).Deprecated {
 		t.Fatal("attached target was deprecated")
 	}
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), body)

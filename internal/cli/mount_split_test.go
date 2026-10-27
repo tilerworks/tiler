@@ -44,24 +44,29 @@ func writeSplitFile(t *testing.T, path, body string) {
 }
 
 // storeFixtureMeta writes one repository metadata document.
-func storeFixtureMeta(t *testing.T, repoDir string, meta image.Meta) {
+func storeFixtureMeta(t *testing.T, repoDir string, manifest image.Manifest) {
 	t.Helper()
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := image.Store(filepath.Join(repoDir, "meta.yaml"), meta); err != nil {
+	if err := image.StoreManifest(filepath.Join(repoDir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// fixtureMeta is the shared metadata head of the split fixtures.
-func fixtureMeta(name string) image.Meta {
-	return image.Meta{
-		Name: name, Version: image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd},
-		MtimeUnix: splitMtime.Unix(), CreatedAt: splitMtime,
-		Builder: "tiler test",
+// fixtureManifest is the shared manifest head of the split
+// fixtures: one full-root template the builders fill in.
+func fixtureManifest(name string) image.Manifest {
+	return image.Manifest{
+		Version: image.ManifestVersion,
+		Name:    name,
+		Format:  image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd},
+		Images: []image.ImageMeta{{
+			Kind:      image.KindFull,
+			MtimeUnix: splitMtime.Unix(),
+			CreatedAt: splitMtime,
+			Builder:   "tiler test",
+		}},
 	}
 }
 
@@ -80,17 +85,19 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 		whole = append(whole, body...)
 	}
 	wholeSum := sha256.Sum256(whole)
-	meta := fixtureMeta(repo.Name())
-	meta.ID = image.ID(wholeSum)
-	meta.Size = int64(len(whole))
-	meta.SHA256 = hex.EncodeToString(wholeSum[:])
-	blocksDir := filepath.Join(repo.Dir, "_blocks", meta.ID)
+	manifest := fixtureManifest(repo.Name())
+	root := &manifest.Images[0]
+	root.ID = image.ID(wholeSum)
+	root.Size = int64(len(whole))
+	root.SHA256 = hex.EncodeToString(wholeSum[:])
+	manifest.Head = root.ID
+	blocksDir := filepath.Join(repo.Dir, "_blocks", root.ID)
 	var names []string
 	for i, body := range bodies {
 		block := fmt.Sprintf("blk.%03d", i)
 		writeSplitFile(t, filepath.Join(blocksDir, block), body)
 		names = append(names, block)
-		meta.Blocks = append(meta.Blocks, image.BlockEntry{
+		root.Blocks = append(root.Blocks, image.BlockEntry{
 			Name: block, Size: int64(len(body)),
 			SHA256: sumOf([]byte(body)), MtimeUnix: splitMtime.Unix(),
 		})
@@ -99,8 +106,8 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 		writeSplitFile(t, filepath.Join(blocksDir, concatViewFile),
 			strings.Join(names, "\n")+"\n")
 	}
-	storeFixtureMeta(t, repo.Dir, meta)
-	return meta.ID
+	storeFixtureMeta(t, repo.Dir, manifest)
+	return root.ID
 }
 
 // writeBlocksChainFixture seeds a blocks full image plus one chain
@@ -123,29 +130,30 @@ func writeBlocksChainFixture(
 	layerSum = hex.EncodeToString(layerDigest[:])
 	layerID := image.ID(layerDigest)
 	blocksDir := filepath.Join(repo.Dir, "_blocks", layerID)
-	meta, err := image.Load(filepath.Join(repo.Dir, "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(repo.Dir, "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ID != fullID {
-		t.Fatalf("full id = %s, want %s", meta.ID, fullID)
+	if manifestRootID(manifest) != fullID {
+		t.Fatalf("full id = %s, want %s", manifestRootID(manifest), fullID)
 	}
-	entry := image.ChainEntry{
-		ID: layerID, Parent: meta.ID,
+	node := image.ImageMeta{
+		ID: layerID, Kind: image.KindIncremental, Parent: fullID,
 		Size: int64(len(layerWhole)), SHA256: layerSum,
 		MtimeUnix: splitMtime.Unix(), CreatedAt: splitMtime,
 	}
 	for i, body := range layerBodies {
 		block := fmt.Sprintf("blk.%03d", i)
 		writeSplitFile(t, filepath.Join(blocksDir, block), body)
-		entry.Blocks = append(entry.Blocks, image.BlockEntry{
+		node.Blocks = append(node.Blocks, image.BlockEntry{
 			Name: block, Size: int64(len(body)),
 			SHA256: sumOf([]byte(body)), MtimeUnix: splitMtime.Unix(),
 		})
 	}
-	meta.Chain = []image.ChainEntry{entry}
-	storeFixtureMeta(t, repo.Dir, meta)
-	return meta.SHA256, layerSum
+	manifest.Images = append(manifest.Images, node)
+	manifest.Head = node.ID
+	storeFixtureMeta(t, repo.Dir, manifest)
+	return manifestRoot(manifest).SHA256, layerSum
 }
 
 func TestMountBlocksReassembleRoute(t *testing.T) {

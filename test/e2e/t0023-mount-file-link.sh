@@ -91,9 +91,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file registers symlink m
 	test_path_is_symlink "$payload" &&
 	test "$(readlink "$payload")" = "$img" &&
 	test_path_is_file "$meta_file" &&
-	test_grep -E "^id: \"?[0-9a-f]+\"?$" "$meta_file" &&
-	test_grep ! "^chain:" "$meta_file" &&
-	base_id=$(sed -n "s/^id: \"\\?\([0-9a-f]*\\)\"\\?$/\\1/p" "$meta_file") &&
+	test_grep -E "^head: \"?[0-9a-f]+\"?$" "$meta_file" &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
+	base_id=$(sed -n "s/^head: \"\\?\([0-9a-f]*\\)\"\\?$/\\1/p" "$meta_file") &&
 	test -n "$base_id" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	test_path_is_file "$work_dir/docs/guide.md" &&
@@ -123,7 +123,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --increm
 	test "$layer" != "$base_id" &&
 	test_path_is_symlink "$payload" &&
 	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
-	test_grep -E "^id: \"?$base_id\"?$" "$meta_file" &&
+	test_grep -E "^[[:space:]]*- id: \"?$base_id\"?$" "$meta_file" &&
 	"$tiler_bin" images show "$lib_name" >show.out 2>show.err &&
 	test_grep -E "^  chain +1$" show.out
 '

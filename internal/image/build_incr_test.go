@@ -73,14 +73,14 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 		t.Fatalf("version = %q, want %q", loaded.Version, ManifestVersion)
 	}
 	root, err := loaded.Full()
-	if err != nil || root.ID != active.ID {
+	if err != nil || root.ID != rootID(active) {
 		t.Fatalf("manifest root = %+v, %v", root, err)
 	}
 	if len(loaded.Images) != 2 || loaded.Head != res.ID {
 		t.Fatalf("manifest = %+v", loaded)
 	}
 	node, ok := loaded.Node(res.ID)
-	if !ok || node.Kind != KindIncremental || node.Parent != active.ID ||
+	if !ok || node.Kind != KindIncremental || node.Parent != rootID(active) ||
 		node.Size != int64(len(body)) || node.SHA256 != res.SHA256 ||
 		!node.CreatedAt.Equal(fixedNow()) {
 		t.Fatalf("graph node = %+v", node)
@@ -142,12 +142,12 @@ func TestBuildIncrRefusesWhenChainFull(t *testing.T) {
 		"dddddddddddddddd", "eeeeeeeeeeeeeeee", "ffffffffffffffff",
 		"0000000000000000",
 	}
-	parent := active.ID
+	parent := rootID(active)
 	for _, id := range ids {
-		active.Chain = append(active.Chain, validEntry(parent, id))
+		active = withNode(active, validNode(parent, id))
 		parent = id
 	}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{body: []byte("one-too-many")}
@@ -256,7 +256,7 @@ func TestBuildIncrBaseTipBranchesAndMovesHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stack) != 3 || stack[0].ID != active.ID ||
+	if len(stack) != 3 || stack[0].ID != rootID(active) ||
 		stack[1].ID != first.ID || stack[2].ID != third.ID {
 		t.Fatalf("branch stack = %+v", stack)
 	}
@@ -289,7 +289,7 @@ func TestBuildIncrRejectsUnknownBaseTip(t *testing.T) {
 		t.Fatalf("packer ran on a refused base tip: %v", runner.calls)
 	}
 	loaded := readManifest(t, repo)
-	if len(loaded.Images) != 1 || loaded.Head != active.ID {
+	if len(loaded.Images) != 1 || loaded.Head != rootID(active) {
 		t.Fatalf("manifest changed: %+v", loaded)
 	}
 }
@@ -308,12 +308,12 @@ func TestBuildIncrDepthLimitFollowsBaseTipPath(t *testing.T) {
 		"dddddddddddddddd", "eeeeeeeeeeeeeeee", "ffffffffffffffff",
 		"0000000000000000",
 	}
-	parent := active.ID
+	parent := rootID(active)
 	for _, id := range ids {
-		active.Chain = append(active.Chain, validEntry(parent, id))
+		active = withNode(active, validNode(parent, id))
 		parent = id
 	}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{body: []byte("one-too-many")}
@@ -376,7 +376,7 @@ func TestBuildIncrSameDigestOnTrailingBaseTipIsNoOp(t *testing.T) {
 	}
 	body := []byte("layer-from-old-view")
 	req.Run = (&fakeRunner{body: body}).run
-	req.BaseTip = active.ID
+	req.BaseTip = rootID(active)
 	first, err := BuildIncr(req)
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestBuildIncrSameDigestOnTrailingBaseTipIsNoOp(t *testing.T) {
 	// success: the layer is already in the graph, so neither the
 	// graph nor the head moves.
 	req.Run = (&fakeRunner{body: body}).run
-	req.BaseTip = active.ID
+	req.BaseTip = rootID(active)
 	replay, err := BuildIncr(req)
 	if err != nil {
 		t.Fatal(err)
@@ -420,7 +420,7 @@ func TestBuildIncrSameDigestAcrossParentsReusesNode(t *testing.T) {
 	// Layer X is recorded under the root, and the head moves onto it.
 	bodyX := []byte("shared-payload")
 	req.Run = (&fakeRunner{body: bodyX}).run
-	req.BaseTip = active.ID
+	req.BaseTip = rootID(active)
 	nodeX, err := BuildIncr(req)
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +451,7 @@ func TestBuildIncrSameDigestAcrossParentsReusesNode(t *testing.T) {
 		t.Fatalf("reuse changed the graph or the head: %+v", loaded)
 	}
 	node, ok := loaded.Node(nodeX.ID)
-	if !ok || node.Parent != active.ID {
+	if !ok || node.Parent != rootID(active) {
 		t.Fatalf("reused node reparented: %+v", node)
 	}
 	assertBytes(t, reuse.Path, bodyX)
@@ -467,8 +467,8 @@ func TestBuildIncrRestoresMissingLayerFile(t *testing.T) {
 	active := seedActive(t, repo, []byte("base-full"), false)
 	body := []byte("layer-lost-its-file")
 	sum := sha256.Sum256(body)
-	active.Chain = []ChainEntry{realEntry(active.ID, body)}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	active = withNode(active, realNode(rootID(active), body))
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	req := IncrRequest{
@@ -489,12 +489,13 @@ func TestBuildIncrRestoresMissingLayerFile(t *testing.T) {
 	}
 }
 
-// realEntry is a chain member whose digest fields describe body, so
-// verification of the layer file can pass.
-func realEntry(parent string, body []byte) ChainEntry {
+// realNode is an incremental node whose digest fields describe
+// body, so verification of the layer file can pass.
+func realNode(parent string, body []byte) ImageMeta {
 	sum := sha256.Sum256(body)
-	return ChainEntry{
+	return ImageMeta{
 		ID:        ID(sum),
+		Kind:      KindIncremental,
 		Parent:    parent,
 		Size:      int64(len(body)),
 		SHA256:    hex.EncodeToString(sum[:]),
@@ -532,8 +533,8 @@ func TestBuildIncrVerifiesPublishedLayer(t *testing.T) {
 	}
 	loaded := readManifest(t, repo)
 	root, rootErr := loaded.Full()
-	if rootErr != nil || root.ID != active.ID ||
-		len(loaded.Images) != 1 || loaded.Head != active.ID {
+	if rootErr != nil || root.ID != rootID(active) ||
+		len(loaded.Images) != 1 || loaded.Head != rootID(active) {
 		t.Fatalf("manifest changed despite the failed verification: %+v", loaded)
 	}
 	entries, readErr := os.ReadDir(incrDir)
@@ -554,15 +555,15 @@ func TestBuildIncrReuseDetectsCorruptLayer(t *testing.T) {
 	}
 	active := seedActive(t, repo, []byte("base-full"), false)
 	body := []byte("layer-with-corrupt-twin")
-	active.Chain = []ChainEntry{realEntry(active.ID, body)}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	active = withNode(active, realNode(rootID(active), body))
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	incrDir := filepath.Join(repo.Dir, dirIncr)
 	if err := os.MkdirAll(incrDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	corrupt, err := repo.IncrPath(active.Chain[0].ID)
+	corrupt, err := repo.IncrPath(active.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,7 +642,7 @@ func TestBuildIncrSubdirMovesUpperWithoutCopy(t *testing.T) {
 	}
 	loaded := readManifest(t, repo)
 	node, ok := loaded.Node(res.ID)
-	if !ok || node.Parent != active.ID || loaded.Head != res.ID {
+	if !ok || node.Parent != rootID(active) || loaded.Head != res.ID {
 		t.Fatalf("manifest = %+v", loaded)
 	}
 }
@@ -686,8 +687,8 @@ func TestBuildIncrMetaRenameFailureRemovesLayer(t *testing.T) {
 	}
 	loaded := readManifest(t, repo)
 	root, rootErr := loaded.Full()
-	if rootErr != nil || root.ID != active.ID ||
-		len(loaded.Images) != 1 || loaded.Head != active.ID {
+	if rootErr != nil || root.ID != rootID(active) ||
+		len(loaded.Images) != 1 || loaded.Head != rootID(active) {
 		t.Fatalf("old manifest changed: %+v", loaded)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(repo.Dir, dirIncr))
@@ -809,7 +810,7 @@ func TestBuildIncrUpperMustBeDirectory(t *testing.T) {
 }
 
 // seedBlocksActive publishes a blocks-form full image for incr tests.
-func seedBlocksActive(t *testing.T, cfg config.Config, body []byte, blockSize int64) (Repo, Meta) {
+func seedBlocksActive(t *testing.T, cfg config.Config, body []byte, blockSize int64) (Repo, Manifest) {
 	t.Helper()
 	src := sourceDir(t)
 	_, err := BuildFull(FullRequest{
@@ -828,12 +829,9 @@ func seedBlocksActive(t *testing.T, cfg config.Config, body []byte, blockSize in
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if PayloadKind(loaded) != PayloadBlocks {
-		t.Fatalf("active form = %s, want blocks", PayloadKind(loaded))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if loaded.PayloadKind() != PayloadBlocks {
+		t.Fatalf("active form = %s, want blocks", loaded.PayloadKind())
 	}
 	return repo, loaded
 }
@@ -875,14 +873,14 @@ func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
 	}
 	loaded := readManifest(t, repo)
 	root, err := loaded.Full()
-	if err != nil || root.ID != active.ID {
+	if err != nil || root.ID != rootID(active) {
 		t.Fatalf("manifest root = %+v, %v", root, err)
 	}
 	if len(loaded.Images) != 2 || loaded.Head != res.ID {
 		t.Fatalf("manifest = %+v", loaded)
 	}
 	node, ok := loaded.Node(res.ID)
-	if !ok || node.Parent != active.ID ||
+	if !ok || node.Parent != rootID(active) ||
 		node.Size != int64(len(body)) || node.SHA256 != res.SHA256 ||
 		len(node.Blocks) != 3 ||
 		!node.CreatedAt.Equal(fixedNow()) {
@@ -1086,8 +1084,8 @@ func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
 	}
 	loaded := readManifest(t, repo)
 	root, rootErr := loaded.Full()
-	if rootErr != nil || root.ID != active.ID ||
-		len(loaded.Images) != 1 || loaded.Head != active.ID {
+	if rootErr != nil || root.ID != rootID(active) ||
+		len(loaded.Images) != 1 || loaded.Head != rootID(active) {
 		t.Fatalf("old manifest changed: %+v", loaded)
 	}
 	sum := sha256.Sum256(body)
@@ -1098,7 +1096,7 @@ func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
 	if _, statErr := os.Stat(doomed); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("fresh blocks dir left behind: %v", statErr)
 	}
-	fullDir, err := repo.BlocksDirPath(active.ID)
+	fullDir, err := repo.BlocksDirPath(rootID(active))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1119,7 +1117,7 @@ func TestBuildIncrInheritsActiveFormat(t *testing.T) {
 	}
 	active := seedActive(t, repo, []byte("base-full"), false)
 	active.Format = Format{Type: FormatErofs, Compression: "lz4"}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	upper := upperDir(t)
@@ -1152,7 +1150,7 @@ func TestBuildIncrDefaultSmokeMountsActiveFormat(t *testing.T) {
 	}
 	active := seedActive(t, repo, []byte("base-full"), false)
 	active.Format = Format{Type: FormatErofs, Compression: "lz4"}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	format, err := container.Lookup(FormatErofs)

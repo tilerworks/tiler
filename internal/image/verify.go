@@ -8,10 +8,10 @@ import (
 )
 
 // VerifySHA256 re-hashes a published file and compares the digest
-// with meta. Builds call it when the build ends so a torn rename
-// cannot pass as a good image.
-func VerifySHA256(meta Meta, path string) error {
-	return verifyFileSHA256(path, meta.SHA256)
+// with the recorded node facts. Builds call it when the build ends
+// so a torn rename cannot pass as a good image.
+func VerifySHA256(node ImageMeta, path string) error {
+	return verifyFileSHA256(path, node.SHA256)
 }
 
 func verifyFileSHA256(path, want string) error {
@@ -31,8 +31,8 @@ func verifyFileSHA256(path, want string) error {
 
 // QuickCheck compares the recorded size and mtime with the file on
 // disk. Later mount commands use it as a cheap staleness probe.
-func QuickCheck(meta Meta, path string) error {
-	return quickCheckFile(path, meta.Size, meta.MtimeUnix)
+func QuickCheck(node ImageMeta, path string) error {
+	return quickCheckFile(path, node.Size, node.MtimeUnix)
 }
 
 func quickCheckFile(path string, size, mtime int64) error {

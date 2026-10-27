@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// State is the listing of one repository: its active image plus the
-// chains parked beside it.
+// State is the listing of one repository: its active manifest plus
+// the chains parked beside it.
 type State struct {
-	// Active is the active image metadata. HasActive reports whether
-	// an active image loaded; a repository mid-publish or fully
+	// Active is the active image manifest. HasActive reports whether
+	// an active manifest loaded; a repository mid-publish or fully
 	// archived has none.
-	Active    Meta
+	Active    Manifest
 	HasActive bool
 	// Archives and Holds list the chain ids under _archives/ and
 	// _hold/, sorted by name. Transient parked entries never list.
@@ -146,11 +146,11 @@ func findDeeperLeaf(dir string, segments []string) (string, bool) {
 // archive still lists by id; a corrupt active meta fails the call.
 func Inspect(repo Repo) (State, error) {
 	var state State
-	meta, exists, err := loadActive(repo)
+	manifest, exists, err := loadActiveManifest(repo)
 	if err != nil {
 		return State{}, err
 	}
-	state.Active, state.HasActive = meta, exists
+	state.Active, state.HasActive = manifest, exists
 	state.Archives, err = chainDirIDs(filepath.Join(repo.Dir, dirArchives))
 	if err != nil {
 		return State{}, err

@@ -42,10 +42,12 @@ const (
 	PayloadBlocks = "blocks"
 )
 
-// MetaVersion is the metadata layout version written to meta.yaml.
-// Version is a reserved compatibility field: a loader that only
-// understands MetaVersion refuses any other value, so a future
-// layout upgrade stays fail-closed.
+// MetaVersion is the legacy v1 metadata layout version. Version is
+// a reserved compatibility field: a loader refuses every value it
+// does not understand, so a future layout upgrade stays fail-closed.
+// LoadManifest still reads v1 documents and converts their linear
+// chain into a DAG; no writer produces v1 anymore, so rewriting a
+// lazily migrated hold or archive document upgrades it.
 const MetaVersion = "1.0"
 
 // ManifestVersion is the DAG metadata layout version. LoadManifest
@@ -61,11 +63,11 @@ type Format struct {
 	Compression string `yaml:"compression"`
 }
 
-// ChainEntry is one incremental layer. Kind is not repeated here;
-// every member is incremental. Blocks is set when the layer is
-// stored as _blocks/<id>/; digest and size still describe the whole
-// logical squashfs.
-type ChainEntry struct {
+// chainEntryV1 is one incremental layer of a legacy v1 document.
+// Kind is not repeated there; every member is incremental. Blocks
+// is set when the layer is stored as _blocks/<id>/; digest and size
+// still describe the whole logical squashfs.
+type chainEntryV1 struct {
 	ID        string       `yaml:"id"`
 	Parent    string       `yaml:"parent"`
 	Size      int64        `yaml:"size"`
@@ -77,7 +79,7 @@ type ChainEntry struct {
 
 // BlockEntry is one fixed-size byte block of a blocks payload. The
 // blocks reassemble in manifest order into the single logical image
-// file whose digest and size are recorded on Meta.
+// file whose digest and size are recorded on the image node.
 type BlockEntry struct {
 	Name      string `yaml:"name"`
 	Size      int64  `yaml:"size"`
@@ -85,14 +87,17 @@ type BlockEntry struct {
 	MtimeUnix int64  `yaml:"mtime_unix"`
 }
 
-// Meta is the YAML document stored beside an image. Unknown fields
-// are dropped on load.
-type Meta struct {
+// metaV1 is the legacy v1 YAML document stored beside an image
+// before the DAG layout. Only the loader reads this shape: v1
+// documents resting in _hold/ and _archives/ migrate lazily, so the
+// decoder must keep accepting them, but nothing writes one anymore.
+// Unknown fields are dropped on load.
+type metaV1 struct {
 	ID string `yaml:"id"`
 	// Name is the canonical library name this image belongs to.
 	Name string `yaml:"name"`
-	// Version is the reserved metadata layout version. Builds write
-	// MetaVersion; Validate refuses any other value.
+	// Version is the reserved metadata layout version. Legacy
+	// documents carry MetaVersion; validate refuses any other value.
 	Version    string    `yaml:"version"`
 	Kind       string    `yaml:"kind"`
 	Format     Format    `yaml:"format"`
@@ -110,8 +115,8 @@ type Meta struct {
 	// payload is already deterministic. An identical fingerprint is
 	// an idle rebuild that skips hdiutil, because real disk images
 	// embed timestamps.
-	ContentSHA256 string       `yaml:"content_sha256,omitempty"`
-	Chain         []ChainEntry `yaml:"chain,omitempty"`
+	ContentSHA256 string         `yaml:"content_sha256,omitempty"`
+	Chain         []chainEntryV1 `yaml:"chain,omitempty"`
 	// Blocks is the byte-block manifest of a split payload. It stays
 	// empty for the single-file form.
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
@@ -122,7 +127,7 @@ type Meta struct {
 // was built on, which is the full root or another incremental node
 // when builds branch off a view that trails the head.
 //
-//nolint:revive // ImageMeta is the metadata layout name; Meta is the v1 type.
+//nolint:revive // ImageMeta names one DAG node; the document type is Manifest.
 type ImageMeta struct {
 	ID     string `yaml:"id"`
 	Kind   string `yaml:"kind"`
@@ -134,9 +139,9 @@ type ImageMeta struct {
 	MtimeUnix int64     `yaml:"mtime_unix"`
 	CreatedAt time.Time `yaml:"created_at"`
 	Builder   string    `yaml:"builder"`
-	// Deprecated and ContentSHA256 carry the same facts as the Meta
-	// fields of the same name; ContentSHA256 is set by dmg publishes
-	// only.
+	// Deprecated marks an image flagged by the two-phase remove.
+	// ContentSHA256 is the logical content fingerprint of a dmg
+	// publish; both stay facts of the full root.
 	Deprecated    bool   `yaml:"deprecated"`
 	ContentSHA256 string `yaml:"content_sha256,omitempty"`
 	// Blocks is the byte-block manifest of a split payload node. It
@@ -166,16 +171,6 @@ type Manifest struct {
 // payload digest stored on meta.
 func ID(sum [32]byte) string {
 	return hex.EncodeToString(sum[:])
-}
-
-// PayloadKind reports the storage form of the active payload. Load,
-// publish, and resolve paths dispatch on it; an empty Blocks list is
-// the single-file form.
-func PayloadKind(m Meta) string {
-	if len(m.Blocks) > 0 {
-		return PayloadBlocks
-	}
-	return PayloadSingle
 }
 
 // PayloadKind reports the storage form of the manifest payload. The
@@ -295,11 +290,18 @@ func (m Manifest) Reachable(tips ...string) map[string]bool {
 	return seen
 }
 
-// manifestFromMeta converts a v1 document into the DAG form. The v1
-// root is the full image and every chain member is incremental, so
-// the recorded parent edges form a linear DAG; head becomes the
-// chain tail, or the full id when the chain is empty.
-func manifestFromMeta(meta Meta) Manifest {
+// Branches counts the DAG nodes off the head stack: layers built on
+// a view that trailed the head, which later head moves do not
+// reach. A linear DAG reports zero.
+func (m Manifest) Branches() int {
+	return len(m.Images) - len(m.Reachable(m.Head))
+}
+
+// manifestFromV1 converts a legacy v1 document into the DAG form.
+// The v1 root is the full image and every chain member is
+// incremental, so the recorded parent edges form a linear DAG; head
+// becomes the chain tail, or the full id when the chain is empty.
+func manifestFromV1(meta metaV1) Manifest {
 	manifest := Manifest{
 		Version: ManifestVersion,
 		Name:    meta.Name,
@@ -333,52 +335,4 @@ func manifestFromMeta(meta Meta) Manifest {
 		manifest.Head = entry.ID
 	}
 	return manifest
-}
-
-// metaFromManifest converts a manifest into the v1 Meta shape for
-// readers that predate the DAG. The v1 chain is the linearized head
-// stack, so branch nodes off the head stack are invisible in this
-// view; graph-aware callers read the manifest itself. The result is
-// deliberately not re-validated against the v1 rules: the manifest
-// passed the graph Validate, but Validate tolerates legacy 16-hex
-// ids while v1 Meta.Validate demands 64 hex digits, so a legacy-id
-// manifest converts into a Meta that would fail v1 validation. A v1
-// caller that re-encodes such a Meta through Store or Encode sees
-// that violation surface there.
-func metaFromManifest(manifest Manifest) (Meta, error) {
-	root, err := manifest.Full()
-	if err != nil {
-		return Meta{}, err
-	}
-	stack, err := manifest.HeadStack()
-	if err != nil {
-		return Meta{}, err
-	}
-	meta := Meta{
-		ID:            root.ID,
-		Name:          manifest.Name,
-		Version:       MetaVersion,
-		Kind:          KindFull,
-		Format:        manifest.Format,
-		Size:          root.Size,
-		SHA256:        root.SHA256,
-		MtimeUnix:     root.MtimeUnix,
-		CreatedAt:     root.CreatedAt,
-		Builder:       root.Builder,
-		Deprecated:    root.Deprecated,
-		ContentSHA256: root.ContentSHA256,
-		Blocks:        root.Blocks,
-	}
-	for _, node := range stack[1:] {
-		meta.Chain = append(meta.Chain, ChainEntry{
-			ID:        node.ID,
-			Parent:    node.Parent,
-			Size:      node.Size,
-			SHA256:    node.SHA256,
-			MtimeUnix: node.MtimeUnix,
-			CreatedAt: node.CreatedAt,
-			Blocks:    node.Blocks,
-		})
-	}
-	return meta, nil
 }

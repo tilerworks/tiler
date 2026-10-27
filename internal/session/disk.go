@@ -203,11 +203,15 @@ func (e *Engine) libraryDigest(action Action) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	meta, err := image.Load(metaPath)
-	if err != nil || meta.SHA256 == "" {
+	manifest, err := image.LoadManifest(metaPath)
+	if err != nil {
 		return "", false
 	}
-	return meta.SHA256, true
+	root, err := manifest.Full()
+	if err != nil || root.SHA256 == "" {
+		return "", false
+	}
+	return root.SHA256, true
 }
 
 // fileDigest is the lowercase sha256 of path. attach hashes a

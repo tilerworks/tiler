@@ -325,7 +325,11 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	meta, err := image.Load(repo.MetaPath())
+	manifest, err := image.LoadManifest(repo.MetaPath())
+	if err != nil {
+		return false, fmt.Errorf("build: %w", err)
+	}
+	root, err := manifest.Full()
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
@@ -333,13 +337,13 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: upper: %w", err)
 	}
-	layers := chainBytes(meta)
-	if !exceedsHalfBase(meta.Size, layers, upper) {
+	layers := chainBytes(manifest)
+	if !exceedsHalfBase(root.Size, layers, upper) {
 		return false, nil
 	}
 	_, err = fmt.Fprintf(stderr,
 		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
-		layers+upper, meta.Size)
+		layers+upper, root.Size)
 	return err == nil, err
 }
 
@@ -356,10 +360,16 @@ func exceedsHalfBase(base, layers, upper int64) bool {
 	return sum > base/2
 }
 
-func chainBytes(meta image.Meta) int64 {
+// chainBytes sums the recorded layer sizes of the head stack: the
+// incremental nodes a default build appends to.
+func chainBytes(manifest image.Manifest) int64 {
+	stack, err := manifest.HeadStack()
+	if err != nil {
+		return 0
+	}
 	var n int64
-	for _, entry := range meta.Chain {
-		n += entry.Size
+	for _, node := range stack[1:] {
+		n += node.Size
 	}
 	return n
 }
@@ -452,11 +462,11 @@ func readActiveFormat(cfg config.Config, name string) (image.Format, error) {
 	if err != nil {
 		return image.Format{}, err
 	}
-	meta, err := image.Load(repo.MetaPath())
+	manifest, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
 		return image.Format{}, err
 	}
-	return meta.Format, nil
+	return manifest.Format, nil
 }
 
 func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, compression string) error {

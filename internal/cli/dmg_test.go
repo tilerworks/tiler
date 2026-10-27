@@ -47,7 +47,7 @@ func TestImagesShowDMGSurvivesPublishRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Publish(body, publishManifest(meta), nil); err != nil {
+	if err := repo.Publish(body, meta, nil); err != nil {
 		t.Fatal(err)
 	}
 	sqsh := filepath.Join(repo.Dir, image.ImageFile)
@@ -453,48 +453,50 @@ func writeDMGFixture(t *testing.T, imagesDir, compression string) {
 		t.Fatal(err)
 	}
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	meta := image.Meta{
-		ID:        sum,
-		Name:      "alice/app",
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatDMG, Compression: compression},
-		Size:      info.Size(),
-		SHA256:    sum,
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
-		Builder:   "test",
-	}
-	if len(meta.Chain) != 0 {
-		t.Fatal("fixture chain is not empty")
-	}
-	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
+	manifest := dmgFixtureManifest(sum, sum, info.Size(),
+		info.ModTime().Unix(), compression)
+	if err := image.StoreManifest(filepath.Join(dir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// publishManifest converts a v1 fixture meta into the single-node
-// v2 manifest Repo.Publish accepts.
-func publishManifest(meta image.Meta) image.Manifest {
+// dmgFixtureManifest assembles the single-node dmg manifest the
+// fixtures store: the full image is the whole DAG and the head.
+func dmgFixtureManifest(id, sha string, size, mtime int64, compression string) image.Manifest {
 	return image.Manifest{
 		Version: image.ManifestVersion,
-		Name:    meta.Name,
-		Format:  meta.Format,
-		Head:    meta.ID,
+		Name:    "alice/app",
+		Format:  image.Format{Type: image.FormatDMG, Compression: compression},
+		Head:    id,
 		Images: []image.ImageMeta{{
-			ID:            meta.ID,
-			Kind:          image.KindFull,
-			Size:          meta.Size,
-			SHA256:        meta.SHA256,
-			MtimeUnix:     meta.MtimeUnix,
-			CreatedAt:     meta.CreatedAt,
-			Builder:       meta.Builder,
-			ContentSHA256: meta.ContentSHA256,
+			ID:        id,
+			Kind:      image.KindFull,
+			Size:      size,
+			SHA256:    sha,
+			MtimeUnix: mtime,
+			CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
+			Builder:   "test",
 		}},
 	}
 }
 
-func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Meta {
+// manifestRootID is the full-root id of a fixture manifest. Test
+// fixtures always hold a valid root, so the graph error cannot
+// occur; a broken helper input panics instead of passing silently.
+func manifestRootID(m image.Manifest) string {
+	return manifestRoot(m).ID
+}
+
+// manifestRoot is the full-root node of a fixture manifest.
+func manifestRoot(m image.Manifest) image.ImageMeta {
+	root, err := m.Full()
+	if err != nil {
+		panic(err)
+	}
+	return root
+}
+
+func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Manifest {
 	t.Helper()
 	dir := filepath.Join(imagesDir, "alice", "app")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -509,28 +511,15 @@ func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Me
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	meta := image.Meta{
-		ID:        image.ID(sum),
-		Name:      "alice/app",
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
-		Size:      info.Size(),
-		SHA256:    hex.EncodeToString(sum[:]),
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
-		Builder:   "test",
-	}
-	if len(meta.Chain) != 0 {
-		t.Fatal("fixture chain is not empty")
-	}
-	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
+	manifest := dmgFixtureManifest(image.ID(sum), hex.EncodeToString(sum[:]),
+		info.Size(), info.ModTime().Unix(), "ulfo")
+	if err := image.StoreManifest(filepath.Join(dir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, image.ImageFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("fixture must not include image.sqsh")
 	}
-	return meta
+	return manifest
 }
 
 func installHdiutil(t *testing.T, body []byte) *[][]string {
@@ -589,7 +578,7 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 			useDarwinHost(t)
 			calls := installHdiutil(t, []byte("baked-dmg"))
 			action := libraryAction("alice/app", work, session.ModeRW)
-			action.FullID = meta.ID
+			action.FullID = manifestRootID(meta)
 			writeSessionRecord(t, sessionsDir(home), "dev", action)
 			args := append(lib, "build")
 			if flag != "" {
@@ -617,7 +606,7 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 				t.Fatalf("shadow = %q %v", body, readErr)
 			}
 			assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_hold", meta.ID, image.ImageDMG), "old-dmg")
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_hold", manifestRootID(meta), image.ImageDMG), "old-dmg")
 			if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("active session archived the pinned image: %v", statErr)
 			}
@@ -665,7 +654,7 @@ func TestDMGViewBakeAcceptsEquivalentDirs(t *testing.T) {
 			useDarwinHost(t)
 			calls := installHdiutil(t, []byte("baked-dmg"))
 			action := libraryAction("alice/app", work, session.ModeRW)
-			action.FullID = meta.ID
+			action.FullID = manifestRootID(meta)
 			writeSessionRecord(t, sessionsDir(home), "dev", action)
 			if form.parent {
 				t.Chdir(home)
@@ -727,7 +716,7 @@ func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
 	}
 	assertFileText(t, shadow, "live-shadow")
 	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", meta.ID, image.ImageDMG), "old-dmg")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", manifestRootID(meta), image.ImageDMG), "old-dmg")
 	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_hold")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unreferenced bake held the image: %v", statErr)
 	}
@@ -867,7 +856,7 @@ func diskInfoSession(t *testing.T) (imagesDir string, lib []string, shadow, reso
 	}
 	recorded, resolved := symlinkView(t, home)
 	action := libraryAction("alice/app", recorded, session.ModeRW)
-	action.FullID = meta.ID
+	action.FullID = manifestRootID(meta)
 	writeSessionRecord(t, sessionsDir(home), "dev", action)
 	withBuildSeams(t, nil)
 	useDarwinHost(t)

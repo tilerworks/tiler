@@ -16,18 +16,18 @@ import (
 
 // holdActiveSingleFile moves the active single-file leaf into
 // _hold/<id>/ and installs a different active payload so pin and
-// name-only mount diverge. Returns the held meta.
-func holdActiveSingleFile(t *testing.T, imagesDir, name string, newBody []byte) image.Meta {
+// name-only mount diverge. Returns the held manifest.
+func holdActiveSingleFile(t *testing.T, imagesDir, name string, newBody []byte) image.Manifest {
 	t.Helper()
 	repo, err := image.OpenRepo(imagesDir, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	held, err := image.Load(repo.MetaPath())
+	held, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := repo.HoldPath(held.ID)
+	hold, err := repo.HoldPath(manifestRootID(held))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func containerBody(formatType, tag string) []byte {
 }
 
 // writeSingleActive installs one single-file active leaf.
-func writeSingleActive(t *testing.T, repoDir, name, formatType string, body []byte) image.Meta {
+func writeSingleActive(t *testing.T, repoDir, name, formatType string, body []byte) image.Manifest {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(repoDir, "_incr"), 0o755); err != nil {
 		t.Fatal(err)
@@ -83,38 +83,42 @@ func writeSingleActive(t *testing.T, repoDir, name, formatType string, body []by
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	meta := image.Meta{
-		ID:        image.ID(sum),
-		Name:      name,
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: formatType, Compression: image.CompressionZstd},
-		Size:      info.Size(),
-		SHA256:    hex.EncodeToString(sum[:]),
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC),
-		Builder:   "test",
-	}
+	compression := image.CompressionZstd
 	if formatType == image.FormatDMG {
-		meta.Format.Compression = "ulfo"
+		compression = "ulfo"
 	}
-	storeFixtureMeta(t, repoDir, meta)
-	return meta
+	manifest := image.Manifest{
+		Version: image.ManifestVersion,
+		Name:    name,
+		Format:  image.Format{Type: formatType, Compression: compression},
+		Head:    image.ID(sum),
+		Images: []image.ImageMeta{{
+			ID:        image.ID(sum),
+			Kind:      image.KindFull,
+			Size:      info.Size(),
+			SHA256:    hex.EncodeToString(sum[:]),
+			MtimeUnix: info.ModTime().Unix(),
+			CreatedAt: time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC),
+			Builder:   "test",
+		}},
+	}
+	storeFixtureMeta(t, repoDir, manifest)
+	return manifest
 }
 
 // holdActiveBlocks moves the active blocks leaf into _hold/<id>/ and
 // installs a different active blocks payload.
-func holdActiveBlocks(t *testing.T, imagesDir, name string, newBodies []string) image.Meta {
+func holdActiveBlocks(t *testing.T, imagesDir, name string, newBodies []string) image.Manifest {
 	t.Helper()
 	repo, err := image.OpenRepo(imagesDir, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	held, err := image.Load(repo.MetaPath())
+	held, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := repo.HoldPath(held.ID)
+	hold, err := repo.HoldPath(manifestRootID(held))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +148,7 @@ func TestSessionOpenReplaysPinnedHoldSquashfs(t *testing.T) {
 	pinPortableHealth(t, f)
 
 	action := libraryAction("alice/app", view, session.ModeRW)
-	action.FullID = held.ID
+	action.FullID = manifestRootID(held)
 	writeSessionRecord(t, sessionsDir(home), "dev", action)
 
 	if _, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...); err != nil {
@@ -153,7 +157,7 @@ func TestSessionOpenReplaysPinnedHoldSquashfs(t *testing.T) {
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
 	}
-	want := filepath.Join(repoDir, "_hold", held.ID, image.ImageFile)
+	want := filepath.Join(repoDir, "_hold", manifestRootID(held), image.ImageFile)
 	if f.mountReqs[0].Full != want {
 		t.Fatalf("Full = %s, want hold %s", f.mountReqs[0].Full, want)
 	}
@@ -177,7 +181,7 @@ func TestSessionOpenReplaysPinnedHoldDMG(t *testing.T) {
 	pinPortableHealth(t, f)
 
 	action := libraryAction("alice/app", view, session.ModeRW)
-	action.FullID = heldMeta.ID
+	action.FullID = manifestRootID(heldMeta)
 	writeSessionRecord(t, sessionsDir(home), "dev", action)
 
 	if _, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...); err != nil {
@@ -186,7 +190,7 @@ func TestSessionOpenReplaysPinnedHoldDMG(t *testing.T) {
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
 	}
-	want := filepath.Join(imagesDir, "alice", "app", "_hold", heldMeta.ID, image.ImageDMG)
+	want := filepath.Join(imagesDir, "alice", "app", "_hold", manifestRootID(heldMeta), image.ImageDMG)
 	if f.mountReqs[0].Full != want {
 		t.Fatalf("Full = %s, want hold %s", f.mountReqs[0].Full, want)
 	}
@@ -197,15 +201,15 @@ func TestSessionOpenReplaysPinnedHoldBlocks(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	heldID := writeBlocksFixture(t, imagesDir, "alice/app", []string{"held-a", "held-b"}, true)
 	held := holdActiveBlocks(t, imagesDir, "alice/app", []string{"new-active"})
-	if held.ID != heldID {
-		t.Fatalf("held id = %s, want %s", held.ID, heldID)
+	if manifestRootID(held) != heldID {
+		t.Fatalf("held id = %s, want %s", manifestRootID(held), heldID)
 	}
 	view := filepath.Join(work, "view")
 	f := withMountSeams(t, nil)
 	pinPortableHealth(t, f)
 
 	action := libraryAction("alice/app", view, session.ModeRW)
-	action.FullID = held.ID
+	action.FullID = manifestRootID(held)
 	writeSessionRecord(t, sessionsDir(home), "dev", action)
 
 	if _, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...); err != nil {
@@ -214,13 +218,13 @@ func TestSessionOpenReplaysPinnedHoldBlocks(t *testing.T) {
 	if f.assembleN != 1 || len(f.assembleBlockPaths) != 1 {
 		t.Fatalf("assemble = %d paths=%v", f.assembleN, f.assembleBlockPaths)
 	}
-	holdMarker := filepath.Join("_hold", held.ID, "_blocks", held.ID)
+	holdMarker := filepath.Join("_hold", manifestRootID(held), "_blocks", manifestRootID(held))
 	for _, path := range f.assembleBlockPaths[0] {
 		if !strings.Contains(path, holdMarker) {
 			t.Fatalf("block path %s not under hold _blocks", path)
 		}
 	}
-	wantBlk := filepath.Join(imagesDir, "alice", "app", "_hold", held.ID, "_blocks", held.ID, "blk.000")
+	wantBlk := filepath.Join(imagesDir, "alice", "app", "_hold", manifestRootID(held), "_blocks", manifestRootID(held), "blk.000")
 	if f.assembleBlockPaths[0][0] != wantBlk {
 		t.Fatalf("blk.000 = %s, want %s", f.assembleBlockPaths[0][0], wantBlk)
 	}
@@ -248,6 +252,6 @@ func TestSessionOpenEmptyFullIDUsesActive(t *testing.T) {
 	}
 	want := filepath.Join(repoDir, image.ImageFile)
 	if f.mountReqs[0].Full != want {
-		t.Fatalf("Full = %s, want active %s (held was %s)", f.mountReqs[0].Full, want, held.ID)
+		t.Fatalf("Full = %s, want active %s (held was %s)", f.mountReqs[0].Full, want, manifestRootID(held))
 	}
 }

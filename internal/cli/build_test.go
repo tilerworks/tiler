@@ -200,18 +200,18 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
 		t.Fatal(err)
 	}
-	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ID != fields[2] {
-		t.Fatalf("meta id = %s, stdout id = %s", meta.ID, fields[2])
+	if manifestRootID(manifest) != fields[2] {
+		t.Fatalf("meta id = %s, stdout id = %s", manifestRootID(manifest), fields[2])
 	}
-	if meta.Builder != Version {
-		t.Fatalf("builder = %q, want %q", meta.Builder, Version)
+	if manifestRoot(manifest).Builder != Version {
+		t.Fatalf("builder = %q, want %q", manifestRoot(manifest).Builder, Version)
 	}
-	if meta.Format.Type != image.FormatSquashfs || meta.Format.Compression != image.CompressionZstd {
-		t.Fatalf("format = %s/%s, want squashfs/zstd", meta.Format.Type, meta.Format.Compression)
+	if manifest.Format.Type != image.FormatSquashfs || manifest.Format.Compression != image.CompressionZstd {
+		t.Fatalf("format = %s/%s, want squashfs/zstd", manifest.Format.Type, manifest.Format.Compression)
 	}
 }
 
@@ -396,12 +396,12 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "incr" || fields[2] != layer {
 		t.Fatalf("second stdout = %q, want incr id %s", stdout, layer)
 	}
-	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(meta.Chain) != 1 || meta.Chain[0].ID != layer {
-		t.Fatalf("chain = %+v", meta.Chain)
+	if len(manifest.Images) != 2 || manifest.Images[1].ID != layer {
+		t.Fatalf("chain = %+v", manifest.Images[1:])
 	}
 }
 
@@ -536,12 +536,12 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ID != fullID || len(meta.Chain) != 1 || meta.Chain[0].ID != fields[2] {
-		t.Fatalf("meta = %+v, stdout id = %s", meta, fields[2])
+	if manifestRootID(manifest) != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
+		t.Fatalf("meta = %+v, stdout id = %s", manifest, fields[2])
 	}
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_incr", fields[2]+".sqsh")); err != nil {
 		t.Fatal(err)
@@ -601,12 +601,12 @@ func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
 			if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 				t.Fatalf("stdout = %q", stdout)
 			}
-			meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+			manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if meta.ID != fullID || len(meta.Chain) != 1 || meta.Chain[0].ID != fields[2] {
-				t.Fatalf("meta = %+v, stdout id = %s", meta, fields[2])
+			if manifestRootID(manifest) != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
+				t.Fatalf("meta = %+v, stdout id = %s", manifest, fields[2])
 			}
 		})
 	}
@@ -843,15 +843,15 @@ func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inherit build: %v\n%s", err, stderr)
 	}
-	meta, err := image.Load(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Format.Type != image.FormatSquashfs || meta.Format.Compression != image.CompressionZstd {
-		t.Fatalf("inherited format = %s/%s", meta.Format.Type, meta.Format.Compression)
+	if manifest.Format.Type != image.FormatSquashfs || manifest.Format.Compression != image.CompressionZstd {
+		t.Fatalf("inherited format = %s/%s", manifest.Format.Type, manifest.Format.Compression)
 	}
-	if len(meta.Chain) != 1 || meta.Chain[0].ID != buildOutput(t, stdout) {
-		t.Fatalf("chain = %+v", meta.Chain)
+	if len(manifest.Images) != 2 || manifest.Images[1].ID != buildOutput(t, stdout) {
+		t.Fatalf("chain = %+v", manifest.Images[1:])
 	}
 }
 
@@ -861,13 +861,13 @@ func assertBuiltFormat(t *testing.T, imagesDir, name, id, format, compression st
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := image.Load(repo.MetaPath())
+	manifest, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ID != id || meta.Format.Type != format || meta.Format.Compression != compression {
+	if manifestRootID(manifest) != id || manifest.Format.Type != format || manifest.Format.Compression != compression {
 		t.Fatalf("meta id=%s format=%s/%s, want %s %s/%s",
-			meta.ID, meta.Format.Type, meta.Format.Compression, id, format, compression)
+			manifestRootID(manifest), manifest.Format.Type, manifest.Format.Compression, id, format, compression)
 	}
 }
 

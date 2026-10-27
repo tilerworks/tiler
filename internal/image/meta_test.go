@@ -35,7 +35,7 @@ func TestIDHexLenFloor(t *testing.T) {
 
 func TestValidateReportsEveryViolation(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	meta := Meta{
+	meta := metaV1{
 		ID:      "0123456789ABCDEF",
 		Name:    "..",
 		Version: "2.0",
@@ -47,7 +47,7 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 			2026, 10, 16, 8, 0, 0, 0, time.FixedZone("CST", 8*3600),
 		),
 		MtimeUnix: -1,
-		Chain: []ChainEntry{{
+		Chain: []chainEntryV1{{
 			ID:        "fedcba9876543210",
 			Parent:    "unknown",
 			Size:      0,
@@ -55,7 +55,7 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 			MtimeUnix: -2,
 		}},
 	}
-	err := meta.Validate()
+	err := meta.validate()
 	if err == nil {
 		t.Fatal("expected violations")
 	}
@@ -89,7 +89,7 @@ func TestValidateRejectsUnknownVersion(t *testing.T) {
 	for _, version := range []string{"", "0.9", "2.0", "1"} {
 		meta := validMeta()
 		meta.Version = version
-		err := meta.Validate()
+		err := meta.validate()
 		if err == nil {
 			t.Fatalf("version %q accepted", version)
 		}
@@ -99,20 +99,20 @@ func TestValidateRejectsUnknownVersion(t *testing.T) {
 	}
 	meta := validMeta()
 	meta.Version = MetaVersion
-	if err := meta.Validate(); err != nil {
+	if err := meta.validate(); err != nil {
 		t.Fatalf("MetaVersion rejected: %v", err)
 	}
 }
 
 func TestValidateRejectsDuplicateAndBrokenChain(t *testing.T) {
 	base := validMeta()
-	base.Chain = []ChainEntry{
+	base.Chain = []chainEntryV1{
 		validEntry(base.ID, "fedcba9876543210"),
 		validEntry(base.ID, "0011223344556677"),
 	}
 	base.Chain[1].ID = base.Chain[0].ID
 	base.Chain[1].SHA256 = base.Chain[0].SHA256
-	err := base.Validate()
+	err := base.validate()
 	if err == nil {
 		t.Fatal("expected chain violations")
 	}
@@ -128,7 +128,7 @@ func TestValidateRejectsDuplicateAndBrokenChain(t *testing.T) {
 func TestValidateRejectsNonCanonicalName(t *testing.T) {
 	meta := validMeta()
 	meta.Name = "alice//app"
-	err := meta.Validate()
+	err := meta.validate()
 	if err == nil {
 		t.Fatal("expected non-canonical name to fail")
 	}
@@ -137,9 +137,8 @@ func TestValidateRejectsNonCanonicalName(t *testing.T) {
 	}
 }
 
-func TestDecodeRejectsOwnerRepoOnlyIdentity(t *testing.T) {
-	meta := validMeta()
-	encoded, err := Encode(meta)
+func TestDecodeManifestRejectsOwnerRepoOnlyIdentity(t *testing.T) {
+	encoded, err := yaml.Marshal(validMeta())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,9 +150,9 @@ func TestDecodeRejectsOwnerRepoOnlyIdentity(t *testing.T) {
 		lines = append(lines, line)
 	}
 	body := strings.Join(lines, "\n") + "owner: alice\nrepo: app\n"
-	_, err = Decode([]byte(body))
+	_, err = DecodeManifest([]byte(body))
 	if err == nil {
-		t.Fatal("expected owner/repo-only document to fail Decode")
+		t.Fatal("expected owner/repo-only document to fail")
 	}
 	if !strings.Contains(err.Error(), "name: invalid image name") {
 		t.Fatalf("error = %v", err)
@@ -163,11 +162,11 @@ func TestDecodeRejectsOwnerRepoOnlyIdentity(t *testing.T) {
 func TestValidateAcceptsZeroOffsetUTC(t *testing.T) {
 	meta := validMeta()
 	meta.CreatedAt = time.Date(2026, 10, 16, 8, 0, 0, 0, time.FixedZone("UTC", 0))
-	if err := meta.Validate(); err != nil {
+	if err := meta.validate(); err != nil {
 		t.Fatal(err)
 	}
 
-	encoded, err := Encode(validMeta())
+	encoded, err := yaml.Marshal(validMeta())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,40 +176,50 @@ func TestValidateAcceptsZeroOffsetUTC(t *testing.T) {
 		"2026-10-16T08:00:00+00:00",
 		1,
 	)
-	if _, err := Decode([]byte(body)); err != nil {
+	if _, err := DecodeManifest([]byte(body)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestLoadEmptyDocumentPrefixesOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meta.yaml")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+func TestLoadManifestPrefixesDecodeErrorsOnce(t *testing.T) {
+	manifest := validManifest()
+	manifest.Head = ""
+	// EncodeManifest validates, so write the broken document the way
+	// a corrupted meta.yaml would appear.
+	body, err := yaml.Marshal(manifest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(path)
-	if err == nil || err.Error() != "meta: empty document" {
+	path := filepath.Join(t.TempDir(), "meta.yaml")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadManifest(path)
+	if err == nil || err.Error() != "meta: head: must be set" {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
+func TestDecodeManifestDropsUnknownV1Fields(t *testing.T) {
 	meta := validMeta()
-	meta.Chain = []ChainEntry{validEntry(meta.ID, "fedcba9876543210")}
+	meta.Chain = []chainEntryV1{validEntry(meta.ID, "fedcba9876543210")}
 
-	encoded, err := Encode(meta)
+	encoded, err := yaml.Marshal(meta)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := strings.Replace(string(encoded), "type: squashfs\n", "type: squashfs\n    extra: 1\n", 1)
 	body += "future: dropped\n"
-	got, err := Decode([]byte(body))
+	got, err := DecodeManifest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := got.Validate(); err != nil {
-		t.Fatal(err)
+	if len(got.Images) != 2 || got.Head != testID("fedcba9876543210") {
+		t.Fatalf("converted manifest = %+v", got)
 	}
-	again, err := Encode(got)
+
+	// The v2 re-encode keeps no unknown field of the v1 document.
+	again, err := EncodeManifest(got)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,64 +227,50 @@ func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
 	if strings.Contains(text, "future") || strings.Contains(text, "extra") {
 		t.Fatalf("unknown field kept: %s", text)
 	}
-	if got.ID != meta.ID || got.Version != MetaVersion {
-		t.Fatalf("round trip changed fields: %+v", got)
-	}
-	if len(got.Chain) != 1 || got.Chain[0].Parent != meta.ID {
-		t.Fatalf("chain = %+v", got.Chain)
-	}
-
-	path := filepath.Join(t.TempDir(), "meta.yaml")
-	if err := Store(path, meta); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.SHA256 != meta.SHA256 || loaded.CreatedAt.Location() != time.UTC {
-		t.Fatalf("loaded = %+v", loaded)
-	}
-	if loaded.Deprecated || loaded.Kind != KindFull {
-		t.Fatalf("loaded flags = %+v", loaded)
+	if got.Version != ManifestVersion {
+		t.Fatalf("round trip changed the version: %+v", got)
 	}
 }
 
-func TestSplitManifestRoundTrip(t *testing.T) {
+func TestSplitV1DocumentConvertsWithBlocks(t *testing.T) {
 	meta := validBlocksMeta()
-	encoded, err := Encode(meta)
+	encoded, err := yaml.Marshal(meta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Decode(encoded)
+	got, err := DecodeManifest(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Blocks, meta.Blocks) {
-		t.Errorf("blocks = %+v, want %+v", got.Blocks, meta.Blocks)
+	root := got.Images[0]
+	if !reflect.DeepEqual(root.Blocks, meta.Blocks) {
+		t.Errorf("blocks = %+v, want %+v", root.Blocks, meta.Blocks)
 	}
-	if got.ID != meta.ID || got.SHA256 != meta.SHA256 ||
-		got.Size != meta.Size {
-		t.Errorf("identity changed on round trip: %+v", got)
+	if root.ID != meta.ID || root.SHA256 != meta.SHA256 ||
+		root.Size != meta.Size {
+		t.Errorf("identity changed on conversion: %+v", got)
 	}
 }
 
-func TestSingleFileMetaOmitsSplitKeys(t *testing.T) {
-	encoded, err := Encode(validMeta())
+func TestSingleFileManifestOmitsSplitKeys(t *testing.T) {
+	manifest := validManifest()
+	manifest.Images = manifest.Images[:1]
+	manifest.Head = manifest.Images[0].ID
+	encoded, err := EncodeManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, key := range []string{"blocks:", "members:", "source:"} {
+	for _, key := range []string{"blocks:", "members:", "source:", "chain:"} {
 		if strings.Contains(text, key) {
-			t.Fatalf("single-file meta grew %s:\n%s", key, text)
+			t.Fatalf("single-file manifest grew %s:\n%s", key, text)
 		}
 	}
-	got, err := Decode(encoded)
+	got, err := DecodeManifest(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Blocks) != 0 {
+	if len(got.Images[0].Blocks) != 0 {
 		t.Fatalf("split manifests appeared: %+v", got)
 	}
 }
@@ -289,9 +284,9 @@ func testID(id string) string {
 	return id
 }
 
-func validMeta() Meta {
+func validMeta() metaV1 {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	return Meta{
+	return metaV1{
 		ID:        sum,
 		Name:      "alice/app",
 		Version:   MetaVersion,
@@ -305,9 +300,9 @@ func validMeta() Meta {
 	}
 }
 
-func validEntry(parent, id string) ChainEntry {
+func validEntry(parent, id string) chainEntryV1 {
 	sum := testID(id)
-	return ChainEntry{
+	return chainEntryV1{
 		ID:        sum,
 		Parent:    testID(parent),
 		Size:      4096,
@@ -330,8 +325,8 @@ func TestValidateAcceptsRegisteredContainers(t *testing.T) {
 	for _, format := range formats {
 		meta := validMeta()
 		meta.Format = format
-		meta.Chain = []ChainEntry{validEntry(meta.ID, "fedcba9876543210")}
-		if err := meta.Validate(); err != nil {
+		meta.Chain = []chainEntryV1{validEntry(meta.ID, "fedcba9876543210")}
+		if err := meta.validate(); err != nil {
 			t.Errorf("%s/%s: %v", format.Type, format.Compression, err)
 		}
 	}
@@ -340,12 +335,12 @@ func TestValidateAcceptsRegisteredContainers(t *testing.T) {
 func TestValidateRejectsDisallowedCompression(t *testing.T) {
 	meta := validMeta()
 	meta.Format = Format{Type: FormatErofs, Compression: "xz"}
-	err := meta.Validate()
+	err := meta.validate()
 	if err == nil || !strings.Contains(err.Error(), `format.compression: erofs does not allow "xz"`) {
 		t.Fatalf("erofs xz: %v", err)
 	}
 	meta.Format = Format{Type: FormatSquashfs, Compression: ""}
-	err = meta.Validate()
+	err = meta.validate()
 	if err == nil || !strings.Contains(err.Error(), `format.compression: squashfs does not allow ""`) {
 		t.Fatalf("empty compression: %v", err)
 	}
@@ -417,11 +412,17 @@ func deepManifest(n int) Manifest {
 	return manifest
 }
 
-// storeManifest writes the v1 encoding of meta and returns the path.
-func storeManifest(t *testing.T, meta Meta) string {
+// storeV1 writes the legacy v1 encoding of meta and returns the
+// path. It feeds the loader-migration tests a document shaped the
+// way old builds left on disk.
+func storeV1(t *testing.T, meta metaV1) string {
 	t.Helper()
+	body, err := yaml.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "meta.yaml")
-	if err := Store(path, meta); err != nil {
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -429,11 +430,11 @@ func storeManifest(t *testing.T, meta Meta) string {
 
 func TestLoadManifestConvertsV1ChainToLinearDAG(t *testing.T) {
 	meta := validMeta()
-	meta.Chain = []ChainEntry{
+	meta.Chain = []chainEntryV1{
 		validEntry(meta.ID, "fedcba9876543210"),
 		validEntry("fedcba9876543210", "0011223344556677"),
 	}
-	got, err := LoadManifest(storeManifest(t, meta))
+	got, err := LoadManifest(storeV1(t, meta))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +489,7 @@ func TestLoadManifestConvertsV1ChainToLinearDAG(t *testing.T) {
 
 func TestLoadManifestConvertsV1EmptyChain(t *testing.T) {
 	meta := validMeta()
-	got, err := LoadManifest(storeManifest(t, meta))
+	got, err := LoadManifest(storeV1(t, meta))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,9 +512,9 @@ func TestLoadManifestCarriesV1SplitPayloadFacts(t *testing.T) {
 	meta := validBlocksMeta()
 	meta.Deprecated = true
 	meta.ContentSHA256 = strings.Repeat("cd", 32)
-	meta.Chain = []ChainEntry{validEntry(meta.ID, "fedcba9876543210")}
+	meta.Chain = []chainEntryV1{validEntry(meta.ID, "fedcba9876543210")}
 	meta.Chain[0].Blocks = blocksSeq(2)
-	got, err := LoadManifest(storeManifest(t, meta))
+	got, err := LoadManifest(storeV1(t, meta))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1008,176 +1009,20 @@ func validManifestWithBranch() (Manifest, string) {
 	return manifest, branch
 }
 
-func TestDecodeLinearizesManifestHeadStack(t *testing.T) {
-	manifest, branch := validManifestWithBranch()
-	encoded, err := EncodeManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "meta.yaml")
-	if err := os.WriteFile(path, encoded, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := manifest.Images[0]
-	if got.ID != root.ID || got.Name != manifest.Name ||
-		got.Format != manifest.Format || got.Size != root.Size ||
-		got.SHA256 != root.SHA256 || got.MtimeUnix != root.MtimeUnix ||
-		got.Builder != root.Builder || got.Deprecated != root.Deprecated ||
-		got.ContentSHA256 != root.ContentSHA256 ||
-		!got.CreatedAt.Equal(root.CreatedAt) {
-		t.Fatalf("root facts changed: %+v", got)
-	}
-	if got.Version != MetaVersion || got.Kind != KindFull {
-		t.Fatalf("v1 header = %q/%q, want %q/%q",
-			got.Version, got.Kind, MetaVersion, KindFull)
-	}
-	// The linearized chain is the head stack minus the root, and the
-	// result satisfies the v1 rules.
-	if err := got.Validate(); err != nil {
-		t.Fatalf("linearized meta rejected: %v", err)
-	}
-	want := []string{manifest.Images[1].ID, manifest.Images[2].ID}
-	if len(got.Chain) != len(want) {
-		t.Fatalf("chain = %+v, want %v", got.Chain, want)
-	}
-	parent := root.ID
-	for i, id := range want {
-		entry := got.Chain[i]
-		if entry.ID != id || entry.Parent != parent {
-			t.Errorf("chain[%d] = %+v, want id %q parent %q",
-				i, entry, id, parent)
-		}
-		node, ok := manifest.Node(id)
-		if !ok {
-			t.Fatalf("manifest lacks %q", id)
-		}
-		if entry.Size != node.Size || entry.SHA256 != node.SHA256 ||
-			entry.MtimeUnix != node.MtimeUnix ||
-			!entry.CreatedAt.Equal(node.CreatedAt) {
-			t.Errorf("chain[%d] facts changed: %+v", i, entry)
-		}
-		parent = id
-	}
-	for _, entry := range got.Chain {
-		if entry.ID == branch {
-			t.Fatalf("branch node leaked into the v1 chain: %+v", got.Chain)
-		}
-	}
-}
-
-func TestDecodeCarriesManifestBlocks(t *testing.T) {
+func TestManifestBranchesCountsOffHeadNodes(t *testing.T) {
 	manifest := validManifest()
-	for i := range manifest.Images {
-		manifest.Images[i].Blocks = blocksSeq(2)
+	if got := manifest.Branches(); got != 0 {
+		t.Fatalf("linear manifest branches = %d", got)
 	}
-	encoded, err := EncodeManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
+	withBranch, branch := validManifestWithBranch()
+	if got := withBranch.Branches(); got != 1 {
+		t.Fatalf("branches = %d, want 1", got)
 	}
-	got, err := Decode(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.Blocks, manifest.Images[0].Blocks) {
-		t.Errorf("root blocks = %+v, want %+v",
-			got.Blocks, manifest.Images[0].Blocks)
-	}
-	if PayloadKind(got) != PayloadBlocks {
-		t.Errorf("payload kind = %s, want blocks", PayloadKind(got))
-	}
-	if len(got.Chain) != 2 {
-		t.Fatalf("chain = %+v, want two entries", got.Chain)
-	}
-	for i, entry := range got.Chain {
-		want := manifest.Images[i+1].Blocks
-		if !reflect.DeepEqual(entry.Blocks, want) {
-			t.Errorf("chain[%d] blocks = %+v, want %+v", i, entry.Blocks, want)
-		}
-	}
-	if err := got.Validate(); err != nil {
-		t.Fatalf("linearized blocks meta rejected: %v", err)
-	}
-}
-
-func TestDecodeSurfacesBrokenManifestError(t *testing.T) {
-	manifest := validManifest()
-	manifest.Head = strings.Repeat("d", sumHexLen)
-	// EncodeManifest validates, so write the broken document the way
-	// a corrupted meta.yaml would appear.
-	body, err := yaml.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Decode(body); err == nil ||
-		!strings.Contains(err.Error(), "head: unknown image id") {
-		t.Fatalf("Decode error = %v, want the head violation", err)
-	}
-	path := filepath.Join(t.TempDir(), "meta.yaml")
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(path); err == nil ||
-		!strings.Contains(err.Error(), "head: unknown image id") {
-		t.Fatalf("Load error = %v, want the head violation", err)
-	}
-}
-
-func TestDecodeLegacyIDManifestSkipsV1Validation(t *testing.T) {
-	// Manifest.Validate tolerates legacy 16-hex ids, while v1
-	// Meta.Validate demands 64 hex digits. The Decode seam converts
-	// without re-validating, so the document loads and the stricter
-	// v1 rule only surfaces if a caller re-validates or re-encodes.
-	full := "0123456789abcdef"
-	tip := "fedcba9876543210"
-	manifest := Manifest{
-		Version: ManifestVersion,
-		Name:    "alice/app",
-		Format:  Format{Type: FormatSquashfs, Compression: CompressionZstd},
-		Head:    tip,
-		Images: []ImageMeta{
-			{
-				ID:        full,
-				Kind:      KindFull,
-				Size:      12345,
-				SHA256:    full,
-				MtimeUnix: 1710000000,
-				CreatedAt: time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC),
-				Builder:   "dev",
-			},
-			{
-				ID:        tip,
-				Kind:      KindIncremental,
-				Parent:    full,
-				Size:      4096,
-				SHA256:    tip,
-				MtimeUnix: 1710000001,
-				CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
-			},
-		},
-	}
-	encoded, err := EncodeManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := Decode(encoded)
-	if err != nil {
-		t.Fatalf("Decode refused a legacy-id manifest: %v", err)
-	}
-	if got.ID != full || got.SHA256 != full || len(got.Chain) != 1 ||
-		got.Chain[0].ID != tip || got.Chain[0].Parent != full {
-		t.Fatalf("decoded meta = %+v", got)
-	}
-	// The pinned seam behavior: the converted Meta keeps the legacy
-	// ids and fails the stricter v1 validation.
-	err = got.Validate()
-	if err == nil || !strings.Contains(err.Error(), "id: must be 64 lowercase hex digits") {
-		t.Fatalf("v1 Validate = %v, want the legacy-id violation", err)
-	}
-	if _, err := Encode(got); err == nil {
-		t.Fatal("Encode accepted a legacy-id meta")
+	// Moving the head onto the branch leaves the two linear nodes
+	// off the head stack.
+	reheaded := withBranch
+	reheaded.Head = branch
+	if got := reheaded.Branches(); got != 2 {
+		t.Fatalf("reheaded branches = %d, want 2", got)
 	}
 }
