@@ -12,8 +12,9 @@ Build with `make build` and call `bin/tiler`, or any `tiler` on
 
 `<path>` is the path to evaluate. It is typically the mount point of
 an external USB or Thunderbolt disk, or of a NAS share already
-mounted under `/Volumes` (macOS) or `/mnt` (Linux). It must already
-exist and be a directory; tiler neither creates nor removes it. A run
+mounted under `/Volumes` (macOS) or `/mnt` (Linux). It must be a
+directory; when it does not exist yet, tiler prints a warning and
+creates it. `<path>` itself is never removed. A run
 measures the volume that holds `<path>`, not the directory or its
 depth, so a scratch directory measures only the local disk. Point
 `<path>` at the disk or share you care about; the format tables below
@@ -314,8 +315,9 @@ root persistent flags such as `--images-dir`.
   starting with `./` or `../`, and values containing a `..` element
   are refused. The joined directory must not exist or must be empty,
   and the whole directory is removed when the run ends; `--keep`
-  preserves it. `<path>` itself must already exist, is never removed,
-  and nothing else under it is deleted or renamed.
+  preserves it. When `<path>` does not exist, tiler warns and
+  creates it; `<path>` itself is never removed, and nothing else
+  under it is deleted or renamed.
 - The runtime dir holds `mount/`, `logs/`, and the payload tree
   (`--src`, default `data`) on the **local** machine — by default a
   private directory in the system temp area. A `--runtime-dir` you

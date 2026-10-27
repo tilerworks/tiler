@@ -45,19 +45,22 @@ type Options struct {
 // Decision is what a later run will do. Create packs an image,
 // Read measures two reads, and Probe samples 4 KiB random I/O.
 // BenchDir is the absolute directory Plan joined under Path; it is
-// empty when the run does not use one. Src is the payload directory
-// name relative to the runtime dir, non-empty only when Create is
-// true; Run joins it with the runtime dir. OwnRuntime is true when
-// RuntimeDir is empty and the run must create a private directory
-// under the system temp dir. Compress is a container token: ulfo,
-// ulmo, udro, or a squashfs or erofs name. It stays empty for tar,
-// and for erofs when --compress was unset, so pack can choose from
-// the mkfs.erofs help text.
+// empty when the run does not use one. CreatePath records that Path
+// did not exist at plan time; the run creates it and prints a
+// warning. Src is the payload directory name relative to the
+// runtime dir, non-empty only when Create is true; Run joins it
+// with the runtime dir. OwnRuntime is true when RuntimeDir is empty
+// and the run must create a private directory under the system temp
+// dir. Compress is a container token: ulfo, ulmo, udro, or a squashfs
+// or erofs name. It stays empty for tar, and for erofs when
+// --compress was unset, so pack can choose from the mkfs.erofs help
+// text.
 type Decision struct {
 	Create     bool
 	Read       bool
 	Probe      bool
 	Path       string
+	CreatePath bool
 	BenchDir   string
 	RuntimeDir string
 	OwnRuntime bool
@@ -114,7 +117,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	path, err := requireVolume(files, opts.Path)
+	path, pathMissing, err := requireVolume(files, opts.Path)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -122,8 +125,12 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	if err := ensureWritable(files, path, opts.ReadOnly); err != nil {
-		return Decision{}, err
+	// A missing path is created by the run, so the writable check
+	// has nothing to stat yet; a failed create surfaces at run time.
+	if !pathMissing {
+		if err := ensureWritable(files, path, opts.ReadOnly); err != nil {
+			return Decision{}, err
+		}
 	}
 	bench, err := placeBench(files, path, opts.BenchDir, opts.BenchDirSet, act)
 	if err != nil {
@@ -154,6 +161,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 		Read:       act.Read,
 		Probe:      act.Probe,
 		Path:       path,
+		CreatePath: pathMissing,
 		BenchDir:   bench,
 		RuntimeDir: runtime,
 		OwnRuntime: owned,

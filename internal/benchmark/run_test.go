@@ -83,6 +83,41 @@ func TestRunRemovesUserRuntimeDir(t *testing.T) {
 	}
 }
 
+func TestRunCreatesMissingPathWithWarning(t *testing.T) {
+	vol := filepath.Join(t.TempDir(), "new-vol")
+	bench := filepath.Join(vol, "bench")
+	var out, errOut bytes.Buffer
+	d := baseDecision(vol, bench)
+	d.CreatePath = true
+	d.Create = true
+	d.Read = true
+	d.Mode = "both"
+
+	err := Run(d, Env{
+		Command: tarPackCommand(t),
+		Purge:   func() string { return "no" },
+		Stdout:  &out,
+		Stderr:  &errOut,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(errOut.String(), vol) ||
+		!strings.Contains(errOut.String(), "did not exist") {
+		t.Fatalf("stderr = %q, want creation warning for %s", errOut.String(), vol)
+	}
+	// <path> survives the run; the bench dir does not.
+	if _, statErr := os.Stat(vol); statErr != nil {
+		t.Fatalf("path after run: %v", statErr)
+	}
+	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bench after run: %v", statErr)
+	}
+	if entries := listNames(t, vol); len(entries) != 0 {
+		t.Fatalf("path leftovers: %v", entries)
+	}
+}
+
 func TestRunPayloadUnderRuntimeNotBench(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "bench")

@@ -110,6 +110,38 @@ func TestPrepareRunRemovesEmptyUserRuntime(t *testing.T) {
 	}
 }
 
+func TestPrepareRunCreatesMissingPath(t *testing.T) {
+	vol := filepath.Join(t.TempDir(), "new-vol")
+	bench := filepath.Join(vol, "tiler-bench")
+	d := Decision{
+		Create:     true,
+		Path:       vol,
+		CreatePath: true,
+		BenchDir:   bench,
+		OwnRuntime: true,
+		Type:       "tar",
+		Src:        "data",
+	}
+	state, err := prepareRun(d)
+	if err != nil {
+		t.Fatalf("prepareRun: %v", err)
+	}
+	if _, statErr := os.Stat(vol); statErr != nil {
+		t.Fatalf("created path = %v", statErr)
+	}
+	state.cleanup(func(string, []string, ...string) ([]byte, error) {
+		t.Fatal("cleanup must not run a command")
+		return nil, nil
+	})
+	// The path itself is never removed; only the bench dir goes.
+	if _, statErr := os.Stat(vol); statErr != nil {
+		t.Fatalf("path after cleanup = %v", statErr)
+	}
+	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bench after cleanup = %v", statErr)
+	}
+}
+
 func TestPrepareRunKeepsBenchWhenRequested(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "bench")

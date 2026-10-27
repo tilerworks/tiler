@@ -161,6 +161,24 @@ func TestPlanAcceptsMissingBenchDir(t *testing.T) {
 	}
 }
 
+func TestPlanAcceptsMissingPath(t *testing.T) {
+	got, err := Plan(Options{
+		Path:     volPath,
+		Type:     "tar",
+		Size:     "1",
+		FileSize: "1",
+	}, memFS{}.FS("linux"))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !got.CreatePath || got.Path != volPath {
+		t.Fatalf("path = %s create %v", got.Path, got.CreatePath)
+	}
+	if got.BenchDir != volPath+"/tiler-bench" {
+		t.Fatalf("bench = %s", got.BenchDir)
+	}
+}
+
 func TestPlanReadImageIgnoresDefaultDirs(t *testing.T) {
 	got, err := Plan(Options{
 		Path:     volPath,
@@ -577,11 +595,6 @@ func TestPlanUsageRefusals(t *testing.T) {
 			edit: func(o *Options) { o.Type = "squashfs" },
 			fs:   writableVol("darwin"),
 			want: "linux",
-		},
-		{
-			name: "missing path",
-			fs:   memFS{}.FS("linux"),
-			want: "does not exist",
 		},
 		{
 			name: "negative probe ops",

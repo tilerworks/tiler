@@ -7,25 +7,29 @@ import (
 	"strings"
 )
 
-func requireVolume(files FS, path string) (string, error) {
+// requireVolume resolves the benchmark path and reports whether it
+// is missing. A missing path is not an error: the run creates it and
+// warns, so missing returns true and the caller records it on the
+// Decision. A path that exists must be a directory.
+func requireVolume(files FS, path string) (string, bool, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", usagef("benchmark: path is required")
+		return "", false, usagef("benchmark: path is required")
 	}
 	abs, err := absPath(path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	info, err := files.stat(abs)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", usagef("benchmark: path %s does not exist", abs)
+		return abs, true, nil
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !info.IsDir() {
-		return "", usagef("benchmark: path %s must be a directory", abs)
+		return "", false, usagef("benchmark: path %s must be a directory", abs)
 	}
-	return abs, nil
+	return abs, false, nil
 }
 
 func ensureWritable(files FS, path string, readonly bool) error {

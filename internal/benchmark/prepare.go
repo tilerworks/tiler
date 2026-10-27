@@ -40,6 +40,11 @@ type runState struct {
 }
 
 func prepareRun(d Decision) (*runState, error) {
+	if d.CreatePath {
+		if err := os.MkdirAll(d.Path, 0o755); err != nil {
+			return nil, fmt.Errorf("benchmark: mkdir %s: %w", d.Path, err)
+		}
+	}
 	bench, err := prepareBench(d)
 	if err != nil {
 		return nil, err

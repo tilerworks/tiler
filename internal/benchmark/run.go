@@ -34,6 +34,12 @@ func Run(d Decision, env Env) error {
 		return err
 	}
 	defer state.cleanup(logCommand(env.Command, state.logs, detachLogName))
+	if d.CreatePath {
+		if _, err := fmt.Fprintf(env.Stderr,
+			"benchmark: warning: path %s did not exist; created it\n", d.Path); err != nil {
+			return fmt.Errorf("benchmark: write warning: %w", err)
+		}
+	}
 
 	var device deviceInfo
 	switch d.Format {
