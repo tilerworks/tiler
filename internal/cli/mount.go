@@ -339,6 +339,10 @@ func mountAction(ref string, target image.Target, dir string, flags mountFlags) 
 			return session.Action{}, fmt.Errorf("mount: %w", err)
 		}
 		action.Name, action.FullID = strings.Join(segs, "/"), target.ID
+		// The resolved stack tip pins the desired stack, so a later
+		// replay remounts the same layers even after the library
+		// head moves past them.
+		action.TipID = target.Tip
 	}
 	return action, nil
 }

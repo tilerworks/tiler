@@ -334,6 +334,165 @@ func TestOpenRemountsTornDownViewsAndIgnoresUmountActions(t *testing.T) {
 	}
 }
 
+// The stack ids of the served-stack fixtures: a desired tip and the
+// served pair a rebuild left behind while the live view still serves
+// the replaced stack.
+const (
+	fixtureTip       = "fedcba9876543210"
+	fixtureServedID  = "abcdef0123456789"
+	fixtureServedTip = "9999888877776666"
+)
+
+// seedServedMounted records one mounted action carrying a desired
+// tip and served stack ids, through the real write-ahead path.
+func seedServedMounted(t *testing.T, e *Engine, name, point string) {
+	t.Helper()
+	action := mountAction(point)
+	action.TipID = fixtureTip
+	action.ServedID = fixtureServedID
+	action.ServedTip = fixtureServedTip
+	stored, err := e.Append(name, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Writeback(name, stored.Seq, StatusMounted, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenReplayClearsServedAfterRealRemount(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view1 := filepath.Join(dir, "view1")
+	view2 := filepath.Join(dir, "view2")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view1)
+	seedServedMounted(t, e, "dev", view2)
+	// view1 is stale and remounts for real; view2 stays healthy and
+	// is skipped, so its live view still serves the replaced stack.
+	e.Health = func(point string) bool { return point == view2 }
+	e.Clean = func(string) error { return nil }
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remounted := rec.Actions[0]
+	if remounted.Status != StatusMounted {
+		t.Fatalf("remounted action = %+v, want mounted", remounted)
+	}
+	if remounted.ServedID != "" || remounted.ServedTip != "" {
+		t.Errorf("a real remount kept the served stack: %+v", remounted)
+	}
+	if remounted.FullID != "0123456789abcdef" || remounted.TipID != fixtureTip {
+		t.Errorf("a real remount changed the desired stack: %+v", remounted)
+	}
+	skipped := rec.Actions[1]
+	if skipped.ServedID != fixtureServedID || skipped.ServedTip != fixtureServedTip {
+		t.Errorf("a healthy skipped view lost its served stack: %+v", skipped)
+	}
+}
+
+func TestOpenReplayKeepsServedOnReusedView(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view)
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error { return nil }
+	// The engine adopted an already-healthy view: nothing remounted
+	// for real, so the record must keep describing the stack the
+	// live view actually serves.
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint, Reused: true}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := rec.Actions[0]
+	if action.Status != StatusMounted {
+		t.Fatalf("action = %+v, want mounted", action)
+	}
+	if action.ServedID != fixtureServedID || action.ServedTip != fixtureServedTip {
+		t.Errorf("an adopted view lost its served stack: %+v", action)
+	}
+}
+
+// TestOpenReconcileOfProvenMountClearsServed pins the heal of the
+// mount-succeeded-but-not-yet-written window: a crash after a real
+// remount left the action pending or failed while its served ids
+// still name the replaced stack. Reality proves the execution ran,
+// so the reconcile to mounted empties the served pair in the same
+// writeback instead of stranding it beside status=mounted forever.
+func TestOpenReconcileOfProvenMountClearsServed(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			e := newEngine(dir)
+			view := filepath.Join(dir, "view")
+			if err := e.New("dev"); err != nil {
+				t.Fatal(err)
+			}
+			action := mountAction(view)
+			action.TipID = fixtureTip
+			action.ServedID = fixtureServedID
+			action.ServedTip = fixtureServedTip
+			if _, err := e.Append("dev", action); err != nil {
+				t.Fatal(err)
+			}
+			if status == StatusFailed {
+				if err := e.Writeback("dev", 1, StatusFailed, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var log callLog
+			e.Health = func(string) bool { return true }
+			e.Clean = func(point string) error {
+				log.add("clean %s", filepath.Base(point))
+				return nil
+			}
+			mount := func(a Action) (Result, error) {
+				log.add("mount %d", a.Seq)
+				return Result{Mountpoint: a.Mountpoint}, nil
+			}
+			if err := e.Open("dev", mount); err != nil {
+				t.Fatal(err)
+			}
+			if len(log.calls) != 0 {
+				t.Fatalf("a proven mount was cleaned or remounted: %v", log.calls)
+			}
+			rec, err := e.Load("dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := rec.Actions[0]
+			if got.Status != StatusMounted {
+				t.Fatalf("action = %+v, want the reconciled mounted status", got)
+			}
+			if got.ServedID != "" || got.ServedTip != "" {
+				t.Errorf("the reconcile kept the replaced served stack: %+v", got)
+			}
+			if got.TipID != fixtureTip {
+				t.Errorf("the reconcile changed the desired stack: %+v", got)
+			}
+		})
+	}
+}
+
 func TestOpenReconcilesHealthyPendingActionWithoutRemount(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)

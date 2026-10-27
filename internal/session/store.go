@@ -189,6 +189,42 @@ func (s Store) Writeback(name string, seq int, status, mountpoint string) error 
 	return fmt.Errorf("session: %s has no action with seq %d", name, seq)
 }
 
+// WritebackMounted records one mount action as mounted after the
+// view it names proved live: it sets the mounted status, takes the
+// mountpoint when the execution resolved or changed it — an empty
+// mountpoint keeps the recorded one — and, when clearServed is set,
+// empties the served stack ids in the same atomic write. Folding
+// the clear into the status write leaves a crash no window to
+// strand status=mounted beside stale served ids, a state no later
+// open could heal. A seq the record does not carry is an error, as
+// in Writeback. The caller must hold the session's exclusive lock.
+func (s Store) WritebackMounted(
+	name string,
+	seq int,
+	mountpoint string,
+	clearServed bool,
+) error {
+	rec, err := s.Load(name)
+	if err != nil {
+		return err
+	}
+	for i := range rec.Actions {
+		if rec.Actions[i].Seq != seq {
+			continue
+		}
+		rec.Actions[i].Status = StatusMounted
+		if mountpoint != "" {
+			rec.Actions[i].Mountpoint = mountpoint
+		}
+		if clearServed {
+			rec.Actions[i].ServedID = ""
+			rec.Actions[i].ServedTip = ""
+		}
+		return s.Save(rec)
+	}
+	return fmt.Errorf("session: %s has no action with seq %d", name, seq)
+}
+
 // knownStatus reports whether a writeback status is part of the
 // record contract.
 func knownStatus(status string) bool {

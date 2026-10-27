@@ -316,6 +316,62 @@ func TestWritebackRejectsUnknownSeqAndStatus(t *testing.T) {
 	}
 }
 
+func TestWritebackMountedFoldsServedClearIntoOneWrite(t *testing.T) {
+	dir := t.TempDir()
+	store := newRecord(t, dir, "dev")
+	seed := Action{
+		Type: TypeMount, Image: "alice/app", Mountpoint: "/planned",
+		Mode: ModeRW, TipID: fixtureTip,
+		ServedID: fixtureServedID, ServedTip: fixtureServedTip,
+	}
+	adopted, err := store.Append("dev", seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remounted, err := store.Append("dev", seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An adopted view keeps the served pair: it still serves the
+	// stack those ids name.
+	if err := store.WritebackMounted("dev", adopted.Seq, "/actual", false); err != nil {
+		t.Fatal(err)
+	}
+	// A real remount lands the mounted status, the resolved
+	// mountpoint, and the emptied served pair through one atomic
+	// write, so no intermediate record ever pairs status=mounted
+	// with stale served ids for a crash to strand.
+	if err := store.WritebackMounted("dev", remounted.Seq, "", true); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := rec.Actions[0]
+	if kept.Status != StatusMounted || kept.Mountpoint != "/actual" {
+		t.Fatalf("adopted action = %+v", kept)
+	}
+	if kept.ServedID != fixtureServedID || kept.ServedTip != fixtureServedTip {
+		t.Errorf("an adopted view lost its served stack: %+v", kept)
+	}
+	cleared := rec.Actions[1]
+	if cleared.Status != StatusMounted || cleared.Mountpoint != "/planned" {
+		t.Fatalf("remounted action = %+v", cleared)
+	}
+	if cleared.ServedID != "" || cleared.ServedTip != "" {
+		t.Errorf("a real remount kept the served stack: %+v", cleared)
+	}
+	if cleared.TipID != fixtureTip {
+		t.Errorf("the writeback changed the desired tip: %+v", cleared)
+	}
+	// Like Writeback, an unknown seq is an error, never a silent
+	// pass over the unmodified record.
+	if err := store.WritebackMounted("dev", 7, "", true); err == nil {
+		t.Fatal("WritebackMounted accepted an unknown seq")
+	}
+}
+
 func TestListOrdersRecordsAndSkipsForeignFiles(t *testing.T) {
 	dir := t.TempDir()
 	store := newRecord(t, dir, "zeta")

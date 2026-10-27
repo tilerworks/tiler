@@ -172,6 +172,142 @@ func TestRecordRemoveOnCloseJSON(t *testing.T) {
 	}
 }
 
+func TestRecordStackIDsAreAdditive(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Dir: dir}
+	// An action carrying the desired tip and the served stack ids
+	// round-trips all three fields. The ids reuse the package's
+	// served-stack fixture constants.
+	rebased := sampleAction(1)
+	rebased.TipID = fixtureTip
+	rebased.ServedID = fixtureServedID
+	rebased.ServedTip = fixtureServedTip
+	if err := store.Save(Record{
+		Name:      "dev",
+		State:     StateActive,
+		Actions:   []Action{rebased},
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !actionEqual(loaded.Actions[0], rebased) {
+		t.Fatalf("action = %+v, want %+v", loaded.Actions[0], rebased)
+	}
+	action, err := storedActionJSON(t, filepath.Join(dir, "dev", "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"tip_id":     fixtureTip,
+		"served_id":  fixtureServedID,
+		"served_tip": fixtureServedTip,
+	} {
+		if action[key] != want {
+			t.Errorf("action key %q = %v, want %v", key, action[key], want)
+		}
+	}
+	// An action without stack ids omits the additive keys entirely,
+	// so existing records and goldens stay byte-for-byte unchanged.
+	if err := store.Save(Record{
+		Name:      "plain",
+		State:     StateActive,
+		Actions:   []Action{sampleAction(1)},
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	action, err = storedActionJSON(t, filepath.Join(dir, "plain", "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"tip_id", "served_id", "served_tip"} {
+		if _, ok := action[key]; ok {
+			t.Errorf("a plain action carried %q: %v", key, action[key])
+		}
+	}
+}
+
+// storedActionJSON reads one record file and returns the JSON object
+// of its single action.
+func storedActionJSON(t *testing.T, path string) (map[string]any, error) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	actions, ok := doc["actions"].([]any)
+	if !ok || len(actions) != 1 {
+		t.Fatalf("actions = %v", doc["actions"])
+	}
+	action, ok := actions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("action = %v", actions[0])
+	}
+	return action, nil
+}
+
+func TestOldRecordJSONRoundTripsByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Dir: dir}
+	// A record exactly as it was written before the stack id fields
+	// existed: no tip_id, served_id, or served_tip keys anywhere.
+	const old = `{
+  "name": "dev",
+  "state": "active",
+  "actions": [
+    {
+      "seq": 1,
+      "type": "mount",
+      "image": "alice/app",
+      "name": "alice/app",
+      "full_id": "0123456789abcdef",
+      "mountpoint": "/tmp/view",
+      "mode": "rw",
+      "subdir": "src",
+      "runtime_id": "m1",
+      "status": "mounted",
+      "timestamp": "2026-10-17T03:15:00Z"
+    }
+  ],
+  "created_at": "2026-10-16T09:00:00Z",
+  "closed_at": "0001-01-01T00:00:00Z"
+}
+`
+	if err := os.MkdirAll(filepath.Join(dir, "dev"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "dev", "session.json")
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !actionEqual(rec.Actions[0], sampleAction(1)) {
+		t.Fatalf("old action = %+v, want %+v", rec.Actions[0], sampleAction(1))
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != old {
+		t.Fatalf("an old record did not round-trip byte-identical:\nwant:\n%s\ngot:\n%s",
+			old, after)
+	}
+}
+
 func TestOldOwnerRepoActionDoesNotPin(t *testing.T) {
 	const fullID = "0123456789abcdef"
 	raw := `{

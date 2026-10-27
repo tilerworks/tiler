@@ -227,9 +227,17 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 			// Reconcile the record with the healthy reality: an
 			// action left pending or failed by a crash between the
 			// execution and its writeback becomes mounted without a
-			// remount, keeping a repeated open a pure no-op.
+			// remount, keeping a repeated open a pure no-op. A
+			// served-carrying action only reaches this branch after
+			// its replay cleaned the stale point and the remount
+			// actually succeeded, so the reconcile empties the
+			// replaced served stack ids in the same writeback
+			// instead of stranding them beside status=mounted. An
+			// already-mounted action is left untouched: a healthy
+			// mounted view carrying served ids still serves the
+			// replaced stack.
 			if action.Status != StatusMounted {
-				if err := e.Writeback(name, action.Seq, StatusMounted, ""); err != nil {
+				if err := e.WritebackMounted(name, action.Seq, "", true); err != nil {
 					return err
 				}
 			}
@@ -258,7 +266,15 @@ func (e *Engine) reopen(name string) error {
 }
 
 // replay cleans one stale action and rebuilds it through the mount
-// seam, writing the outcome back to the record.
+// seam, writing the outcome back to the record. A real remount —
+// not the adoption of an already-healthy view — serves the desired
+// stack again, so the mounted status and the emptied served stack
+// ids land in the same atomic write and the old stack stops being
+// pinned through them. A second write for the clear would leave a
+// crash in between strand status=mounted beside stale served ids
+// forever: a healthy mounted action carrying served ids is exactly
+// the post-rebase steady state, so no later open could tell the two
+// apart and heal it.
 func (e *Engine) replay(name string, action Action, clean CleanFunc, mount MountFunc) error {
 	if action.Mountpoint != "" {
 		if err := clean(action.Mountpoint); err != nil {
@@ -272,10 +288,9 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 		}
 		return fmt.Errorf("session: %s: replay seq %d: %w", name, action.Seq, err)
 	}
-	if err := e.Writeback(name, action.Seq, StatusMounted, result.Mountpoint); err != nil {
-		return err
-	}
-	return nil
+	// An adopted (Reused) view still serves the stack its served
+	// ids name, so only a real remount clears them.
+	return e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused)
 }
 
 // Close tears every recorded mount down in reverse record order. A
