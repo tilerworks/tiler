@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -917,4 +918,265 @@ func lookOnly(names ...string) func(string) (string, error) {
 		}
 		return "", exec.ErrNotFound
 	}
+}
+
+// pinnedAction is one recorded library mount action whose desired
+// stack pins (fullID, tipID), so an in-view rebase has a distinct
+// old stack to replace and record as served.
+func pinnedAction(imageRef, mountpoint, mode, fullID, tipID string) session.Action {
+	action := libraryAction(imageRef, mountpoint, mode)
+	action.FullID = fullID
+	action.TipID = tipID
+	return action
+}
+
+// onlyMountAction returns the single mount action of one record.
+func onlyMountAction(t *testing.T, dir, name string) session.Action {
+	t.Helper()
+	actions := loadSessionRecord(t, dir, name).Actions
+	if len(actions) != 1 || actions[0].Type != session.TypeMount {
+		t.Fatalf("actions = %+v, want one mount", actions)
+	}
+	return actions[0]
+}
+
+// assertStack checks the desired and served stacks of one recorded
+// mount action.
+func assertStack(t *testing.T, action session.Action, fullID, tipID, servedID, servedTip string) {
+	t.Helper()
+	if action.FullID != fullID || action.TipID != tipID {
+		t.Fatalf("desired = (%s, %s), want (%s, %s)",
+			action.FullID, action.TipID, fullID, tipID)
+	}
+	if action.ServedID != servedID || action.ServedTip != servedTip {
+		t.Fatalf("served = (%s, %s), want (%s, %s)",
+			action.ServedID, action.ServedTip, servedID, servedTip)
+	}
+}
+
+// viewFixture publishes one full image from an external source and
+// records a live mount of it at merged, pinning the (full, full)
+// stack. It returns the published full id.
+func viewFixture(t *testing.T, home, work string, lib []string, merged string) string {
+	t.Helper()
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	fullID := buildImage(t, lib, "alice/app", src)
+	writeSessionRecord(t, sessionsDir(home), "dev",
+		pinnedAction("alice/app", merged, session.ModeRW, fullID, fullID))
+	return fullID
+}
+
+func TestBuildFullInsideViewRebasesSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	oldID := viewFixture(t, home, work, lib, merged)
+	// The view content differs from the packed source, so the
+	// rebuild publishes a new id instead of being a no-op.
+	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
+	t.Chdir(merged)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
+	if err != nil {
+		t.Fatalf("build --full: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	newID := fields[2]
+	if newID == oldID {
+		t.Fatalf("rebuild kept the old id %s", oldID)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr %q", stderr)
+	}
+	// The record moves to the new stack; the live view keeps serving
+	// the old one until the next mount.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), newID, newID, oldID, oldID)
+}
+
+func TestBuildFullNoopInsideViewKeepsSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	oldID := viewFixture(t, home, work, lib, merged)
+	// The view content matches the packed source, so every rebuild
+	// is a no-op that reports the existing id.
+	writeTestFile(t, filepath.Join(merged, "base.txt"), "base")
+	t.Chdir(merged)
+
+	for i := 1; i <= 2; i++ {
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
+		if err != nil {
+			t.Fatalf("build --full #%d: %v\n%s", i, err, stderr)
+		}
+		fields := strings.Fields(stdout)
+		if len(fields) != 3 || fields[0] != "full" ||
+			fields[1] != "alice/app" || fields[2] != oldID {
+			t.Fatalf("stdout #%d = %q, want the no-op id %s", i, stdout, oldID)
+		}
+		if stderr != "" {
+			t.Fatalf("build --full #%d warned: %q", i, stderr)
+		}
+	}
+	// The no-op rebuild still rebases the view, but onto the stack
+	// the record already pins: the engine's identity guard skips the
+	// rewrite, so desired stays put and no served stack is recorded
+	// for a view that never differed from it.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, oldID, "", "")
+}
+
+func TestBuildIncrInsideViewRebasesSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	fullID := viewFixture(t, home, work, lib, merged)
+	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(merged)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr %q", stderr)
+	}
+	// The full root stays; the desired tip moves to the new layer
+	// and the served stack keeps the old (full, full) pin.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), fullID, fields[2], fullID, fullID)
+}
+
+func TestBuildPromotedFullInsideViewRebasesSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	oldID := viewFixture(t, home, work, lib, merged)
+	// An upper beyond half the small fake base image promotes the
+	// default build to a full rebuild of the view.
+	writeTestFile(t, filepath.Join(upper, "big.txt"), strings.Repeat("x", 4096))
+	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
+	t.Chdir(merged)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	newID := fields[2]
+	if newID == oldID {
+		t.Fatalf("promoted rebuild kept the old id %s", oldID)
+	}
+	if !strings.Contains(stderr, "exceed 50%") {
+		t.Fatalf("promotion warning missing: %q", stderr)
+	}
+	// The promoted path rebases exactly like a requested full build.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), newID, newID, oldID, oldID)
+}
+
+func TestBuildOutsideViewKeepsSessionRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	fullID := viewFixture(t, home, work, lib, merged)
+
+	// A plain directory build replaces the active image but keeps
+	// the recorded pin: no rebase and no warning.
+	other := filepath.Join(work, "other")
+	writeTestFile(t, filepath.Join(other, "f.txt"), "external")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", other)...)
+	if err != nil {
+		t.Fatalf("external build: %v\n%s", err, stderr)
+	}
+	if newID := buildOutput(t, stdout); newID == fullID {
+		t.Fatalf("external rebuild kept the old id %s", fullID)
+	}
+	if stderr != "" {
+		t.Fatalf("external build warned: %q", stderr)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), fullID, fullID, "", "")
+
+	// A --image diversion from inside the view packs another image
+	// and leaves the mounted view's record alone as well.
+	docs := filepath.Join(merged, "docs")
+	writeTestFile(t, filepath.Join(docs, "guide.md"), "guide")
+	t.Chdir(merged)
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--image", "bob/docs", docs)...)
+	if err != nil {
+		t.Fatalf("diverted build: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "bob/docs" || !isPayloadID(fields[2]) {
+		t.Fatalf("diverted stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("diverted build warned: %q", stderr)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), fullID, fullID, "", "")
+}
+
+func TestBuildRebaseFailureWarnsAndStillSucceeds(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	withSessionSeams(t, nil)
+	oldID := viewFixture(t, home, work, lib, merged)
+	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
+	t.Chdir(merged)
+
+	orig := rebaseMountedStack
+	t.Cleanup(func() { rebaseMountedStack = orig })
+	var gotPoint, gotName, gotFull, gotTip string
+	rebaseMountedStack = func(_ config.Config, point, name, fullID, tipID string) error {
+		gotPoint, gotName, gotFull, gotTip = point, name, fullID, tipID
+		return errors.New("session store: boom")
+	}
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
+	if err != nil {
+		t.Fatalf("build --full: %v\n%s", err, stderr)
+	}
+	fields := strings.Fields(stdout)
+	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	newID := fields[2]
+	if gotPoint != merged || gotName != "alice/app" || gotFull != newID || gotTip != newID {
+		t.Fatalf("rebase call = (%q, %q, %q, %q), want (%q, alice/app, %s, %s)",
+			gotPoint, gotName, gotFull, gotTip, merged, newID, newID)
+	}
+	// The published image is not rolled back: the failure degrades
+	// to a stderr warning and the build exits 0.
+	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "boom") {
+		t.Fatalf("stderr = %q, want a rebase warning", stderr)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, oldID, "", "")
 }

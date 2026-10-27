@@ -31,6 +31,13 @@ var (
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
 	incrSmoke func(string) error
+	// rebaseMountedStack rewrites the desired stack of every live
+	// mount action serving one library image, after a build from the
+	// mounted view itself published a new stack. Tests replace it to
+	// record the call or to fail the rewrite.
+	rebaseMountedStack = func(cfg config.Config, point, name, fullID, tipID string) error {
+		return sessionEngine(cfg).RebaseMountedStack(point, name, fullID, tipID)
+	}
 )
 
 func newBuildCmd() *cobra.Command {
@@ -406,6 +413,7 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	rebaseView(cmd.ErrOrStderr(), cfg, decision, res.ID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err
 }
@@ -422,12 +430,37 @@ func mapBuildPathError(err error) error {
 	return err
 }
 
+// rebaseView moves the session record of the mounted view a build ran
+// from onto the freshly published stack (fullID, tipID). Only builds
+// inside a writable overlay view carry a mount point; external builds
+// and --image diversions keep their recorded pins, and the dmg paths
+// never call this. The image is already published when this runs, so
+// a failed rewrite is a stderr warning only and the build still
+// succeeds. The build never umounts or mounts: the live view keeps
+// serving the replaced stack until the next mount picks up the new
+// one.
+func rebaseView(stderr io.Writer, cfg config.Config, decision mountinfo.Decision, fullID, tipID string) {
+	if decision.MountPoint == "" || fullID == "" || tipID == "" {
+		return
+	}
+	err := rebaseMountedStack(cfg, decision.MountPoint, decision.Name.String(), fullID, tipID)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr,
+			"warning: the session record for %s was not moved to the new image %s: %v\n",
+			decision.MountPoint, tipID, err)
+	}
+}
+
 func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, format, compression string) error {
 	typ, comp, err := explicitContainer(cmd, format, compression)
 	if err != nil {
 		return err
 	}
-	if active, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
+	// The active full root id names the base of the rebased stack;
+	// an incremental build never moves it.
+	var fullID string
+	if active, root, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
+		fullID = root
 		if err := image.FormatConflict(active, typ, comp); err != nil {
 			return usageError{err}
 		}
@@ -451,22 +484,28 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	rebaseView(cmd.ErrOrStderr(), cfg, decision, fullID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
 }
 
-// readActiveFormat loads the container recorded on the active image.
-// A missing image is left for BuildIncr to report.
-func readActiveFormat(cfg config.Config, name string) (image.Format, error) {
+// readActiveFormat loads the container format and the full root id
+// recorded on the active image. A missing image is left for BuildIncr
+// to report.
+func readActiveFormat(cfg config.Config, name string) (image.Format, string, error) {
 	repo, err := image.OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
-		return image.Format{}, err
+		return image.Format{}, "", err
 	}
 	manifest, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
-		return image.Format{}, err
+		return image.Format{}, "", err
 	}
-	return manifest.Format, nil
+	root, err := manifest.Full()
+	if err != nil {
+		return image.Format{}, "", err
+	}
+	return manifest.Format, root.ID, nil
 }
 
 func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, compression string) error {
