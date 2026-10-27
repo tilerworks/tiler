@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1434,5 +1435,399 @@ func TestSmokeReadOnlyReportsMountFailure(t *testing.T) {
 	}
 	if len(rec.find("fusermount3")) != 0 {
 		t.Error("unmount ran although nothing was mounted")
+	}
+}
+
+// pruneRequest builds a read-write request with PruneUpper set and a
+// reused upper that already holds content, so the prune window runs.
+func pruneRequest(t *testing.T) Request {
+	t.Helper()
+	req, _ := testRequest(t)
+	req.PruneUpper = true
+	upper := filepath.Join(req.RuntimeDir, "upper")
+	if err := os.MkdirAll(upper, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upper, "keep.txt"), []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
+// captureWarnings redirects the warnf seam and returns the captured
+// lines for the duration of the test.
+func captureWarnings(t *testing.T) *[]string {
+	t.Helper()
+	var lines []string
+	old := warnf
+	warnf = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() { warnf = old })
+	return &lines
+}
+
+func TestMountPruneWindowMergesLowersReadonlyFirst(t *testing.T) {
+	req := pruneRequest(t)
+	lowercheck := filepath.Join(req.RuntimeDir, "lowercheck")
+	k := newFakeKernel()
+	w, err := mountTest(t, req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := k.find("fuse-overlayfs")
+	if len(overlay) != 2 {
+		t.Fatalf("fuse-overlayfs calls = %v, want the lowercheck window and the merged view", overlay)
+	}
+	squash := k.find("squashfuse_ll")
+	if len(squash) != 3 {
+		t.Fatalf("squashfuse_ll calls = %v", squash)
+	}
+	opts := overlay[0][2]
+	lowerdir := strings.Join([]string{squash[0][4], squash[1][4], squash[2][4]}, ":")
+	if !strings.Contains(opts, "lowerdir="+lowerdir) {
+		t.Errorf("lowercheck opts %q missing the member lowers", opts)
+	}
+	if strings.Contains(opts, "upperdir=") || strings.Contains(opts, "workdir=") {
+		t.Errorf("the lowercheck merge is not read-only: %q", opts)
+	}
+	if overlay[0][3] != lowercheck {
+		t.Errorf("lowercheck point = %q", overlay[0][3])
+	}
+	if overlay[1][3] != req.MergedDir {
+		t.Errorf("merged point = %q", overlay[1][3])
+	}
+	if !strings.Contains(overlay[1][2], "upperdir="+w.UpperDir) {
+		t.Errorf("merged opts %q missing the upper", overlay[1][2])
+	}
+	// Ordering: every lower, the lowercheck merge, its immediate
+	// teardown, and only then the merged view.
+	var events []string
+	for _, call := range k.calls {
+		switch call[0] {
+		case "squashfuse_ll":
+			events = append(events, "lower")
+		case "fuse-overlayfs":
+			events = append(events, "overlay:"+filepath.Base(call[3]))
+		case "fusermount3":
+			events = append(events, "umount:"+filepath.Base(call[2]))
+		}
+	}
+	want := []string{"lower", "lower", "lower", "overlay:lowercheck", "umount:lowercheck", "overlay:merged"}
+	if !slices.Equal(events, want) {
+		t.Errorf("events = %v, want %v", events, want)
+	}
+	// The temporary point never joins the terminal accounting and
+	// leaves no residue behind.
+	if len(w.mounts) != 4 || slices.Contains(w.mounts, lowercheck) {
+		t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
+	}
+	if _, statErr := os.Stat(lowercheck); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("lowercheck residue survived: %v", statErr)
+	}
+	if w.Prune == nil {
+		t.Error("the prune report was not recorded")
+	}
+}
+
+func TestMountPruneWindowOnlyForReusedWritableUpper(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, req *Request)
+	}{
+		{
+			name:   "PruneUpper unset",
+			mutate: func(_ *testing.T, req *Request) { req.PruneUpper = false },
+		},
+		{
+			name:   "read-only chain",
+			mutate: func(_ *testing.T, req *Request) { req.ReadOnly = true },
+		},
+		{
+			name: "fresh upper",
+			mutate: func(t *testing.T, req *Request) {
+				if err := os.RemoveAll(filepath.Join(req.RuntimeDir, "upper")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "empty upper",
+			mutate: func(t *testing.T, req *Request) {
+				stale := filepath.Join(req.RuntimeDir, "upper", "keep.txt")
+				if err := os.Remove(stale); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := pruneRequest(t)
+			tc.mutate(t, &req)
+			k := newFakeKernel()
+			w, err := mountTest(t, req, k.run, k.seam())
+			if err != nil {
+				t.Fatal(err)
+			}
+			overlay := k.find("fuse-overlayfs")
+			if len(overlay) != 1 || overlay[0][3] != req.MergedDir {
+				t.Errorf("fuse-overlayfs calls = %v, want only the merged view", overlay)
+			}
+			if w.Prune != nil {
+				t.Errorf("prune ran: %+v", w.Prune)
+			}
+		})
+	}
+}
+
+func TestMountReusedViewNeverPrunes(t *testing.T) {
+	req := pruneRequest(t)
+	runtime := req.RuntimeDir
+	if err := os.MkdirAll(req.MergedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req.Table = append([]Entry{{
+		Point:  req.MergedDir,
+		FSType: "fuse.fuse-overlayfs",
+		Source: "overlay",
+		Upper:  filepath.Join(runtime, "upper"),
+		Lowers: plannedLowers(runtime, 3),
+	}}, stackLowerEntries(t, runtime, req)...)
+	rec := &recRunner{}
+	w, err := mountTest(t, req, rec.run, testHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Reused {
+		t.Error("a matching live view must be reused")
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("reuse ran commands: %v", rec.calls)
+	}
+	if w.Prune != nil {
+		t.Errorf("reuse pruned a live upper: %+v", w.Prune)
+	}
+	assertBytesFile(t, filepath.Join(runtime, "upper", "keep.txt"), []byte("user data"))
+}
+
+func TestMountPruneFailureWarnsAndContinues(t *testing.T) {
+	req := pruneRequest(t)
+	lowercheck := filepath.Join(req.RuntimeDir, "lowercheck")
+	warns := captureWarnings(t)
+	k := newFakeKernel()
+	seam := k.seam()
+	seam.prune = func(upperDir, lowerView string) (PruneReport, error) {
+		if upperDir != filepath.Join(req.RuntimeDir, "upper") {
+			t.Errorf("upper dir = %q", upperDir)
+		}
+		if lowerView != lowercheck {
+			t.Errorf("lower view = %q", lowerView)
+		}
+		return PruneReport{Kept: 7}, errors.New("prune: forced failure")
+	}
+	w, err := mountTest(t, req, k.run, seam)
+	if err != nil {
+		t.Fatalf("prune failure blocked the mount: %v", err)
+	}
+	if len(*warns) != 1 || !strings.Contains((*warns)[0], "forced failure") {
+		t.Errorf("warnings = %v, want one prune warning", *warns)
+	}
+	if w.Prune == nil || w.Prune.Kept != 7 {
+		t.Errorf("report = %+v, want the counts back", w.Prune)
+	}
+	// The temporary point is torn down even though the prune failed.
+	unmounts := k.find("fusermount3")
+	if len(unmounts) != 1 || unmounts[0][2] != lowercheck {
+		t.Errorf("fusermount3 calls = %v, want only the lowercheck teardown", unmounts)
+	}
+	if len(w.mounts) != 4 || slices.Contains(w.mounts, lowercheck) {
+		t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
+	}
+}
+
+func TestMountPruneTeardownFailureWarnsButMounts(t *testing.T) {
+	req := pruneRequest(t)
+	lowercheck := filepath.Join(req.RuntimeDir, "lowercheck")
+	warns := captureWarnings(t)
+	k := newFakeKernel()
+	run := func(name string, args ...string) error {
+		if name == "fusermount3" && args[len(args)-1] == lowercheck {
+			k.calls = append(k.calls, append([]string{name}, args...))
+			return errors.New("fusermount3: forced failure")
+		}
+		return k.run(name, args...)
+	}
+	w, err := mountTest(t, req, run, k.seam())
+	if err != nil {
+		t.Fatalf("teardown failure blocked the mount: %v", err)
+	}
+	if len(*warns) != 1 || !strings.Contains((*warns)[0], "forced failure") {
+		t.Errorf("warnings = %v, want one teardown warning", *warns)
+	}
+	if w.Prune == nil {
+		t.Error("the prune report was not recorded")
+	}
+	// The residue stays live but out of the terminal accounting; the
+	// next mount's plan phase tears it down.
+	if !k.isLive(lowercheck) {
+		t.Error("the failed teardown should leave the point live")
+	}
+	if len(w.mounts) != 4 || slices.Contains(w.mounts, lowercheck) {
+		t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
+	}
+}
+
+// TestMountPruneWindowCameUpFailureWarnsButMounts covers the three
+// ways the prune window itself can fail to come up: creating the
+// lowercheck point, the fuse-overlayfs exec, and the liveness poll.
+// In every case the mount must succeed without a prune report, with
+// exactly one warning, and without lowercheck residue.
+func TestMountPruneWindowCameUpFailureWarnsButMounts(t *testing.T) {
+	tests := []struct {
+		name string
+		// prepare mutates the fixture before the mount runs.
+		prepare func(t *testing.T, req Request)
+		// run replaces the fake kernel runner when set.
+		run      func(req Request, k *fakeKernel) runFunc
+		wantWarn string
+	}{
+		{
+			name: "lowercheck point cannot be created",
+			prepare: func(t *testing.T, req Request) {
+				// A dangling symlink occupies the point name: it
+				// reads as missing but MkdirAll fails on it.
+				point := filepath.Join(req.RuntimeDir, "lowercheck")
+				if err := os.Symlink(filepath.Join(req.RuntimeDir, "nowhere"), point); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantWarn: "file exists",
+		},
+		{
+			name: "fuse-overlayfs exec fails",
+			run: func(req Request, k *fakeKernel) runFunc {
+				point := filepath.Join(req.RuntimeDir, "lowercheck")
+				return func(name string, args ...string) error {
+					if name == "fuse-overlayfs" && args[len(args)-1] == point {
+						k.calls = append(k.calls, append([]string{name}, args...))
+						return errors.New("fuse-overlayfs: forced failure")
+					}
+					return k.run(name, args...)
+				}
+			},
+			wantWarn: "forced failure",
+		},
+		{
+			name: "window never comes up live",
+			run: func(req Request, k *fakeKernel) runFunc {
+				point := filepath.Join(req.RuntimeDir, "lowercheck")
+				return func(name string, args ...string) error {
+					if name == "fuse-overlayfs" && args[len(args)-1] == point {
+						// The exec succeeds but the daemon never
+						// publishes the mount.
+						k.calls = append(k.calls, append([]string{name}, args...))
+						return nil
+					}
+					return k.run(name, args...)
+				}
+			},
+			wantWarn: "did not become a live mount",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := pruneRequest(t)
+			point := filepath.Join(req.RuntimeDir, "lowercheck")
+			if tc.prepare != nil {
+				tc.prepare(t, req)
+			}
+			warns := captureWarnings(t)
+			k := newFakeKernel()
+			run := k.run
+			if tc.run != nil {
+				run = tc.run(req, k)
+			}
+			w, err := mountTest(t, req, run, k.seam())
+			if err != nil {
+				t.Fatalf("a window that never came up blocked the mount: %v", err)
+			}
+			if w.Prune != nil {
+				t.Errorf("prune report recorded for a window failure: %+v", w.Prune)
+			}
+			if len(*warns) != 1 || !strings.Contains((*warns)[0], tc.wantWarn) {
+				t.Errorf("warnings = %v, want one warning containing %q", *warns, tc.wantWarn)
+			}
+			if len(w.mounts) != 4 || slices.Contains(w.mounts, point) {
+				t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
+			}
+			if _, statErr := os.Stat(point); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("lowercheck residue survived: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestMountPruneWindowRollsBackWithMergeFailure(t *testing.T) {
+	req := pruneRequest(t)
+	lowercheck := filepath.Join(req.RuntimeDir, "lowercheck")
+	k := newFakeKernel()
+	run := func(name string, args ...string) error {
+		if name == "fuse-overlayfs" && args[len(args)-1] == req.MergedDir {
+			k.calls = append(k.calls, append([]string{name}, args...))
+			return errors.New("fuse-overlayfs: forced failure")
+		}
+		return k.run(name, args...)
+	}
+	_, err := mountTest(t, req, run, k.seam())
+	if err == nil || !strings.Contains(err.Error(), "forced failure") {
+		t.Fatalf("err = %v", err)
+	}
+	// The window tore the lowercheck point down before the merged
+	// view was attempted, and the failure cleanup only reaches the
+	// three lowers afterwards.
+	unmounts := k.find("fusermount3")
+	points := make([]string, 0, len(unmounts))
+	for _, call := range unmounts {
+		points = append(points, filepath.Base(call[2]))
+	}
+	want := []string{"lowercheck", "lower-2", "lower-1", "lower-0"}
+	if !slices.Equal(points, want) {
+		t.Errorf("teardown points = %v, want %v", points, want)
+	}
+	for _, dir := range []string{lowercheck, req.MergedDir} {
+		if _, statErr := os.Stat(dir); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("created dir %s survived the failure: %v", dir, statErr)
+		}
+	}
+	// The reused upper data is never removed by a failed mount.
+	assertBytesFile(t, filepath.Join(req.RuntimeDir, "upper", "keep.txt"), []byte("user data"))
+}
+
+func TestMountCleansResidualLowercheckPoint(t *testing.T) {
+	req := pruneRequest(t)
+	req.PruneUpper = false
+	lowercheck := filepath.Join(req.RuntimeDir, "lowercheck")
+	if err := os.MkdirAll(lowercheck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k := newFakeKernel()
+	k.live[lowercheck] = true
+	w, err := mountTest(t, req, k.run, k.seam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Reused {
+		t.Error("residue cleanup must not report reuse")
+	}
+	if k.calls[0][0] != "fusermount3" || k.calls[0][2] != lowercheck {
+		t.Fatalf("first call = %v, want the residual lowercheck teardown", k.calls[0])
+	}
+	overlay := k.find("fuse-overlayfs")
+	if len(overlay) != 1 || overlay[0][3] != req.MergedDir {
+		t.Errorf("fuse-overlayfs calls = %v, want only the merged view", overlay)
+	}
+	if len(w.mounts) != 4 || slices.Contains(w.mounts, lowercheck) {
+		t.Errorf("mounts = %v, want three lowers plus the merged view", w.mounts)
 	}
 }
