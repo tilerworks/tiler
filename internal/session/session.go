@@ -482,6 +482,117 @@ func (e *Engine) releaseMountActions(name, dir string) error {
 	return nil
 }
 
+// RebaseMountedStack rewrites the desired stack of every live mount
+// action serving mountpoint from the library image name: a build
+// published from the mounted view itself moves the next mount to the
+// new stack, while the live view keeps serving the replaced one until
+// a real remount. The replaced stack lands in the served fields so
+// reference protection covers both stacks, and a chained rebase keeps
+// the original served values: the live view never moved. Like
+// ReleaseMount, this is a two-phase walk — a candidate scan over the
+// records, then a Load/modify/Save per candidate under the session's
+// exclusive lock. Closed records and unmounted actions are left
+// alone; an action already naming the new stack is a no-op. Callers
+// pass a non-empty mountpoint and name: an empty query matches no
+// action — a file-path mount records no identity — and the call is a
+// silent no-op.
+func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string) error {
+	var names []string
+	err := e.eachRecord(func(rec Record) bool {
+		if rec.State != StateActive {
+			return false
+		}
+		for _, action := range rec.Actions {
+			if rebaseHit(action, mountpoint, name) {
+				names = append(names, rec.Name)
+				return false
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return err
+	}
+	for _, sessionName := range names {
+		if err := e.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rebaseActions rewrites the matching actions of one session under
+// its exclusive lock, re-checking the hit rule so a concurrent close
+// or teardown between the scan and the lock keeps the record as it
+// is. The record is saved only when an action actually changed.
+func (e *Engine) rebaseActions(
+	sessionName, mountpoint, name, newFullID, newTipID string,
+) error {
+	release, err := e.lockExclusive(sessionName)
+	if err != nil {
+		return err
+	}
+	defer release()
+	rec, err := e.Load(sessionName)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if rec.State != StateActive {
+		return nil
+	}
+	changed := false
+	for i := range rec.Actions {
+		action := &rec.Actions[i]
+		if !rebaseHit(*action, mountpoint, name) ||
+			(action.FullID == newFullID && action.TipID == newTipID) {
+			continue
+		}
+		// The served fields keep their first value across chained
+		// rebases: they name the stack the live view serves, and
+		// that view never remounted in between.
+		action.ServedID = firstNonEmpty(action.ServedID, action.FullID)
+		action.ServedTip = firstNonEmpty(action.ServedTip, action.TipID, action.FullID)
+		action.FullID = newFullID
+		action.TipID = newTipID
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return e.Save(rec)
+}
+
+// rebaseHit reports whether one recorded action is a live mount of
+// the library image name at mountpoint: the rewrite target of a
+// build published from that very view. The mountpoint compares
+// through SameMountPoint, so a symlinked spelling of the same
+// directory still hits. An empty mountpoint or name never hits:
+// SameMountPoint matches empty-for-empty and a file-path action
+// records no name, so without this guard an empty query would stamp
+// library stack ids onto a file-path mount. Identity.Lookup keeps
+// the same contract.
+func rebaseHit(action Action, mountpoint, name string) bool {
+	return mountpoint != "" && name != "" &&
+		action.Type == TypeMount &&
+		action.Status != StatusUnmounted &&
+		SameMountPoint(action.Mountpoint, mountpoint) &&
+		action.Name == name
+}
+
+// firstNonEmpty returns the first non-empty value, or the empty
+// string when every value is empty.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // Discard deletes one record that never came to serve a live view
 // of its own. A mount that failed, or one that merely adopted a
 // view another session already serves, leaves such a record behind;
