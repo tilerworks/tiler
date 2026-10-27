@@ -122,6 +122,15 @@ func TestBuildDMGDirectoryUsesSrcfolder(t *testing.T) {
 		len(meta.Chain) != 0 || meta.SHA256 != res.SHA256 {
 		t.Fatalf("meta = %+v", meta)
 	}
+	// The published document is a single-node v2 manifest.
+	manifest, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != ManifestVersion || len(manifest.Images) != 1 ||
+		manifest.Head != res.ID || manifest.Format.Type != FormatDMG {
+		t.Fatalf("manifest = %+v", manifest)
+	}
 }
 
 func TestBuildDMGEmptyCompressionIsULFO(t *testing.T) {

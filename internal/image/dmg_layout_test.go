@@ -117,7 +117,11 @@ func TestEmptyChainDMGSurvivesPreparePublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists || got.ID != meta.ID || got.Format.Type != FormatDMG {
+	root, err := got.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || root.ID != meta.ID || got.Format.Type != FormatDMG {
 		t.Fatalf("preparePublish = %+v exists=%v", got, exists)
 	}
 	if err := repairTornActive(repo, hooks{}, ""); err != nil {
@@ -125,8 +129,8 @@ func TestEmptyChainDMGSurvivesPreparePublish(t *testing.T) {
 	}
 	assertDMGStillActive(t, repo, body, meta)
 
-	if payloadRoot(repo.Dir, meta) != filepath.Join(repo.Dir, ImageDMG) {
-		t.Fatalf("root = %s", payloadRoot(repo.Dir, meta))
+	if payloadRoot(repo.Dir, manifestFromMeta(meta)) != filepath.Join(repo.Dir, ImageDMG) {
+		t.Fatalf("root = %s", payloadRoot(repo.Dir, manifestFromMeta(meta)))
 	}
 	holdPath := holdPayloadPath("hold", meta)
 	if holdPath != filepath.Join("hold", ImageDMG) {
@@ -193,23 +197,27 @@ func TestPreparePublishKeepsSquashfsOnImageSqsh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists || got.SHA256 != meta.SHA256 {
+	root, err := got.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || root.SHA256 != meta.SHA256 {
 		t.Fatalf("preparePublish = %+v exists=%v", got, exists)
 	}
 	assertBytes(t, repo.ImagePath(), body)
 	if _, err := os.Stat(filepath.Join(repo.Dir, ImageDMG)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("repair created image.dmg")
 	}
-	if payloadRoot(repo.Dir, meta) != repo.ImagePath() {
-		t.Fatalf("root = %s", payloadRoot(repo.Dir, meta))
+	if payloadRoot(repo.Dir, manifestFromMeta(meta)) != repo.ImagePath() {
+		t.Fatalf("root = %s", payloadRoot(repo.Dir, manifestFromMeta(meta)))
 	}
 	if holdPayloadPath("hold", meta) != filepath.Join("hold", ImageFile) {
 		t.Fatalf("hold = %s", holdPayloadPath("hold", meta))
 	}
 	erofs := meta
 	erofs.Format.Type = FormatErofs
-	if payloadRoot(repo.Dir, erofs) != filepath.Join(repo.Dir, ImageFile) {
-		t.Fatalf("erofs root = %s", payloadRoot(repo.Dir, erofs))
+	if payloadRoot(repo.Dir, manifestFromMeta(erofs)) != filepath.Join(repo.Dir, ImageFile) {
+		t.Fatalf("erofs root = %s", payloadRoot(repo.Dir, manifestFromMeta(erofs)))
 	}
 	ok, err := payloadMatchesMeta(repo, meta)
 	if err != nil || !ok {
@@ -230,7 +238,7 @@ func seedDMGActive(t *testing.T, repo Repo, body []byte) Meta {
 	if err := os.WriteFile(filepath.Join(repo.Dir, ImageDMG), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifestFromMeta(meta)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(repo.ImagePath()); !errors.Is(err, os.ErrNotExist) {

@@ -166,7 +166,7 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	format := image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}
 	alice := image.Meta{
 		ID: goldenActiveID, Name: "alice/app", Version: image.MetaVersion,
-		Kind: image.KindIncremental, Format: format,
+		Kind: image.KindFull, Format: format,
 		Size: 2048, SHA256: goldenActiveSum, MtimeUnix: 1772600767,
 		CreatedAt: createdAt, Builder: "tiler golden",
 		Chain: []image.ChainEntry{{

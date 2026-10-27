@@ -19,6 +19,12 @@ type splitFixture struct {
 	bodies [][]byte
 }
 
+// manifest is the v2 DAG form of the fixture: the linear chain
+// becomes the node list and the head is the chain tail.
+func (fx splitFixture) manifest() Manifest {
+	return manifestFromMeta(fx.meta)
+}
+
 func TestPublishStagedBlocksPayloadFresh(t *testing.T) {
 	repo := testRepo(t)
 	fx := blocksFixture([][]byte{[]byte("block-a"), []byte("block-b")})
@@ -113,7 +119,7 @@ func TestPublishStagedPayloadRejectsMismatch(t *testing.T) {
 	corrupt := splitFixture{meta: fx.meta,
 		bodies: [][]byte{[]byte("block-a"), []byte("torn-write")}}
 	payloadTmp, metaTmp := stageSplitPayload(t, repo, corrupt)
-	err := publishStagedPayload(repo, fx.meta, nil, payloadTmp,
+	err := publishStagedPayload(repo, fx.manifest(), nil, payloadTmp,
 		finalPayloadDir(t, repo, fx.meta), metaTmp, hooks{})
 	if err == nil || !strings.Contains(err.Error(), "payload does not match meta") {
 		t.Fatalf("err = %v", err)
@@ -137,8 +143,9 @@ func TestPublishStagedPayloadRejectsSingleMeta(t *testing.T) {
 	if err := os.Mkdir(payloadTmp, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	metaTmp := stageMeta(t, repo, meta)
-	err = publishStagedPayload(repo, meta, nil, payloadTmp, repo.ImagePath(), metaTmp, hooks{})
+	manifest := manifestFromMeta(meta)
+	metaTmp := stageManifest(t, repo, manifest)
+	err = publishStagedPayload(repo, manifest, nil, payloadTmp, repo.ImagePath(), metaTmp, hooks{})
 	if err == nil || !strings.Contains(err.Error(), "requires a split manifest") {
 		t.Fatalf("err = %v", err)
 	}
@@ -178,7 +185,7 @@ func TestPublishStagedPayloadRenameFailureRestoresPrevious(t *testing.T) {
 		return nil
 	}}
 	payloadTmp, metaTmp := stageSplitPayload(t, repo, next)
-	err := publishStagedPayload(repo, next.meta, nil, payloadTmp, final, metaTmp, seam)
+	err := publishStagedPayload(repo, next.manifest(), nil, payloadTmp, final, metaTmp, seam)
 	if err == nil {
 		t.Fatal("expected payload rename failure")
 	}
@@ -191,7 +198,7 @@ func TestHoldRestoreSymmetryForSplitPayloads(t *testing.T) {
 	fx := blocksFixture([][]byte{[]byte("sym-a"), []byte("sym-b")})
 	repo := testRepo(t)
 	seedSplitActive(t, repo, fx)
-	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+	if err := moveActiveToHold(repo, fx.manifest(), hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	assertGone(t, finalPayloadDir(t, repo, fx.meta))
@@ -214,7 +221,7 @@ func TestHoldRestoreSymmetryForSplitPayloads(t *testing.T) {
 func TestPublishHoldRestoreChainBlockDirs(t *testing.T) {
 	repo := testRepo(t)
 	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
-	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+	if err := moveActiveToHold(repo, fx.manifest(), hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	assertGone(t, filepath.Join(repo.Dir, dirBlocks))
@@ -240,7 +247,7 @@ func TestPublishHoldRestoreChainBlockDirs(t *testing.T) {
 func TestRestoreHoldMergesChainBlockDir(t *testing.T) {
 	repo := testRepo(t)
 	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
-	if err := moveActiveToHold(repo, fx.meta, hooks{}); err != nil {
+	if err := moveActiveToHold(repo, fx.manifest(), hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	hold, err := repo.HoldPath(fx.meta.ID)
@@ -274,7 +281,7 @@ func TestPublishArchivesChainBlockDirs(t *testing.T) {
 	repo := testRepo(t)
 	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
 	next := []byte("replacement-full")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
@@ -333,7 +340,7 @@ func TestPublishReclaimsChainBlockDirFromStaleHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("image-c")
-	if err := repo.Publish(next, metaFor(next), refs); err != nil {
+	if err := repo.Publish(next, manifestFor(next), refs); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
@@ -365,7 +372,7 @@ func TestPublishRepairsTornBlocksHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("after-tear")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
@@ -405,7 +412,7 @@ func TestPublishSweepsTornChainBlockDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("after-tear")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
@@ -416,6 +423,248 @@ func TestPublishSweepsTornChainBlockDir(t *testing.T) {
 	}
 	assertBytes(t, filepath.Join(arch, dirBlocks, layer, "blk.000"), []byte("layer-body"))
 	assertPayloadAt(t, holdPayloadPath(arch, fx.meta), fx)
+}
+
+// TestPublishSweepReturnsBranchBlockDirsByReachability covers the
+// crash repair after the full blocks payload and the meta of a
+// branching DAG reached the hold while both branch layer directories
+// stayed in the active slot: the sweep must return every _blocks/<id>
+// directory the hold manifest lists, including the branch node the
+// head stack does not reach.
+func TestPublishSweepReturnsBranchBlockDirsByReachability(t *testing.T) {
+	repo := testRepo(t)
+	manifest, layer, branch := seedBlocksWithBranch(t, repo)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(hold, dirBlocks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fullDir, err := repo.BlocksDirPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(fullDir, filepath.Join(hold, dirBlocks, root.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(repo.MetaPath(), filepath.Join(hold, fileMeta)); err != nil {
+		t.Fatal(err)
+	}
+	next := []byte("after-tear")
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks))
+	arch, err := repo.ArchivePath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(arch, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertBytes(t, filepath.Join(arch, dirBlocks, branch, "blk.000"), []byte("branch-body"))
+}
+
+// seedBlocksWithBranch publishes a blocks-form full image plus two
+// branch block layer directories parented on the root, with the head
+// on one branch. It returns the manifest and the two layer ids.
+func seedBlocksWithBranch(t *testing.T, repo Repo) (Manifest, string, string) {
+	t.Helper()
+	fx := blocksFixture([][]byte{[]byte("full-a"), []byte("full-b")})
+	manifest := fx.manifest()
+	rootID := manifest.Head
+	layerBodies := [][]byte{[]byte("layer-body")}
+	branchBodies := [][]byte{[]byte("branch-body")}
+	layer := blocksNodeOf(rootID, layerBodies)
+	branch := blocksNodeOf(rootID, branchBodies)
+	manifest = withNode(manifest, layer)
+	manifest = withNode(manifest, branch)
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	writePayloadDir(t, finalPayloadDir(t, repo, fx.meta), fx)
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	writePayloadDir(t, mustBlocksDir(t, repo, layer.ID), splitFixture{
+		meta: Meta{Blocks: layer.Blocks}, bodies: layerBodies,
+	})
+	writePayloadDir(t, mustBlocksDir(t, repo, branch.ID), splitFixture{
+		meta: Meta{Blocks: branch.Blocks}, bodies: branchBodies,
+	})
+	return manifest, layer.ID, branch.ID
+}
+
+// blocksNodeOf builds one incremental blocks node whose block
+// digests match the concatenated bodies.
+func blocksNodeOf(parent string, bodies [][]byte) ImageMeta {
+	entry := chainBlocksEntry(parent, bodies)
+	return ImageMeta{
+		ID:        entry.ID,
+		Kind:      KindIncremental,
+		Parent:    entry.Parent,
+		Size:      entry.Size,
+		SHA256:    entry.SHA256,
+		MtimeUnix: entry.MtimeUnix,
+		CreatedAt: entry.CreatedAt,
+		Blocks:    entry.Blocks,
+	}
+}
+
+// TestPublishSweepKeepsIntactActiveBranchBlockDir is the blocks twin
+// of TestPublishSweepKeepsIntactActiveBranchLayer: an intact active
+// branching manifest lists a branch node whose _blocks/<id> directory
+// rests in the active slot, while the pinned hold lists the same id
+// without holding the directory. The sweep of a later preparePublish
+// must not relocate it, and the branch stack must still resolve. A
+// staged split payload that mismatches its manifest runs the sweep
+// and then returns before the active DAG moves aside.
+func TestPublishSweepKeepsIntactActiveBranchBlockDir(t *testing.T) {
+	repo := testRepo(t)
+	manifest, layer, branch := seedBlocksWithBranch(t, repo)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := holdSet{ids: map[string]bool{root.ID: true}}
+	other := blocksFixture([][]byte{[]byte("other-full")})
+	if err := publishSplit(t, repo, other, refs, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	// Republishing the branching DAG makes it active again:
+	// retireStaleHold returns both layer directories into the active
+	// slot, and the pinned hold survives listing them without the
+	// directories.
+	fx := blocksFixture([][]byte{[]byte("full-a"), []byte("full-b")})
+	payloadTmp, stagedMeta := stageSplitPayload(t, repo, fx)
+	removeFile(stagedMeta)
+	metaTmp := stageManifest(t, repo, manifest)
+	final := finalPayloadDir(t, repo, fx.meta)
+	err = publishStagedPayload(repo, manifest, refs, payloadTmp, final, metaTmp, hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGone(t, filepath.Join(hold, dirBlocks, layer))
+	next := blocksFixture([][]byte{[]byte("mismatched-a")})
+	corrupt := splitFixture{meta: next.meta,
+		bodies: [][]byte{[]byte("torn-write")}}
+	tornTmp, tornMeta := stageSplitPayload(t, repo, corrupt)
+	err = publishStagedPayload(repo, next.manifest(), refs, tornTmp,
+		finalPayloadDir(t, repo, next.meta), tornMeta, hooks{})
+	if err == nil || !strings.Contains(err.Error(), "payload does not match meta") {
+		t.Fatalf("err = %v", err)
+	}
+	assertBytes(t, filepath.Join(repo.Dir, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertBytes(t, filepath.Join(repo.Dir, dirBlocks, branch, "blk.000"), []byte("branch-body"))
+	assertGone(t, filepath.Join(hold, dirBlocks, layer))
+	active, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := resolveBlocksAt(repo.Dir, repo.Name(), active, layer)
+	if err != nil {
+		t.Fatalf("branch stack does not resolve: %v", err)
+	}
+	if target.Tip != layer || len(target.Members) != 2 {
+		t.Fatalf("branch target = %+v", target)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestPublishReclaimsHoldBlockDirsWithoutManifest covers the split
+// form of the reclaim fallback through a full republish: the hold of
+// an id that becomes active again still owns the only copy of a
+// chain block directory, but its manifest is gone. The hold then
+// claims every directory resting in its _blocks/, so the next publish
+// reclaims the layer directory into the active slot and it travels
+// into the fresh hold instead of being deleted with the stale one.
+func TestPublishReclaimsHoldBlockDirsWithoutManifest(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	other := blocksFixture([][]byte{[]byte("other-full")})
+	refs := holdSet{ids: map[string]bool{fx.meta.ID: true}}
+	if err := publishSplit(t, repo, other, refs, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash that restored the full payload as active
+	// without retiring the stale hold, then tear the hold manifest
+	// away: the only copy of the layer directory rests in a hold
+	// that cannot be listed through its manifest.
+	if err := os.RemoveAll(filepath.Join(repo.Dir, dirBlocks)); err != nil {
+		t.Fatal(err)
+	}
+	writePayloadDir(t, finalPayloadDir(t, repo, fx.meta), fx)
+	if err := Store(repo.MetaPath(), fx.meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(hold, fileMeta)); err != nil {
+		t.Fatal(err)
+	}
+	next := []byte("image-c")
+	if err := repo.Publish(next, manifestFor(next), refs); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertPayloadAt(t, holdPayloadPath(hold, fx.meta), fx)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestMoveActiveToHoldReclaimsBlockDirsFromCorruptManifest is the
+// split twin of TestMoveActiveToHoldReclaimsFromCorruptHoldManifest:
+// a corrupt hold manifest still claims every _blocks/<id> directory
+// resting in the hold, so the reclaim saves the layer directory from
+// the removal of the stale hold. The republish flow cannot carry this
+// case because the torn-slot repair refuses a corrupt hold manifest
+// earlier, so the test drives moveActiveToHold directly.
+func TestMoveActiveToHoldReclaimsBlockDirsFromCorruptManifest(t *testing.T) {
+	repo := testRepo(t)
+	fx, layer := seedBlocksWithChain(t, repo, []byte("layer-body"))
+	manifest := fx.manifest()
+	if err := moveActiveToHold(repo, manifest, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(fx.meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	if err := os.WriteFile(filepath.Join(hold, fileMeta), []byte("meta: [torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash that restored the full payload as active
+	// without the layer directory: the hold owns the only copy
+	// behind a corrupt manifest.
+	writePayloadDir(t, finalPayloadDir(t, repo, fx.meta), fx)
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveActiveToHold(repo, manifest, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirBlocks, layer, "blk.000"), []byte("layer-body"))
+	assertPayloadAt(t, holdPayloadPath(hold, fx.meta), fx)
+	assertGone(t, filepath.Join(repo.Dir, dirBlocks, layer))
+	held, err := LoadManifest(filepath.Join(hold, fileMeta))
+	if err != nil {
+		t.Fatalf("corrupt manifest was not replaced: %v", err)
+	}
+	if !held.Has(layer) {
+		t.Fatalf("held manifest = %+v", held)
+	}
 }
 
 func TestRepairPayloadWithoutMeta(t *testing.T) {
@@ -751,7 +1000,7 @@ func seedBlocksWithChain(t *testing.T, repo Repo, layerBody []byte) (splitFixtur
 func seedSplitActive(t *testing.T, repo Repo, fx splitFixture) {
 	t.Helper()
 	writePayloadDir(t, finalPayloadDir(t, repo, fx.meta), fx)
-	if err := Store(repo.MetaPath(), fx.meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), fx.manifest()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -766,7 +1015,7 @@ func finalPayloadDir(t *testing.T, repo Repo, meta Meta) string {
 }
 
 // stageSplitPayload mimics a split build ready to publish: a scratch
-// payload directory and a synced staged meta inside repo.Dir.
+// payload directory and a synced staged manifest inside repo.Dir.
 func stageSplitPayload(t *testing.T, repo Repo, fx splitFixture) (string, string) {
 	t.Helper()
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
@@ -778,12 +1027,12 @@ func stageSplitPayload(t *testing.T, repo Repo, fx splitFixture) (string, string
 	}
 	payloadTmp := filepath.Join(repo.Dir, name)
 	writePayloadDir(t, payloadTmp, fx)
-	return payloadTmp, stageMeta(t, repo, fx.meta)
+	return payloadTmp, stageManifest(t, repo, fx.manifest())
 }
 
-func stageMeta(t *testing.T, repo Repo, meta Meta) string {
+func stageManifest(t *testing.T, repo Repo, manifest Manifest) string {
 	t.Helper()
-	body, err := Encode(meta)
+	body, err := EncodeManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,7 +1046,7 @@ func stageMeta(t *testing.T, repo Repo, meta Meta) string {
 func publishSplit(t *testing.T, repo Repo, fx splitFixture, refs Refs, seam hooks) error {
 	t.Helper()
 	payloadTmp, metaTmp := stageSplitPayload(t, repo, fx)
-	return publishStagedPayload(repo, fx.meta, refs, payloadTmp,
+	return publishStagedPayload(repo, fx.manifest(), refs, payloadTmp,
 		finalPayloadDir(t, repo, fx.meta), metaTmp, seam)
 }
 

@@ -171,7 +171,7 @@ func bakeDMG(repo Repo, req DMGRequest) (FullResult, error) {
 // idleDMG returns the active image when its logical content already
 // matches. preparePublish still runs so unreferenced holds archive.
 func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult, error) {
-	active, exists, err := loadActive(repo)
+	active, exists, err := loadActiveManifest(repo)
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
@@ -181,10 +181,14 @@ func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult
 	if _, _, err := preparePublish(repo, req.Refs, hooks{}, ""); err != nil {
 		return FullResult{}, err
 	}
+	root, err := active.Full()
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
 	return FullResult{
-		ID:     active.ID,
+		ID:     root.ID,
 		Path:   filepath.Join(repo.Dir, ImageDMG),
-		SHA256: active.SHA256,
+		SHA256: root.SHA256,
 	}, nil
 }
 
@@ -192,8 +196,12 @@ func idleDMG(repo Repo, req DMGRequest, content, compression string) (FullResult
 // moves a pinned active image.dmg into _hold/<id> and puts the new
 // bytes at the active slot. The shadow stays the delta for the held
 // base, so a later bake must not open the new active file.
-func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (string, string, error) {
-	if req.MountedID != "" && req.MountedID != active.ID {
+func bakeSource(repo Repo, active Manifest, activePath string, req DMGRequest) (string, string, error) {
+	root, err := active.Full()
+	if err != nil {
+		return "", "", fmt.Errorf("build: %w", err)
+	}
+	if req.MountedID != "" && req.MountedID != root.ID {
 		path, comp, found, err := holdDMG(repo, req.MountedID)
 		if err != nil {
 			return "", "", err
@@ -202,7 +210,7 @@ func bakeSource(repo Repo, active Meta, activePath string, req DMGRequest) (stri
 			return path, comp, nil
 		}
 	}
-	pinsActive, err := heldBy(req.Refs, refFor(repo, active.ID))
+	pinsActive, err := heldBy(req.Refs, refFor(repo, root.ID))
 	if err != nil {
 		return "", "", fmt.Errorf("build: %w", err)
 	}
@@ -231,14 +239,14 @@ func holdDMG(repo Repo, id string) (string, string, bool, error) {
 		}
 		return "", "", false, fmt.Errorf("build: %w", err)
 	}
-	meta, err := Load(filepath.Join(hold, fileMeta))
+	manifest, err := LoadManifest(filepath.Join(hold, fileMeta))
 	if err != nil {
 		return "", "", false, fmt.Errorf("build: %w", err)
 	}
-	if meta.Format.Type != FormatDMG {
+	if manifest.Format.Type != FormatDMG {
 		return "", "", false, nil
 	}
-	return path, meta.Format.Compression, true, nil
+	return path, manifest.Format.Compression, true, nil
 }
 
 // pinnedHoldDMG is the one held dmg Refs still pins. Several pinned
@@ -276,16 +284,16 @@ func pinnedHoldDMG(repo Repo, refs Refs) (string, string, bool, error) {
 	return path, comp, hit, nil
 }
 
-func activeDMG(repo Repo) (Meta, string, error) {
-	active, exists, err := loadActive(repo)
+func activeDMG(repo Repo) (Manifest, string, error) {
+	active, exists, err := loadActiveManifest(repo)
 	if err != nil {
-		return Meta{}, "", fmt.Errorf("build: %w", err)
+		return Manifest{}, "", fmt.Errorf("build: %w", err)
 	}
 	if !exists {
-		return Meta{}, "", errors.New("build: no active image to bake")
+		return Manifest{}, "", errors.New("build: no active image to bake")
 	}
 	if active.Format.Type != FormatDMG {
-		return Meta{}, "", fmt.Errorf("build: active image is %s, not dmg", active.Format.Type)
+		return Manifest{}, "", fmt.Errorf("build: active image is %s, not dmg", active.Format.Type)
 	}
 	return active, filepath.Join(repo.Dir, ImageDMG), nil
 }
@@ -333,12 +341,12 @@ func finishDMG(repo Repo, req DMGRequest, tmp, compression, content string) (Ful
 		removeFile(tmp)
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	meta, err := dmgMeta(repo, req, tmp, compression, content)
+	manifest, err := dmgManifest(repo, req, tmp, compression, content)
 	if err != nil {
 		removeFile(tmp)
 		return FullResult{}, err
 	}
-	body, err := Encode(meta)
+	body, err := EncodeManifest(manifest)
 	if err != nil {
 		removeFile(tmp)
 		return FullResult{}, fmt.Errorf("build: %w", err)
@@ -348,35 +356,38 @@ func finishDMG(repo Repo, req DMGRequest, tmp, compression, content string) (Ful
 		removeFile(tmp)
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	if err := publishStaged(repo, meta, req.Refs, tmp, metaTmp, hooks{}); err != nil {
+	if err := publishStaged(repo, manifest, req.Refs, tmp, metaTmp, hooks{}); err != nil {
 		return FullResult{}, err
 	}
-	path := filepath.Join(repo.Dir, ImageDMG)
-	if err := VerifySHA256(meta, path); err != nil {
+	root, err := manifest.Full()
+	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	return FullResult{ID: meta.ID, Path: path, SHA256: meta.SHA256}, nil
+	path := filepath.Join(repo.Dir, ImageDMG)
+	if err := verifyFileSHA256(path, root.SHA256); err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	return FullResult{ID: root.ID, Path: path, SHA256: root.SHA256}, nil
 }
 
-func dmgMeta(repo Repo, req DMGRequest, tmp, compression, content string) (Meta, error) {
+// dmgManifest assembles the single-node manifest of a dmg publish.
+// The content fingerprint marks idle rebuilds; see DMGRequest.Shadow.
+func dmgManifest(repo Repo, req DMGRequest, tmp, compression, content string) (Manifest, error) {
 	sum, err := fileSHA256(tmp)
 	if err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
 	info, err := os.Stat(tmp)
 	if err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
 	now := req.Now
 	if now == nil {
 		now = time.Now
 	}
-	meta := Meta{
-		Name:          repo.Name(),
+	node := ImageMeta{
 		ID:            ID(sum),
-		Version:       MetaVersion,
 		Kind:          KindFull,
-		Format:        Format{Type: FormatDMG, Compression: compression},
 		Size:          info.Size(),
 		SHA256:        hexDigest(sum),
 		MtimeUnix:     info.ModTime().Unix(),
@@ -384,8 +395,13 @@ func dmgMeta(repo Repo, req DMGRequest, tmp, compression, content string) (Meta,
 		Builder:       req.Builder,
 		ContentSHA256: content,
 	}
-	if err := meta.Validate(); err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+	manifest := fullManifest(
+		repo.Name(),
+		Format{Type: FormatDMG, Compression: compression},
+		node,
+	)
+	if err := manifest.Validate(); err != nil {
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
-	return meta, nil
+	return manifest, nil
 }

@@ -130,6 +130,16 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 		!loaded.CreatedAt.Equal(fixedNow()) || len(loaded.Chain) != 0 {
 		t.Fatalf("meta provenance = %+v", loaded)
 	}
+	// The published document is a single-node v2 manifest: the full
+	// image is the whole DAG and the head.
+	manifest, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != ManifestVersion || len(manifest.Images) != 1 ||
+		manifest.Head != res.ID || manifest.Images[0].Kind != KindFull {
+		t.Fatalf("manifest = %+v", manifest)
+	}
 	assertNoTemps(t, repo.Dir)
 }
 
@@ -448,12 +458,12 @@ func TestBuildFullSameBytesWithChainRebuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
+	manifest, err := LoadManifest(repo.MetaPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded.Chain = []ChainEntry{validEntry(loaded.ID, "fedcba9876543210")}
-	if err := Store(repo.MetaPath(), loaded); err != nil {
+	manifest = withNode(manifest, validNode(manifest.Head, "fedcba9876543210"))
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	second, err := BuildFull(FullRequest{

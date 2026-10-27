@@ -173,6 +173,16 @@ func TestBuildBlocksPublishesSplitPayload(t *testing.T) {
 		!loaded.CreatedAt.Equal(fixedNow()) || loaded.Builder != "test" {
 		t.Fatalf("meta provenance = %+v", loaded)
 	}
+	// The published document is a single-node v2 manifest whose root
+	// carries the block list.
+	manifest, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != ManifestVersion || len(manifest.Images) != 1 ||
+		manifest.Head != res.ID || len(manifest.Images[0].Blocks) != len(parts) {
+		t.Fatalf("manifest = %+v", manifest)
+	}
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner calls = %v", runner.calls)
 	}

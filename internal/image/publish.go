@@ -28,14 +28,17 @@ type hooks struct {
 	sync   func(dir string) error
 }
 
-// Publish writes data and meta into the active slot.
+// Publish writes data and manifest into the active slot.
 //
-// An existing active chain is renamed into _hold/<old-id> before the
-// new bytes become active. If activation fails, that chain is put
-// back. When refs does not hold the previous chain, hold is renamed
-// to archives in the same call, replacing an older archive of that
-// id. A nil Refs holds nothing. The same full id is left in place
-// only when both chains are empty.
+// An existing active manifest is renamed into _hold/<old-full-id>
+// before the new bytes become active. The whole old DAG moves: the
+// full payload, meta.yaml, and the _incr/ and _blocks/ layer files
+// of every node, including branches off the head stack. If
+// activation fails, that manifest is put back. When refs does not
+// hold the previous full id, hold is renamed to archives in the same
+// call, replacing an older archive of that id. A nil Refs holds
+// nothing. The same full id is left in place only when both
+// manifests hold just their full root.
 //
 // Files are written to a temporary name in the destination directory
 // and synced. The directory is synced again after the name is linked
@@ -46,39 +49,39 @@ type hooks struct {
 // active image intact.
 //
 // The next publish repairs a crash that restored only part of the
-// previous chain, dropped one active file, or parked an archive
+// previous DAG, dropped one active file, or parked an archive
 // beside its final name. Layer files left in the active _incr
-// directory, and _blocks/<id> directories a chain lists, move into
-// the one hold whose chain lists them.
+// directory, and _blocks/<id> directories a hold manifest lists,
+// move into the one hold that lists them.
 // Unreferenced holds are archived even when another image is already
-// active, and republishing a pinned id returns the chain layers its
+// active, and republishing a pinned id returns the layer files its
 // hold still owns instead of deleting them.
-func (repo Repo) Publish(data []byte, meta Meta, refs Refs) error {
-	return publish(repo, data, meta, refs, hooks{})
+func (repo Repo) Publish(data []byte, manifest Manifest, refs Refs) error {
+	return publish(repo, data, manifest, refs, hooks{})
 }
 
-func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
-	if err := validatePublish(repo, data, meta); err != nil {
+func publish(repo Repo, data []byte, manifest Manifest, refs Refs, seam hooks) error {
+	if err := validatePublish(repo, data, manifest); err != nil {
 		return err
 	}
 	existing, exists, err := preparePublish(repo, refs, seam, "")
 	if err != nil {
 		return err
 	}
-	if exists && sameIdleFull(existing, meta) {
+	if exists && sameIdleFull(existing, manifest) {
 		return nil
 	}
-	imgTmp, metaTmp, err := stage(repo.Dir, data, meta, seam)
+	imgTmp, metaTmp, err := stage(repo.Dir, data, manifest, seam)
 	if err != nil {
 		return err
 	}
-	dst, err := singlePublishPath(repo, meta)
+	dst, err := singlePublishPath(repo, manifest)
 	if err != nil {
 		removeFile(imgTmp)
 		removeFile(metaTmp)
 		return err
 	}
-	if err := commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam); err != nil {
+	if err := commit(repo, existing, exists, manifest, imgTmp, dst, metaTmp, refs, seam); err != nil {
 		removeFile(imgTmp)
 		removeFile(metaTmp)
 		return err
@@ -88,160 +91,177 @@ func publish(repo Repo, data []byte, meta Meta, refs Refs, seam hooks) error {
 
 // singlePublishPath is the active file a single-file publish renames
 // onto. dmg lands on image.dmg. Squashfs and erofs keep image.sqsh.
-func singlePublishPath(repo Repo, meta Meta) (string, error) {
-	if meta.Format.Type != FormatDMG {
+func singlePublishPath(repo Repo, manifest Manifest) (string, error) {
+	if manifest.Format.Type != FormatDMG {
 		return repo.ImagePath(), nil
 	}
-	return activePayloadPath(repo, meta)
+	return manifestPayloadPath(repo, manifest)
 }
 
-// publishStaged publishes a temporary image and meta pair that
+// publishStaged publishes a temporary image and manifest pair that
 // already rest synced in the repository directory. Builds hand the
 // packer output over this way instead of copying the bytes through
 // memory again. The temps never survive the call: renamed on
 // success, deleted on the idle no-op and on every error.
-func publishStaged(repo Repo, meta Meta, refs Refs, imgTmp, metaTmp string, seam hooks) error {
+func publishStaged(repo Repo, manifest Manifest, refs Refs, imgTmp, metaTmp string, seam hooks) error {
 	defer removeFile(imgTmp)
 	defer removeFile(metaTmp)
-	if err := validateMeta(repo, meta); err != nil {
+	if err := validateMeta(repo, manifest); err != nil {
 		return err
 	}
 	existing, exists, err := preparePublish(repo, refs, seam, "")
 	if err != nil {
 		return err
 	}
-	if exists && sameIdleFull(existing, meta) {
+	if exists && sameIdleFull(existing, manifest) {
 		return nil
 	}
-	match, err := fileMatchesMeta(imgTmp, meta)
+	root, err := manifest.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	match, err := fileMatches(imgTmp, root.Size, root.SHA256)
 	if err != nil {
 		return err
 	}
 	if !match {
 		return errors.New("publish: payload does not match meta")
 	}
-	dst, err := singlePublishPath(repo, meta)
+	dst, err := singlePublishPath(repo, manifest)
 	if err != nil {
 		return err
 	}
-	return commit(repo, existing, exists, meta, imgTmp, dst, metaTmp, refs, seam)
+	return commit(repo, existing, exists, manifest, imgTmp, dst, metaTmp, refs, seam)
 }
 
 // publishStagedPayload publishes a temporary split payload directory
-// and meta pair that already rest synced in the repository directory.
-// It is the directory-payload sibling of publishStaged: the payload
-// directory lands with one rename onto its final layout place, then
-// the meta rename follows, and a failure puts the previous active
-// payload back. The temps never survive the call: renamed on success,
-// removed on the idle no-op and on every error.
+// and manifest pair that already rest synced in the repository
+// directory. It is the directory-payload sibling of publishStaged:
+// the payload directory lands with one rename onto its final layout
+// place, then the meta rename follows, and a failure puts the
+// previous active payload back. The temps never survive the call:
+// renamed on success, removed on the idle no-op and on every error.
 func publishStagedPayload(
 	repo Repo,
-	meta Meta,
+	manifest Manifest,
 	refs Refs,
 	payloadTmp, finalPayloadDir, metaTmp string,
 	seam hooks,
 ) error {
 	defer func() { _ = os.RemoveAll(payloadTmp) }()
 	defer removeFile(metaTmp)
-	if err := validateMeta(repo, meta); err != nil {
+	if err := validateMeta(repo, manifest); err != nil {
 		return err
 	}
-	if PayloadKind(meta) == PayloadSingle {
+	if manifest.PayloadKind() == PayloadSingle {
 		return errors.New("publish: staged payload requires a split manifest")
 	}
 	existing, exists, err := preparePublish(repo, refs, seam, payloadTmp)
 	if err != nil {
 		return err
 	}
-	if exists && sameIdleFull(existing, meta) {
+	if exists && sameIdleFull(existing, manifest) {
 		return nil
 	}
-	match, err := stagedPayloadMatches(payloadTmp, meta)
+	match, err := stagedPayloadMatches(payloadTmp, manifest)
 	if err != nil {
 		return err
 	}
 	if !match {
 		return errors.New("publish: payload does not match meta")
 	}
-	return commit(repo, existing, exists, meta, payloadTmp, finalPayloadDir, metaTmp, refs, seam)
+	return commit(repo, existing, exists, manifest, payloadTmp, finalPayloadDir, metaTmp, refs, seam)
 }
 
 // stagedPayloadMatches checks a scratch payload directory against the
 // manifest that publishes with it. The scratch layout matches the
 // final one: block files rest directly inside.
-func stagedPayloadMatches(payloadTmp string, meta Meta) (bool, error) {
-	return dirMatchesBlocks(payloadTmp, meta.Blocks)
+func stagedPayloadMatches(payloadTmp string, manifest Manifest) (bool, error) {
+	root, err := manifest.Full()
+	if err != nil {
+		return false, err
+	}
+	return dirMatchesBlocks(payloadTmp, root.Blocks)
 }
 
 // preparePublish repairs the leftovers of earlier crashes and
 // archives the holds no reference pins, so the active slot is ready
 // for a new image. A split publish in progress passes its own
 // staging directory as keep so the repair sweep spares it.
-func preparePublish(repo Repo, refs Refs, seam hooks, keep string) (Meta, bool, error) {
+func preparePublish(repo Repo, refs Refs, seam hooks, keep string) (Manifest, bool, error) {
 	if err := repairTornActive(repo, seam, keep); err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
 	if err := repairParkedArchives(repo, seam); err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
-	existing, exists, err := loadActive(repo)
+	existing, exists, err := loadActiveManifest(repo)
 	if err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
-	// Return torn layers to the hold whose chain owns them and
+	// Return torn layers to the hold whose manifest owns them and
 	// archive the holds no reference pins, before the active slot is
 	// reused by the new image.
 	if err := archiveUnreferencedHolds(repo, refs, seam); err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
 	return existing, exists, nil
 }
 
-func validatePublish(repo Repo, data []byte, meta Meta) error {
-	if err := validateMeta(repo, meta); err != nil {
+func validatePublish(repo Repo, data []byte, manifest Manifest) error {
+	if err := validateMeta(repo, manifest); err != nil {
 		return err
 	}
+	root, err := manifest.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
 	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != meta.SHA256 || int64(len(data)) != meta.Size {
+	if hex.EncodeToString(sum[:]) != root.SHA256 || int64(len(data)) != root.Size {
 		return errors.New("publish: payload does not match meta")
 	}
 	return nil
 }
 
-func validateMeta(repo Repo, meta Meta) error {
-	if meta.Kind != KindFull {
-		return errors.New("publish: active meta kind must be full")
-	}
-	if meta.Name != repo.Name() {
+// validateMeta checks a manifest about to become the active slot: it
+// names this repository and passes the graph rules. Exactly one full
+// root is part of Manifest.Validate, so no separate kind check is
+// needed.
+func validateMeta(repo Repo, manifest Manifest) error {
+	if manifest.Name != repo.Name() {
 		return errors.New("publish: meta name does not match repository")
 	}
-	return meta.Validate()
+	return manifest.Validate()
 }
 
-func sameIdleFull(existing, next Meta) bool {
-	return len(existing.Chain) == 0 && len(next.Chain) == 0 &&
-		existing.ID == next.ID && existing.SHA256 == next.SHA256
+// sameIdleFull reports an idle republish: both manifests hold only
+// their full root, and the roots record the same identity. Any
+// incremental node, on either side, makes the republish replace.
+func sameIdleFull(existing, next Manifest) bool {
+	oldRoot, err := existing.Full()
+	if err != nil {
+		return false
+	}
+	newRoot, err := next.Full()
+	if err != nil {
+		return false
+	}
+	return len(existing.Images) == 1 && len(next.Images) == 1 &&
+		oldRoot.ID == newRoot.ID && oldRoot.SHA256 == newRoot.SHA256
 }
 
-// loadActive reads the active meta and checks that the payload of
-// its kind is in place. The payload shape follows from the meta, so
-// the meta leads: a slot whose meta rests without its payload fails
-// with the missing-payload error of its form, and a payload resting
-// without any meta stays ErrMetaMissing.
+// loadActive reads the active manifest and converts it into the v1
+// Meta shape for readers that predate the DAG (gc, list, remove).
+// The v1 chain is the linearized head stack, so branch nodes are
+// invisible in this view; graph-aware callers use loadActiveManifest.
 func loadActive(repo Repo) (Meta, bool, error) {
-	meta, err := Load(repo.MetaPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return payloadWithoutMeta(repo)
+	manifest, exists, err := loadActiveManifest(repo)
+	if err != nil || !exists {
+		return Meta{}, exists, err
 	}
+	meta, err := metaFromManifest(manifest)
 	if err != nil {
-		return Meta{}, false, err
-	}
-	there, err := activePayloadExists(repo, meta)
-	if err != nil {
-		return Meta{}, false, err
-	}
-	if !there {
-		return Meta{}, false, missingPayloadError(meta)
+		return Meta{}, false, fmt.Errorf("publish: %w", err)
 	}
 	return meta, true, nil
 }
@@ -258,13 +278,6 @@ func payloadWithoutMeta(repo Repo) (Meta, bool, error) {
 		return Meta{}, false, ErrMetaMissing
 	}
 	return Meta{}, false, nil
-}
-
-func missingPayloadError(meta Meta) error {
-	if PayloadKind(meta) == PayloadSingle {
-		return errors.New("publish: active image missing")
-	}
-	return errors.New("publish: active payload missing")
 }
 
 // singleFileNames lists the single-file payload names that count in
@@ -325,24 +338,18 @@ func activePayloadPath(repo Repo, meta Meta) (string, error) {
 }
 
 // payloadRoot is the outermost file or directory that carries the
-// payload of the kind of meta inside a directory preserving the
+// payload of the manifest's kind inside a directory preserving the
 // active layout. Moving the root as a whole keeps the layout
 // identical on both sides: the blocks wrapper travels with its
-// nested id directory. The single-file name follows the format, so
-// dmg moves image.dmg and squashfs and erofs move image.sqsh.
-func payloadRoot(dir string, meta Meta) string {
-	if PayloadKind(meta) == PayloadBlocks {
+// nested id directories, so every reachable and branch layer
+// directory travels with the full image. The single-file name
+// follows the format, so dmg moves image.dmg and squashfs and erofs
+// move image.sqsh.
+func payloadRoot(dir string, manifest Manifest) string {
+	if manifest.PayloadKind() == PayloadBlocks {
 		return filepath.Join(dir, dirBlocks)
 	}
-	return filepath.Join(dir, activeImageName(meta.Format.Type))
-}
-
-func activePayloadExists(repo Repo, meta Meta) (bool, error) {
-	path, err := activePayloadPath(repo, meta)
-	if err != nil {
-		return false, err
-	}
-	return pathExists(path)
+	return filepath.Join(dir, activeImageName(manifest.Format.Type))
 }
 
 // holdPayloadPath is where the payload of the kind of meta rests
@@ -356,11 +363,11 @@ func holdPayloadPath(hold string, meta Meta) string {
 	return filepath.Join(hold, activeImageName(meta.Format.Type))
 }
 
-func stage(dir string, data []byte, meta Meta, seam hooks) (string, string, error) {
+func stage(dir string, data []byte, manifest Manifest, seam hooks) (string, string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", err
 	}
-	body, err := Encode(meta)
+	body, err := EncodeManifest(manifest)
 	if err != nil {
 		return "", "", err
 	}
@@ -439,14 +446,22 @@ func joinWriteErr(errs ...error) error {
 // final layout place for the kind of next.
 func commit(
 	repo Repo,
-	existing Meta,
+	existing Manifest,
 	exists bool,
-	next Meta,
+	next Manifest,
 	payloadSrc, payloadDst, metaTmp string,
 	refs Refs,
 	seam hooks,
 ) error {
+	nextRoot, err := next.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	var oldRoot ImageMeta
 	if exists {
+		if oldRoot, err = existing.Full(); err != nil {
+			return fmt.Errorf("publish: %w", err)
+		}
 		if err := moveActiveToHold(repo, existing, seam); err != nil {
 			return err
 		}
@@ -455,26 +470,30 @@ func commit(
 		if !exists {
 			return err
 		}
-		if undoErr := restoreHold(repo, existing.ID, seam); undoErr != nil {
+		if undoErr := restoreHold(repo, oldRoot.ID, seam); undoErr != nil {
 			return fmt.Errorf("%w (undo: %v)", err, undoErr)
 		}
 		return err
 	}
 	// This id is active again, so a hold left from an earlier pin is
-	// stale. The chain just moved aside uses the previous id.
-	if !exists || existing.ID != next.ID {
-		if err := retireStaleHold(repo, next.ID, next.Chain, refs, seam); err != nil {
+	// stale. The DAG just moved aside uses the previous full id.
+	if !exists || oldRoot.ID != nextRoot.ID {
+		if err := retireStaleHold(repo, nextRoot.ID, next, refs, seam); err != nil {
 			return err
 		}
 	}
 	if !exists {
 		return nil
 	}
-	return finishHold(repo, existing, refs, seam)
+	return finishHold(repo, oldRoot.ID, refs, seam)
 }
 
-func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
-	hold, err := repo.HoldPath(meta.ID)
+func moveActiveToHold(repo Repo, manifest Manifest, seam hooks) error {
+	root, err := manifest.Full()
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	hold, err := repo.HoldPath(root.ID)
 	if err != nil {
 		return err
 	}
@@ -484,11 +503,8 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 	// A hold left behind when this id became active again may own
 	// incremental blobs the active slot lacks. Move them back before
 	// dropping the stale directory so no layer is deleted while the
-	// chain that lists them retires into this hold.
-	if err := reclaimHoldIncr(repo, hold, seam); err != nil {
-		return err
-	}
-	if err := reclaimHoldBlocks(repo, hold, seam); err != nil {
+	// DAG that lists them retires into this hold.
+	if err := reclaimHoldLayers(repo, hold, seam); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(hold); err != nil {
@@ -497,7 +513,7 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 	if err := os.Mkdir(hold, 0o755); err != nil {
 		return err
 	}
-	moves, err := activeMoves(repo, hold, meta)
+	moves, err := activeMoves(repo, hold, manifest)
 	if err != nil {
 		removeEmpty(hold)
 		return err
@@ -506,19 +522,19 @@ func moveActiveToHold(repo Repo, meta Meta, seam hooks) error {
 }
 
 // activeMoves lists the renames that carry the active slot into a
-// hold. The hold preserves the active layout: the payload root meta
-// names plus meta.yaml, and _incr/ only for the single-file form.
-// Directory payloads move as one rename each way. For blocks that
-// one rename is the whole _blocks/ tree, so chain layer directories
-// reclaimed into the active slot travel with the full image. Do not
-// MkdirAll the hold _blocks/ destination first: rename onto an
-// existing directory fails.
-func activeMoves(repo Repo, hold string, meta Meta) ([][2]string, error) {
+// hold. The hold preserves the active layout: the payload root the
+// manifest names plus meta.yaml, and _incr/ only for the single-file
+// form. Directory payloads move as one rename each way. For blocks
+// that one rename is the whole _blocks/ tree, so every layer
+// directory of the DAG, including branch nodes, travels with the
+// full image. Do not MkdirAll the hold _blocks/ destination first:
+// rename onto an existing directory fails.
+func activeMoves(repo Repo, hold string, manifest Manifest) ([][2]string, error) {
 	moves := [][2]string{
-		{payloadRoot(repo.Dir, meta), payloadRoot(hold, meta)},
+		{payloadRoot(repo.Dir, manifest), payloadRoot(hold, manifest)},
 		{repo.MetaPath(), filepath.Join(hold, fileMeta)},
 	}
-	if PayloadKind(meta) != PayloadSingle {
+	if manifest.PayloadKind() != PayloadSingle {
 		return moves, nil
 	}
 	incr := filepath.Join(repo.Dir, dirIncr)
@@ -607,15 +623,15 @@ func undoLanded(src, dst string) {
 	}
 }
 
-func finishHold(repo Repo, old Meta, refs Refs, seam hooks) error {
-	held, err := heldBy(refs, refFor(repo, old.ID))
+func finishHold(repo Repo, oldID string, refs Refs, seam hooks) error {
+	held, err := heldBy(refs, refFor(repo, oldID))
 	if err != nil {
 		return err
 	}
 	if held {
 		return nil
 	}
-	return archiveHold(repo, old.ID, seam)
+	return archiveHold(repo, oldID, seam)
 }
 
 func archiveUnreferencedHolds(repo Repo, refs Refs, seam hooks) error {
@@ -654,12 +670,12 @@ func archiveUnreferencedHolds(repo Repo, refs Refs, seam hooks) error {
 }
 
 // sweepActiveIncr moves active layer files into the one hold whose
-// meta chain lists them. A torn replace can leave _incr/ behind while
+// manifest lists them. A torn replace can leave _incr/ behind while
 // image and meta already rest in a hold; returning the files by
-// chain id keeps foreign layers out of unrelated archives and
+// node id keeps foreign layers out of unrelated archives and
 // completes the move even when a reference pins the hold. Files the
-// active meta claims, several holds claim, or no hold claims stay
-// where they are.
+// active manifest claims, several holds claim, or no hold claims
+// stay where they are.
 func sweepActiveIncr(repo Repo, holdIDs []string, seam hooks) error {
 	incr := filepath.Join(repo.Dir, dirIncr)
 	entries, err := os.ReadDir(incr)
@@ -694,12 +710,12 @@ func sweepActiveIncr(repo Repo, holdIDs []string, seam hooks) error {
 }
 
 // sweepActiveBlockDirs moves _blocks/<id> directories left in the
-// active slot into the one hold whose chain lists that id. A crashed
-// restore or return of chain layers can leave one directory behind
-// after the rest of the hold moved; deleting that directory as an
-// orphan payload would drop the layer. Directories the active meta
-// still claims, several holds claim, or no hold claims stay where
-// they are.
+// active slot into the one hold whose manifest lists that id. A
+// crashed restore or return of layer files can leave one directory
+// behind after the rest of the hold moved; deleting that directory
+// as an orphan payload would drop the layer. Directories the active
+// manifest still claims, several holds claim, or no hold claims stay
+// where they are.
 func sweepActiveBlockDirs(repo Repo, holdIDs []string, seam hooks) error {
 	dir := filepath.Join(repo.Dir, dirBlocks)
 	entries, err := os.ReadDir(dir)
@@ -737,22 +753,29 @@ func sweepOneBlockDir(repo Repo, entry os.DirEntry, active map[string]bool, clai
 	return moveBlockDirIntoHold(repo, id, claims[id][0], seam)
 }
 
-// activeBlockOwners lists the full id and chain ids of the active
-// meta. A slot without meta claims nothing, which is what a torn
-// restore looks like after meta.yaml has already reached the hold.
+// activeBlockOwners lists every node the active manifest lists: the
+// full root plus every layer, including branch nodes off the head
+// stack -- the active slot owns the layer files of its whole DAG. A
+// slot without meta claims nothing, which is what a torn restore
+// looks like after meta.yaml has already reached the hold.
 func activeBlockOwners(repo Repo) (map[string]bool, error) {
-	meta, err := Load(repo.MetaPath())
+	manifest, err := LoadManifest(repo.MetaPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]bool{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	ids := chainIDs(meta)
-	if meta.ID != "" {
-		ids[meta.ID] = true
+	return manifestNodeIDs(manifest), nil
+}
+
+// manifestNodeIDs is the set of every node id a manifest lists.
+func manifestNodeIDs(manifest Manifest) map[string]bool {
+	ids := make(map[string]bool, len(manifest.Images))
+	for _, node := range manifest.Images {
+		ids[node.ID] = true
 	}
-	return ids, nil
+	return ids
 }
 
 func moveBlockDirIntoHold(repo Repo, id, holdID string, seam hooks) error {
@@ -781,30 +804,28 @@ func moveLayerIntoHold(repo Repo, incr, name, holdID string, seam hooks) error {
 	return seam.do(filepath.Join(incr, name), dst)
 }
 
-// activeChainIDs lists the layer ids claimed by the active meta. A
+// activeChainIDs lists every node the active manifest lists: the
+// layer files plus the full root the active slot claims, including
+// branch nodes off the head stack -- the active slot owns the layer
+// files of its whole DAG. Only a file the active manifest does not
+// list is a stray that travels back to the one hold listing it. A
 // slot without an image claims nothing.
 func activeChainIDs(repo Repo) (map[string]bool, error) {
 	there, err := pathExists(repo.ImagePath())
 	if err != nil || !there {
 		return nil, err
 	}
-	meta, err := Load(repo.MetaPath())
+	manifest, err := LoadManifest(repo.MetaPath())
 	if err != nil {
 		return nil, err
 	}
-	return chainIDs(meta), nil
+	return manifestNodeIDs(manifest), nil
 }
 
-func chainIDs(meta Meta) map[string]bool {
-	ids := make(map[string]bool, len(meta.Chain))
-	for _, entry := range meta.Chain {
-		ids[entry.ID] = true
-	}
-	return ids
-}
-
-// holdChainClaims maps every layer id to the holds whose meta chain
-// lists it. A hold without a meta claims nothing.
+// holdChainClaims maps every layer id to the holds whose manifest
+// lists it. Branch nodes count: a hold owns the layer files of its
+// whole DAG, not just the head stack. A hold without a manifest
+// claims nothing.
 func holdChainClaims(repo Repo, holdIDs []string) (map[string][]string, error) {
 	claims := make(map[string][]string)
 	for _, holdID := range holdIDs {
@@ -812,15 +833,15 @@ func holdChainClaims(repo Repo, holdIDs []string) (map[string][]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		meta, err := Load(filepath.Join(hold, fileMeta))
+		manifest, err := LoadManifest(filepath.Join(hold, fileMeta))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range meta.Chain {
-			claims[entry.ID] = append(claims[entry.ID], holdID)
+		for _, node := range manifest.layerNodes() {
+			claims[node.ID] = append(claims[node.ID], holdID)
 		}
 	}
 	return claims, nil
@@ -981,10 +1002,10 @@ func removeHold(repo Repo, id string) error {
 }
 
 // retireStaleHold clears the hold of an id that just became active
-// again. Layers the new active chain lists but that rest only in the
-// hold move back into the active incr directory first, and a hold
+// again. Layer files the new active manifest lists but that rest
+// only in the hold move back into the active slot first, and a hold
 // still pinned by refs survives until a later sweep archives it.
-func retireStaleHold(repo Repo, id string, chain []ChainEntry, refs Refs, seam hooks) error {
+func retireStaleHold(repo Repo, id string, manifest Manifest, refs Refs, seam hooks) error {
 	hold, err := repo.HoldPath(id)
 	if err != nil {
 		return err
@@ -993,7 +1014,7 @@ func retireStaleHold(repo Repo, id string, chain []ChainEntry, refs Refs, seam h
 	if err != nil || !there {
 		return err
 	}
-	if err := returnChainLayers(repo, hold, chain, seam); err != nil {
+	if err := returnChainLayers(repo, hold, manifest, seam); err != nil {
 		return err
 	}
 	held, err := heldBy(refs, refFor(repo, id))
@@ -1006,13 +1027,14 @@ func retireStaleHold(repo Repo, id string, chain []ChainEntry, refs Refs, seam h
 	return removeHold(repo, id)
 }
 
-// returnChainLayers moves the layers the chain lists from the hold
-// back into the active slot. Single-file layers come from _incr/;
-// blocks layers come from _blocks/<id>/. Files the active slot already
-// has stay untouched.
-func returnChainLayers(repo Repo, hold string, chain []ChainEntry, seam hooks) error {
-	for _, entry := range chain {
-		if err := returnOneLayer(repo, hold, entry, seam); err != nil {
+// returnChainLayers moves the layers the manifest lists from the
+// hold back into the active slot, including branch nodes off the
+// head stack: the active slot owns the layer files of its whole
+// DAG. Single-file layers come from _incr/; blocks layers come from
+// _blocks/<id>/. Files the active slot already has stay untouched.
+func returnChainLayers(repo Repo, hold string, manifest Manifest, seam hooks) error {
+	for _, node := range manifest.layerNodes() {
+		if err := returnOneLayer(repo, hold, node, seam); err != nil {
 			return err
 		}
 	}
@@ -1021,20 +1043,20 @@ func returnChainLayers(repo Repo, hold string, chain []ChainEntry, seam hooks) e
 	return nil
 }
 
-func returnOneLayer(repo Repo, hold string, entry ChainEntry, seam hooks) error {
-	if len(entry.Blocks) > 0 {
-		dst, err := repo.BlocksDirPath(entry.ID)
+func returnOneLayer(repo Repo, hold string, node ImageMeta, seam hooks) error {
+	if len(node.Blocks) > 0 {
+		dst, err := repo.BlocksDirPath(node.ID)
 		if err != nil {
 			return err
 		}
-		src := filepath.Join(hold, dirBlocks, entry.ID)
+		src := filepath.Join(hold, dirBlocks, node.ID)
 		return moveIfAbsent(src, dst, seam)
 	}
-	dst, err := repo.IncrPath(entry.ID)
+	dst, err := repo.IncrPath(node.ID)
 	if err != nil {
 		return err
 	}
-	src := filepath.Join(hold, dirIncr, entry.ID+squashExt)
+	src := filepath.Join(hold, dirIncr, node.ID+squashExt)
 	return moveIfAbsent(src, dst, seam)
 }
 
@@ -1055,60 +1077,81 @@ func moveIfAbsent(src, dst string, seam hooks) error {
 	return seam.do(src, dst)
 }
 
-// reclaimHoldIncr moves the layer files a stale hold of the active id
-// owns but the active slot lacks, so the retiring chain carries every
-// blob back into its fresh hold instead of deleting them.
-func reclaimHoldIncr(repo Repo, hold string, seam hooks) error {
-	entries, err := os.ReadDir(filepath.Join(hold, dirIncr))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+// reclaimHoldLayers moves the layer payloads a stale hold of the
+// active id owns but the active slot lacks, so the retiring DAG
+// carries every blob back into its fresh hold instead of deleting
+// them: single-file layers come from the hold _incr/, blocks layers
+// from its _blocks/<id>/.
+func reclaimHoldLayers(repo Repo, hold string, seam hooks) error {
+	incr, blocks, err := holdLayerNames(hold)
 	if err != nil {
 		return err
 	}
-	dstDir := filepath.Join(repo.Dir, dirIncr)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		dst := filepath.Join(dstDir, entry.Name())
-		there, err := pathExists(dst)
-		if err != nil || there {
+	for _, name := range incr {
+		dst := filepath.Join(repo.Dir, dirIncr, name)
+		if err := moveIfAbsent(filepath.Join(hold, dirIncr, name), dst, seam); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(dstDir, 0o755); err != nil {
-			return err
-		}
-		if err := seam.do(filepath.Join(hold, dirIncr, entry.Name()), dst); err != nil {
+	}
+	for _, name := range blocks {
+		dst := filepath.Join(repo.Dir, dirBlocks, name)
+		if err := moveIfAbsent(filepath.Join(hold, dirBlocks, name), dst, seam); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// reclaimHoldBlocks moves _blocks/<id> directories a stale hold of the
-// active id owns but the active slot lacks. The following removal of
-// the hold would otherwise delete chain layers that the fresh hold
-// is supposed to carry.
-func reclaimHoldBlocks(repo Repo, hold string, seam hooks) error {
-	entries, err := os.ReadDir(filepath.Join(hold, dirBlocks))
+// holdLayerNames lists the layer payload names the hold manifest
+// claims, split by payload form: the _incr file name of every
+// incremental node without a blocks manifest, and the _blocks
+// directory name of every node with one. A hold whose manifest is
+// missing or unreadable claims every file in its _incr directory and
+// every directory in its _blocks directory instead, so a torn hold
+// never loses a layer.
+func holdLayerNames(hold string) (incr, blocks []string, err error) {
+	manifest, loadErr := LoadManifest(filepath.Join(hold, fileMeta))
+	if loadErr == nil {
+		for _, node := range manifest.layerNodes() {
+			if len(node.Blocks) == 0 {
+				incr = append(incr, node.ID+squashExt)
+			} else {
+				blocks = append(blocks, node.ID)
+			}
+		}
+		return incr, blocks, nil
+	}
+	if incr, err = holdEntryNames(filepath.Join(hold, dirIncr), isFileEntry); err != nil {
+		return nil, nil, err
+	}
+	if blocks, err = holdEntryNames(filepath.Join(hold, dirBlocks), os.DirEntry.IsDir); err != nil {
+		return nil, nil, err
+	}
+	return incr, blocks, nil
+}
+
+// isFileEntry selects the regular files of a directory listing.
+func isFileEntry(entry os.DirEntry) bool {
+	return !entry.IsDir()
+}
+
+// holdEntryNames lists the names of the entries keep accepts. A
+// missing directory lists nothing.
+func holdEntryNames(dir string, keep func(os.DirEntry) bool) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var names []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		src := filepath.Join(hold, dirBlocks, entry.Name())
-		dst := filepath.Join(repo.Dir, dirBlocks, entry.Name())
-		if err := moveIfAbsent(src, dst, seam); err != nil {
-			return err
+		if keep(entry) {
+			names = append(names, entry.Name())
 		}
 	}
-	return nil
+	return names, nil
 }
 
 // repairTornActive finishes a crash in the middle of activate or

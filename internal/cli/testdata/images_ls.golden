@@ -5,7 +5,7 @@
       "active": {
         "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "version": "1.0",
-        "kind": "incremental",
+        "kind": "full",
         "format": "squashfs/zstd",
         "size": 2048,
         "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

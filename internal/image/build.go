@@ -84,10 +84,12 @@ type FullResult struct {
 // outside every reserved tree. When the source is a git repository,
 // it is sanitized first and any git failure aborts the build before
 // packing. The container packer writes a synced temporary file inside the
-// repository directory; the image is hashed from disk, the metadata
+// repository directory; the image is hashed from disk, the manifest
 // is validated, and the atomic publish renames both into place,
-// archiving the previous chain when it is not referenced. An
-// identical active image with an empty chain is a no-op. Before
+// archiving the previous DAG when it is not referenced. The publish
+// restarts the DAG: the new full image is the only manifest node and
+// the head. An identical active image whose manifest holds no
+// incremental node is a no-op. Before
 // returning, the published payload is hashed again and compared with
 // the stored manifest. A failed packer leaves no active image and no
 // temporary file behind.
@@ -289,13 +291,15 @@ func packContainer(run ToolRunner, src, dst, typ, compression string, incr bool)
 }
 
 // finishFull hashes the packed file, assembles and validates the
-// metadata, publishes both, and verifies the published bytes.
+// single-node manifest, publishes both, and verifies the published
+// bytes. A full build restarts the DAG: the full image is the only
+// node and the head.
 func finishFull(repo Repo, req FullRequest, imgTmp string, now func() time.Time) (FullResult, error) {
-	meta, err := packedMeta(repo, req, imgTmp, now)
+	manifest, err := packedManifest(repo, req, imgTmp, now)
 	if err != nil {
 		return FullResult{}, err
 	}
-	body, err := Encode(meta)
+	body, err := EncodeManifest(manifest)
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
@@ -303,47 +307,59 @@ func finishFull(repo Repo, req FullRequest, imgTmp string, now func() time.Time)
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	if err := publishStaged(repo, meta, req.Refs, imgTmp, metaTmp, hooks{}); err != nil {
+	if err := publishStaged(repo, manifest, req.Refs, imgTmp, metaTmp, hooks{}); err != nil {
 		return FullResult{}, err
 	}
-	if err := VerifySHA256(meta, repo.ImagePath()); err != nil {
+	root, err := manifest.Full()
+	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	return FullResult{ID: meta.ID, Path: repo.ImagePath(), SHA256: meta.SHA256}, nil
+	if err := verifyFileSHA256(repo.ImagePath(), root.SHA256); err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	return FullResult{ID: root.ID, Path: repo.ImagePath(), SHA256: root.SHA256}, nil
 }
 
-// packedMeta hashes the packed temporary file and assembles the full
-// image metadata from the bytes that landed on disk.
-func packedMeta(repo Repo, req FullRequest, tmp string, now func() time.Time) (Meta, error) {
+// packedManifest hashes the packed temporary file and assembles the
+// full image manifest from the bytes that landed on disk.
+func packedManifest(repo Repo, req FullRequest, tmp string, now func() time.Time) (Manifest, error) {
 	sum, err := fileSHA256(tmp)
 	if err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
 	info, err := os.Stat(tmp)
 	if err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
-	meta := newFullMeta(repo, req, now)
-	meta.ID = ID(sum)
-	meta.Size = info.Size()
-	meta.SHA256 = hexDigest(sum)
-	meta.MtimeUnix = info.ModTime().Unix()
-	if err := meta.Validate(); err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
-	}
-	return meta, nil
-}
-
-// newFullMeta is the metadata skeleton every full build shares
-// before the payload facts are filled in.
-func newFullMeta(repo Repo, req FullRequest, now func() time.Time) Meta {
-	return Meta{
-		Name:      repo.Name(),
-		Version:   MetaVersion,
+	node := ImageMeta{
+		ID:        ID(sum),
 		Kind:      KindFull,
-		Format:    Format{Type: req.Format, Compression: req.Compression},
+		Size:      info.Size(),
+		SHA256:    hexDigest(sum),
+		MtimeUnix: info.ModTime().Unix(),
 		CreatedAt: now().UTC(),
 		Builder:   req.Builder,
+	}
+	manifest := fullManifest(
+		repo.Name(),
+		Format{Type: req.Format, Compression: req.Compression},
+		node,
+	)
+	if err := manifest.Validate(); err != nil {
+		return Manifest{}, fmt.Errorf("build: %w", err)
+	}
+	return manifest, nil
+}
+
+// fullManifest is the single-node manifest every full publish
+// writes: the full image is the whole DAG and the head.
+func fullManifest(name string, format Format, root ImageMeta) Manifest {
+	return Manifest{
+		Version: ManifestVersion,
+		Name:    name,
+		Format:  format,
+		Head:    root.ID,
+		Images:  []ImageMeta{root},
 	}
 }
 

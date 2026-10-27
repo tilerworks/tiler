@@ -47,7 +47,7 @@ func TestImagesShowDMGSurvivesPublishRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Publish(body, meta, nil); err != nil {
+	if err := repo.Publish(body, publishManifest(meta), nil); err != nil {
 		t.Fatal(err)
 	}
 	sqsh := filepath.Join(repo.Dir, image.ImageFile)
@@ -470,6 +470,27 @@ func writeDMGFixture(t *testing.T, imagesDir, compression string) {
 	}
 	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// publishManifest converts a v1 fixture meta into the single-node
+// v2 manifest Repo.Publish accepts.
+func publishManifest(meta image.Meta) image.Manifest {
+	return image.Manifest{
+		Version: image.ManifestVersion,
+		Name:    meta.Name,
+		Format:  meta.Format,
+		Head:    meta.ID,
+		Images: []image.ImageMeta{{
+			ID:            meta.ID,
+			Kind:          image.KindFull,
+			Size:          meta.Size,
+			SHA256:        meta.SHA256,
+			MtimeUnix:     meta.MtimeUnix,
+			CreatedAt:     meta.CreatedAt,
+			Builder:       meta.Builder,
+			ContentSHA256: meta.ContentSHA256,
+		}},
 	}
 }
 

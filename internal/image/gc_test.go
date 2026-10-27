@@ -52,7 +52,7 @@ func holdViaPublish(t *testing.T, repo Repo) Meta {
 	old := seedActive(t, repo, []byte("retired-full"), true)
 	refs := holdSet{ids: map[string]bool{old.ID: true}}
 	next := []byte("replacement-full")
-	if err := repo.Publish(next, metaFor(next), refs); err != nil {
+	if err := repo.Publish(next, manifestFor(next), refs); err != nil {
 		t.Fatal(err)
 	}
 	return old

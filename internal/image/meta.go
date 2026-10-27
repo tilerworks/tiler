@@ -262,6 +262,22 @@ func (m Manifest) HeadStack() ([]ImageMeta, error) {
 	return m.Stack(m.Head)
 }
 
+// layerNodes returns every incremental node of the DAG: the union of
+// the reachability sets of all tips. These are the nodes whose layer
+// files (_incr/<id>.sqsh or _blocks/<id>/) travel between the active
+// slot and a hold; the full root's payload travels with the slot
+// layout itself, so sweeping and reclaim callers never relocate it
+// as a layer.
+func (m Manifest) layerNodes() []ImageMeta {
+	nodes := make([]ImageMeta, 0, len(m.Images))
+	for _, img := range m.Images {
+		if img.Kind == KindIncremental {
+			nodes = append(nodes, img)
+		}
+	}
+	return nodes
+}
+
 // Reachable returns the id set holding every tip together with all
 // of its ancestors. Unknown tips contribute nothing.
 func (m Manifest) Reachable(tips ...string) map[string]bool {

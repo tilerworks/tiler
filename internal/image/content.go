@@ -67,9 +67,9 @@ func contentEntry(path, rel string, entry fs.DirEntry) (string, error) {
 }
 
 // shadowContentSHA256 is the bake fingerprint: sha256 of the session
-// upper.shadow file. Idle bakes compare this digest to
-// Meta.ContentSHA256. Callers hash after a successful convert,
-// because hdiutil rewrites the shadow bytes.
+// upper.shadow file. Idle bakes compare this digest to the content
+// fingerprint of the manifest's full root. Callers hash after a
+// successful convert, because hdiutil rewrites the shadow bytes.
 func shadowContentSHA256(path string) (string, error) {
 	sum, err := fileSHA256(path)
 	if err != nil {
@@ -78,12 +78,17 @@ func shadowContentSHA256(path string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// dmgContentIdle reports an active dmg that already records the same
-// logical content and compression, with no incremental chain.
-func dmgContentIdle(active Meta, contentSHA256, compression string) bool {
+// dmgContentIdle reports an active dmg manifest that already records
+// the same logical content and compression, with no incremental
+// nodes: the full root is the whole DAG.
+func dmgContentIdle(active Manifest, contentSHA256, compression string) bool {
+	root, err := active.Full()
+	if err != nil {
+		return false
+	}
 	return active.Format.Type == FormatDMG &&
 		active.Format.Compression == compression &&
-		len(active.Chain) == 0 &&
+		len(active.Images) == 1 &&
 		contentSHA256 != "" &&
-		active.ContentSHA256 == contentSHA256
+		root.ContentSHA256 == contentSHA256
 }
