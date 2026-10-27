@@ -1256,3 +1256,81 @@ func TestReadOnlyViewDMGCreateWarnsAndKeepsRecord(t *testing.T) {
 	}
 	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
 }
+
+// TestDMGBakeThenReplayAttachesRecordedBase chains the dmg exception
+// end to end where dmg is registered: two in-view bakes publish new
+// images while the record keeps the base the live attach serves,
+// and a replay of the dead view attaches that recorded base again —
+// resolved through the hold leaf the first bake parked it in — with
+// no prune request, because a dmg attach has no upper directory.
+// The cross-platform bake coverage lives in
+// TestDMGViewBakeTwiceKeepsRecordedBase.
+func TestDMGBakeThenReplayAttachesRecordedBase(t *testing.T) {
+	if _, err := container.Lookup(image.FormatDMG); err != nil {
+		t.Skip("dmg is not registered on this OS")
+	}
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	meta := writeHashedDMGFixture(t, imagesDir, []byte("old-dmg"))
+	oldID := manifestRootID(meta)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("shadow-one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point: work, FSType: "fuse.dmg", Upper: shadow,
+		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+	}})
+	useDarwinHost(t)
+	forbidRebase(t)
+	installSeqHdiutil(t, []byte("baked-one"), []byte("baked-two"))
+	action := libraryAction("alice/app", work, session.ModeRW)
+	action.FullID = oldID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+
+	// Two bakes from the view: both succeed, both warn that the
+	// record keeps the old base, and the record never moves.
+	for i := 0; i < 2; i++ {
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
+		if err != nil {
+			t.Fatalf("bake %d: %v\n%s", i+1, err, stderr)
+		}
+		if !strings.HasPrefix(stdout, "full alice/app ") {
+			t.Fatalf("bake %d stdout = %q", i+1, stdout)
+		}
+		if !strings.Contains(stderr, "the session record keeps "+oldID) {
+			t.Fatalf("bake %d stderr = %q", i+1, stderr)
+		}
+		assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+		// A fresh shadow delta keeps the next bake off the idle path.
+		if err := os.WriteFile(shadow, []byte("shadow-two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The attach dies behind the record's back: the replay resolves
+	// the recorded base through the hold leaf and never asks for a
+	// prune.
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	if _, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...); err != nil {
+		t.Fatalf("session open: %v\n%s", err, stderr)
+	}
+	if len(f.mountReqs) != 1 {
+		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
+	}
+	req := f.mountReqs[0]
+	want := filepath.Join(imagesDir, "alice", "app", "_hold", oldID, image.ImageDMG)
+	if req.Full != want {
+		t.Fatalf("Full = %s, want the held recorded base %s", req.Full, want)
+	}
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want a dmg replay to keep the flag clear")
+	}
+	// The replay of a dmg view reattaches the recorded base and the
+	// record keeps pinning nothing else.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+}

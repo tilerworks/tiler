@@ -72,7 +72,10 @@ func newBuildCmd() *cobra.Command {
 			"A successful build inside a Linux merged view moves the session\n" +
 			"record to the new image; the new image takes effect at the next\n" +
 			"mount of that session, which prunes the reused upper of what the\n" +
-			"new image already carries. A dmg build from inside a mounted\n" +
+			"new image already carries. The prune compares metadata only,\n" +
+			"never content: an upper file rewritten within the same second\n" +
+			"as its baked copy, with an unchanged size, mode, and owner,\n" +
+			"can be pruned by mistake. A dmg build from inside a mounted\n" +
 			"view is never rebased: a bake's shadow is bound to the attached\n" +
 			"base and a create's view keeps serving the base it was mounted\n" +
 			"from, so the record keeps the old id, the build only warns, and\n" +
