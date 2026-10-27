@@ -19,6 +19,179 @@ func (m Meta) Validate() error {
 	return list.err()
 }
 
+// Validate reports every manifest rule violation in one error. The
+// graph rules mirror the v1 chain rules: unique well-formed ids,
+// exactly one parentless full root, every other node parented
+// inside the graph, no cycles, a head inside the graph, root-to-node
+// paths within the stack limit, and one payload kind across nodes.
+// Every node also carries the v1 payload facts — digest, size,
+// mtime, and created_at — and the full root carries the v1 root
+// facts: the builder and, when recorded, the content digest.
+func (m Manifest) Validate() error {
+	var list issueList
+	if m.Version != ManifestVersion {
+		list.add("version: unsupported metadata version %q", m.Version)
+	}
+	checkNameField(m.Name, &list)
+	checkContainer(m.Format, &list)
+	index := m.checkImages(&list)
+	root := m.checkEdges(index, &list)
+	m.checkBlocksForm(root, &list)
+	m.checkHead(index, &list)
+	m.checkWalks(index, &list)
+	return list.err()
+}
+
+// checkImages validates the per-node fields and returns the map
+// from a well-formed unique id to its node index.
+func (m Manifest) checkImages(list *issueList) map[string]int {
+	index := make(map[string]int, len(m.Images))
+	for i := range m.Images {
+		node := &m.Images[i]
+		prefix := fmt.Sprintf("images[%d]", i)
+		if !onDiskID(node.ID) {
+			list.add("%s.id: must be %d lowercase hex digits, or a legacy %d-digit id",
+				prefix, sumHexLen, idHexLen)
+		} else if _, ok := index[node.ID]; ok {
+			list.add("%s.id: duplicate", prefix)
+		} else {
+			index[node.ID] = i
+		}
+		if node.Kind != KindFull && node.Kind != KindIncremental {
+			list.add("%s.kind: must be full or incremental", prefix)
+		}
+		if node.Parent != "" && !onDiskID(node.Parent) {
+			list.add("%s.parent: must be %d lowercase hex digits, or a legacy %d-digit id",
+				prefix, sumHexLen, idHexLen)
+		}
+		checkNodeFacts(prefix, node, list)
+		checkBlockList(prefix+".blocks", node.Blocks, list)
+	}
+	return index
+}
+
+// checkNodeFacts enforces the v1 per-node payload facts on one
+// manifest node. The digest fact mirrors checkDigest with the
+// legacy on-disk id tolerance instead of the strict 64-hex sum:
+// sha256 must be well-formed and equal the node id. The builder
+// and content_sha256 facts stay on the full root only, because
+// v1 chain entries carry neither.
+func checkNodeFacts(prefix string, node *ImageMeta, list *issueList) {
+	if !onDiskID(node.SHA256) {
+		list.add("%s.sha256: must be %d lowercase hex digits, or a legacy %d-digit id",
+			prefix, sumHexLen, idHexLen)
+	} else if node.SHA256 != node.ID {
+		list.add("%s.id: must equal sha256", prefix)
+	}
+	checkSize(prefix+".size", node.Size, list)
+	checkMtime(prefix+".mtime_unix", node.MtimeUnix, list)
+	checkTime(prefix+".created_at", node.CreatedAt, list)
+	if node.Kind != KindFull {
+		return
+	}
+	if node.Builder == "" {
+		list.add("%s.builder: must be set", prefix)
+	}
+	if node.ContentSHA256 != "" {
+		checkSum(prefix+".content_sha256", node.ContentSHA256, list)
+	}
+}
+
+// checkEdges validates the node kinds and the parent edges. It
+// returns the index of the full root, or -1 when the graph has none.
+func (m Manifest) checkEdges(index map[string]int, list *issueList) int {
+	root := -1
+	for i := range m.Images {
+		node := &m.Images[i]
+		prefix := fmt.Sprintf("images[%d]", i)
+		switch node.Kind {
+		case KindFull:
+			if root >= 0 {
+				list.add("%s.kind: more than one full root", prefix)
+			} else {
+				root = i
+			}
+			if node.Parent != "" {
+				list.add("%s.parent: the full root must not have a parent", prefix)
+			}
+		case KindIncremental:
+			if node.Parent == "" {
+				list.add("%s.parent: incremental nodes must have a parent", prefix)
+			} else if _, ok := index[node.Parent]; !ok {
+				list.add("%s.parent: unknown image id", prefix)
+			}
+		}
+	}
+	if root < 0 {
+		list.add("images: must hold exactly one full root")
+	}
+	return root
+}
+
+// checkBlocksForm keeps every node on the payload kind of the full
+// root: the split form stores blocks for every node, the single
+// form stores none.
+func (m Manifest) checkBlocksForm(root int, list *issueList) {
+	if root < 0 {
+		return
+	}
+	blocksForm := len(m.Images[root].Blocks) > 0
+	for i := range m.Images {
+		node := &m.Images[i]
+		prefix := fmt.Sprintf("images[%d]", i)
+		switch {
+		case blocksForm && len(node.Blocks) == 0:
+			list.add("%s.blocks: must be set for blocks payloads", prefix)
+		case !blocksForm && len(node.Blocks) > 0:
+			list.add("%s.blocks: must be empty for single payloads", prefix)
+		}
+	}
+}
+
+// checkHead requires head to name a node of the graph.
+func (m Manifest) checkHead(index map[string]int, list *issueList) {
+	if m.Head == "" {
+		list.add("head: must be set")
+		return
+	}
+	if _, ok := index[m.Head]; !ok {
+		list.add("head: unknown image id")
+	}
+}
+
+// checkWalks reports the first parent cycle once and every node
+// whose root-to-node path exceeds the stack limit.
+func (m Manifest) checkWalks(index map[string]int, list *issueList) {
+	cycleReported := false
+	for i := range m.Images {
+		prefix := fmt.Sprintf("images[%d]", i)
+		onPath := make(map[string]bool, len(m.Images))
+		depth := 0
+		cycle := false
+		for id := m.Images[i].ID; id != ""; {
+			if onPath[id] {
+				cycle = true
+				break
+			}
+			onPath[id] = true
+			depth++
+			j, ok := index[id]
+			if !ok {
+				break // a malformed id was already reported
+			}
+			id = m.Images[j].Parent
+		}
+		switch {
+		case cycle && !cycleReported:
+			list.add("%s.parent: the parent edges must stay acyclic", prefix)
+			cycleReported = true
+		case !cycle && depth > maxStackDepth:
+			list.add("%s: root path of %d images exceeds the stack limit of %d",
+				prefix, depth, maxStackDepth)
+		}
+	}
+}
+
 func (m Meta) checkIdentity(list *issueList) {
 	checkDigest(m.ID, m.SHA256, "", list)
 	checkNameField(m.Name, list)

@@ -2,6 +2,8 @@ package image
 
 import (
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -45,6 +47,13 @@ const (
 // understands MetaVersion refuses any other value, so a future
 // layout upgrade stays fail-closed.
 const MetaVersion = "1.0"
+
+// ManifestVersion is the DAG metadata layout version. LoadManifest
+// also accepts MetaVersion and converts the linear v1 chain into a
+// DAG; every other version stays refused. EncodeManifest writes
+// only ManifestVersion, so rewriting a lazily migrated v1 document
+// upgrades it.
+const ManifestVersion = "2.0"
 
 // Format is the container recorded on an image.
 type Format struct {
@@ -108,6 +117,51 @@ type Meta struct {
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
 }
 
+// ImageMeta records one image node of the manifest DAG. The full
+// root leaves Parent empty; an incremental node names the image it
+// was built on, which is the full root or another incremental node
+// when builds branch off a view that trails the head.
+//
+//nolint:revive // ImageMeta is the metadata layout name; Meta is the v1 type.
+type ImageMeta struct {
+	ID     string `yaml:"id"`
+	Kind   string `yaml:"kind"`
+	Parent string `yaml:"parent,omitempty"`
+	// Size and SHA256 describe the whole logical payload of this
+	// node in both the single-file and the split form.
+	Size      int64     `yaml:"size"`
+	SHA256    string    `yaml:"sha256"`
+	MtimeUnix int64     `yaml:"mtime_unix"`
+	CreatedAt time.Time `yaml:"created_at"`
+	Builder   string    `yaml:"builder"`
+	// Deprecated and ContentSHA256 carry the same facts as the Meta
+	// fields of the same name; ContentSHA256 is set by dmg publishes
+	// only.
+	Deprecated    bool   `yaml:"deprecated"`
+	ContentSHA256 string `yaml:"content_sha256,omitempty"`
+	// Blocks is the byte-block manifest of a split payload node. It
+	// stays empty for the single-file form.
+	Blocks []BlockEntry `yaml:"blocks,omitempty"`
+}
+
+// Manifest is the v2 metadata document stored beside an image
+// repository: one full root plus the incremental nodes descending
+// from it form a DAG, and Head names the active stack tip. The
+// mount order of a tip is its root-to-tip path with the root first.
+type Manifest struct {
+	Version string `yaml:"version"`
+	// Name is the canonical library name this manifest belongs to.
+	Name   string `yaml:"name"`
+	Format Format `yaml:"format"`
+	// Head is the active stack tip. Every successful build moves it
+	// to the new result, even when that result branches off the
+	// previous head.
+	Head string `yaml:"head"`
+	// Images holds every node: exactly one full root and the
+	// incremental nodes that descend from it.
+	Images []ImageMeta `yaml:"images"`
+}
+
 // ID is the lowercase hex encoding of a sha256 sum. It equals the
 // payload digest stored on meta.
 func ID(sum [32]byte) string {
@@ -122,4 +176,132 @@ func PayloadKind(m Meta) string {
 		return PayloadBlocks
 	}
 	return PayloadSingle
+}
+
+// Full returns the unique full root of the DAG.
+func (m Manifest) Full() (ImageMeta, error) {
+	found := -1
+	for i := range m.Images {
+		if m.Images[i].Kind != KindFull {
+			continue
+		}
+		if found >= 0 {
+			return ImageMeta{}, errors.New("manifest: more than one full root")
+		}
+		found = i
+	}
+	if found < 0 {
+		return ImageMeta{}, errors.New("manifest: no full root")
+	}
+	return m.Images[found], nil
+}
+
+// Node returns the image recorded under id.
+func (m Manifest) Node(id string) (ImageMeta, bool) {
+	for i := range m.Images {
+		if m.Images[i].ID == id {
+			return m.Images[i], true
+		}
+	}
+	return ImageMeta{}, false
+}
+
+// Has reports whether id names a node of the DAG.
+func (m Manifest) Has(id string) bool {
+	_, ok := m.Node(id)
+	return ok
+}
+
+// Stack returns the mount order from the full root to tip, root
+// first. It fails when tip is unknown, its ancestors loop, or the
+// ancestor path does not start at the full root.
+func (m Manifest) Stack(tip string) ([]ImageMeta, error) {
+	var reversed []ImageMeta
+	onPath := make(map[string]bool, len(m.Images))
+	for id := tip; id != ""; {
+		img, ok := m.Node(id)
+		if !ok {
+			return nil, fmt.Errorf("manifest: unknown image id %q", id)
+		}
+		if onPath[id] {
+			return nil, fmt.Errorf("manifest: parent cycle at %q", id)
+		}
+		onPath[id] = true
+		reversed = append(reversed, img)
+		id = img.Parent
+	}
+	if len(reversed) == 0 {
+		return nil, errors.New("manifest: empty stack tip")
+	}
+	stack := make([]ImageMeta, len(reversed))
+	for i, img := range reversed {
+		stack[len(reversed)-1-i] = img
+	}
+	if stack[0].Kind != KindFull {
+		return nil, fmt.Errorf(
+			"manifest: stack of %q does not start at the full root", tip)
+	}
+	return stack, nil
+}
+
+// HeadStack returns the active stack: the root-to-head path.
+func (m Manifest) HeadStack() ([]ImageMeta, error) {
+	return m.Stack(m.Head)
+}
+
+// Reachable returns the id set holding every tip together with all
+// of its ancestors. Unknown tips contribute nothing.
+func (m Manifest) Reachable(tips ...string) map[string]bool {
+	seen := make(map[string]bool)
+	for _, tip := range tips {
+		for id := tip; id != "" && !seen[id]; {
+			img, ok := m.Node(id)
+			if !ok {
+				break
+			}
+			seen[id] = true
+			id = img.Parent
+		}
+	}
+	return seen
+}
+
+// manifestFromMeta converts a v1 document into the DAG form. The v1
+// root is the full image and every chain member is incremental, so
+// the recorded parent edges form a linear DAG; head becomes the
+// chain tail, or the full id when the chain is empty.
+func manifestFromMeta(meta Meta) Manifest {
+	manifest := Manifest{
+		Version: ManifestVersion,
+		Name:    meta.Name,
+		Format:  meta.Format,
+		Head:    meta.ID,
+		Images:  make([]ImageMeta, 0, 1+len(meta.Chain)),
+	}
+	manifest.Images = append(manifest.Images, ImageMeta{
+		ID:            meta.ID,
+		Kind:          KindFull,
+		Size:          meta.Size,
+		SHA256:        meta.SHA256,
+		MtimeUnix:     meta.MtimeUnix,
+		CreatedAt:     meta.CreatedAt,
+		Builder:       meta.Builder,
+		Deprecated:    meta.Deprecated,
+		ContentSHA256: meta.ContentSHA256,
+		Blocks:        meta.Blocks,
+	})
+	for _, entry := range meta.Chain {
+		manifest.Images = append(manifest.Images, ImageMeta{
+			ID:        entry.ID,
+			Kind:      KindIncremental,
+			Parent:    entry.Parent,
+			Size:      entry.Size,
+			SHA256:    entry.SHA256,
+			MtimeUnix: entry.MtimeUnix,
+			CreatedAt: entry.CreatedAt,
+			Blocks:    entry.Blocks,
+		})
+		manifest.Head = entry.ID
+	}
+	return manifest
 }
