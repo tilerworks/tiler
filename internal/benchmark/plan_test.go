@@ -136,28 +136,16 @@ func TestPlanPlacesBenchDirAndRuntimeDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if got.BenchDir != volPath+"/work" || got.RuntimeDir != rtPath || got.OwnRuntime {
-		t.Fatalf("dirs = bench %s runtime %s owned %v", got.BenchDir, got.RuntimeDir, got.OwnRuntime)
+	if got.BenchDir != volPath+"/work" || got.OwnRuntime {
+		t.Fatalf("dirs = bench %s owned %v", got.BenchDir, got.OwnRuntime)
+	}
+	if got.RuntimeDir != rtPath+"/runtime" || got.RuntimeParent != rtPath ||
+		got.RuntimeDirCreated {
+		t.Fatalf("runtime = root %s parent %s created %v",
+			got.RuntimeDir, got.RuntimeParent, got.RuntimeDirCreated)
 	}
 	if got.Src != "payload" || !got.Create {
 		t.Fatalf("src = %+v", got)
-	}
-}
-
-func TestPlanAcceptsMissingBenchDir(t *testing.T) {
-	got, err := Plan(Options{
-		Path:        volPath,
-		BenchDir:    "fresh",
-		BenchDirSet: true,
-		Type:        "tar",
-		Size:        "1",
-		FileSize:    "1",
-	}, writableVol("linux"))
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	if got.BenchDir != volPath+"/fresh" {
-		t.Fatalf("bench = %s", got.BenchDir)
 	}
 }
 
@@ -175,6 +163,61 @@ func TestPlanAcceptsMissingPath(t *testing.T) {
 		t.Fatalf("path = %s create %v", got.Path, got.CreatePath)
 	}
 	if got.BenchDir != volPath+"/tiler-bench" {
+		t.Fatalf("bench = %s", got.BenchDir)
+	}
+}
+
+func TestPlanCreatesMissingRuntimeDir(t *testing.T) {
+	got, err := Plan(Options{
+		Path:       volPath,
+		RuntimeDir: rtPath,
+		Type:       "tar",
+		Size:       "1",
+		FileSize:   "1",
+	}, writableVol("linux"))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got.RuntimeDir != rtPath+"/runtime" || got.RuntimeParent != rtPath {
+		t.Fatalf("runtime = root %s parent %s", got.RuntimeDir, got.RuntimeParent)
+	}
+	if !got.RuntimeDirCreated || got.OwnRuntime {
+		t.Fatalf("created = %v owned = %v", got.RuntimeDirCreated, got.OwnRuntime)
+	}
+}
+
+func TestPlanAcceptsNonEmptyRuntimeDir(t *testing.T) {
+	got, err := Plan(Options{
+		Path:       volPath,
+		RuntimeDir: rtPath,
+		Type:       "tar",
+		Size:       "1",
+		FileSize:   "1",
+	}, memFS{nodes: map[string]node{
+		volPath: {dir: true, writable: true},
+		rtPath:  {dir: true, names: []string{"marker"}},
+	}}.FS("linux"))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got.RuntimeDir != rtPath+"/runtime" || got.RuntimeDirCreated {
+		t.Fatalf("runtime = root %s created %v", got.RuntimeDir, got.RuntimeDirCreated)
+	}
+}
+
+func TestPlanAcceptsMissingBenchDir(t *testing.T) {
+	got, err := Plan(Options{
+		Path:        volPath,
+		BenchDir:    "fresh",
+		BenchDirSet: true,
+		Type:        "tar",
+		Size:        "1",
+		FileSize:    "1",
+	}, writableVol("linux"))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got.BenchDir != volPath+"/fresh" {
 		t.Fatalf("bench = %s", got.BenchDir)
 	}
 }
@@ -520,13 +563,24 @@ func TestPlanUsageRefusals(t *testing.T) {
 			want: "--runtime-dir",
 		},
 		{
-			name: "runtime-dir not empty",
+			name: "runtime subdir not empty",
 			edit: func(o *Options) { o.RuntimeDir = rtPath },
 			fs: memFS{nodes: map[string]node{
-				volPath: {dir: true, writable: true},
-				rtPath:  {dir: true, names: []string{"marker"}},
+				volPath:             {dir: true, writable: true},
+				rtPath:              {dir: true},
+				rtPath + "/runtime": {dir: true, names: []string{"old"}},
 			}}.FS("linux"),
 			want: "not empty",
+		},
+		{
+			name: "runtime subdir is a file",
+			edit: func(o *Options) { o.RuntimeDir = rtPath },
+			fs: memFS{nodes: map[string]node{
+				volPath:             {dir: true, writable: true},
+				rtPath:              {dir: true},
+				rtPath + "/runtime": {dir: false},
+			}}.FS("linux"),
+			want: "must be a directory",
 		},
 		{
 			name: "runtime-dir is a file",

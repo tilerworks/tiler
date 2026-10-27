@@ -39,7 +39,7 @@ func TestPrepareRunRemovesOwnedRuntimeAndBench(t *testing.T) {
 	}
 }
 
-func TestPrepareRunRejectsNonEmptyUserRuntime(t *testing.T) {
+func TestPrepareRunRejectsNonEmptyRuntimeSubdir(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "tiler-bench")
 	runtimeDir := t.TempDir()
@@ -47,11 +47,18 @@ func TestPrepareRunRejectsNonEmptyUserRuntime(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sub := filepath.Join(runtimeDir, "runtime")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "old"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	d := Decision{
 		Create:     true,
 		Path:       vol,
 		BenchDir:   bench,
-		RuntimeDir: runtimeDir,
+		RuntimeDir: sub,
 		OwnRuntime: false,
 		Type:       "tar",
 		Src:        "data",
@@ -65,21 +72,28 @@ func TestPrepareRunRejectsNonEmptyUserRuntime(t *testing.T) {
 	if _, statErr := os.Stat(marker); statErr != nil {
 		t.Fatalf("marker = %v", statErr)
 	}
+	if _, statErr := os.Stat(filepath.Join(sub, "old")); statErr != nil {
+		t.Fatalf("subdir content = %v", statErr)
+	}
 	// The abort path removes the bench dir this run created.
 	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("bench = %v", statErr)
 	}
 }
 
-func TestPrepareRunRemovesEmptyUserRuntime(t *testing.T) {
+func TestPrepareRunKeepsExistingRuntimeParent(t *testing.T) {
 	vol := t.TempDir()
 	bench := filepath.Join(vol, "tiler-bench")
-	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	runtimeDir := t.TempDir()
+	marker := filepath.Join(runtimeDir, "keep-me")
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	d := Decision{
 		Create:     true,
 		Path:       vol,
 		BenchDir:   bench,
-		RuntimeDir: runtimeDir,
+		RuntimeDir: filepath.Join(runtimeDir, "runtime"),
 		OwnRuntime: false,
 		Type:       "tar",
 		Src:        "data",
@@ -89,24 +103,105 @@ func TestPrepareRunRemovesEmptyUserRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareRun: %v", err)
 	}
-	if want := filepath.Join(runtimeDir, "data"); state.src != want {
+	if want := filepath.Join(runtimeDir, "runtime", "data"); state.src != want {
 		t.Fatalf("src = %q, want %q", state.src, want)
 	}
-	if _, statErr := os.Stat(filepath.Join(runtimeDir, "mount")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(runtimeDir, "runtime", "mount")); statErr != nil {
 		t.Fatalf("mount = %v", statErr)
 	}
 	state.cleanup(func(string, []string, ...string) ([]byte, error) {
 		t.Fatal("cleanup must not run a command")
 		return nil, nil
 	})
-	if _, statErr := os.Stat(runtimeDir); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("runtime after cleanup = %v", statErr)
+	// The pre-existing parent and its own content survive; only the
+	// runtime subdir this run created is removed.
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("marker after cleanup = %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(runtimeDir, "runtime")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("runtime subdir after cleanup = %v", statErr)
 	}
 	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("bench after cleanup = %v", statErr)
 	}
 	if entries := listNames(t, vol); len(entries) != 0 {
 		t.Fatalf("path leftovers: %v", entries)
+	}
+}
+
+func TestPrepareRunRemovesCreatedRuntimeParent(t *testing.T) {
+	vol := t.TempDir()
+	bench := filepath.Join(vol, "tiler-bench")
+	runtimeDir := filepath.Join(t.TempDir(), "created")
+	d := Decision{
+		Create:            true,
+		Path:              vol,
+		BenchDir:          bench,
+		RuntimeDir:        filepath.Join(runtimeDir, "runtime"),
+		RuntimeParent:     runtimeDir,
+		RuntimeDirCreated: true,
+		OwnRuntime:        false,
+		Type:              "tar",
+		Src:               "data",
+		Keep:              false,
+	}
+	state, err := prepareRun(d)
+	if err != nil {
+		t.Fatalf("prepareRun: %v", err)
+	}
+	if _, statErr := os.Stat(runtimeDir); statErr != nil {
+		t.Fatalf("created parent = %v", statErr)
+	}
+	state.cleanup(func(string, []string, ...string) ([]byte, error) {
+		t.Fatal("cleanup must not run a command")
+		return nil, nil
+	})
+	// The run created the parent, cleaned its runtime subdir, and
+	// removed the empty parent again.
+	if _, statErr := os.Stat(runtimeDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("parent after cleanup = %v", statErr)
+	}
+	if _, statErr := os.Stat(bench); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bench after cleanup = %v", statErr)
+	}
+}
+
+func TestPrepareRunKeepsCreatedRuntimeParentWithForeignFile(t *testing.T) {
+	vol := t.TempDir()
+	bench := filepath.Join(vol, "tiler-bench")
+	runtimeDir := filepath.Join(t.TempDir(), "created")
+	d := Decision{
+		Create:            true,
+		Path:              vol,
+		BenchDir:          bench,
+		RuntimeDir:        filepath.Join(runtimeDir, "runtime"),
+		RuntimeParent:     runtimeDir,
+		RuntimeDirCreated: true,
+		OwnRuntime:        false,
+		Type:              "tar",
+		Src:               "data",
+		Keep:              false,
+	}
+	state, err := prepareRun(d)
+	if err != nil {
+		t.Fatalf("prepareRun: %v", err)
+	}
+	// Simulate a file the user drops into the parent while the run
+	// is active: the parent is no longer empty after the runtime
+	// subdir is cleaned, so it must survive.
+	foreign := filepath.Join(runtimeDir, "foreign")
+	if err := os.WriteFile(foreign, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state.cleanup(func(string, []string, ...string) ([]byte, error) {
+		t.Fatal("cleanup must not run a command")
+		return nil, nil
+	})
+	if _, statErr := os.Stat(foreign); statErr != nil {
+		t.Fatalf("foreign file = %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(runtimeDir, "runtime")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("runtime subdir after cleanup = %v", statErr)
 	}
 }
 

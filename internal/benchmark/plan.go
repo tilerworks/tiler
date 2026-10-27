@@ -51,30 +51,36 @@ type Options struct {
 // runtime dir, non-empty only when Create is true; Run joins it
 // with the runtime dir. OwnRuntime is true when RuntimeDir is empty
 // and the run must create a private directory under the system temp
-// dir. Compress is a container token: ulfo, ulmo, udro, or a squashfs
-// or erofs name. It stays empty for tar, and for erofs when
-// --compress was unset, so pack can choose from the mkfs.erofs help
-// text.
+// dir. Otherwise RuntimeDir is the runtimeSubdir directory under the
+// user-passed --runtime-dir (RuntimeParent) that holds mount, logs,
+// and payload; the run removes it at the end. RuntimeDirCreated
+// records that RuntimeParent was absent at plan time, so the run
+// also removes RuntimeParent when it ends up empty. Compress is a
+// container token: ulfo, ulmo, udro, or a squashfs or erofs name.
+// It stays empty for tar, and for erofs when --compress was unset,
+// so pack can choose from the mkfs.erofs help text.
 type Decision struct {
-	Create     bool
-	Read       bool
-	Probe      bool
-	Path       string
-	CreatePath bool
-	BenchDir   string
-	RuntimeDir string
-	OwnRuntime bool
-	Image      string
-	Src        string
-	Type       string
-	Compress   string
-	Mode       string
-	Size       int64
-	FileSize   int64
-	ProbeOps   int
-	ReadOnly   bool
-	Keep       bool
-	Format     string
+	Create            bool
+	Read              bool
+	Probe             bool
+	Path              string
+	CreatePath        bool
+	BenchDir          string
+	RuntimeDir        string
+	RuntimeParent     string
+	RuntimeDirCreated bool
+	OwnRuntime        bool
+	Image             string
+	Src               string
+	Type              string
+	Compress          string
+	Mode              string
+	Size              int64
+	FileSize          int64
+	ProbeOps          int
+	ReadOnly          bool
+	Keep              bool
+	Format            string
 }
 
 // UsageError is a flag or directory policy problem. Callers map it
@@ -136,7 +142,7 @@ func Plan(opts Options, files FS) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	runtime, owned, err := placeRuntime(files, path, opts.RuntimeDir)
+	rt, err := placeRuntime(files, path, opts.RuntimeDir)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -157,25 +163,27 @@ func Plan(opts Options, files FS) (Decision, error) {
 		return Decision{}, err
 	}
 	return Decision{
-		Create:     act.Create,
-		Read:       act.Read,
-		Probe:      act.Probe,
-		Path:       path,
-		CreatePath: pathMissing,
-		BenchDir:   bench,
-		RuntimeDir: runtime,
-		OwnRuntime: owned,
-		Image:      image,
-		Src:        src,
-		Type:       typ,
-		Compress:   compress,
-		Mode:       mode,
-		Size:       size,
-		FileSize:   fileSize,
-		ProbeOps:   ops,
-		ReadOnly:   opts.ReadOnly,
-		Keep:       opts.Keep,
-		Format:     format,
+		Create:            act.Create,
+		Read:              act.Read,
+		Probe:             act.Probe,
+		Path:              path,
+		CreatePath:        pathMissing,
+		BenchDir:          bench,
+		RuntimeDir:        rt.root,
+		RuntimeParent:     rt.parent,
+		RuntimeDirCreated: rt.parentCreated,
+		OwnRuntime:        rt.owned,
+		Image:             image,
+		Src:               src,
+		Type:              typ,
+		Compress:          compress,
+		Mode:              mode,
+		Size:              size,
+		FileSize:          fileSize,
+		ProbeOps:          ops,
+		ReadOnly:          opts.ReadOnly,
+		Keep:              opts.Keep,
+		Format:            format,
 	}, nil
 }
 

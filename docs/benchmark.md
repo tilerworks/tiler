@@ -35,7 +35,8 @@ step rows (`image_create`, `image_attach` for a mounted type,
 
 Each run generates its own payload under `--src` (default `data`)
 inside the runtime directory: a private local temp dir by default,
-or the local directory passed to `--runtime-dir`. The measured
+or the `runtime/` subdir of the local directory passed to
+`--runtime-dir`. The measured
 volume only ever holds the bench dir with the image inside it, so
 pack reads the payload from local disk while writing the image to
 `<path>`. Payload bytes are urandom and incompressible, so pack
@@ -68,8 +69,8 @@ passwordless sudo works (`sudo -n purge` on macOS,
 The **expanded** columns are not a `tiler benchmark` step. Rerun
 with `--keep` and an explicit local `--runtime-dir`, then — after
 the same passwordless purge — walk the kept payload tree
-(`<runtime-dir>/data`) twice in 1 MiB reads, skipping names that
-start with `.`. The first walk is "expanded, first"; the second is
+(`<runtime-dir>/runtime/data`) twice in 1 MiB reads, skipping names
+that start with `.`. The first walk is "expanded, first"; the second is
 "expanded, warm". That tree lives on the local disk, so these
 columns measure local reads.
 
@@ -97,8 +98,9 @@ bin/tiler benchmark "$voldir" \
 
 Each run writes only its image under `<path>` and removes
 `run-dmg` / `run-tar` plus its private runtime dir at the end. For
-the expanded columns, add `--keep --runtime-dir <dir>` (an absent or
-empty local dir) and walk `<dir>/data` twice after the purge
+the expanded columns, add `--keep --runtime-dir <dir>` (a local
+dir; tiler works inside `<dir>/runtime`) and walk
+`<dir>/runtime/data` twice after the purge
 (`sudo -n purge` when it is allowed).
 
 `hdiutil create` uses `-format ULFO -fs APFS`. tar uses `tar -czf`.
@@ -137,7 +139,7 @@ bin/tiler benchmark "$voldir" \
 ```
 
 For the expanded columns, add `--keep --runtime-dir <dir>` to one
-run and walk `<dir>/data` twice (after `drop_caches` when
+run and walk `<dir>/runtime/data` twice (after `drop_caches` when
 passwordless sudo allows it).
 
 squashfs packs with `mksquashfs -comp zstd -noappend`. erofs uses
@@ -316,14 +318,19 @@ root persistent flags such as `--images-dir`.
   are refused. The joined directory must not exist or must be empty,
   and the whole directory is removed when the run ends; `--keep`
   preserves it. When `<path>` does not exist, tiler warns and
-  creates it; `<path>` itself is never removed, and nothing else
-  under it is deleted or renamed.
+  creates it; `<path>` itself is never removed,
+  and nothing else under it is deleted or renamed.
 - The runtime dir holds `mount/`, `logs/`, and the payload tree
   (`--src`, default `data`) on the **local** machine — by default a
-  private directory in the system temp area. A `--runtime-dir` you
-  pass must not exist or must be an empty directory, and it is
-  removed entirely at the end (`--keep` preserves it together with
-  the bench dir). `--runtime-dir` and `<path>` must not contain each
+  private directory in the system temp area, removed as a whole at
+  the end. With a `--runtime-dir` you pass, everything lives inside
+  its `runtime/` subdirectory instead, so nothing scatters next to
+  your own files. That subdirectory must not exist or must be empty,
+  and the run removes it at the end. The directory you passed may
+  already hold other content and is never removed — unless this run
+  created it, in which case it goes away too once it ends up empty
+  again. `--keep` preserves the runtime dir together with the bench
+  dir. `--runtime-dir` and `<path>` must not contain each
   other, so attach never creates a directory on the measured volume.
 - The device probe writes `.tiler-bench-probe` inside the bench dir
   and removes it after sampling. Skip it with `--no-probe`.
@@ -400,9 +407,13 @@ rest of tiler (`128M`, `4M`, bare integers are bytes). For dmg,
 is `zstd` (default), `gzip`, `lz4`, or `xz`; for erofs it is `zstd`,
 `lz4`, or `gzip`, defaulting to the best compressor the host's
 `mkfs.erofs` lists. tar rejects `--compress`. `--probe-ops` defaults
-to 2000. `--bench-dir` and `--runtime-dir` must not exist or must be
-empty, and both are removed when the run ends; `--keep` preserves
-both directories, the payload tree included. Images land at
+to 2000. `--bench-dir` must not exist or must be empty, and it is
+removed when the run ends. `--runtime-dir` may already exist and
+hold other files; the run works inside its `runtime/` subdirectory
+(which must not exist or must be empty) and removes only that
+subdirectory, plus the passed directory itself when the run created
+it and it ends up empty. `--keep` preserves
+the bench dir, the runtime subdir, and the payload tree. Images land at
 `<path>/<bench-dir>/image.dmg`, `image.sqsh`, `image.erofs`, or
 `image.tar.gz`. `--format` selects the report shape: `table`
 (default) is the human layout, `tsv` prints only step rows for

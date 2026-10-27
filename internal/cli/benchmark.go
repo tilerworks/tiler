@@ -70,8 +70,10 @@ func newBenchmarkCmd() *cobra.Command {
 	cmd.Flags().StringVar(&benchDir, "bench-dir", benchmark.DefaultBenchDir,
 		"relative isolation directory created under <path>")
 	cmd.Flags().StringVar(&runtimeDir, "runtime-dir", "",
-		"local dir for mount, logs, and payload; must be absent or empty "+
-			"and is removed at the end (default: a private temp dir)")
+		"local dir for mount, logs, and payload, used via its runtime/ "+
+			"subdir; the run removes what it created, including the dir "+
+			"itself only when it created it and it ends up empty "+
+			"(default: a private temp dir)")
 	cmd.Flags().StringVar(&mode, "mode", "both", "write, read, or both")
 	cmd.Flags().StringVar(&typ, "type", "",
 		"image type: dmg, tar, squashfs, or erofs")

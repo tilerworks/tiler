@@ -7,8 +7,12 @@ import (
 )
 
 const (
-	runtimeMount = "mount"
-	runtimeLogs  = "logs"
+	// runtimeSubdir is the directory Plan joins under a user-passed
+	// --runtime-dir, so mount, logs, and payload never scatter next
+	// to the user's own files and cleanup removes a single entry.
+	runtimeSubdir = "runtime"
+	runtimeMount  = "mount"
+	runtimeLogs   = "logs"
 )
 
 // DefaultPayloadDir is the --src name used when the flag was not set
@@ -28,15 +32,20 @@ var imageNames = map[string]string{
 // --keep: when true, cleanup and the abort path leave the runtime
 // and bench dirs alone. src is the absolute payload dir under the
 // runtime dir and is empty when the run creates no image.
+// runtimeParent is the user-passed --runtime-dir whose runtime
+// subdir this run uses; runtimeParentCreated records that this run
+// created that parent and may remove it again when empty.
 type runState struct {
-	bench   string
-	runtime string
-	keep    bool
-	src     string
-	mount   string
-	logs    string
-	image   string
-	mounted *Mount
+	bench                string
+	runtime              string
+	runtimeParent        string
+	runtimeParentCreated bool
+	keep                 bool
+	src                  string
+	mount                string
+	logs                 string
+	image                string
+	mounted              *Mount
 }
 
 func prepareRun(d Decision) (*runState, error) {
@@ -50,8 +59,10 @@ func prepareRun(d Decision) (*runState, error) {
 		return nil, err
 	}
 	state := &runState{
-		bench: bench,
-		keep:  d.Keep,
+		bench:                bench,
+		keep:                 d.Keep,
+		runtimeParent:        d.RuntimeParent,
+		runtimeParentCreated: d.RuntimeDirCreated,
 	}
 	runtimeDir, err := prepareRuntime(d)
 	if err != nil {
@@ -91,15 +102,22 @@ func (s *runState) abort(err error) (*runState, error) {
 
 // release removes the runtime dir (owned or user-supplied) and the
 // bench dir this run prepared, unless --keep asked to preserve them.
-// A nil state releases nothing. It never touches the benchmark path
-// itself or anything else under it, so abort and cleanup share
-// exactly the same conditions.
+// A --runtime-dir this run created is removed too, but only when it
+// ended up empty; os.Remove refuses anything else, so files the user
+// added during the run survive together with their directory. A
+// pre-existing --runtime-dir is never removed. A nil state releases
+// nothing. Release never touches the benchmark path itself or
+// anything else under it, so abort and cleanup share exactly the
+// same conditions.
 func (s *runState) release() {
 	if s == nil || s.keep {
 		return
 	}
 	if s.runtime != "" {
 		_ = os.RemoveAll(s.runtime)
+	}
+	if s.runtimeParent != "" && s.runtimeParentCreated {
+		_ = os.Remove(s.runtimeParent)
 	}
 	if s.bench != "" {
 		_ = os.RemoveAll(s.bench)
@@ -124,9 +142,10 @@ func prepareRuntime(d Decision) (string, error) {
 		if err := os.MkdirAll(d.RuntimeDir, 0o755); err != nil {
 			return "", fmt.Errorf("benchmark: mkdir %s: %w", d.RuntimeDir, err)
 		}
-		// Plan already refuses a non-empty --runtime-dir; this guards
-		// callers that build a Decision directly, because the run
-		// removes the whole directory at the end.
+		// Plan already refuses a non-empty runtime subdir under a
+		// user-passed --runtime-dir; this guards callers that build
+		// a Decision directly, because the run removes the whole
+		// runtime dir at the end.
 		if err := requireEmptyDir(d.RuntimeDir, "--runtime-dir"); err != nil {
 			return "", err
 		}

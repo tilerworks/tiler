@@ -106,26 +106,53 @@ func placeBench(files FS, path, bench string, benchSet bool, act actions) (strin
 	return emptyDir(files, filepath.Join(path, rel), "--bench-dir")
 }
 
-func placeRuntime(files FS, path, runtime string) (string, bool, error) {
+// runtimeDirs is where a run keeps its mount, logs, and payload.
+// owned means the flag was empty and the run creates a private
+// directory under the system temp dir, removed as a whole at the
+// end. Otherwise root is the <parent>/runtimeSubdir directory the
+// run actually uses and removes; parent is the --runtime-dir the
+// user passed. parentCreated records that parent was absent at plan
+// time, so the run created it and may remove it again when it ends
+// up empty. A pre-existing parent is never removed, and its other
+// content is never touched.
+type runtimeDirs struct {
+	owned         bool
+	root          string
+	parent        string
+	parentCreated bool
+}
+
+func placeRuntime(files FS, path, runtime string) (runtimeDirs, error) {
 	if strings.TrimSpace(runtime) == "" {
-		return "", true, nil
+		return runtimeDirs{owned: true}, nil
 	}
 	abs, err := absPath(runtime)
 	if err != nil {
-		return "", false, err
+		return runtimeDirs{}, err
 	}
 	if sameOrNested(path, abs) {
-		return "", false, usagef(
+		return runtimeDirs{}, usagef(
 			"benchmark: --runtime-dir and the path must not contain each other")
 	}
-	// The run removes the runtime dir at the end, so an existing one
-	// must be an empty directory; emptyDir also covers stat failures
-	// and a non-directory at that location.
-	abs, err = emptyDir(files, abs, "--runtime-dir")
-	if err != nil {
-		return "", false, err
+	// The passed dir itself may hold other content; only the runtime
+	// subdir the run creates must be absent or empty, because that
+	// is the only thing the run removes inside a pre-existing dir.
+	created := false
+	info, err := files.stat(abs)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		created = true
+	case err != nil:
+		return runtimeDirs{}, err
+	case !info.IsDir():
+		return runtimeDirs{}, usagef(
+			"benchmark: --runtime-dir %s must be a directory", abs)
 	}
-	return abs, false, nil
+	root, err := emptyDir(files, filepath.Join(abs, runtimeSubdir), "--runtime-dir")
+	if err != nil {
+		return runtimeDirs{}, err
+	}
+	return runtimeDirs{root: root, parent: abs, parentCreated: created}, nil
 }
 
 // placeSrc validates the relative --src name under the runtime dir.
