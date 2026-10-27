@@ -988,3 +988,196 @@ func TestManifestValidateAcceptsLegacyIDs(t *testing.T) {
 		t.Fatalf("short id: %v", err)
 	}
 }
+
+// validManifestWithBranch is validManifest plus one branch node
+// parented on the root. The head stays on the linear tip, so the
+// branch node is off the head stack. It returns the manifest and the
+// branch node's id.
+func validManifestWithBranch() (Manifest, string) {
+	manifest := validManifest()
+	branch := testID("beefbeefbeefbeef")
+	manifest.Images = append(manifest.Images, ImageMeta{
+		ID:        branch,
+		Kind:      KindIncremental,
+		Parent:    manifest.Images[0].ID,
+		Size:      4096,
+		SHA256:    branch,
+		MtimeUnix: 1710000003,
+		CreatedAt: time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC),
+	})
+	return manifest, branch
+}
+
+func TestDecodeLinearizesManifestHeadStack(t *testing.T) {
+	manifest, branch := validManifestWithBranch()
+	encoded, err := EncodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "meta.yaml")
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := manifest.Images[0]
+	if got.ID != root.ID || got.Name != manifest.Name ||
+		got.Format != manifest.Format || got.Size != root.Size ||
+		got.SHA256 != root.SHA256 || got.MtimeUnix != root.MtimeUnix ||
+		got.Builder != root.Builder || got.Deprecated != root.Deprecated ||
+		got.ContentSHA256 != root.ContentSHA256 ||
+		!got.CreatedAt.Equal(root.CreatedAt) {
+		t.Fatalf("root facts changed: %+v", got)
+	}
+	if got.Version != MetaVersion || got.Kind != KindFull {
+		t.Fatalf("v1 header = %q/%q, want %q/%q",
+			got.Version, got.Kind, MetaVersion, KindFull)
+	}
+	// The linearized chain is the head stack minus the root, and the
+	// result satisfies the v1 rules.
+	if err := got.Validate(); err != nil {
+		t.Fatalf("linearized meta rejected: %v", err)
+	}
+	want := []string{manifest.Images[1].ID, manifest.Images[2].ID}
+	if len(got.Chain) != len(want) {
+		t.Fatalf("chain = %+v, want %v", got.Chain, want)
+	}
+	parent := root.ID
+	for i, id := range want {
+		entry := got.Chain[i]
+		if entry.ID != id || entry.Parent != parent {
+			t.Errorf("chain[%d] = %+v, want id %q parent %q",
+				i, entry, id, parent)
+		}
+		node, ok := manifest.Node(id)
+		if !ok {
+			t.Fatalf("manifest lacks %q", id)
+		}
+		if entry.Size != node.Size || entry.SHA256 != node.SHA256 ||
+			entry.MtimeUnix != node.MtimeUnix ||
+			!entry.CreatedAt.Equal(node.CreatedAt) {
+			t.Errorf("chain[%d] facts changed: %+v", i, entry)
+		}
+		parent = id
+	}
+	for _, entry := range got.Chain {
+		if entry.ID == branch {
+			t.Fatalf("branch node leaked into the v1 chain: %+v", got.Chain)
+		}
+	}
+}
+
+func TestDecodeCarriesManifestBlocks(t *testing.T) {
+	manifest := validManifest()
+	for i := range manifest.Images {
+		manifest.Images[i].Blocks = blocksSeq(2)
+	}
+	encoded, err := EncodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Blocks, manifest.Images[0].Blocks) {
+		t.Errorf("root blocks = %+v, want %+v",
+			got.Blocks, manifest.Images[0].Blocks)
+	}
+	if PayloadKind(got) != PayloadBlocks {
+		t.Errorf("payload kind = %s, want blocks", PayloadKind(got))
+	}
+	if len(got.Chain) != 2 {
+		t.Fatalf("chain = %+v, want two entries", got.Chain)
+	}
+	for i, entry := range got.Chain {
+		want := manifest.Images[i+1].Blocks
+		if !reflect.DeepEqual(entry.Blocks, want) {
+			t.Errorf("chain[%d] blocks = %+v, want %+v", i, entry.Blocks, want)
+		}
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("linearized blocks meta rejected: %v", err)
+	}
+}
+
+func TestDecodeSurfacesBrokenManifestError(t *testing.T) {
+	manifest := validManifest()
+	manifest.Head = strings.Repeat("d", sumHexLen)
+	// EncodeManifest validates, so write the broken document the way
+	// a corrupted meta.yaml would appear.
+	body, err := yaml.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(body); err == nil ||
+		!strings.Contains(err.Error(), "head: unknown image id") {
+		t.Fatalf("Decode error = %v, want the head violation", err)
+	}
+	path := filepath.Join(t.TempDir(), "meta.yaml")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil ||
+		!strings.Contains(err.Error(), "head: unknown image id") {
+		t.Fatalf("Load error = %v, want the head violation", err)
+	}
+}
+
+func TestDecodeLegacyIDManifestSkipsV1Validation(t *testing.T) {
+	// Manifest.Validate tolerates legacy 16-hex ids, while v1
+	// Meta.Validate demands 64 hex digits. The Decode seam converts
+	// without re-validating, so the document loads and the stricter
+	// v1 rule only surfaces if a caller re-validates or re-encodes.
+	full := "0123456789abcdef"
+	tip := "fedcba9876543210"
+	manifest := Manifest{
+		Version: ManifestVersion,
+		Name:    "alice/app",
+		Format:  Format{Type: FormatSquashfs, Compression: CompressionZstd},
+		Head:    tip,
+		Images: []ImageMeta{
+			{
+				ID:        full,
+				Kind:      KindFull,
+				Size:      12345,
+				SHA256:    full,
+				MtimeUnix: 1710000000,
+				CreatedAt: time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC),
+				Builder:   "dev",
+			},
+			{
+				ID:        tip,
+				Kind:      KindIncremental,
+				Parent:    full,
+				Size:      4096,
+				SHA256:    tip,
+				MtimeUnix: 1710000001,
+				CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	encoded, err := EncodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode refused a legacy-id manifest: %v", err)
+	}
+	if got.ID != full || got.SHA256 != full || len(got.Chain) != 1 ||
+		got.Chain[0].ID != tip || got.Chain[0].Parent != full {
+		t.Fatalf("decoded meta = %+v", got)
+	}
+	// The pinned seam behavior: the converted Meta keeps the legacy
+	// ids and fails the stricter v1 validation.
+	err = got.Validate()
+	if err == nil || !strings.Contains(err.Error(), "id: must be 64 lowercase hex digits") {
+		t.Fatalf("v1 Validate = %v, want the legacy-id violation", err)
+	}
+	if _, err := Encode(got); err == nil {
+		t.Fatal("Encode accepted a legacy-id meta")
+	}
+}

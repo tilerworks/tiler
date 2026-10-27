@@ -10,9 +10,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Decode reads one metadata document. Unknown fields are discarded,
-// then the document is validated.
+// Decode reads one metadata document in the v1 Meta shape. Unknown
+// fields are dropped, then the document is validated. A
+// ManifestVersion document is accepted through the DAG and converted
+// with metaFromManifest: the v1 chain becomes the linearized head
+// stack, which keeps readers that predate the manifest working while
+// writers upgrade documents lazily. Graph-aware callers use
+// DecodeManifest.
 func Decode(data []byte) (Meta, error) {
+	if version, err := probeDocVersion(data); err == nil && version == ManifestVersion {
+		manifest, err := DecodeManifest(data)
+		if err != nil {
+			return Meta{}, err
+		}
+		return metaFromManifest(manifest)
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var meta Meta
 	if err := dec.Decode(&meta); err != nil {
@@ -65,19 +77,43 @@ func Store(path string, meta Meta) error {
 	return nil
 }
 
+// StoreManifest writes a validated manifest to path.
+func StoreManifest(path string, manifest Manifest) error {
+	data, err := EncodeManifest(manifest)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("meta: %w", err)
+	}
+	return nil
+}
+
+// probeDocVersion reads the version key of a metadata document. A
+// malformed YAML body or a missing key probes as the empty version,
+// which no loader supports; the version decoders report those
+// documents themselves.
+func probeDocVersion(data []byte) (string, error) {
+	var probe struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return "", err
+	}
+	return probe.Version, nil
+}
+
 // DecodeManifest reads one metadata document as a manifest DAG. A
 // MetaVersion document converts through its linear chain, a
 // ManifestVersion document loads as-is, and every other version is
 // refused. The result is validated.
 func DecodeManifest(data []byte) (Manifest, error) {
-	var probe struct {
-		Version string `yaml:"version"`
-	}
-	if err := yaml.Unmarshal(data, &probe); err != nil {
+	version, err := probeDocVersion(data)
+	if err != nil {
 		return Manifest{}, err
 	}
 	var manifest Manifest
-	switch probe.Version {
+	switch version {
 	case MetaVersion:
 		meta, err := Decode(data)
 		if err != nil {
@@ -90,7 +126,7 @@ func DecodeManifest(data []byte) (Manifest, error) {
 		}
 	default:
 		return Manifest{}, fmt.Errorf(
-			"unsupported metadata version %q", probe.Version)
+			"unsupported metadata version %q", version)
 	}
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err

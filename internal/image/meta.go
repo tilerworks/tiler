@@ -318,3 +318,51 @@ func manifestFromMeta(meta Meta) Manifest {
 	}
 	return manifest
 }
+
+// metaFromManifest converts a manifest into the v1 Meta shape for
+// readers that predate the DAG. The v1 chain is the linearized head
+// stack, so branch nodes off the head stack are invisible in this
+// view; graph-aware callers read the manifest itself. The result is
+// deliberately not re-validated against the v1 rules: the manifest
+// passed the graph Validate, but Validate tolerates legacy 16-hex
+// ids while v1 Meta.Validate demands 64 hex digits, so a legacy-id
+// manifest converts into a Meta that would fail v1 validation. A v1
+// caller that re-encodes such a Meta through Store or Encode sees
+// that violation surface there.
+func metaFromManifest(manifest Manifest) (Meta, error) {
+	root, err := manifest.Full()
+	if err != nil {
+		return Meta{}, err
+	}
+	stack, err := manifest.HeadStack()
+	if err != nil {
+		return Meta{}, err
+	}
+	meta := Meta{
+		ID:            root.ID,
+		Name:          manifest.Name,
+		Version:       MetaVersion,
+		Kind:          KindFull,
+		Format:        manifest.Format,
+		Size:          root.Size,
+		SHA256:        root.SHA256,
+		MtimeUnix:     root.MtimeUnix,
+		CreatedAt:     root.CreatedAt,
+		Builder:       root.Builder,
+		Deprecated:    root.Deprecated,
+		ContentSHA256: root.ContentSHA256,
+		Blocks:        root.Blocks,
+	}
+	for _, node := range stack[1:] {
+		meta.Chain = append(meta.Chain, ChainEntry{
+			ID:        node.ID,
+			Parent:    node.Parent,
+			Size:      node.Size,
+			SHA256:    node.SHA256,
+			MtimeUnix: node.MtimeUnix,
+			CreatedAt: node.CreatedAt,
+			Blocks:    node.Blocks,
+		})
+	}
+	return meta, nil
+}

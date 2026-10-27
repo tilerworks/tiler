@@ -28,6 +28,16 @@ func upperDir(t *testing.T) string {
 // default read-only mount gate.
 func skipSmoke(string) error { return nil }
 
+// readManifest loads the active manifest of repo for assertions.
+func readManifest(t *testing.T, repo Repo) Manifest {
+	t.Helper()
+	manifest, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
 func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
@@ -58,18 +68,22 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 		t.Fatalf("result path = %s", res.Path)
 	}
 	assertBytes(t, wantPath, body)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded := readManifest(t, repo)
+	if loaded.Version != ManifestVersion {
+		t.Fatalf("version = %q, want %q", loaded.Version, ManifestVersion)
 	}
-	if loaded.ID != active.ID || len(loaded.Chain) != 1 {
-		t.Fatalf("active meta = %+v", loaded)
+	root, err := loaded.Full()
+	if err != nil || root.ID != active.ID {
+		t.Fatalf("manifest root = %+v, %v", root, err)
 	}
-	entry := loaded.Chain[0]
-	if entry.Parent != active.ID || entry.ID != res.ID ||
-		entry.Size != int64(len(body)) || entry.SHA256 != res.SHA256 ||
-		!entry.CreatedAt.Equal(fixedNow()) {
-		t.Fatalf("chain entry = %+v", entry)
+	if len(loaded.Images) != 2 || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+	node, ok := loaded.Node(res.ID)
+	if !ok || node.Kind != KindIncremental || node.Parent != active.ID ||
+		node.Size != int64(len(body)) || node.SHA256 != res.SHA256 ||
+		!node.CreatedAt.Equal(fixedNow()) {
+		t.Fatalf("graph node = %+v", node)
 	}
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner calls = %v", runner.calls)
@@ -92,12 +106,13 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err = Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded = readManifest(t, repo)
+	node2, ok := loaded.Node(res2.ID)
+	if !ok || node2.Parent != res.ID {
+		t.Fatalf("second node = %+v", node2)
 	}
-	if len(loaded.Chain) != 2 || loaded.Chain[1].Parent != res.ID || loaded.Chain[1].ID != res2.ID {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	if len(loaded.Images) != 3 || loaded.Head != res2.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 }
 
@@ -180,12 +195,9 @@ func TestBuildIncrSameDigestIsNoOp(t *testing.T) {
 	if second.ID != first.ID || second.Path != first.Path {
 		t.Fatalf("rebuild = %+v, want %+v", second, first)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 {
-		t.Fatalf("chain appended twice: %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 2 || loaded.Head != first.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 	entries, err := os.ReadDir(filepath.Join(repo.Dir, dirIncr))
 	if err != nil {
@@ -194,6 +206,255 @@ func TestBuildIncrSameDigestIsNoOp(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("incr entries = %v", entries)
 	}
+	assertNoTemps(t, repo.Dir)
+}
+
+func TestBuildIncrBaseTipBranchesAndMovesHead(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Now: fixedNow, MountSmoke: skipSmoke,
+	}
+	req.Run = (&fakeRunner{body: []byte("layer-one")}).run
+	first, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Naming the head as the base tip behaves like the default.
+	req.Run = (&fakeRunner{body: []byte("layer-two")}).run
+	req.BaseTip = first.ID
+	second, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A build from a view that trails the head parents on the served
+	// tip, forms a branch, and still moves the head onto the result.
+	req.Run = (&fakeRunner{body: []byte("layer-three")}).run
+	req.BaseTip = first.ID
+	third, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 4 || loaded.Head != third.ID {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+	node, ok := loaded.Node(third.ID)
+	if !ok || node.Parent != first.ID {
+		t.Fatalf("branch node = %+v", node)
+	}
+	branch, ok := loaded.Node(second.ID)
+	if !ok || branch.Parent != first.ID {
+		t.Fatalf("superseded node = %+v", branch)
+	}
+	stack, err := loaded.Stack(third.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stack) != 3 || stack[0].ID != active.ID ||
+		stack[1].ID != first.ID || stack[2].ID != third.ID {
+		t.Fatalf("branch stack = %+v", stack)
+	}
+	headStack, err := loaded.HeadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headStack) != 3 || headStack[2].ID != third.ID {
+		t.Fatalf("head stack = %+v", headStack)
+	}
+}
+
+func TestBuildIncrRejectsUnknownBaseTip(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	runner := &fakeRunner{body: []byte("never-packed")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		BaseTip: strings.Repeat("a", sumHexLen),
+		Run:     runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown image id") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran on a refused base tip: %v", runner.calls)
+	}
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 1 || loaded.Head != active.ID {
+		t.Fatalf("manifest changed: %+v", loaded)
+	}
+}
+
+func TestBuildIncrDepthLimitFollowsBaseTipPath(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	// Seed a linear chain of seven layers: the head stack holds the
+	// full eight-image limit, so a default build is refused.
+	ids := []string{
+		"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "cccccccccccccccc",
+		"dddddddddddddddd", "eeeeeeeeeeeeeeee", "ffffffffffffffff",
+		"0000000000000000",
+	}
+	parent := active.ID
+	for _, id := range ids {
+		active.Chain = append(active.Chain, validEntry(parent, id))
+		parent = id
+	}
+	if err := Store(repo.MetaPath(), active); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{body: []byte("one-too-many")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), "new full image") {
+		t.Fatalf("head build err = %v", err)
+	}
+	// The deepest base tip sits on the same full-length path.
+	runner = &fakeRunner{body: []byte("still-too-many")}
+	_, err = BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		BaseTip: testID(ids[len(ids)-1]),
+		Run:     runner.run, MountSmoke: skipSmoke,
+	})
+	if err == nil || !strings.Contains(err.Error(), "new full image") {
+		t.Fatalf("deep base err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("packer ran past the depth limit: %v", runner.calls)
+	}
+	// A mid-chain base tip leaves room for exactly one more layer:
+	// the limit is measured along the root-to-base path, not against
+	// the deepest branch of the graph.
+	runner = &fakeRunner{body: []byte("fits-on-branch")}
+	res, err := BuildIncr(IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		BaseTip: testID(ids[len(ids)-2]),
+		Now:     fixedNow, Run: runner.run, MountSmoke: skipSmoke,
+	})
+	if err != nil {
+		t.Fatalf("mid-chain base build: %v", err)
+	}
+	loaded := readManifest(t, repo)
+	node, ok := loaded.Node(res.ID)
+	if !ok || node.Parent != testID(ids[len(ids)-2]) || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+	stack, err := loaded.Stack(res.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stack) != maxStackDepth {
+		t.Fatalf("branch stack holds %d members, want %d", len(stack), maxStackDepth)
+	}
+}
+
+func TestBuildIncrSameDigestOnTrailingBaseTipIsNoOp(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Now: fixedNow, MountSmoke: skipSmoke,
+	}
+	body := []byte("layer-from-old-view")
+	req.Run = (&fakeRunner{body: body}).run
+	req.BaseTip = active.ID
+	first, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Run = (&fakeRunner{body: []byte("layer-on-head")}).run
+	req.BaseTip = ""
+	second, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same payload from the same trailing view is an idempotent
+	// success: the layer is already in the graph, so neither the
+	// graph nor the head moves.
+	req.Run = (&fakeRunner{body: body}).run
+	req.BaseTip = active.ID
+	replay, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.ID != first.ID || replay.Path != first.Path || replay.SHA256 != first.SHA256 {
+		t.Fatalf("replay = %+v, want %+v", replay, first)
+	}
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 3 || loaded.Head != second.ID {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+func TestBuildIncrSameDigestAcrossParentsReusesNode(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := seedActive(t, repo, []byte("base-full"), false)
+	req := IncrRequest{
+		Config: cfg, Name: "alice/app", Upper: upperDir(t),
+		Now: fixedNow, MountSmoke: skipSmoke,
+	}
+	// Layer X is recorded under the root, and the head moves onto it.
+	bodyX := []byte("shared-payload")
+	req.Run = (&fakeRunner{body: bodyX}).run
+	req.BaseTip = active.ID
+	nodeX, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Layer Y is recorded under X, and the head moves onto Y.
+	req.Run = (&fakeRunner{body: []byte("next-payload")}).run
+	req.BaseTip = nodeX.ID
+	nodeY, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rebuilding payload X from base tip Y finds the digest already
+	// in the graph under a different parent (the root): the build
+	// reuses X's node, the head stays on Y, and the metadata is
+	// untouched.
+	req.Run = (&fakeRunner{body: bodyX}).run
+	req.BaseTip = nodeY.ID
+	reuse, err := BuildIncr(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reuse.ID != nodeX.ID || reuse.Path != nodeX.Path ||
+		reuse.SHA256 != nodeX.SHA256 {
+		t.Fatalf("reuse = %+v, want node X %+v", reuse, nodeX)
+	}
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 3 || loaded.Head != nodeY.ID {
+		t.Fatalf("reuse changed the graph or the head: %+v", loaded)
+	}
+	node, ok := loaded.Node(nodeX.ID)
+	if !ok || node.Parent != active.ID {
+		t.Fatalf("reused node reparented: %+v", node)
+	}
+	assertBytes(t, reuse.Path, bodyX)
 	assertNoTemps(t, repo.Dir)
 }
 
@@ -222,12 +483,9 @@ func TestBuildIncrRestoresMissingLayerFile(t *testing.T) {
 		t.Fatalf("result id = %s", res.ID)
 	}
 	assertBytes(t, res.Path, body)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 2 || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 }
 
@@ -272,12 +530,11 @@ func TestBuildIncrVerifiesPublishedLayer(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match sha256") {
 		t.Fatalf("err = %v", err)
 	}
-	loaded, loadErr := Load(repo.MetaPath())
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if loaded.ID != active.ID || len(loaded.Chain) != 0 {
-		t.Fatalf("meta changed despite the failed verification: %+v", loaded)
+	loaded := readManifest(t, repo)
+	root, rootErr := loaded.Full()
+	if rootErr != nil || root.ID != active.ID ||
+		len(loaded.Images) != 1 || loaded.Head != active.ID {
+		t.Fatalf("manifest changed despite the failed verification: %+v", loaded)
 	}
 	entries, readErr := os.ReadDir(incrDir)
 	if readErr != nil {
@@ -321,12 +578,9 @@ func TestBuildIncrReuseDetectsCorruptLayer(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	assertBytes(t, corrupt, []byte("corrupted-on-disk"))
-	loaded, loadErr := Load(repo.MetaPath())
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if len(loaded.Chain) != 1 {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 2 {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 }
 
@@ -385,12 +639,10 @@ func TestBuildIncrSubdirMovesUpperWithoutCopy(t *testing.T) {
 	if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("temp root left behind: %v", statErr)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 || loaded.Chain[0].Parent != active.ID || loaded.Chain[0].ID != res.ID {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	node, ok := loaded.Node(res.ID)
+	if !ok || node.Parent != active.ID || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 }
 
@@ -432,12 +684,11 @@ func TestBuildIncrMetaRenameFailureRemovesLayer(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "meta rename failed") {
 		t.Fatalf("err = %v", err)
 	}
-	loaded, loadErr := Load(repo.MetaPath())
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if loaded.ID != active.ID || len(loaded.Chain) != 0 {
-		t.Fatalf("old meta changed: %+v", loaded)
+	loaded := readManifest(t, repo)
+	root, rootErr := loaded.Full()
+	if rootErr != nil || root.ID != active.ID ||
+		len(loaded.Images) != 1 || loaded.Head != active.ID {
+		t.Fatalf("old manifest changed: %+v", loaded)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(repo.Dir, dirIncr))
 	if readErr != nil {
@@ -476,12 +727,9 @@ func TestBuildIncrPackerFailureLeavesNoLayer(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	loaded, loadErr := Load(repo.MetaPath())
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if len(loaded.Chain) != 0 {
-		t.Fatalf("chain changed: %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 1 {
+		t.Fatalf("manifest changed: %+v", loaded)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(repo.Dir, dirIncr))
 	if readErr != nil {
@@ -625,26 +873,27 @@ func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
 	for i, part := range parts {
 		assertBytes(t, filepath.Join(wantDir, fmt.Sprintf(blockNameFmt, i)), part)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded := readManifest(t, repo)
+	root, err := loaded.Full()
+	if err != nil || root.ID != active.ID {
+		t.Fatalf("manifest root = %+v, %v", root, err)
 	}
-	if loaded.ID != active.ID || len(loaded.Chain) != 1 {
-		t.Fatalf("active meta = %+v", loaded)
+	if len(loaded.Images) != 2 || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
-	entry := loaded.Chain[0]
-	if entry.Parent != active.ID || entry.ID != res.ID ||
-		entry.Size != int64(len(body)) || entry.SHA256 != res.SHA256 ||
-		len(entry.Blocks) != 3 ||
-		!entry.CreatedAt.Equal(fixedNow()) {
-		t.Fatalf("chain entry = %+v", entry)
+	node, ok := loaded.Node(res.ID)
+	if !ok || node.Parent != active.ID ||
+		node.Size != int64(len(body)) || node.SHA256 != res.SHA256 ||
+		len(node.Blocks) != 3 ||
+		!node.CreatedAt.Equal(fixedNow()) {
+		t.Fatalf("graph node = %+v", node)
 	}
-	for i, block := range entry.Blocks {
+	for i, block := range node.Blocks {
 		partSum := sha256.Sum256(parts[i])
 		if block.Name != fmt.Sprintf(blockNameFmt, i) ||
 			block.Size != int64(len(parts[i])) ||
 			block.SHA256 != hex.EncodeToString(partSum[:]) {
-			t.Fatalf("chain blocks[%d] = %+v", i, block)
+			t.Fatalf("node blocks[%d] = %+v", i, block)
 		}
 	}
 	if len(smoked) != 1 {
@@ -680,12 +929,10 @@ func TestBuildIncrSingleKeepsIncrSqsh(t *testing.T) {
 		t.Fatalf("path = %s, want %s", res.Path, wantPath)
 	}
 	assertBytes(t, wantPath, body)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 || len(loaded.Chain[0].Blocks) != 0 {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	node, ok := loaded.Node(res.ID)
+	if !ok || len(loaded.Images) != 2 || len(node.Blocks) != 0 || loaded.Head != res.ID {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, dirBlocks)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("single incr created _blocks/: %v", err)
@@ -754,12 +1001,9 @@ func TestBuildIncrBlocksSameDigestIsNoOp(t *testing.T) {
 	if second.ID != first.ID || second.Path != first.Path {
 		t.Fatalf("rebuild = %+v, want %+v", second, first)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 {
-		t.Fatalf("chain appended twice: %+v", loaded.Chain)
+	loaded := readManifest(t, repo)
+	if len(loaded.Images) != 2 || loaded.Head != first.ID {
+		t.Fatalf("manifest appended twice: %+v", loaded)
 	}
 	entries, err := os.ReadDir(filepath.Join(repo.Dir, dirBlocks))
 	if err != nil {
@@ -790,10 +1034,7 @@ func TestBuildIncrBlocksRestoresMissingDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := readManifest(t, repo)
 	if err := os.RemoveAll(first.Path); err != nil {
 		t.Fatal(err)
 	}
@@ -805,20 +1046,22 @@ func TestBuildIncrBlocksRestoresMissingDir(t *testing.T) {
 	if second.ID != first.ID || second.Path != first.Path || second.SHA256 != first.SHA256 {
 		t.Fatalf("restore = %+v, want %+v", second, first)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded := readManifest(t, repo)
+	wantNode, ok := before.Node(first.ID)
+	if !ok {
+		t.Fatalf("seed manifest lacks the layer: %+v", before)
 	}
-	if len(loaded.Chain) != 1 || len(loaded.Chain[0].Blocks) != len(before.Chain[0].Blocks) {
-		t.Fatalf("chain = %+v", loaded.Chain)
+	node, ok := loaded.Node(second.ID)
+	if !ok || len(loaded.Images) != 2 || len(node.Blocks) != len(wantNode.Blocks) {
+		t.Fatalf("manifest = %+v", loaded)
 	}
-	for i, block := range loaded.Chain[0].Blocks {
-		want := before.Chain[0].Blocks[i]
+	for i, block := range node.Blocks {
+		want := wantNode.Blocks[i]
 		if block.Name != want.Name || block.Size != want.Size || block.SHA256 != want.SHA256 {
 			t.Fatalf("blocks[%d] = %+v, want %+v", i, block, want)
 		}
 	}
-	ok, err := dirMatchesBlocks(second.Path, loaded.Chain[0].Blocks)
+	ok, err = dirMatchesBlocks(second.Path, node.Blocks)
 	if err != nil || !ok {
 		t.Fatalf("restored blocks dir match = %v, %v", ok, err)
 	}
@@ -841,12 +1084,11 @@ func TestBuildIncrBlocksMetaRenameFailureRemovesDir(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "meta rename failed") {
 		t.Fatalf("err = %v", err)
 	}
-	loaded, loadErr := Load(repo.MetaPath())
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if loaded.ID != active.ID || len(loaded.Chain) != 0 {
-		t.Fatalf("old meta changed: %+v", loaded)
+	loaded := readManifest(t, repo)
+	root, rootErr := loaded.Full()
+	if rootErr != nil || root.ID != active.ID ||
+		len(loaded.Images) != 1 || loaded.Head != active.ID {
+		t.Fatalf("old manifest changed: %+v", loaded)
 	}
 	sum := sha256.Sum256(body)
 	doomed, err := repo.BlocksDirPath(ID(sum))
@@ -896,12 +1138,9 @@ func TestBuildIncrInheritsActiveFormat(t *testing.T) {
 	if call[0] != "mkfs.erofs" || call[3] != "-zlz4" || call[len(call)-1] != upper {
 		t.Fatalf("runner call = %q", call)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Format != active.Format || len(loaded.Chain) != 1 {
-		t.Fatalf("meta = %+v", loaded)
+	loaded := readManifest(t, repo)
+	if loaded.Format != active.Format || len(loaded.Images) != 2 {
+		t.Fatalf("manifest = %+v", loaded)
 	}
 }
 
