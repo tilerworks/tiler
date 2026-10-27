@@ -61,8 +61,8 @@ func buildSplitBlocks(t *testing.T, cfg config.Config, name, src string, blockSi
 	cfg.SplitSize = blockSize
 	res, err := image.BuildFull(image.FullRequest{
 		Config: cfg, Name: name, SrcDir: src,
-		Version: "v1", Builder: "test",
-		Refs: session.Refs{Dir: cfg.SessionsDir},
+		Builder: "test",
+		Refs:    session.Refs{Dir: cfg.SessionsDir},
 	})
 	if err != nil {
 		t.Fatal(err)

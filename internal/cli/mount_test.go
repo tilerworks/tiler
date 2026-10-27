@@ -919,7 +919,7 @@ func writeLibraryContainer(t *testing.T, imagesDir, format string, body []byte) 
 	}
 	sum := sha256.Sum256(body)
 	meta := image.Meta{
-		ID: image.ID(sum), Name: "alice/app",
+		ID: image.ID(sum), Name: "alice/app", Version: image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: format, Compression: image.CompressionZstd},
 		Size:      int64(len(body)),

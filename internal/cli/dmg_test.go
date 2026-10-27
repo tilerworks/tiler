@@ -456,6 +456,7 @@ func writeDMGFixture(t *testing.T, imagesDir, compression string) {
 	meta := image.Meta{
 		ID:        sum,
 		Name:      "alice/app",
+		Version:   image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: compression},
 		Size:      info.Size(),
@@ -490,6 +491,7 @@ func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Me
 	meta := image.Meta{
 		ID:        image.ID(sum),
 		Name:      "alice/app",
+		Version:   image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
 		Size:      info.Size(),

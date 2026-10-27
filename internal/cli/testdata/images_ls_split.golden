@@ -4,7 +4,7 @@
       "name": "alice/data",
       "active": {
         "id": "3e4ba0e03b605ddbed5448543ac7ade8b7af09cdf8f561f46203ca6c59228f82",
-        "version": "v1",
+        "version": "1.0",
         "kind": "full",
         "form": "blocks",
         "format": "squashfs/zstd",

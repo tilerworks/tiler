@@ -165,7 +165,7 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	createdAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	format := image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}
 	alice := image.Meta{
-		ID: goldenActiveID, Name: "alice/app", Version: "v3",
+		ID: goldenActiveID, Name: "alice/app", Version: image.MetaVersion,
 		Kind: image.KindIncremental, Format: format,
 		Size: 2048, SHA256: goldenActiveSum, MtimeUnix: 1772600767,
 		CreatedAt: createdAt, Builder: "tiler golden",
@@ -180,7 +180,7 @@ func writeGoldenLibrary(t *testing.T, imagesDir string) {
 	writeGoldenChainDir(t, aliceDir, "_archives", goldenArchiveID)
 	writeGoldenChainDir(t, aliceDir, "_hold", goldenHoldID)
 	bob := image.Meta{
-		ID: goldenBobID, Name: "bob/tool", Version: "v1",
+		ID: goldenBobID, Name: "bob/tool", Version: image.MetaVersion,
 		Kind: image.KindFull, Format: format,
 		Size: 4096, SHA256: goldenBobSum, MtimeUnix: 1772600767,
 		CreatedAt: createdAt.Add(2 * time.Hour), Builder: "tiler golden",

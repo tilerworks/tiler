@@ -249,16 +249,6 @@ func newImageTableRow(named namedState) imageTableRow {
 	if meta.Deprecated {
 		suffix = append(suffix, "deprecated")
 	}
-	if meta.Source.Ref != "" {
-		suffix = append(suffix, "ref="+meta.Source.Ref)
-	}
-	if meta.Source.Commit != "" {
-		commit := meta.Source.Commit
-		if len(commit) > 7 {
-			commit = commit[:7]
-		}
-		suffix = append(suffix, "commit="+commit)
-	}
 	return imageTableRow{
 		cols: []string{
 			named.name,
@@ -328,9 +318,6 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 	if meta.Builder != "" {
 		fields = append(fields, [2]string{"builder", meta.Builder})
 	}
-	if src := detailSource(meta.Source); src != "" {
-		fields = append(fields, [2]string{"source", src})
-	}
 	if meta.Deprecated {
 		fields = append(fields, [2]string{"deprecated", "true"})
 	}
@@ -374,20 +361,6 @@ func writeImageDetail(w io.Writer, name string, state image.State) error {
 func writeDetailField(w io.Writer, key, value string) error {
 	_, err := fmt.Fprintf(w, "  %-*s  %s\n", detailKeyWidth, key, value)
 	return err
-}
-
-func detailSource(src image.Source) string {
-	var parts []string
-	if src.Repo != "" {
-		parts = append(parts, "repo="+src.Repo)
-	}
-	if src.Ref != "" {
-		parts = append(parts, "ref="+src.Ref)
-	}
-	if src.Commit != "" {
-		parts = append(parts, "commit="+src.Commit)
-	}
-	return strings.Join(parts, " ")
 }
 
 // shownChainLength is the chain length images list and show print.

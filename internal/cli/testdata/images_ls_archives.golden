@@ -4,7 +4,7 @@
       "name": "alice/app",
       "active": {
         "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "version": "v3",
+        "version": "1.0",
         "kind": "incremental",
         "format": "squashfs/zstd",
         "size": 2048,
@@ -32,7 +32,7 @@
       "name": "bob/tool",
       "active": {
         "id": "4444444444444444444444444444444444444444444444444444444444444444",
-        "version": "v1",
+        "version": "1.0",
         "kind": "full",
         "format": "squashfs/zstd",
         "size": 4096,

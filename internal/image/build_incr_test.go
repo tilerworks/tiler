@@ -40,8 +40,7 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	runner := &fakeRunner{body: body}
 	req := IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upper,
-		Source: Source{Commit: "abc123"},
-		Now:    fixedNow, Run: runner.run, MountSmoke: skipSmoke,
+		Now: fixedNow, Run: runner.run, MountSmoke: skipSmoke,
 	}
 	res, err := BuildIncr(req)
 	if err != nil {
@@ -69,7 +68,7 @@ func TestBuildIncrAppendsLayerToChain(t *testing.T) {
 	entry := loaded.Chain[0]
 	if entry.Parent != active.ID || entry.ID != res.ID ||
 		entry.Size != int64(len(body)) || entry.SHA256 != res.SHA256 ||
-		entry.Source != req.Source || !entry.CreatedAt.Equal(fixedNow()) {
+		!entry.CreatedAt.Equal(fixedNow()) {
 		t.Fatalf("chain entry = %+v", entry)
 	}
 	if len(runner.calls) != 1 {
@@ -600,7 +599,7 @@ func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
 	var smoked []string
 	req := IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: upperDir(t),
-		Source: Source{Commit: "abc123"}, Now: fixedNow,
+		Now: fixedNow,
 		Run: (&fakeRunner{body: body}).run,
 		MountSmoke: func(image string) error {
 			smoked = append(smoked, image)
@@ -636,7 +635,7 @@ func TestBuildIncrBlocksPublishesChainBlocks(t *testing.T) {
 	entry := loaded.Chain[0]
 	if entry.Parent != active.ID || entry.ID != res.ID ||
 		entry.Size != int64(len(body)) || entry.SHA256 != res.SHA256 ||
-		len(entry.Blocks) != 3 || entry.Source != req.Source ||
+		len(entry.Blocks) != 3 ||
 		!entry.CreatedAt.Equal(fixedNow()) {
 		t.Fatalf("chain entry = %+v", entry)
 	}

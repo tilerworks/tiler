@@ -22,13 +22,15 @@ func (m Meta) Validate() error {
 func (m Meta) checkIdentity(list *issueList) {
 	checkDigest(m.ID, m.SHA256, "", list)
 	checkNameField(m.Name, list)
+	if m.Version != MetaVersion {
+		list.add("version: unsupported metadata version %q", m.Version)
+	}
 	if m.Kind != KindFull && m.Kind != KindIncremental {
 		list.add("kind: must be full or incremental")
 	}
 	if m.Builder == "" {
 		list.add("builder: must be set")
 	}
-	checkCommit("source.commit", m.Source.Commit, list)
 }
 
 // checkNameField requires Name to parse as a canonical 1-to-5
@@ -89,7 +91,6 @@ func (m Meta) checkChain(list *issueList) {
 		checkSize(prefix+".size", entry.Size, list)
 		checkMtime(prefix+".mtime_unix", entry.MtimeUnix, list)
 		checkTime(prefix+".created_at", entry.CreatedAt, list)
-		checkCommit(prefix+".source.commit", entry.Source.Commit, list)
 		if entry.Parent != parent {
 			list.add("%s.parent: must continue the linear chain", prefix)
 		}
@@ -108,11 +109,7 @@ func (m Meta) checkChain(list *issueList) {
 // checkSplit validates the split payload manifests. The single-file
 // form carries no manifest, so its rules stay untouched. Blocks may
 // carry a chain whose entries each hold their own Blocks list.
-// Historical members-form metadata is refused fail-closed.
 func (m Meta) checkSplit(list *issueList) {
-	if len(m.Members) > 0 {
-		list.add("members: the members split form is no longer supported")
-	}
 	if len(m.Blocks) == 0 {
 		return
 	}
@@ -179,15 +176,6 @@ func checkTime(field string, ts time.Time, list *issueList) {
 	}
 	if _, offset := ts.Zone(); offset != 0 {
 		list.add("%s: must be UTC", field)
-	}
-}
-
-func checkCommit(field, commit string, list *issueList) {
-	if commit == "" {
-		return
-	}
-	if !isLowerHex(commit, len(commit)) {
-		list.add("%s: must be lowercase hex", field)
 	}
 }
 

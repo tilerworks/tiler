@@ -32,9 +32,6 @@ type FullRequest struct {
 	Name string
 	// SrcDir is the prepared directory to pack.
 	SrcDir string
-	// Version and Source are optional provenance recorded in meta.
-	Version string
-	Source  Source
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
 	// Format is the container type to pack, for example "squashfs"
@@ -342,10 +339,9 @@ func packedMeta(repo Repo, req FullRequest, tmp string, now func() time.Time) (M
 func newFullMeta(repo Repo, req FullRequest, now func() time.Time) Meta {
 	return Meta{
 		Name:      repo.Name(),
-		Version:   req.Version,
+		Version:   MetaVersion,
 		Kind:      KindFull,
 		Format:    Format{Type: req.Format, Compression: req.Compression},
-		Source:    req.Source,
 		CreatedAt: now().UTC(),
 		Builder:   req.Builder,
 	}

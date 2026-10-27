@@ -397,6 +397,7 @@ func TestDiskMatchUsesAttachedImagePath(t *testing.T) {
 	meta := image.Meta{
 		ID:        sum,
 		Name:      "alice/app",
+		Version:   image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
 		Size:      4,
@@ -473,7 +474,7 @@ func TestRecordedImageAndLibraryDigestFollowHoldPin(t *testing.T) {
 	heldSum := strings.Repeat("a", 64)
 	activeSum := strings.Repeat("b", 64)
 	held := image.Meta{
-		ID: heldSum, Name: "alice/app", Kind: image.KindFull,
+		ID: heldSum, Name: "alice/app", Version: image.MetaVersion, Kind: image.KindFull,
 		Format: image.Format{Type: image.FormatDMG, Compression: "ulfo"},
 		Size:   8, SHA256: heldSum, MtimeUnix: 1710000000,
 		CreatedAt: time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC), Builder: "dev",

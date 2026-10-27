@@ -32,13 +32,13 @@ func TestIDHexLenFloor(t *testing.T) {
 func TestValidateReportsEveryViolation(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	meta := Meta{
-		ID:     "0123456789ABCDEF",
-		Name:   "..",
-		Kind:   "blob",
-		Format: Format{Type: "tar", Compression: "gzip"},
-		Size:   0,
-		SHA256: strings.ToUpper(sum),
-		Source: Source{Commit: "ABC"},
+		ID:      "0123456789ABCDEF",
+		Name:    "..",
+		Version: "2.0",
+		Kind:    "blob",
+		Format:  Format{Type: "tar", Compression: "gzip"},
+		Size:    0,
+		SHA256:  strings.ToUpper(sum),
 		CreatedAt: time.Date(
 			2026, 10, 16, 8, 0, 0, 0, time.FixedZone("CST", 8*3600),
 		),
@@ -49,7 +49,6 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 			Size:      0,
 			SHA256:    sum,
 			MtimeUnix: -2,
-			Source:    Source{Commit: "ZZ"},
 		}},
 	}
 	err := meta.Validate()
@@ -61,9 +60,9 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 		"id: must be 64 lowercase hex digits",
 		"sha256: must be 64 lowercase hex digits",
 		"name: invalid image name",
+		`version: unsupported metadata version "2.0"`,
 		"kind: must be full or incremental",
 		"builder: must be set",
-		"source.commit: must be lowercase hex",
 		"format.type: unknown container type: \"tar\"",
 		"size: must be greater than 0",
 		"mtime_unix: must not be negative",
@@ -74,12 +73,30 @@ func TestValidateReportsEveryViolation(t *testing.T) {
 		"chain[0].size: must be greater than 0",
 		"chain[0].mtime_unix: must not be negative",
 		"chain[0].created_at: must be set",
-		"chain[0].source.commit: must be lowercase hex",
 	}
 	for _, want := range wants {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %s", want, text)
 		}
+	}
+}
+
+func TestValidateRejectsUnknownVersion(t *testing.T) {
+	for _, version := range []string{"", "0.9", "2.0", "1"} {
+		meta := validMeta()
+		meta.Version = version
+		err := meta.Validate()
+		if err == nil {
+			t.Fatalf("version %q accepted", version)
+		}
+		if want := "version: unsupported metadata version"; !strings.Contains(err.Error(), want) {
+			t.Fatalf("version %q: error = %v", version, err)
+		}
+	}
+	meta := validMeta()
+	meta.Version = MetaVersion
+	if err := meta.Validate(); err != nil {
+		t.Fatalf("MetaVersion rejected: %v", err)
 	}
 }
 
@@ -174,8 +191,6 @@ func TestLoadEmptyDocumentPrefixesOnce(t *testing.T) {
 
 func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
 	meta := validMeta()
-	meta.Version = "1.2.3"
-	meta.Source.Commit = "abc123"
 	meta.Chain = []ChainEntry{validEntry(meta.ID, "fedcba9876543210")}
 
 	encoded, err := Encode(meta)
@@ -199,7 +214,7 @@ func TestMetaYAMLRoundTripDropsUnknownFields(t *testing.T) {
 	if strings.Contains(text, "future") || strings.Contains(text, "extra") {
 		t.Fatalf("unknown field kept: %s", text)
 	}
-	if got.ID != meta.ID || got.Version != meta.Version || got.Source.Commit != "abc123" {
+	if got.ID != meta.ID || got.Version != MetaVersion {
 		t.Fatalf("round trip changed fields: %+v", got)
 	}
 	if len(got.Chain) != 1 || got.Chain[0].Parent != meta.ID {
@@ -247,7 +262,7 @@ func TestSingleFileMetaOmitsSplitKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, key := range []string{"blocks:", "members:"} {
+	for _, key := range []string{"blocks:", "members:", "source:"} {
 		if strings.Contains(text, key) {
 			t.Fatalf("single-file meta grew %s:\n%s", key, text)
 		}
@@ -256,7 +271,7 @@ func TestSingleFileMetaOmitsSplitKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Blocks) != 0 || len(got.Members) != 0 {
+	if len(got.Blocks) != 0 {
 		t.Fatalf("split manifests appeared: %+v", got)
 	}
 }
@@ -275,6 +290,7 @@ func validMeta() Meta {
 	return Meta{
 		ID:        sum,
 		Name:      "alice/app",
+		Version:   MetaVersion,
 		Kind:      KindFull,
 		Format:    Format{Type: FormatSquashfs, Compression: CompressionZstd},
 		Size:      12345,

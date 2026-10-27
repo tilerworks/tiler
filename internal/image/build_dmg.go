@@ -374,6 +374,7 @@ func dmgMeta(repo Repo, req DMGRequest, tmp, compression, content string) (Meta,
 	meta := Meta{
 		Name:          repo.Name(),
 		ID:            ID(sum),
+		Version:       MetaVersion,
 		Kind:          KindFull,
 		Format:        Format{Type: FormatDMG, Compression: compression},
 		Size:          info.Size(),

@@ -57,7 +57,7 @@ func storeFixtureMeta(t *testing.T, repoDir string, meta image.Meta) {
 // fixtureMeta is the shared metadata head of the split fixtures.
 func fixtureMeta(name string) image.Meta {
 	return image.Meta{
-		Name: name, Version: "v1",
+		Name: name, Version: image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd},
 		MtimeUnix: splitMtime.Unix(), CreatedAt: splitMtime,

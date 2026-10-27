@@ -39,8 +39,6 @@ type IncrRequest struct {
 	// Subdir is an optional image-relative prefix. The upper is
 	// moved under it before packing and moved back afterwards.
 	Subdir string
-	// Source is optional provenance recorded on the chain entry.
-	Source Source
 	// Refs is accepted for symmetry with full builds; appending a
 	// layer retires no chain, so nothing consults it yet.
 	Refs Refs
@@ -371,7 +369,7 @@ func finishIncrSingle(
 	now func() time.Time,
 	seam hooks,
 ) (IncrResult, error) {
-	entry, err := chainEntry(req, active, id, sum, tmp, now, nil)
+	entry, err := chainEntry(active, id, sum, tmp, now, nil)
 	if err != nil {
 		removeFile(tmp)
 		return IncrResult{}, err
@@ -444,7 +442,6 @@ func finishIncrBlocks(
 		Size:      split.size,
 		SHA256:    hexDigest(split.whole),
 		MtimeUnix: info.ModTime().Unix(),
-		Source:    req.Source,
 		CreatedAt: now().UTC(),
 		Blocks:    split.blocks,
 	}
@@ -711,7 +708,6 @@ func entryBlockSize(entry ChainEntry) int64 {
 // chainEntry assembles the new chain member. Its parent is the last
 // chain member, or the full image id when the chain is empty.
 func chainEntry(
-	req IncrRequest,
 	active Meta,
 	id string,
 	sum [32]byte,
@@ -729,7 +725,6 @@ func chainEntry(
 		Size:      info.Size(),
 		SHA256:    hexDigest(sum),
 		MtimeUnix: info.ModTime().Unix(),
-		Source:    req.Source,
 		CreatedAt: now().UTC(),
 		Blocks:    blocks,
 	}, nil

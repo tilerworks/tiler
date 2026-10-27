@@ -176,6 +176,7 @@ func linkMeta(repo Repo, typ, comp string, sum [32]byte, size, mtime int64, buil
 	return Meta{
 		ID:        digest,
 		Name:      repo.Name(),
+		Version:   MetaVersion,
 		Kind:      KindFull,
 		Format:    Format{Type: typ, Compression: comp},
 		Size:      size,

@@ -36,7 +36,7 @@ func TestIncrementalWorkspaceRoundTrip(t *testing.T) {
 	src := gitSource(t)
 	full, err := BuildFull(FullRequest{
 		Config: cfg, Name: "alice/app", SrcDir: src,
-		Version: "v1", Builder: "test", Source: Source{Ref: "main"},
+		Builder: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,6 @@ func TestIncrementalWorkspaceRoundTrip(t *testing.T) {
 	// really mounts the fresh layer read-only.
 	inc1, err := BuildIncr(IncrRequest{
 		Config: cfg, Name: "alice/app", Upper: w1.UpperDir,
-		Source: Source{Ref: "added-branch"},
 	})
 	if err != nil {
 		t.Fatal(err)

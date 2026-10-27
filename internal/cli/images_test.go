@@ -130,7 +130,6 @@ func TestImageTableSuffixAndDetail(t *testing.T) {
 			CreatedAt:  created,
 			Builder:    "dev",
 			Deprecated: true,
-			Source:     image.Source{Repo: "git.example/app", Ref: "main", Commit: "abcdef1234567890"},
 			Chain: []image.ChainEntry{{
 				ID: "1111111111111111", Parent: "0123456789abcdef",
 				Size: 12 << 20, CreatedAt: created.Add(time.Hour),
@@ -143,7 +142,7 @@ func TestImageTableSuffixAndDetail(t *testing.T) {
 	if err := writeImageTable(&buf, []namedState{{name: "alice/app", state: state}}, false); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(buf.String(), "\t") || !strings.Contains(buf.String(), "deprecated ref=main commit=abcdef1") {
+	if strings.Contains(buf.String(), "\t") || !strings.Contains(buf.String(), "deprecated") {
 		t.Fatalf("short row:\n%s", buf.String())
 	}
 	buf.Reset()
@@ -152,7 +151,6 @@ func TestImageTableSuffixAndDetail(t *testing.T) {
 	}
 	detail := buf.String()
 	for _, want := range []string{
-		"  source      repo=git.example/app ref=main commit=abcdef1234567890\n",
 		"  deprecated  true\n",
 		"    1111111111111111  parent=0123456789abcdef  12 MiB  2026-10-20T10:14:03Z\n",
 		"  archives    1\n    2222222222222222\n",

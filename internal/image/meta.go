@@ -40,18 +40,16 @@ const (
 	PayloadBlocks = "blocks"
 )
 
+// MetaVersion is the metadata layout version written to meta.yaml.
+// Version is a reserved compatibility field: a loader that only
+// understands MetaVersion refuses any other value, so a future
+// layout upgrade stays fail-closed.
+const MetaVersion = "1.0"
+
 // Format is the container recorded on an image.
 type Format struct {
 	Type        string `yaml:"type"`
 	Compression string `yaml:"compression"`
-}
-
-// Source is optional provenance. Empty fields are valid. A non-empty
-// commit must be lowercase hexadecimal.
-type Source struct {
-	Repo   string `yaml:"repo"`
-	Ref    string `yaml:"ref"`
-	Commit string `yaml:"commit"`
 }
 
 // ChainEntry is one incremental layer. Kind is not repeated here;
@@ -64,7 +62,6 @@ type ChainEntry struct {
 	Size      int64        `yaml:"size"`
 	SHA256    string       `yaml:"sha256"`
 	MtimeUnix int64        `yaml:"mtime_unix"`
-	Source    Source       `yaml:"source"`
 	CreatedAt time.Time    `yaml:"created_at"`
 	Blocks    []BlockEntry `yaml:"blocks,omitempty"`
 }
@@ -79,28 +76,20 @@ type BlockEntry struct {
 	MtimeUnix int64  `yaml:"mtime_unix"`
 }
 
-// MemberEntry is retained only so historical members-form metadata
-// still unmarshals; Validate rejects any non-empty Members list.
-type MemberEntry struct {
-	Name      string `yaml:"name"`
-	Image     string `yaml:"image"`
-	Size      int64  `yaml:"size"`
-	SHA256    string `yaml:"sha256"`
-	MtimeUnix int64  `yaml:"mtime_unix"`
-}
-
 // Meta is the YAML document stored beside an image. Unknown fields
 // are dropped on load.
 type Meta struct {
-	ID         string    `yaml:"id"`
-	Name       string    `yaml:"name"`
+	ID string `yaml:"id"`
+	// Name is the canonical library name this image belongs to.
+	Name string `yaml:"name"`
+	// Version is the reserved metadata layout version. Builds write
+	// MetaVersion; Validate refuses any other value.
 	Version    string    `yaml:"version"`
 	Kind       string    `yaml:"kind"`
 	Format     Format    `yaml:"format"`
 	Size       int64     `yaml:"size"`
 	SHA256     string    `yaml:"sha256"`
 	MtimeUnix  int64     `yaml:"mtime_unix"`
-	Source     Source    `yaml:"source"`
 	CreatedAt  time.Time `yaml:"created_at"`
 	Builder    string    `yaml:"builder"`
 	Deprecated bool      `yaml:"deprecated"`
@@ -117,10 +106,6 @@ type Meta struct {
 	// Blocks is the byte-block manifest of a split payload. It stays
 	// empty for the single-file form.
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
-	// Members is the historical directory-partition manifest. Any
-	// non-empty list is refused by Validate so old libraries fail
-	// closed; the members form is no longer supported.
-	Members []MemberEntry `yaml:"members,omitempty"`
 }
 
 // ID is the lowercase hex encoding of a sha256 sum. It equals the
@@ -130,9 +115,8 @@ func ID(sum [32]byte) string {
 }
 
 // PayloadKind reports the storage form of the active payload. Load,
-// publish, and resolve paths dispatch on it. Members-form metadata
-// never reaches here after Validate; an empty Blocks list is the
-// single-file form.
+// publish, and resolve paths dispatch on it; an empty Blocks list is
+// the single-file form.
 func PayloadKind(m Meta) string {
 	if len(m.Blocks) > 0 {
 		return PayloadBlocks

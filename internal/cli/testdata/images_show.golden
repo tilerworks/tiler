@@ -2,7 +2,7 @@
   "name": "alice/app",
   "active": {
     "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "version": "v3",
+    "version": "1.0",
     "kind": "incremental",
     "format": "squashfs/zstd",
     "size": 2048,

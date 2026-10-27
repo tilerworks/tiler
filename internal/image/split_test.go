@@ -25,13 +25,6 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 			mutate: func(*Meta) {},
 		},
 		{
-			name: "members form is refused",
-			mutate: func(m *Meta) {
-				m.Members = []MemberEntry{{Name: "alpha"}}
-			},
-			wants: []string{"members: the members split form is no longer supported"},
-		},
-		{
 			name:   "incremental kind is refused",
 			mutate: func(m *Meta) { m.Kind = KindIncremental },
 			wants:  []string{"kind: must be full for split payloads"},
@@ -103,17 +96,6 @@ func TestValidateBlocksManifestRules(t *testing.T) {
 			assertIssues(t, meta, tc.wants)
 		})
 	}
-}
-
-func TestValidateMembersFormIsRefused(t *testing.T) {
-	meta := validMeta()
-	meta.Members = []MemberEntry{{
-		Name: "alpha", Image: "members/alpha.sqsh", Size: 1,
-		SHA256: strings.Repeat("0a", 32),
-	}}
-	assertIssues(t, meta, []string{
-		"members: the members split form is no longer supported",
-	})
 }
 
 func TestPayloadKindDispatch(t *testing.T) {

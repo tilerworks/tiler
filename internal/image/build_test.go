@@ -76,12 +76,6 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 		Config:  cfg,
 		Name:    "alice/app",
 		SrcDir:  src,
-		Version: "v1.2.3",
-		Source: Source{
-			Repo:   "https://example.com/alice/app.git",
-			Ref:    "main",
-			Commit: "0123abc",
-		},
 		Builder: "test",
 		Now:     fixedNow,
 		Run:     runner.run,
@@ -121,7 +115,7 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "alice/app" || loaded.Version != "v1.2.3" {
+	if loaded.Name != "alice/app" || loaded.Version != MetaVersion {
 		t.Fatalf("meta identity = %+v", loaded)
 	}
 	if loaded.Kind != KindFull || loaded.Format.Type != FormatSquashfs ||
@@ -132,7 +126,7 @@ func TestBuildFullPublishesPackedImage(t *testing.T) {
 		loaded.ID != ID(sum) || loaded.MtimeUnix != info.ModTime().Unix() {
 		t.Fatalf("meta payload = %+v", loaded)
 	}
-	if loaded.Source != req.Source || loaded.Builder != "test" ||
+	if loaded.Builder != "test" ||
 		!loaded.CreatedAt.Equal(fixedNow()) || len(loaded.Chain) != 0 {
 		t.Fatalf("meta provenance = %+v", loaded)
 	}

@@ -86,6 +86,7 @@ func writeSingleActive(t *testing.T, repoDir, name, formatType string, body []by
 	meta := image.Meta{
 		ID:        image.ID(sum),
 		Name:      name,
+		Version:   image.MetaVersion,
 		Kind:      image.KindFull,
 		Format:    image.Format{Type: formatType, Compression: image.CompressionZstd},
 		Size:      info.Size(),
