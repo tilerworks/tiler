@@ -178,6 +178,19 @@ func PayloadKind(m Meta) string {
 	return PayloadSingle
 }
 
+// PayloadKind reports the storage form of the manifest payload. The
+// full root's blocks list decides for every node, because Validate
+// keeps one payload kind across the DAG. A manifest without a full
+// root reports the single-file form; resolution surfaces the graph
+// error itself.
+func (m Manifest) PayloadKind() string {
+	root, err := m.Full()
+	if err == nil && len(root.Blocks) > 0 {
+		return PayloadBlocks
+	}
+	return PayloadSingle
+}
+
 // Full returns the unique full root of the DAG.
 func (m Manifest) Full() (ImageMeta, error) {
 	found := -1

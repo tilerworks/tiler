@@ -21,7 +21,8 @@ func TestResolveMountBlocksForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Library || got.Name != "alice/app" || got.ID != fx.meta.ID || got.Format != FormatSquashfs {
+	if !got.Library || got.Name != "alice/app" || got.ID != fx.meta.ID ||
+		got.Tip != fx.meta.ID || got.Format != FormatSquashfs {
 		t.Fatalf("target identity = %+v", got)
 	}
 	if got.Form != PayloadBlocks {
@@ -90,6 +91,10 @@ func TestResolveMountBlocksWithChainExpandsStack(t *testing.T) {
 	if len(got.Members) != 2 {
 		t.Fatalf("members = %+v, want full + chain", got.Members)
 	}
+	if got.ID != fx.meta.ID || got.Tip != entry.ID {
+		t.Fatalf("target ids = (%q, %q), want (%q, %q)",
+			got.ID, got.Tip, fx.meta.ID, entry.ID)
+	}
 	if got.Members[0].ID != fx.meta.ID || len(got.Members[0].Blocks) != 2 {
 		t.Fatalf("full layer = %+v", got.Members[0])
 	}
@@ -132,27 +137,33 @@ func TestResolveMountBlocksChainMissingFileNamesLayer(t *testing.T) {
 }
 
 func TestResolveBlocksChainMissingBlocksManifest(t *testing.T) {
-	// Validate rejects this layout at Load/Store; resolveBlocks is
-	// the mount-time guard for a hand-edited or corrupt meta that
-	// somehow reaches resolution with a blocks active and an empty
-	// chain Blocks list.
+	// Validate rejects this layout at LoadManifest; resolveBlocks is
+	// the mount-time guard for a hand-edited or corrupt manifest that
+	// somehow reaches resolution with a blocks root and a layer node
+	// whose Blocks list is empty.
 	cfg := buildConfig(t)
 	fx := blocksFixture([][]byte{[]byte("full-a")})
 	repo := mustRepo(t, cfg)
 	seedSplitActive(t, repo, fx)
-	entry := ChainEntry{
+	layer := ImageMeta{
 		ID:        "abcdef0123456789",
+		Kind:      KindIncremental,
 		Parent:    fx.meta.ID,
 		Size:      9,
 		SHA256:    strings.Repeat("ab", 32),
 		MtimeUnix: 1710000002,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
 	}
-	meta := fx.meta
-	meta.Chain = []ChainEntry{entry}
+	manifest := Manifest{
+		Version: ManifestVersion,
+		Name:    "alice/app",
+		Format:  fx.meta.Format,
+		Head:    layer.ID,
+		Images:  []ImageMeta{rootNodeOf(fx.meta), layer},
+	}
 
-	_, err := resolveBlocks(repo, "alice/app", meta)
-	if err == nil || !strings.Contains(err.Error(), entry.ID) ||
+	_, err := resolveBlocks(repo, "alice/app", manifest)
+	if err == nil || !strings.Contains(err.Error(), layer.ID) ||
 		!strings.Contains(err.Error(), "blocks form requires a blocks manifest") {
 		t.Fatalf("err = %v", err)
 	}
@@ -226,6 +237,8 @@ func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     meta.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),

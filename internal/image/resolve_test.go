@@ -9,8 +9,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // mustRepo opens the alice/app repository used by most cases.
@@ -84,6 +86,9 @@ func assertTarget(t *testing.T, got, want Target) {
 	if got.Library != want.Library || got.Name != want.Name || got.Format != want.Format {
 		t.Fatalf("target = %+v, want %+v", got, want)
 	}
+	if got.ID != want.ID || got.Tip != want.Tip {
+		t.Fatalf("target ids = (%q, %q), want (%q, %q)", got.ID, got.Tip, want.ID, want.Tip)
+	}
 	if len(got.Members) != len(want.Members) {
 		t.Fatalf("members =\n%+v\nwant\n%+v", got.Members, want.Members)
 	}
@@ -98,6 +103,93 @@ func memberEqual(got, want Member) bool {
 	return got.Path == want.Path && got.ID == want.ID &&
 		got.Size == want.Size && got.MtimeUnix == want.MtimeUnix &&
 		got.SHA256 == want.SHA256 && slices.Equal(got.Blocks, want.Blocks)
+}
+
+// rootNodeOf converts the facts of a v1 fixture meta into the full
+// root node of a test manifest.
+func rootNodeOf(meta Meta) ImageMeta {
+	return ImageMeta{
+		ID:            meta.ID,
+		Kind:          KindFull,
+		Size:          meta.Size,
+		SHA256:        meta.SHA256,
+		MtimeUnix:     meta.MtimeUnix,
+		CreatedAt:     meta.CreatedAt,
+		Builder:       meta.Builder,
+		Deprecated:    meta.Deprecated,
+		ContentSHA256: meta.ContentSHA256,
+		Blocks:        meta.Blocks,
+	}
+}
+
+// layerNodeOf builds one valid single-file incremental node for a
+// test manifest. testID expands legacy 16-hex seeds, so callers may
+// pass short deterministic ids.
+func layerNodeOf(parent, id string) ImageMeta {
+	sum := testID(id)
+	return ImageMeta{
+		ID:        sum,
+		Kind:      KindIncremental,
+		Parent:    testID(parent),
+		Size:      4096,
+		SHA256:    sum,
+		MtimeUnix: 1710000001,
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}
+}
+
+// seedManifestDir writes a v2 manifest plus one placeholder payload
+// per node into dir, which preserves the active layout: the full root
+// payload keeps the single-file name and the incremental payloads
+// rest under _incr/. Resolution only stats the files, so placeholder
+// bodies are enough.
+func seedManifestDir(t *testing.T, dir string, manifest Manifest) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, dirIncr), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range manifest.Images {
+		name := filepath.Join(dir, dirIncr, node.ID+squashExt)
+		if node.Kind == KindFull {
+			name = filepath.Join(dir, activeImageName(manifest.Format.Type))
+		}
+		if err := os.WriteFile(name, []byte("payload-"+node.ID), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := EncodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileMeta), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedActiveManifest writes a v2 manifest plus every node payload
+// into the active slot of repo.
+func seedActiveManifest(t *testing.T, repo Repo, manifest Manifest) {
+	t.Helper()
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seedManifestDir(t, repo.Dir, manifest)
+}
+
+// seedHoldManifest writes a v2 manifest plus every node payload into
+// the _hold/<full-id> leaf of repo and returns the hold directory.
+func seedHoldManifest(t *testing.T, repo Repo, manifest Manifest) string {
+	t.Helper()
+	full, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(full.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedManifestDir(t, hold, manifest)
+	return hold
 }
 
 // fileFormCase is one file-path resolution expectation. An empty
@@ -251,6 +343,8 @@ func TestResolveMountLibraryFullOnly(t *testing.T) {
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     meta.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
@@ -289,7 +383,8 @@ func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTarget(t, got, Target{
-		Library: true, Name: "alice/app", Format: FormatSquashfs, Members: members,
+		Library: true, Name: "alice/app", ID: meta.ID,
+		Tip: meta.Chain[len(meta.Chain)-1].ID, Format: FormatSquashfs, Members: members,
 	})
 }
 
@@ -303,6 +398,29 @@ func TestResolveMountAcceptsStackAtDepthLimit(t *testing.T) {
 	}
 	if len(got.Members) != maxStackDepth {
 		t.Fatalf("members = %d, want %d", len(got.Members), maxStackDepth)
+	}
+}
+
+func TestResolveStackAtRefusesOverDeepInMemoryManifest(t *testing.T) {
+	// LoadManifest validation already refuses over-deep DAGs, so the
+	// manifestStack guard only fires for an in-memory manifest that
+	// bypassed validation. Call resolveStackAt directly with such a
+	// manifest, the pattern TestResolveBlocksChainMissingBlocksManifest
+	// uses for resolveBlocks.
+	manifest := deepManifest(maxStackDepth)
+	_, err := resolveStackAt(t.TempDir(), "alice/app", manifest, manifest.Head)
+	if err == nil {
+		t.Fatal("want refusal, got nil error")
+	}
+	wantTexts := []string{
+		"alice/app",
+		fmt.Sprintf("stack holds %d members", maxStackDepth+1),
+		fmt.Sprintf("the limit is %d", maxStackDepth),
+	}
+	for _, text := range wantTexts {
+		if !strings.Contains(err.Error(), text) {
+			t.Fatalf("err = %v, want text %q", err, text)
+		}
 	}
 }
 
@@ -323,6 +441,8 @@ func TestResolveMountIgnoresArchivesAndHolds(t *testing.T) {
 	want := Target{
 		Library: true,
 		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     meta.Chain[0].ID,
 		Format:  FormatSquashfs,
 		Members: []Member{
 			{
@@ -344,6 +464,45 @@ func TestResolveMountIgnoresArchivesAndHolds(t *testing.T) {
 		if strings.Contains(member.Path, dirArchives) ||
 			strings.Contains(member.Path, dirHold) {
 			t.Fatalf("retired file joined the stack: %s", member.Path)
+		}
+	}
+}
+
+func TestResolveMountHeadStackRootFirst(t *testing.T) {
+	cfg := buildConfig(t)
+	repo := mustRepo(t, cfg)
+	body := []byte("branch-full")
+	meta := metaFor(body)
+	layerA := layerNodeOf(meta.ID, "aaaaaaaaaaaaaaaa")
+	layerB := layerNodeOf(layerA.ID, "bbbbbbbbbbbbbbbb")
+	// The head stops mid-stack: layerB rests on disk but must not
+	// join the resolved head stack.
+	manifest := branchManifest(t, body, layerA.ID, layerA, layerB)
+	seedActiveManifest(t, repo, manifest)
+
+	got, err := ResolveMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTarget(t, got, Target{
+		Library: true,
+		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     layerA.ID,
+		Format:  FormatSquashfs,
+		Members: []Member{
+			{
+				Path:      repo.ImagePath(),
+				Size:      meta.Size,
+				MtimeUnix: meta.MtimeUnix,
+				SHA256:    meta.SHA256,
+			},
+			layerMember(repo.Dir, layerA),
+		},
+	})
+	for _, member := range got.Members {
+		if strings.Contains(member.Path, layerB.ID) {
+			t.Fatalf("off-head branch node joined the stack: %s", member.Path)
 		}
 	}
 }
@@ -394,8 +553,13 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 			prepare: func(t *testing.T) config.Config {
 				cfg := buildConfig(t)
 				repo := mustRepo(t, cfg)
-				seedChain(t, repo, 0)
-				if err := os.WriteFile(repo.MetaPath(), []byte("kind: full\n"), 0o644); err != nil {
+				meta := seedChain(t, repo, 0)
+				meta.Builder = ""
+				body, err := yaml.Marshal(meta)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
 					t.Fatal(err)
 				}
 				return cfg
@@ -414,6 +578,20 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 				return cfg
 			},
 			wantText: []string{"active image missing"},
+		},
+		{
+			name: "blocks manifest rests without its payload",
+			prepare: func(t *testing.T) config.Config {
+				cfg := buildConfig(t)
+				repo := mustRepo(t, cfg)
+				fx := blocksFixture([][]byte{[]byte("resting-a")})
+				manifest := blocksBranchManifest(t, fx.meta, fx.meta.ID)
+				// The manifest names the blocks form, but no
+				// _blocks/<root-id>/ directory rests beneath it.
+				seedActiveBlocksManifest(t, repo, manifest)
+				return cfg
+			},
+			wantText: []string{"publish: active payload missing"},
 		},
 		{
 			name: "chain layer file missing names the layer id",
@@ -441,7 +619,7 @@ func TestResolveMountLibraryRefusals(t *testing.T) {
 				seedChain(t, repo, maxStackDepth)
 				return cfg
 			},
-			wantText: []string{"the limit is 8"},
+			wantText: []string{"exceeds the stack limit of 8"},
 		},
 	}
 	for _, tc := range tests {
@@ -522,6 +700,8 @@ func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     meta.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
@@ -551,6 +731,8 @@ func TestResolveMountDirectoryFallsThroughToLibrary(t *testing.T) {
 	assertTarget(t, got, Target{
 		Library: true,
 		Name:    "alice/app",
+		ID:      meta.ID,
+		Tip:     meta.ID,
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),

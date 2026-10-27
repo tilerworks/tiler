@@ -27,15 +27,21 @@ type Target struct {
 	Library bool
 	// Name is the canonical library name when Library is true.
 	Name string
-	// ID is the full image id of the resolved active chain or split
-	// payload when Library is true, and empty for a file path.
+	// ID is the full image id of the resolved stack root when Library
+	// is true, and empty for a file path.
 	ID string
+	// Tip is the stack tip id of this resolution: the active head, or
+	// the requested tip of a pinned resolution. Both the single-file
+	// and the blocks form carry one; a file-path target leaves it
+	// empty. Tip equals ID when the stack holds only the full image.
+	Tip string
 	// Format is the container type recorded on library metadata,
 	// for example "squashfs". A file path leaves it empty; the
 	// mount command detects that file.
 	Format string
 	// Members lists the container files to stack-mount: the full
-	// image first, then chain layers in stored oldest-first order.
+	// image first, then the incremental layers of the resolved
+	// stack in mount order.
 	Members []Member
 	// Form names the split payload shape: empty for the single-file
 	// cascade, or blocks for the byte-block form.
@@ -116,20 +122,88 @@ func LocatePinned(imagesDir, name, idRef string) (string, error) {
 // if idRef is itself an existing hold directory name (64-hex or a
 // legacy 16-hex directory). Zero matches, ambiguous matches, and a
 // missing hold fail and quote the name and id. Name-only ResolveMount
-// stays active-only.
+// stays active-only. The leaf's manifest resolves through its head,
+// so the target stack is the leaf's active head stack.
 func ResolvePinned(cfg config.Config, name, idRef string) (Target, error) {
 	root, err := LocatePinned(cfg.ImagesDir, name, idRef)
 	if err != nil {
 		return Target{}, err
 	}
-	meta, err := Load(filepath.Join(root, fileMeta))
+	manifest, err := LoadManifest(filepath.Join(root, fileMeta))
 	if err != nil {
 		return Target{}, pinError(name, idRef, err)
 	}
-	if PayloadKind(meta) == PayloadBlocks {
-		return resolveBlocksAt(root, name, meta)
+	return resolveManifestAt(root, name, manifest, manifest.Head)
+}
+
+// ResolveStackTip expands a library image by full id plus the stack
+// tip id of a desired stack, the form a session replay resolves. An
+// empty tipID preserves the ResolvePinned semantics: the active head
+// stack or the hold leaf of fullID. Otherwise the active leaf serves
+// the request when its manifest roots at fullID and its DAG holds
+// tipID; a miss falls back to the pinned leaf of fullID and resolves
+// tipID inside that leaf's manifest. A tip no leaf carries fails and
+// quotes the name and the tip.
+func ResolveStackTip(cfg config.Config, name, fullID, tipID string) (Target, error) {
+	if tipID == "" {
+		return ResolvePinned(cfg, name, fullID)
 	}
-	return resolveStackAt(root, name, meta)
+	root, manifest, err := locateTipManifest(cfg.ImagesDir, name, fullID, tipID)
+	if err != nil {
+		return Target{}, err
+	}
+	return resolveManifestAt(root, name, manifest, tipID)
+}
+
+// locateTipManifest finds the leaf whose manifest resolves tipID for
+// the pin (fullID, tipID): the active leaf when its full root matches
+// fullID and its DAG holds tipID, else the pinned leaf of fullID.
+func locateTipManifest(imagesDir, name, fullID, tipID string) (string, Manifest, error) {
+	if repo, manifest, ok := activeTipManifest(imagesDir, name, fullID, tipID); ok {
+		return repo, manifest, nil
+	}
+	root, err := LocatePinned(imagesDir, name, fullID)
+	if err != nil {
+		return "", Manifest{}, err
+	}
+	manifest, err := LoadManifest(filepath.Join(root, fileMeta))
+	if err != nil {
+		return "", Manifest{}, pinError(name, fullID, err)
+	}
+	if !manifest.Has(tipID) {
+		return "", Manifest{}, pinError(name, tipID,
+			fmt.Errorf("unknown stack tip of image %s", fullID))
+	}
+	return root, manifest, nil
+}
+
+// activeTipManifest loads the active manifest when it roots at fullID
+// and holds tipID. Any miss — no repository, no or a broken manifest,
+// another root, an unknown tip — reports false and leaves the pinned
+// fallback in charge.
+func activeTipManifest(imagesDir, name, fullID, tipID string) (string, Manifest, bool) {
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return "", Manifest{}, false
+	}
+	manifest, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		return "", Manifest{}, false
+	}
+	full, err := manifest.Full()
+	if err != nil || full.ID != fullID || !manifest.Has(tipID) {
+		return "", Manifest{}, false
+	}
+	return repo.Dir, manifest, true
+}
+
+// resolveManifestAt expands the root-to-tip stack of the manifest
+// under root, following the payload kind the manifest names.
+func resolveManifestAt(root, name string, manifest Manifest, tip string) (Target, error) {
+	if manifest.PayloadKind() == PayloadBlocks {
+		return resolveBlocksAt(root, name, manifest, tip)
+	}
+	return resolveStackAt(root, name, manifest, tip)
 }
 
 // pinnedRoot locates the absolute leaf root for a pin: index hit for
@@ -223,106 +297,150 @@ func ResolveMount(cfg config.Config, arg string) (Target, error) {
 	return resolveFile(arg)
 }
 
-// resolveLibrary expands the active metadata of one repository by
+// resolveLibrary expands the active manifest of one repository by
 // payload kind: a single-file stack or a byte-block manifest.
 func resolveLibrary(cfg config.Config, name string) (Target, error) {
 	repo, err := OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
 		return Target{}, fmt.Errorf("mount: %w", err)
 	}
-	meta, exists, err := loadActive(repo)
+	manifest, exists, err := loadActiveManifest(repo)
 	if err != nil {
 		return Target{}, fmt.Errorf("mount: %w", err)
 	}
 	if !exists {
 		return Target{}, fmt.Errorf("mount: %w %s", ErrUnknownImage, name)
 	}
-	if PayloadKind(meta) == PayloadBlocks {
-		return resolveBlocks(repo, name, meta)
+	if manifest.PayloadKind() == PayloadBlocks {
+		return resolveBlocks(repo, name, manifest)
 	}
-	return resolveStack(repo, name, meta)
+	return resolveStack(repo, name, manifest)
 }
 
-// resolveStack expands the active full image plus its chain layers.
-func resolveStack(repo Repo, name string, meta Meta) (Target, error) {
-	return resolveStackAt(repo.Dir, name, meta)
+// loadActiveManifest reads the active manifest and checks that the
+// payload of its kind is in place, the DAG counterpart of loadActive.
+// The payload shape follows from the manifest, so the manifest leads:
+// a slot whose manifest rests without its payload fails with the
+// missing-payload error of its form, and a payload resting without
+// any manifest stays ErrMetaMissing.
+func loadActiveManifest(repo Repo) (Manifest, bool, error) {
+	manifest, err := LoadManifest(repo.MetaPath())
+	if errors.Is(err, os.ErrNotExist) {
+		_, exists, err := payloadWithoutMeta(repo)
+		return Manifest{}, exists, err
+	}
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	path, err := manifestPayloadPath(repo, manifest)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	there, err := pathExists(path)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	if !there {
+		return Manifest{}, false, missingManifestPayloadError(manifest)
+	}
+	return manifest, true, nil
 }
 
-// resolveStackAt expands the full image plus chain layers under root
-// (the active leaf or a hold directory that preserves that layout).
-func resolveStackAt(root, name string, meta Meta) (Target, error) {
-	if depth := 1 + len(meta.Chain); depth > maxStackDepth {
-		return Target{}, fmt.Errorf(
-			"mount: %s stack holds %d members; the limit is %d",
-			name, depth, maxStackDepth)
+// manifestPayloadPath is where the payload of the manifest's kind
+// rests in the active slot.
+func manifestPayloadPath(repo Repo, manifest Manifest) (string, error) {
+	root, err := manifest.Full()
+	if err != nil {
+		return "", err
 	}
-	members, err := stackMembersAt(root, meta)
+	if manifest.PayloadKind() == PayloadBlocks {
+		return repo.BlocksDirPath(root.ID)
+	}
+	return filepath.Join(repo.Dir, activeImageName(manifest.Format.Type)), nil
+}
+
+func missingManifestPayloadError(manifest Manifest) error {
+	if manifest.PayloadKind() == PayloadSingle {
+		return errors.New("publish: active image missing")
+	}
+	return errors.New("publish: active payload missing")
+}
+
+// resolveStack expands the head stack of the active manifest.
+func resolveStack(repo Repo, name string, manifest Manifest) (Target, error) {
+	return resolveStackAt(repo.Dir, name, manifest, manifest.Head)
+}
+
+// resolveStackAt expands the root-to-tip path of the manifest under
+// root (the active leaf or a hold directory that preserves that
+// layout).
+func resolveStackAt(root, name string, manifest Manifest, tip string) (Target, error) {
+	stack, err := manifestStack(name, manifest, tip)
+	if err != nil {
+		return Target{}, err
+	}
+	members, err := stackMembersAt(root, manifest.Format.Type, stack)
 	if err != nil {
 		return Target{}, err
 	}
 	return Target{
-		Library: true, Name: name, ID: meta.ID,
-		Format: meta.Format.Type, Members: members,
+		Library: true, Name: name, ID: stack[0].ID, Tip: tip,
+		Format: manifest.Format.Type, Members: members,
 	}, nil
 }
 
-// resolveBlocks expands the active blocks payload plus chain layers.
-func resolveBlocks(repo Repo, name string, meta Meta) (Target, error) {
-	return resolveBlocksAt(repo.Dir, name, meta)
+// resolveBlocks expands the head stack of the active blocks manifest.
+func resolveBlocks(repo Repo, name string, manifest Manifest) (Target, error) {
+	return resolveBlocksAt(repo.Dir, name, manifest, manifest.Head)
 }
 
-// resolveBlocksAt expands blocks under root/_blocks/<layer-id>/.
-// Active root is the repository directory; hold root is
-// _hold/<resolved-id>/. Do not call BlocksDirPath here: that always
-// joins the active repo leaf.
-func resolveBlocksAt(root, name string, meta Meta) (Target, error) {
-	if depth := 1 + len(meta.Chain); depth > maxStackDepth {
-		return Target{}, fmt.Errorf(
-			"mount: %s stack holds %d members; the limit is %d",
-			name, depth, maxStackDepth)
+// resolveBlocksAt expands the root-to-tip blocks stack under
+// root/_blocks/<layer-id>/. Active root is the repository directory;
+// hold root is _hold/<resolved-id>/. Do not call BlocksDirPath here:
+// that always joins the active repo leaf.
+func resolveBlocksAt(root, name string, manifest Manifest, tip string) (Target, error) {
+	stack, err := manifestStack(name, manifest, tip)
+	if err != nil {
+		return Target{}, err
 	}
-	fullBlocks, blocksDir, err := resolveLayerBlocksAt(root, meta.ID, meta.Blocks)
+	full := stack[0]
+	fullBlocks, blocksDir, err := resolveLayerBlocksAt(root, full.ID, full.Blocks)
 	if err != nil {
 		return Target{}, fmt.Errorf("mount: %w", err)
 	}
-	members := []Member{{
-		ID:        meta.ID,
-		Size:      meta.Size,
-		MtimeUnix: meta.MtimeUnix,
-		SHA256:    meta.SHA256,
-		Blocks:    fullBlocks,
-	}}
-	for _, entry := range meta.Chain {
-		if len(entry.Blocks) == 0 {
-			return Target{}, fmt.Errorf(
-				"mount: chain layer %s: blocks form requires a blocks manifest",
-				entry.ID)
-		}
-		layerBlocks, _, err := resolveLayerBlocksAt(root, entry.ID, entry.Blocks)
-		if err != nil {
-			return Target{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
-		}
-		members = append(members, Member{
-			ID:        entry.ID,
-			Size:      entry.Size,
-			MtimeUnix: entry.MtimeUnix,
-			SHA256:    entry.SHA256,
-			Blocks:    layerBlocks,
-		})
+	members, err := blocksMembersAt(root, stack, fullBlocks)
+	if err != nil {
+		return Target{}, err
 	}
 	return Target{
 		Library:    true,
 		Name:       name,
-		ID:         meta.ID,
-		Format:     meta.Format.Type,
+		ID:         full.ID,
+		Tip:        tip,
+		Format:     manifest.Format.Type,
 		Form:       PayloadBlocks,
-		Size:       meta.Size,
-		SHA256:     meta.SHA256,
+		Size:       full.Size,
+		SHA256:     full.SHA256,
 		BlocksDir:  blocksDir,
 		ConcatView: filepath.Join(blocksDir, fileConcatView),
 		Blocks:     fullBlocks,
 		Members:    members,
 	}, nil
+}
+
+// manifestStack resolves the root-to-tip mount order and guards the
+// stack limit for manifests that bypassed LoadManifest validation.
+func manifestStack(name string, manifest Manifest, tip string) ([]ImageMeta, error) {
+	stack, err := manifest.Stack(tip)
+	if err != nil {
+		return nil, fmt.Errorf("mount: %s: %w", name, err)
+	}
+	if len(stack) > maxStackDepth {
+		return nil, fmt.Errorf(
+			"mount: %s stack holds %d members; the limit is %d",
+			name, len(stack), maxStackDepth)
+	}
+	return stack, nil
 }
 
 // resolveLayerBlocksAt checks that every manifest block of one layer
@@ -372,9 +490,11 @@ func blockPathAt(root, id, name string) (string, error) {
 }
 
 // stackMembersAt pairs every container file under root with its
-// recorded facts: image.sqsh / image.dmg and _incr/<id>.sqsh.
-func stackMembersAt(root string, meta Meta) ([]Member, error) {
-	full := filepath.Join(root, activeImageName(meta.Format.Type))
+// recorded facts: image.sqsh / image.dmg and _incr/<id>.sqsh. The
+// stack holds the full root first, then the incremental nodes in
+// mount order.
+func stackMembersAt(root, formatType string, stack []ImageMeta) ([]Member, error) {
+	full := filepath.Join(root, activeImageName(formatType))
 	bytesPath, err := ResolvePayloadBytesPath(full)
 	if err != nil {
 		return nil, fmt.Errorf("mount: %w", err)
@@ -384,12 +504,12 @@ func stackMembersAt(root string, meta Meta) ([]Member, error) {
 	}
 	members := []Member{{
 		Path:      full,
-		Size:      meta.Size,
-		MtimeUnix: meta.MtimeUnix,
-		SHA256:    meta.SHA256,
+		Size:      stack[0].Size,
+		MtimeUnix: stack[0].MtimeUnix,
+		SHA256:    stack[0].SHA256,
 	}}
-	for _, entry := range meta.Chain {
-		member, err := chainMemberAt(root, entry)
+	for _, node := range stack[1:] {
+		member, err := chainMemberAt(root, node)
 		if err != nil {
 			return nil, err
 		}
@@ -398,20 +518,52 @@ func stackMembersAt(root string, meta Meta) ([]Member, error) {
 	return members, nil
 }
 
-// chainMemberAt locates one chain layer file under root/_incr.
-func chainMemberAt(root string, entry ChainEntry) (Member, error) {
-	if !onDiskID(entry.ID) {
-		return Member{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, invalidPath(entry.ID))
+// blocksMembersAt pairs every stack node with its byte-block facts.
+// The full root reuses the blocks resolved for the target header;
+// every incremental node must carry its own blocks manifest.
+func blocksMembersAt(root string, stack []ImageMeta, fullBlocks []BlockFile) ([]Member, error) {
+	members := []Member{{
+		ID:        stack[0].ID,
+		Size:      stack[0].Size,
+		MtimeUnix: stack[0].MtimeUnix,
+		SHA256:    stack[0].SHA256,
+		Blocks:    fullBlocks,
+	}}
+	for _, node := range stack[1:] {
+		if len(node.Blocks) == 0 {
+			return nil, fmt.Errorf(
+				"mount: chain layer %s: blocks form requires a blocks manifest",
+				node.ID)
+		}
+		layerBlocks, _, err := resolveLayerBlocksAt(root, node.ID, node.Blocks)
+		if err != nil {
+			return nil, fmt.Errorf("mount: chain layer %s: %w", node.ID, err)
+		}
+		members = append(members, Member{
+			ID:        node.ID,
+			Size:      node.Size,
+			MtimeUnix: node.MtimeUnix,
+			SHA256:    node.SHA256,
+			Blocks:    layerBlocks,
+		})
 	}
-	path := filepath.Join(root, dirIncr, entry.ID+squashExt)
+	return members, nil
+}
+
+// chainMemberAt locates one incremental layer file under root/_incr.
+func chainMemberAt(root string, node ImageMeta) (Member, error) {
+	if !onDiskID(node.ID) {
+		return Member{}, fmt.Errorf("mount: chain layer %s: %w", node.ID, invalidPath(node.ID))
+	}
+	path := filepath.Join(root, dirIncr, node.ID+squashExt)
 	if _, err := os.Stat(path); err != nil {
-		return Member{}, fmt.Errorf("mount: chain layer %s: %w", entry.ID, err)
+		return Member{}, fmt.Errorf("mount: chain layer %s: %w", node.ID, err)
 	}
 	return Member{
 		Path:      path,
-		Size:      entry.Size,
-		MtimeUnix: entry.MtimeUnix,
-		SHA256:    entry.SHA256,
+		Size:      node.Size,
+		MtimeUnix: node.MtimeUnix,
+		SHA256:    node.SHA256,
 	}, nil
 }
 

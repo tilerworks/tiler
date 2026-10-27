@@ -98,14 +98,14 @@ func scanIndexRows(repo Repo) ([]indexRow, []indexRow, error) {
 }
 
 func appendActiveMeta(repo Repo, shaRows, contentRows *[]indexRow) error {
-	meta, err := Load(repo.MetaPath())
+	sha, content, err := loadIndexFacts(repo.MetaPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	appendMetaRow(meta, indexRelActive, shaRows, contentRows)
+	appendIndexRow(sha, content, indexRelActive, shaRows, contentRows)
 	return nil
 }
 
@@ -122,19 +122,34 @@ func appendChainMetas(repo Repo, kind string, shaRows, contentRows *[]indexRow) 
 			continue
 		}
 		dir := filepath.Join(repo.Dir, kind, entry.Name())
-		meta, err := Load(filepath.Join(dir, fileMeta))
+		sha, content, err := loadIndexFacts(filepath.Join(dir, fileMeta))
 		if err != nil {
 			continue
 		}
 		rel := kind + "/" + entry.Name()
-		appendMetaRow(meta, rel, shaRows, contentRows)
+		appendIndexRow(sha, content, rel, shaRows, contentRows)
 	}
 }
 
-func appendMetaRow(meta Meta, rel string, shaRows, contentRows *[]indexRow) {
-	*shaRows = append(*shaRows, indexRow{key: meta.SHA256, rel: rel})
-	if meta.ContentSHA256 != "" {
-		row := indexRow{key: meta.ContentSHA256, rel: rel}
+// loadIndexFacts reads the metadata of one leaf in either layout
+// version and returns the two facts the indexes key on: the payload
+// digest and the optional content digest of the full root.
+func loadIndexFacts(path string) (string, string, error) {
+	manifest, err := LoadManifest(path)
+	if err != nil {
+		return "", "", err
+	}
+	root, err := manifest.Full()
+	if err != nil {
+		return "", "", err
+	}
+	return root.SHA256, root.ContentSHA256, nil
+}
+
+func appendIndexRow(sha, content, rel string, shaRows, contentRows *[]indexRow) {
+	*shaRows = append(*shaRows, indexRow{key: sha, rel: rel})
+	if content != "" {
+		row := indexRow{key: content, rel: rel}
 		*contentRows = append(*contentRows, row)
 	}
 }
@@ -233,14 +248,14 @@ func FindRepoByID(imagesDir, idRef string) (Repo, error) {
 		rel, err := lookupID(repo, idRef)
 		switch {
 		case err == nil:
-			meta, loadErr := Load(indexMetaPath(repo, rel))
+			sha, _, loadErr := loadIndexFacts(indexMetaPath(repo, rel))
 			if loadErr != nil {
 				return Repo{}, loadErr
 			}
-			if matchKey != "" && (matchKey != meta.SHA256 || match.Name() != repo.Name()) {
+			if matchKey != "" && (matchKey != sha || match.Name() != repo.Name()) {
 				return Repo{}, fmt.Errorf("ambiguous id reference %q", idRef)
 			}
-			match, matchKey = repo, meta.SHA256
+			match, matchKey = repo, sha
 		case isUnknownIDRef(err):
 			continue
 		default:
@@ -355,14 +370,14 @@ func classifyMatches(repo Repo, matches []indexRow, field indexField) (string, p
 }
 
 func rowFresh(repo Repo, row indexRow, field indexField) bool {
-	meta, err := Load(indexMetaPath(repo, row.rel))
+	sha, content, err := loadIndexFacts(indexMetaPath(repo, row.rel))
 	if err != nil {
 		return false
 	}
 	if field == indexContent {
-		return meta.ContentSHA256 == row.key
+		return content == row.key
 	}
-	return meta.SHA256 == row.key
+	return sha == row.key
 }
 
 func indexMetaPath(repo Repo, rel string) string {
