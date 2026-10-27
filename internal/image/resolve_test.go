@@ -336,6 +336,7 @@ func TestResolveMountLibraryFullOnly(t *testing.T) {
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
+			ID:        rootOf(manifest).ID,
 			Size:      rootOf(manifest).Size,
 			MtimeUnix: rootOf(manifest).MtimeUnix,
 			SHA256:    rootOf(manifest).SHA256,
@@ -350,6 +351,7 @@ func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 	manifest := seedChain(t, repo, 3)
 	members := []Member{{
 		Path:      repo.ImagePath(),
+		ID:        rootOf(manifest).ID,
 		Size:      rootOf(manifest).Size,
 		MtimeUnix: rootOf(manifest).MtimeUnix,
 		SHA256:    rootOf(manifest).SHA256,
@@ -361,6 +363,7 @@ func TestResolveMountChainExpandsInStoredOrder(t *testing.T) {
 		}
 		members = append(members, Member{
 			Path:      path,
+			ID:        entry.ID,
 			Size:      entry.Size,
 			MtimeUnix: entry.MtimeUnix,
 			SHA256:    entry.SHA256,
@@ -435,12 +438,14 @@ func TestResolveMountIgnoresArchivesAndHolds(t *testing.T) {
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
+				ID:        rootOf(manifest).ID,
 				Size:      rootOf(manifest).Size,
 				MtimeUnix: rootOf(manifest).MtimeUnix,
 				SHA256:    rootOf(manifest).SHA256,
 			},
 			{
 				Path:      layerPath,
+				ID:        manifest.Images[1].ID,
 				Size:      manifest.Images[1].Size,
 				MtimeUnix: manifest.Images[1].MtimeUnix,
 				SHA256:    manifest.Images[1].SHA256,
@@ -481,6 +486,7 @@ func TestResolveMountHeadStackRootFirst(t *testing.T) {
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
+				ID:        root.ID,
 				Size:      root.Size,
 				MtimeUnix: root.MtimeUnix,
 				SHA256:    root.SHA256,
@@ -693,6 +699,7 @@ func TestResolveMountMissingFileUsesLibraryName(t *testing.T) {
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
+			ID:        rootOf(manifest).ID,
 			Size:      rootOf(manifest).Size,
 			MtimeUnix: rootOf(manifest).MtimeUnix,
 			SHA256:    rootOf(manifest).SHA256,
@@ -724,6 +731,7 @@ func TestResolveMountDirectoryFallsThroughToLibrary(t *testing.T) {
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
+			ID:        rootOf(manifest).ID,
 			Size:      rootOf(manifest).Size,
 			MtimeUnix: rootOf(manifest).MtimeUnix,
 			SHA256:    rootOf(manifest).SHA256,

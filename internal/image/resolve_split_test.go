@@ -243,6 +243,7 @@ func TestResolveMountSingleFileKeepsSingleForm(t *testing.T) {
 		Format:  FormatSquashfs,
 		Members: []Member{{
 			Path:      repo.ImagePath(),
+			ID:        root.ID,
 			Size:      root.Size,
 			MtimeUnix: root.MtimeUnix,
 			SHA256:    root.SHA256,

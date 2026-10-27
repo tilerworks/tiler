@@ -58,6 +58,11 @@ type mountFlags struct {
 	session  string
 	rm       bool
 	file     string
+	// pruneUpper asks the engine to prune a reused upper against
+	// the lower stack before merging. Only session replay sets it,
+	// when the recorded served stack resolves differently from the
+	// desired stack; the mount command leaves it false.
+	pruneUpper bool
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -511,6 +516,7 @@ func blocksRequest(
 		Layers:          mounted[1:],
 		Format:          format,
 		ReadOnly:        flags.readOnly,
+		PruneUpper:      flags.pruneUpper,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,
@@ -695,6 +701,7 @@ func mountRequest(
 		Layers:          mounted[1:],
 		Format:          format,
 		ReadOnly:        flags.readOnly,
+		PruneUpper:      flags.pruneUpper,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,

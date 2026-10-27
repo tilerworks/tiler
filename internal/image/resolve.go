@@ -89,8 +89,9 @@ type Member struct {
 	// Path is the full image file or an _incr/<id>.sqsh layer file.
 	// Empty for a blocks-form layer until reassembly fills a cache path.
 	Path string
-	// ID is the full or incremental image id of a blocks-form layer.
-	// Empty for the single-file cascade and for file-path mounts.
+	// ID is the full or incremental image id of the stack member, in
+	// both the single-file cascade and the blocks form. Empty only
+	// for file-path mounts, which no metadata names.
 	ID string
 	// Size is the recorded payload size in bytes.
 	Size int64
@@ -490,8 +491,8 @@ func blockPathAt(root, id, name string) (string, error) {
 }
 
 // stackMembersAt pairs every container file under root with its
-// recorded facts: image.sqsh / image.dmg and _incr/<id>.sqsh. The
-// stack holds the full root first, then the incremental nodes in
+// recorded id and facts: image.sqsh / image.dmg and _incr/<id>.sqsh.
+// The stack holds the full root first, then the incremental nodes in
 // mount order.
 func stackMembersAt(root, formatType string, stack []ImageMeta) ([]Member, error) {
 	full := filepath.Join(root, activeImageName(formatType))
@@ -504,6 +505,7 @@ func stackMembersAt(root, formatType string, stack []ImageMeta) ([]Member, error
 	}
 	members := []Member{{
 		Path:      full,
+		ID:        stack[0].ID,
 		Size:      stack[0].Size,
 		MtimeUnix: stack[0].MtimeUnix,
 		SHA256:    stack[0].SHA256,
@@ -561,6 +563,7 @@ func chainMemberAt(root string, node ImageMeta) (Member, error) {
 	}
 	return Member{
 		Path:      path,
+		ID:        node.ID,
 		Size:      node.Size,
 		MtimeUnix: node.MtimeUnix,
 		SHA256:    node.SHA256,

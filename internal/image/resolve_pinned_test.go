@@ -34,12 +34,14 @@ func TestResolvePinnedActiveHit(t *testing.T) {
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
+				ID:        root.ID,
 				Size:      root.Size,
 				MtimeUnix: root.MtimeUnix,
 				SHA256:    root.SHA256,
 			},
 			{
 				Path:      layer,
+				ID:        manifest.Images[1].ID,
 				Size:      manifest.Images[1].Size,
 				MtimeUnix: manifest.Images[1].MtimeUnix,
 				SHA256:    manifest.Images[1].SHA256,
@@ -221,6 +223,7 @@ func branchManifest(t *testing.T, body []byte, head string, nodes ...ImageMeta) 
 func layerMember(dir string, node ImageMeta) Member {
 	return Member{
 		Path:      filepath.Join(dir, dirIncr, node.ID+squashExt),
+		ID:        node.ID,
 		Size:      node.Size,
 		MtimeUnix: node.MtimeUnix,
 		SHA256:    node.SHA256,
@@ -252,6 +255,7 @@ func TestResolveStackTipActiveBranchTip(t *testing.T) {
 		Members: []Member{
 			{
 				Path:      repo.ImagePath(),
+				ID:        root.ID,
 				Size:      root.Size,
 				MtimeUnix: root.MtimeUnix,
 				SHA256:    root.SHA256,
@@ -372,6 +376,7 @@ func TestResolveStackTipHoldFallback(t *testing.T) {
 		Members: []Member{
 			{
 				Path:      filepath.Join(hold, fileImage),
+				ID:        held.ID,
 				Size:      held.Size,
 				MtimeUnix: held.MtimeUnix,
 				SHA256:    held.SHA256,

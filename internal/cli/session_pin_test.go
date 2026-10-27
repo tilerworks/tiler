@@ -335,6 +335,11 @@ func TestSessionOpenReplaysPinnedHoldFreezesRecordedTip(t *testing.T) {
 	if req.MergedDir != view {
 		t.Fatalf("MergedDir = %s, want %s", req.MergedDir, view)
 	}
+	// The record carries no served ids, so the frozen replay keeps
+	// the upper untouched.
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want a record without served ids to keep the upper")
+	}
 	// The real remount serves the frozen stack: the desired pin is
 	// unchanged and the served ids stay clear.
 	action := onlyMountAction(t, sessionsDir(home), "dev")
@@ -428,6 +433,12 @@ func TestSessionOpenReplaysRebasedIncrStack(t *testing.T) {
 	if req.RuntimeDir != runtime {
 		t.Fatalf("RuntimeDir = %s, want %s", req.RuntimeDir, runtime)
 	}
+	// The rebased record serves the full-only stack while the
+	// desired stack gained a layer: the lower stack changed, so the
+	// replay asks the engine to prune the reused upper.
+	if !req.PruneUpper {
+		t.Fatal("PruneUpper = false, want the rebased lower stack to prune the upper")
+	}
 	// The real remount serves the desired stack again: the served ids
 	// are cleared in the same writeback that records the mount.
 	action := onlyMountAction(t, sessionsDir(home), "dev")
@@ -514,6 +525,12 @@ func TestSessionOpenReplaysRebasedFullAndFreesOldHold(t *testing.T) {
 	}
 	if len(req.Layers) != 0 {
 		t.Fatalf("Layers = %v, want none", req.Layers)
+	}
+	// The rebuild replaced the whole stack: the served ids resolve
+	// through the hold leaf to other members than the desired stack,
+	// so the replay asks the engine to prune the reused upper.
+	if !req.PruneUpper {
+		t.Fatal("PruneUpper = false, want the replaced lower stack to prune the upper")
 	}
 	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"),
 		newID, newID, "", "")
