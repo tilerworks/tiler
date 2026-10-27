@@ -271,10 +271,16 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 }
 
 // sessionMount resolves one recorded action back into an engine
-// request: a pin (name + FullID) uses ResolvePinned so a hold leaf
-// stays paired with the recorded upper; empty FullID keeps today's
-// name-only ResolveMount. The execution shares the mount command's
-// engine half and reuses sessions/<name>/runtime/m<seq>.
+// request: a pin (name + FullID + TipID) is the desired stack the
+// record froze at mount or rebase time. ResolveStackTip expands it
+// through the active leaf while that still roots at FullID and holds
+// TipID, and through the hold leaf otherwise, so a rebased record
+// mounts the new image and a stack an external build replaced stays
+// paired with the recorded upper. Replay never chases a later head
+// move; the DAG keeps branch tips resolvable. An empty TipID keeps
+// the full-id-only semantics of older records, and an empty FullID
+// keeps today's name-only ResolveMount. The execution shares the
+// mount command's engine half and reuses sessions/<name>/runtime/m<seq>.
 func sessionMount(cfg config.Config, name string) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		var (
@@ -282,7 +288,7 @@ func sessionMount(cfg config.Config, name string) session.MountFunc {
 			err    error
 		)
 		if action.Name != "" && action.FullID != "" {
-			target, err = image.ResolvePinned(cfg, action.Name, action.FullID)
+			target, err = image.ResolveStackTip(cfg, action.Name, action.FullID, action.TipID)
 		} else {
 			target, err = image.ResolveMount(cfg, action.Image)
 		}
