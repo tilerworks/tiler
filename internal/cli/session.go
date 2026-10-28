@@ -20,8 +20,9 @@ import (
 
 func newSessionCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "session",
-		Short: "Manage mount sessions",
+		Use:     "session",
+		Aliases: []string{"sessions"},
+		Short:   "Manage mount sessions",
 		Long: "A session is the durable record of an ordered set of mounts\n" +
 			"and the unit of crash recovery. Every action is recorded\n" +
 			"before it runs, so after a killed process or daemon one\n" +

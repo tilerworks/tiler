@@ -15,8 +15,9 @@ import (
 func newStatusCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "status [path]",
-		Short: "Reconcile sessions with the real mount state",
+		Use:     "status [path]",
+		Aliases: []string{"st"},
+		Short:   "Reconcile sessions with the real mount state",
 		Long: "Without a path, list every session record with the health of\n" +
 			"its live mounts, mark the session named by TILER_SESSION_ID as\n" +
 			"current, and report mounted tiler views no active record claims\n" +

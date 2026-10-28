@@ -66,6 +66,41 @@ func TestListAndRemoveAbbreviations(t *testing.T) {
 	}
 }
 
+func TestTopLevelAliasesUseCanonicalCommandsAndHelp(t *testing.T) {
+	withWorkspace(t)
+	rootHelp := mustHelp(t, "--help")
+	for _, pair := range [][2]string{
+		{"image", "images"},
+		{"sessions", "session"},
+		{"st", "status"},
+		{"bench", "benchmark"},
+	} {
+		t.Run(pair[0], func(t *testing.T) {
+			root := NewRootCmd()
+			alias, _, err := root.Find([]string{pair[0]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical, _, err := root.Find([]string{pair[1]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if alias != canonical || alias.Name() != pair[1] {
+				t.Fatalf("%s does not resolve to %s", pair[0], pair[1])
+			}
+			want := mustHelp(t, pair[1], "--help")
+			for _, args := range [][]string{{pair[0], "--help"}, {"help", pair[0]}} {
+				if got := mustHelp(t, args...); got != want {
+					t.Fatalf("%v help differs from canonical help:\n%s", args, got)
+				}
+			}
+			if strings.Contains(want, "Aliases:") || strings.Contains(rootHelp, "\n  "+pair[0]+" ") {
+				t.Fatalf("help exposes alias %s", pair[0])
+			}
+		})
+	}
+}
+
 func mustHelp(t *testing.T, args ...string) string {
 	t.Helper()
 	stdout, stderr, _, err := runCmd(t, args...)

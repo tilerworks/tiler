@@ -34,8 +34,9 @@ func newBenchmarkCmd() *cobra.Command {
 		format     string
 	)
 	cmd := &cobra.Command{
-		Use:   "benchmark <path>",
-		Short: "Measure image pack and read performance on a path",
+		Use:     "benchmark <path>",
+		Aliases: []string{"bench"},
+		Short:   "Measure image pack and read performance on a path",
 		Long: "benchmark measures one image size on the filesystem that\n" +
 			"holds <path>. It does not read .tiler.yaml or accept root\n" +
 			"persistent flags. Paths, type, and compression come only\n" +
