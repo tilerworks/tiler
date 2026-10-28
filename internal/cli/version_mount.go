@@ -55,13 +55,17 @@ func runVersionMountEngine(
 	if err != nil {
 		return session.Result{}, err
 	}
+	needsFUSE := false
 	for _, member := range req.Members {
+		needsFUSE = needsFUSE || member.Format != image.FormatDMG
 		if err := gateFormatTools("mount", member.Format); err != nil {
 			return session.Result{}, err
 		}
 	}
-	if err := gateAnyStack("mount"); err != nil {
-		return session.Result{}, err
+	if needsFUSE {
+		if err := gateAnyStack("mount"); err != nil {
+			return session.Result{}, err
+		}
 	}
 	return runEngine(req)
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -122,5 +123,40 @@ func writeVersionPayload(t *testing.T, imagesDir, name string, node image.ImageM
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
+	cfg, _ := handoffTestEngine(t)
+	node, stage := handoffVersionNode(t, "dmg payload")
+	node.Format = image.Format{Type: image.FormatDMG, Compression: "ulfo"}
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", stage, node, false); err != nil {
+		t.Fatal(err)
+	}
+	originalLook, originalEngine, originalTable := toolLookPath, mountEngine, loadMountTable
+	t.Cleanup(func() {
+		toolLookPath, mountEngine, loadMountTable = originalLook, originalEngine, originalTable
+	})
+	toolLookPath = func(name string) (string, error) {
+		if name == "hdiutil" {
+			return "/usr/bin/hdiutil", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	loadMountTable = func() ([]mountinfo.Mount, error) { return nil, nil }
+	called := false
+	mountEngine = func(req workspace.Request) (*workspace.Workspace, error) {
+		called = true
+		if len(req.Members) != 1 || req.Members[0].Format != image.FormatDMG {
+			t.Fatalf("members = %#v", req.Members)
+		}
+		return &workspace.Workspace{MergedDir: req.MergedDir}, nil
+	}
+	if _, err := runVersionMountEngine(cfg, versionMountAction(node.ID, node.ID),
+		filepath.Join(t.TempDir(), "view"), mountFlags{}, filepath.Join(t.TempDir(), "runtime")); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("DMG mount did not reach the workspace engine")
 	}
 }
