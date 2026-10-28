@@ -26,8 +26,12 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 	}
 	state.Generation, state.Dirty = journal.Generation, true
 	state.Inventory = maps.Clone(state.Inventory)
+	state.ShardDigests = maps.Clone(state.ShardDigests)
 	if state.Inventory == nil {
 		state.Inventory = make(map[string]ReferenceRevision)
+	}
+	if state.ShardDigests == nil {
+		state.ShardDigests = make(map[string]string)
 	}
 	if err := referenceCheckpoint("dirty", s.SaveReferenceState(state), checkpoint); err != nil {
 		return err
@@ -43,6 +47,11 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 		if err := referenceCheckpoint("bucket", syncReferenceParents(filepath.Dir(path)), checkpoint); err != nil {
 			return err
 		}
+		digest, err := s.referenceShardDigest(bucket.Name, bucket.Tip)
+		if err != nil {
+			return err
+		}
+		state.ShardDigests[referenceCatalogKey(bucket.Name, bucket.Tip)] = digest
 	}
 	delete(state.Inventory, name)
 	if journal.After != nil {

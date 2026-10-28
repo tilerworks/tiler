@@ -55,6 +55,21 @@ func (s Store) referenceBucketPath(name, tip string) (string, error) {
 	return s.referencePath(hex.EncodeToString(digest[:]), tip+".json")
 }
 
+func referenceCatalogKey(name, tip string) string { return name + ":" + tip }
+
+func (s Store) referenceShardDigest(name, tip string) (string, error) {
+	path, err := s.referenceBucketPath(name, tip)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 func (s Store) referencePath(parts ...string) (string, error) {
 	path := filepath.Join(append([]string{s.Dir, referenceDir}, parts...)...)
 	return s.safeStoreFile(path)

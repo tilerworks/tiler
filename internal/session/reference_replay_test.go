@@ -19,7 +19,8 @@ func referenceReplayFixture(t *testing.T, mode string) (Store, ReferenceState, R
 	after.Actions = slices.Clone(before.Actions)
 	after.Actions[0].TipID = strings.Repeat("e", 64)
 	journal := ReferenceJournal{Version: ReferenceControlVersion, Generation: 11, Before: &before, After: &after}
-	state := ReferenceState{Version: ReferenceControlVersion, Generation: 10}
+	state := ReferenceState{Version: ReferenceControlVersion, Generation: 10,
+		CatalogComplete: true, ShardDigests: make(map[string]string)}
 	if mode == "create" {
 		journal.Before = nil
 	} else {
@@ -31,6 +32,11 @@ func referenceReplayFixture(t *testing.T, mode string) (Store, ReferenceState, R
 			if err := store.SaveReferenceBucket(bucket); err != nil {
 				t.Fatal(err)
 			}
+			digest, err := store.referenceShardDigest(bucket.Name, bucket.Tip)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.ShardDigests[referenceCatalogKey(bucket.Name, bucket.Tip)] = digest
 		}
 		revision, err := store.referenceRevision(before)
 		if err != nil {
@@ -76,6 +82,9 @@ func TestReferenceReplaySurvivesEveryDurableTransition(t *testing.T) {
 					t.Fatal(err)
 				}
 				assertReferenceReplayComplete(t, store, journal)
+				if !mustReferenceState(t, store).CatalogComplete {
+					t.Fatal("complete catalog lost during recovery")
+				}
 				if err := store.replayReferenceJournal(mustReferenceState(t, store), journal, nil); err != nil {
 					t.Fatalf("idempotent replay: %v", err)
 				}
@@ -121,6 +130,10 @@ func assertReferenceReplayComplete(t *testing.T, store Store, journal ReferenceJ
 		got, err := store.LoadReferenceBucket(want.Name, want.Tip)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("incomplete reference bucket: %#v, %v", got, err)
+		}
+		digest, err := store.referenceShardDigest(want.Name, want.Tip)
+		if err != nil || state.ShardDigests[referenceCatalogKey(want.Name, want.Tip)] != digest {
+			t.Fatalf("incomplete shard catalog: %s:%s, %v", want.Name, want.Tip, err)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ReferenceControlVersion identifies reference bookkeeping and journal schemas.
@@ -22,10 +23,14 @@ type ReferenceRevision struct {
 
 // ReferenceState is bookkeeping, not independent proof that an index is trusted.
 type ReferenceState struct {
-	Version    string                       `json:"version"`
-	Generation uint64                       `json:"generation"`
-	Dirty      bool                         `json:"dirty"`
-	Inventory  map[string]ReferenceRevision `json:"inventory"`
+	Version         string                       `json:"version"`
+	Generation      uint64                       `json:"generation"`
+	Dirty           bool                         `json:"dirty"`
+	Inventory       map[string]ReferenceRevision `json:"inventory"`
+	CatalogComplete bool                         `json:"catalog_complete"`
+	// ShardDigests includes retained empty shards. Only a complete, verified
+	// catalog can distinguish an absent key from a lost reference shard.
+	ShardDigests map[string]string `json:"shard_digests"`
 }
 
 // ReferenceJournal retains source snapshots until their generation is complete.
@@ -45,6 +50,12 @@ func (state ReferenceState) validate() error {
 		if ValidateName(name) != nil || !completeHash(revision.InstanceID) || !completeHash(revision.SHA256) ||
 			revision.Size < 0 || revision.ModifiedNano <= 0 {
 			return fmt.Errorf("session: invalid reference inventory entry %q", name)
+		}
+	}
+	for key, digest := range state.ShardDigests {
+		name, tip, found := strings.Cut(key, ":")
+		if !found || (ReferenceBucket{Name: name, Tip: tip}).validate() != nil || !completeHash(digest) {
+			return fmt.Errorf("session: invalid reference shard catalog entry %q", key)
 		}
 	}
 	return nil
