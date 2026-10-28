@@ -69,6 +69,11 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 		"alice/0123456789abcdef0",
 		"0123456789abcdef/app",
 		"alice/../../bob/app",
+		"alice/app:abcd",
+		"ali:ce/app",
+		"alice/:/app",
+		"alice/bad:name/../app",
+		"bad:name/../alice/app",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {

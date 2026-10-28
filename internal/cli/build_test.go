@@ -312,6 +312,8 @@ func TestBuildUsageErrorsExitTwo(t *testing.T) {
 		{name: "both mode flags", args: []string{"build", "--full", "--incremental", "--image", "alice/app", src}},
 		{name: "missing image name", args: []string{"build", src}},
 		{name: "bad image name", args: []string{"build", "--image", "_foo", src}},
+		{name: "colon image name", args: []string{"build", "--image", "alice/app:abcd", src}},
+		{name: "colon before path cleaning", args: []string{"build", "--image", "alice/bad:name/../app", src}},
 		{name: "incr outside a view", args: []string{"build", "--incremental", "--image", "alice/app", src}},
 		{name: "short incr outside a view", args: []string{"build", "-i", "-I", "alice/app", src}},
 		{name: "two source arguments", args: []string{"build", "--image", "alice/app", src, src}},
