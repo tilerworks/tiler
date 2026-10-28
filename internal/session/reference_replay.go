@@ -20,7 +20,7 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 	if err != nil {
 		return err
 	}
-	updates, err := s.ReferenceUpdates(journal)
+	updates, err := s.referenceReplayUpdates(state, journal)
 	if err != nil {
 		return err
 	}

@@ -17,7 +17,7 @@ import (
 func newReferenceCoordinator(t *testing.T) ReferenceCoordinator {
 	t.Helper()
 	c := ReferenceCoordinator{Store: Store{Dir: t.TempDir()}, ImagesDir: t.TempDir(), Timeout: -1}
-	if err := c.SaveReferenceState(ReferenceState{Version: ReferenceControlVersion}); err != nil {
+	if err := c.SaveReferenceState(ReferenceState{Version: ReferenceControlVersion, CatalogComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -118,19 +118,12 @@ func TestReferenceCoordinatorHonorsBothLocksAndTimeouts(t *testing.T) {
 	}
 }
 
-func TestReferenceCoordinatorRejectsUncertainBookkeeping(t *testing.T) {
-	for _, mode := range []string{"missing", "dirty", "exhausted", "corrupt journal"} {
+func TestReferenceCoordinatorRejectsUnrecoverableBookkeeping(t *testing.T) {
+	for _, mode := range []string{"exhausted", "corrupt journal"} {
 		c := newReferenceCoordinator(t)
 		rec := versionRecord(t)
 		state := ReferenceState{Version: ReferenceControlVersion}
 		switch mode {
-		case "missing":
-			path, _ := c.referencePath("state.json")
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		case "dirty":
-			state.Generation, state.Dirty = 1, true
 		case "exhausted":
 			state.Generation = ^uint64(0)
 		case "corrupt journal":
@@ -139,10 +132,8 @@ func TestReferenceCoordinatorRejectsUncertainBookkeeping(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if mode != "missing" {
-			if err := c.SaveReferenceState(state); err != nil {
-				t.Fatal(err)
-			}
+		if err := c.SaveReferenceState(state); err != nil {
+			t.Fatal(err)
 		}
 		if err := c.Apply(nil, &rec); err == nil {
 			t.Fatalf("accepted %s bookkeeping", mode)

@@ -11,8 +11,7 @@ import (
 // ErrReferenceConflict means the source changed after its snapshot was read.
 var ErrReferenceConflict = errors.New("session: reference source changed")
 
-// ReferenceCoordinator serializes source and shard changes, but does not rebuild
-// or establish index trust. Runtime integration must validate the inventory too.
+// ReferenceCoordinator validates and serializes source and shard changes.
 // A zero Timeout uses the normal session timeout; negative values try once.
 type ReferenceCoordinator struct {
 	Store
@@ -29,10 +28,7 @@ func (c ReferenceCoordinator) Apply(before, after *Record) error {
 		return err
 	}
 	return c.withLibrary(func() error {
-		if err := c.recoverLocked(); err != nil {
-			return err
-		}
-		state, err := c.LoadReferenceState()
+		state, _, err := c.trustedReferencesLocked(referenceTargets(before, after))
 		if err != nil {
 			return err
 		}
@@ -47,9 +43,6 @@ func (c ReferenceCoordinator) Apply(before, after *Record) error {
 			}
 			if !sameReferenceRecord(current, before) {
 				return ErrReferenceConflict
-			}
-			if _, err := c.ReferenceUpdates(journal); err != nil {
-				return err
 			}
 			if err := c.SaveReferenceJournal(journal); err != nil {
 				return err

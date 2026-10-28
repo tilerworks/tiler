@@ -97,22 +97,27 @@ func (s Store) safeStoreFile(path string) (string, error) {
 // LoadReferenceBucket reads a shard; a missing shard returns os.ErrNotExist.
 // Callers coordinate I/O with the library lock and establish index trust first.
 func (s Store) LoadReferenceBucket(name, tip string) (ReferenceBucket, error) {
+	bucket, _, err := s.loadReferenceBucket(name, tip)
+	return bucket, err
+}
+
+func (s Store) loadReferenceBucket(name, tip string) (ReferenceBucket, []byte, error) {
 	path, err := s.referenceBucketPath(name, tip)
 	if err != nil {
-		return ReferenceBucket{}, err
+		return ReferenceBucket{}, nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ReferenceBucket{}, err
+		return ReferenceBucket{}, nil, err
 	}
 	var bucket ReferenceBucket
 	if err := json.Unmarshal(data, &bucket); err != nil {
-		return bucket, fmt.Errorf("session: parse %s: %w", path, err)
+		return bucket, nil, fmt.Errorf("session: parse %s: %w", path, err)
 	}
 	if bucket.Name != name || bucket.Tip != tip {
-		return bucket, fmt.Errorf("session: mismatched reference bucket %s", path)
+		return bucket, nil, fmt.Errorf("session: mismatched reference bucket %s", path)
 	}
-	return bucket, bucket.validate()
+	return bucket, data, bucket.validate()
 }
 
 // SaveReferenceBucket atomically replaces one validated shard under the library

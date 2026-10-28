@@ -15,6 +15,10 @@ type referenceKey struct{ name, tip string }
 // Missing old shards require rebuilding; new shards may start empty only within
 // that trusted transaction. Persist empty replacements so replay remains safe.
 func (s Store) ReferenceUpdates(journal ReferenceJournal) ([]ReferenceBucket, error) {
+	return s.referenceUpdates(journal, s.LoadReferenceBucket)
+}
+
+func (s Store) referenceUpdates(journal ReferenceJournal, load func(string, string) (ReferenceBucket, error)) ([]ReferenceBucket, error) {
 	if err := journal.validate(); err != nil {
 		return nil, err
 	}
@@ -27,7 +31,7 @@ func (s Store) ReferenceUpdates(journal ReferenceJournal) ([]ReferenceBucket, er
 	}
 	updates := make([]ReferenceBucket, 0, len(keys))
 	for key := range keys {
-		bucket, err := s.LoadReferenceBucket(key.name, key.tip)
+		bucket, err := load(key.name, key.tip)
 		if errors.Is(err, os.ErrNotExist) && len(before[key]) == 0 {
 			bucket, err = ReferenceBucket{Name: key.name, Tip: key.tip}, nil
 		}
