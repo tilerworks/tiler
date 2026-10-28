@@ -579,7 +579,7 @@ func TestEncodeManifestWritesOnlyV2(t *testing.T) {
 }
 
 func TestLoadManifestRejectsUnknownVersion(t *testing.T) {
-	for i, version := range []string{"", "1", "0.9", "2", "3.0"} {
+	for i, version := range []string{"1", "0.9", "2", "3.0"} {
 		body := fmt.Sprintf("version: %q\nname: alice/app\n", version)
 		path := filepath.Join(t.TempDir(), fmt.Sprintf("meta%d.yaml", i))
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -593,23 +593,76 @@ func TestLoadManifestRejectsUnknownVersion(t *testing.T) {
 			t.Fatalf("version %s: error = %v", version, err)
 		}
 	}
-	// A document without a version key fails closed, too.
+	// A versionless document reads as the pre-version v1 layout, so
+	// a foreign body fails closed on the v1 shape rules instead.
 	path := filepath.Join(t.TempDir(), "no-version.yaml")
 	if err := os.WriteFile(path, []byte("name: alice/app\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadManifest(path); err == nil ||
-		!strings.Contains(err.Error(), "unsupported metadata version") {
+		!strings.Contains(err.Error(), "id: must be 64 lowercase hex digits") {
 		t.Fatalf("missing version: error = %v", err)
 	}
-	// An empty document fails closed as well.
+	// An empty document still fails closed.
 	empty := filepath.Join(t.TempDir(), "empty.yaml")
 	if err := os.WriteFile(empty, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadManifest(empty); err == nil ||
-		!strings.Contains(err.Error(), "unsupported metadata version") {
+		!strings.Contains(err.Error(), "empty document") {
 		t.Fatalf("empty document: error = %v", err)
+	}
+}
+
+func TestLoadManifestAcceptsPreVersionDocuments(t *testing.T) {
+	// Builds predating the reserved version field left it empty
+	// while writing the v1 layout. Both the empty spelling and a
+	// document without the key load as v1, and a rewrite upgrades
+	// them to the DAG layout.
+	meta := validMeta()
+	meta.Version = ""
+	meta.Chain = []chainEntryV1{validEntry(meta.ID, "fedcba9876543210")}
+	body, err := yaml.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := strings.Replace(string(body), "version: \"\"\n", "", 1)
+	if stripped == string(body) || strings.Contains(stripped, "version:") {
+		t.Fatalf("fixture does not exercise the missing key:\n%s", stripped)
+	}
+	tail := meta.Chain[0].ID
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"empty version", body},
+		{"missing version key", []byte(stripped)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "meta.yaml")
+			if err := os.WriteFile(path, tt.body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := LoadManifest(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Version != ManifestVersion {
+				t.Errorf("version = %q, want %q", got.Version, ManifestVersion)
+			}
+			if len(got.Images) != 2 || got.Head != tail {
+				t.Fatalf("manifest = %+v, want the chain tail %q as head", got, tail)
+			}
+			upgraded, err := EncodeManifest(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			version, err := probeDocVersion(upgraded)
+			if err != nil || version != ManifestVersion {
+				t.Fatalf("rewrite probes as %q, %v", version, err)
+			}
+		})
 	}
 }
 

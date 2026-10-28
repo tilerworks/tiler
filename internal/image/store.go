@@ -23,9 +23,9 @@ func StoreManifest(path string, manifest Manifest) error {
 }
 
 // probeDocVersion reads the version key of a metadata document. A
-// malformed YAML body or a missing key probes as the empty version,
-// which no loader supports; the version decoders report those
-// documents themselves.
+// malformed YAML body fails here. A missing key probes as the empty
+// version, which DecodeManifest reads as a pre-version document in
+// the v1 layout.
 func probeDocVersion(data []byte) (string, error) {
 	var probe struct {
 		Version string `yaml:"version"`
@@ -37,9 +37,11 @@ func probeDocVersion(data []byte) (string, error) {
 }
 
 // DecodeManifest reads one metadata document as a manifest DAG. A
-// MetaVersion document converts through its linear chain, a
-// ManifestVersion document loads as-is, and every other version is
-// refused. The result is validated.
+// MetaVersion document converts through its linear chain, and so does
+// a document without a version: builds predating the reserved field
+// left it empty while writing the same v1 layout. A ManifestVersion
+// document loads as-is, and every other version is refused. The
+// result is validated.
 func DecodeManifest(data []byte) (Manifest, error) {
 	version, err := probeDocVersion(data)
 	if err != nil {
@@ -47,7 +49,7 @@ func DecodeManifest(data []byte) (Manifest, error) {
 	}
 	var manifest Manifest
 	switch version {
-	case MetaVersion:
+	case MetaVersion, "":
 		if manifest, err = decodeV1(data); err != nil {
 			return Manifest{}, err
 		}
@@ -66,9 +68,12 @@ func DecodeManifest(data []byte) (Manifest, error) {
 }
 
 // decodeV1 reads one legacy v1 document and converts its linear
-// chain into a DAG. Unknown fields are dropped, then the document is
-// validated against the v1 rules before the conversion, so a broken
-// legacy document stays fail-closed.
+// chain into a DAG. Documents written before the version field was
+// reserved carry an empty version in the same layout, so the empty
+// version normalizes to MetaVersion before validation. Unknown fields
+// are dropped, then the document is validated against the v1 rules
+// before the conversion, so a broken legacy document stays
+// fail-closed.
 func decodeV1(data []byte) (Manifest, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var meta metaV1
@@ -77,6 +82,9 @@ func decodeV1(data []byte) (Manifest, error) {
 			return Manifest{}, errors.New("empty document")
 		}
 		return Manifest{}, err
+	}
+	if meta.Version == "" {
+		meta.Version = MetaVersion
 	}
 	if err := meta.validate(); err != nil {
 		return Manifest{}, err

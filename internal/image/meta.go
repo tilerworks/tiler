@@ -97,7 +97,9 @@ type metaV1 struct {
 	// Name is the canonical library name this image belongs to.
 	Name string `yaml:"name"`
 	// Version is the reserved metadata layout version. Legacy
-	// documents carry MetaVersion; validate refuses any other value.
+	// documents carry MetaVersion, and documents predating the
+	// reserved field carry an empty version that decodeV1
+	// normalizes; validate refuses any other value.
 	Version    string    `yaml:"version"`
 	Kind       string    `yaml:"kind"`
 	Format     Format    `yaml:"format"`
