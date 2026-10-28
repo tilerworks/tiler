@@ -36,6 +36,10 @@ type DMGRequest struct {
 	Compression string
 	// Builder is the tiler version stamp recorded in meta.
 	Builder string
+	// Description is publication metadata for immutable version builds only.
+	Description string
+	// DescriptionSet distinguishes explicit empty text from an omitted description.
+	DescriptionSet bool
 	// Refs protects a referenced image while it is replaced. A nil
 	// Refs holds nothing, so the previous image is archived.
 	Refs Refs
