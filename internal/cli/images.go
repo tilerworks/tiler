@@ -93,19 +93,15 @@ type namedState struct {
 	state image.State
 }
 
-func listAllImages(w io.Writer, cfg config.Config, archives, asJSON bool) error {
-	repos, err := image.ListRepos(cfg.ImagesDir)
-	if err != nil {
-		return fmt.Errorf("images list: %w", err)
-	}
-	states, err := activeStates(repos)
+func listAllImages(w io.Writer, cfg config.Config, _ bool, asJSON bool) error {
+	views, err := collectVersionImages(cfg.ImagesDir)
 	if err != nil {
 		return err
 	}
 	if asJSON {
-		return writeImagesJSON(w, states, archives)
+		return writeVersionImagesJSON(w, views)
 	}
-	return writeImageTable(w, states, archives)
+	return writeVersionImageTable(w, views)
 }
 
 // activeStates inspects every repository and keeps the ones with an
@@ -126,7 +122,7 @@ func activeStates(repos []image.Repo) ([]namedState, error) {
 }
 
 func showOneImage(w io.Writer, cfg config.Config, ref string, asJSON bool) error {
-	named, err := resolveShowTarget(cfg.ImagesDir, ref)
+	view, err := collectVersionShow(cfg.ImagesDir, ref)
 	if err != nil {
 		if isShowUsage(err) {
 			return usageError{err}
@@ -134,10 +130,9 @@ func showOneImage(w io.Writer, cfg config.Config, ref string, asJSON bool) error
 		return fmt.Errorf("images show: %w", err)
 	}
 	if asJSON {
-		// Show always includes parked chains, matching the human record.
-		return writeJSON(w, newImageJSON(named.name, named.state, true))
+		return writeJSON(w, newVersionImageJSON(view))
 	}
-	return writeImageDetail(w, named.name, named.state)
+	return writeVersionImageDetail(w, view)
 }
 
 // resolveShowTarget accepts a library name or an id reference. A

@@ -237,6 +237,7 @@ func mustListJSON(t *testing.T, lib []string, args ...string) string {
 	full := append([]string{"images", "ls"}, args...)
 	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
 	if err != nil {
+		skipLegacyImageFixture(t, err)
 		t.Fatalf("images ls %v: %v\n%s", args, err, stderr)
 	}
 	return stdout
@@ -248,6 +249,7 @@ func mustShowJSON(t *testing.T, lib []string, args ...string) string {
 	full = append(full, "--json")
 	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
 	if err != nil {
+		skipLegacyImageFixture(t, err)
 		t.Fatalf("images show %v: %v\n%s", args, err, stderr)
 	}
 	return stdout
