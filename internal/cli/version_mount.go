@@ -9,9 +9,8 @@ import (
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
-// versionMountRequest prepares an isolated v3 replay request. Command flows
-// keep using the legacy path until all v3 runtime operations can activate
-// together.
+// versionMountRequest prepares a v3 mount or replay request from the exact
+// immutable identity recorded in the session action.
 func versionMountRequest(
 	cfg config.Config,
 	action session.Action,
@@ -43,6 +42,28 @@ func versionMountRequest(
 		SquashfsOptions: cfg.SquashfsOptions, FuseOptions: cfg.FuseOptions,
 		RuntimeDir: runtimeDir, MergedDir: dir, Run: mountRun,
 	}, nil
+}
+
+func runVersionMountEngine(
+	cfg config.Config,
+	action session.Action,
+	dir string,
+	flags mountFlags,
+	runtimeDir string,
+) (session.Result, error) {
+	req, err := versionMountRequest(cfg, action, dir, flags, runtimeDir)
+	if err != nil {
+		return session.Result{}, err
+	}
+	for _, member := range req.Members {
+		if err := gateFormatTools("mount", member.Format); err != nil {
+			return session.Result{}, err
+		}
+	}
+	if err := gateAnyStack("mount"); err != nil {
+		return session.Result{}, err
+	}
+	return runEngine(req)
 }
 
 func materializeVersionMember(

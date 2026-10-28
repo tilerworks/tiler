@@ -153,54 +153,21 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 			return err
 		}
 	}
-	resolve := image.ResolveMount
-	if flags.file != "" {
-		resolve = image.ResolveVersionMount
-	}
-	target, err := resolve(cfg, selector)
+	target, versioned, err := resolveMountTarget(cfg, selector)
 	if err != nil {
 		if isResolveUsage(err) {
 			return usageError{err}
 		}
 		return err
 	}
-	if flags.verify && !target.Library {
-		return usageError{errors.New(
-			"mount: --verify needs a library image; a file path records no digest")}
-	}
-	if err := verifyTarget(target, flags.verify); err != nil {
-		return err
-	}
-	// A file path records no format. Detect it before --subdir is
-	// judged, so a koly file is a dmg usage error. A library image
-	// already names its type, and formatForGate returns that without
-	// reading the file. The magic guard stays after this check: a
-	// dmg --subdir is a usage error even when the bytes would also
-	// fail the magic match.
-	format, err := formatForGate(target, nil)
-	if err != nil {
-		return err
-	}
-	if err := refuseDMGSubdir(flags.subdir, format); err != nil {
-		return err
-	}
-	// Unknown magic and a meta/magic mismatch cannot succeed on
-	// replay. Refuse them before the write-ahead action is appended,
-	// or session open retries the bad mount and stops restoring
-	// later views in the same record.
-	blockPaths, err := guardMountFormat(cfg, target)
-	if err != nil {
-		return err
-	}
-	format, err = formatForGate(target, blockPaths)
-	if err != nil {
-		return err
-	}
-	if stackErr != nil && format != image.FormatDMG {
-		return stackErr
-	}
-	if err := gateFormatTools("mount", format); err != nil {
-		return err
+	engine := sessionEngine(cfg)
+	coordinated := target.Library && versioned && engine.Versioned
+	var blockPaths []string
+	if !coordinated {
+		blockPaths, err = validateMountTarget(cfg, target, flags, stackErr)
+		if err != nil {
+			return err
+		}
 	}
 	name, implicit, err := resolveMountSession(flags.session)
 	if err != nil {
@@ -218,39 +185,46 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	// before a fresh write-ahead mount so the new combination starts
 	// clean; a healthy live view is left alone for reuse.
 	preemptStaleView(cfg, dir)
-	engine := sessionEngine(cfg)
 	if implicit {
 		if name, err = allocateGeneratedSession(engine, flags.rm, "mount"); err != nil {
 			return err
 		}
 	}
-	action, err := mountAction(args[0], target, dir, flags)
-	if err != nil {
-		if implicit {
-			discardGeneratedSession(engine, name, false)
+	var result session.Result
+	if coordinated {
+		err = resolveValidatedVersionAndPin(cfg, name, selector, flags, stackErr,
+			func(local *session.Engine, pinned image.Target) error {
+				pinnedAction, actionErr := mountAction(args[0], pinned, dir, flags)
+				if actionErr != nil {
+					return actionErr
+				}
+				result, actionErr = local.RunMount(name, pinnedAction,
+					func(stored session.Action) (session.Result, error) {
+						return runVersionMountEngine(cfg, stored, dir, flags,
+							sessionRuntimeDir(cfg, name, stored))
+					})
+				return actionErr
+			})
+	} else {
+		action, actionErr := mountAction(args[0], target, dir, flags)
+		if actionErr != nil {
+			if implicit {
+				discardGeneratedSession(engine, name, false)
+			}
+			return actionErr
 		}
-		return err
+		result, err = engine.RunMount(name, action,
+			func(stored session.Action) (session.Result, error) {
+				return runMountEngine(cfg, target, dir, flags,
+					sessionRuntimeDir(cfg, name, stored), blockPaths)
+			})
 	}
-	// The write-ahead record is durable before the engine runs and
-	// carries the outcome afterwards, so a crash between the two
-	// leaves a replayable pending action. The stored action carries
-	// RuntimeID (m<seq>), which names the combination directory.
-	result, err := engine.RunMount(name, action,
-		func(stored session.Action) (session.Result, error) {
-			return runMountEngine(cfg, target, dir, flags,
-				sessionRuntimeDir(cfg, name, stored), blockPaths)
-		})
 	if implicit && (err != nil || result.Reused) {
-		// A just-created record whose action failed or merely adopted
-		// an already-healthy view never serves a live view of its own;
-		// keeping it would pin the image and leak an active name.
 		discardGeneratedSession(engine, name, err == nil && result.Reused)
 	}
 	if err != nil {
 		return err
 	}
-	// Announce a kept generated session only after the mount
-	// succeeds; discarded draws must not print a reusable name.
 	if implicit && !result.Reused {
 		if _, err = fmt.Fprintf(cmd.OutOrStdout(),
 			"new session created: %s\n", name); err != nil {
@@ -263,6 +237,77 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", verb, dir)
 	return err
+}
+
+func resolveValidatedVersionAndPin(cfg config.Config, sessionName, selector string,
+	flags mountFlags, stackErr error,
+	callback func(*session.Engine, image.Target) error,
+) error {
+	return resolveVersionAndPin(cfg, sessionName, selector,
+		func(local *session.Engine, pinned image.Target) error {
+			if _, err := validateMountTarget(cfg, pinned, flags, stackErr); err != nil {
+				return err
+			}
+			return callback(local, pinned)
+		})
+}
+
+func validateMountTarget(cfg config.Config, target image.Target, flags mountFlags, stackErr error) ([]string, error) {
+	if flags.verify && !target.Library {
+		return nil, usageError{errors.New(
+			"mount: --verify needs a library image; a file path records no digest")}
+	}
+	if err := verifyTarget(target, flags.verify); err != nil {
+		return nil, err
+	}
+	// A file path records no format. Detect it before --subdir is
+	// judged, so a koly file is a dmg usage error. A library image
+	// already names its type, and formatForGate returns that without
+	// reading the file. The magic guard stays after this check: a
+	// dmg --subdir is a usage error even when the bytes would also
+	// fail the magic match.
+	format, err := formatForGate(target, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := refuseDMGSubdir(flags.subdir, format); err != nil {
+		return nil, err
+	}
+	// Unknown magic and a meta/magic mismatch cannot succeed on
+	// replay. Refuse them before the write-ahead action is appended,
+	// or session open retries the bad mount and stops restoring
+	// later views in the same record.
+	blockPaths, err := guardMountFormat(cfg, target)
+	if err != nil {
+		return nil, err
+	}
+	format, err = formatForGate(target, blockPaths)
+	if err != nil {
+		return nil, err
+	}
+	if stackErr != nil && format != image.FormatDMG {
+		return nil, stackErr
+	}
+	if err := gateFormatTools("mount", format); err != nil {
+		return nil, err
+	}
+	return blockPaths, nil
+}
+
+func resolveMountTarget(cfg config.Config, selector string) (image.Target, bool, error) {
+	target, err := image.ResolveVersionMount(cfg, selector)
+	if err == nil {
+		return target, target.Library, nil
+	}
+	// Legacy command fixtures remain available until the coherent runtime
+	// activation removes the old execution path. V3 repositories never fall
+	// back after selector, metadata, or payload validation errors.
+	if !strings.Contains(err.Error(), "legacy layout or unreadable marker") &&
+		!strings.Contains(err.Error(), "file does not exist") {
+		return image.Target{}, false, err
+	}
+	target, legacyErr := image.ResolveMount(cfg, selector)
+	return target, false, legacyErr
 }
 
 // resolveMountSession applies the session priority: the --session
@@ -671,6 +716,22 @@ func verifyTarget(target image.Target, verify bool) error {
 // default, the full sha256 re-hash with --verify.
 func verifyMembers(target image.Target, verify bool) error {
 	for _, m := range target.Members {
+		if len(m.Blocks) != 0 {
+			for _, block := range m.Blocks {
+				node := image.ImageMeta{Size: block.Size, MtimeUnix: block.MtimeUnix,
+					SHA256: block.SHA256}
+				var err error
+				if verify {
+					err = image.VerifySHA256(node, block.Path)
+				} else {
+					err = image.QuickCheck(node, block.Path)
+				}
+				if err != nil {
+					return fmt.Errorf("mount: %w", err)
+				}
+			}
+			continue
+		}
 		node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
 		var err error
 		if verify {
@@ -771,6 +832,39 @@ func payloadBytesPaths(paths []string) ([]string, error) {
 // is content-addressed, and the returned paths are what the action
 // callback stacks. A nil path list means the payload is not blocks.
 func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) {
+	versioned := target.Library && len(target.Members) != 0
+	for _, member := range target.Members {
+		versioned = versioned && member.Format != ""
+	}
+	if versioned {
+		for _, member := range target.Members {
+			format := member.Format
+			if format == "" {
+				format = target.Format
+			}
+			one := image.Target{Library: true, Format: format,
+				Members: []image.Member{member}}
+			paths := []string{member.Path}
+			if len(member.Blocks) != 0 {
+				one.Form = image.PayloadBlocks
+				path, err := materializeBlockLayers(cfg, one)
+				if err != nil {
+					return nil, err
+				}
+				paths = path
+			} else {
+				var err error
+				paths, err = payloadBytesPaths(paths)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if _, err := matchLibraryFormat(one, paths); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
 	if target.Form == image.PayloadBlocks {
 		mounted, err := materializeBlockLayers(cfg, target)
 		if err != nil {

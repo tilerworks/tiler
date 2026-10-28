@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
+	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
+	"github.com/jiangxin/tiler/internal/workspace"
 )
 
 func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
@@ -46,6 +49,24 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	}
 	if req.Members[0].Path != req.Members[0].FSName || req.Members[1].Path != external {
 		t.Fatalf("registered payload paths = %#v", req.Members)
+	}
+
+	originalEngine := mountEngine
+	originalTable := loadMountTable
+	var replayed workspace.Request
+	mountEngine = func(got workspace.Request) (*workspace.Workspace, error) {
+		replayed = got
+		return &workspace.Workspace{MergedDir: got.MergedDir}, nil
+	}
+	loadMountTable = func() ([]mountinfo.Mount, error) { return nil, nil }
+	t.Cleanup(func() { mountEngine, loadMountTable = originalEngine, originalTable })
+	installFoundTools(t)
+	if _, err := sessionMount(cfg, "dev", io.Discard)(action); err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed.Members) != 2 ||
+		!strings.Contains(replayed.Members[1].FSName, child.ID) {
+		t.Fatalf("historical replay = %#v", replayed.Members)
 	}
 }
 

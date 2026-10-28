@@ -112,6 +112,47 @@ func TestResolveVersionAndPinRollsBackFailedCallback(t *testing.T) {
 	}
 }
 
+func TestResolveValidatedVersionAndPinChecksNewLatest(t *testing.T) {
+	cfg, _ := handoffTestEngine(t)
+	old, oldStage := handoffVersionNode(t, "old latest")
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", oldStage, old, false); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := image.ResolveVersionMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyTarget(preflight, true); err != nil {
+		t.Fatalf("preflight validation: %v", err)
+	}
+
+	latest, latestStage := handoffVersionNode(t, "new latest")
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", latestStage, latest, false); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := image.ResolveVersionMount(cfg, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinned.Members[0].Path, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	err = resolveValidatedVersionAndPin(cfg, "mount", "alice/app",
+		mountFlags{verify: true}, nil,
+		func(*session.Engine, image.Target) error {
+			called = true
+			return nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("validation error = %v", err)
+	}
+	if called {
+		t.Fatal("mount callback ran for unverified pinned target")
+	}
+}
+
 func handoffTestEngine(t *testing.T) (config.Config, *session.Engine) {
 	t.Helper()
 	root := t.TempDir()

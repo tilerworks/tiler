@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -306,19 +308,44 @@ func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountF
 			err    error
 		)
 		if action.Name != "" && action.FullID != "" {
-			target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
+			if action.RuntimeID != "" && len(action.FullID) == 64 && len(action.TipID) == 64 {
+				target, err = image.ResolveVersionMount(cfg, action.Name+":"+action.TipID)
+				if err == nil && target.ID != action.FullID {
+					err = fmt.Errorf("recorded root %s does not match tip %s",
+						action.FullID, action.TipID)
+				}
+			}
+			if target.Name == "" && (err == nil ||
+				strings.Contains(err.Error(), "legacy layout or unreadable marker")) {
+				target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
+			}
 		} else {
 			target, err = image.ResolveMount(cfg, action.Image)
 		}
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}
-		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
+		flags := mountFlags{
 			readOnly:   action.Mode == session.ModeRO,
 			subdir:     action.Subdir,
 			pruneUpper: replayPruneUpper(cfg, action, target, warn),
-		}, sessionRuntimeDir(cfg, name, action), nil)
+		}
+		if action.Name != "" && versionTarget(target) {
+			return runVersionMountEngine(cfg, action, action.Mountpoint, flags,
+				sessionRuntimeDir(cfg, name, action))
+		}
+		return runMountEngine(cfg, target, action.Mountpoint, flags,
+			sessionRuntimeDir(cfg, name, action), nil)
 	}
+}
+
+func versionTarget(target image.Target) bool {
+	for _, member := range target.Members {
+		if strings.Contains(filepath.ToSlash(member.Path), "/_objects/") {
+			return true
+		}
+	}
+	return false
 }
 
 // replayPruneUpper reports whether replaying one recorded action
