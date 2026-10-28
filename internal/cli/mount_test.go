@@ -113,6 +113,7 @@ func (f *mountFake) assemble(
 // mount table for the command tests.
 func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	t.Helper()
+	origLegacy := legacyBuild
 	withSessionLockSeam(t)
 	f := &mountFake{table: table}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
@@ -122,7 +123,9 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 		mountRun, ensureCache, loadMountTable = origRun, origCache, origTable
 		mountEngine, unmountEngine = origMount, origUmount
 		assembleBlocks = origAssemble
+		legacyBuild = origLegacy
 	})
+	legacyBuild = true
 	mountRun = f.runTool
 	ensureCache = f.cache
 	loadMountTable = func() ([]mountinfo.Mount, error) { return f.table, nil }

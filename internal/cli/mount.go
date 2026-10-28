@@ -153,7 +153,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 			return err
 		}
 	}
-	target, versioned, err := resolveMountTarget(cfg, selector)
+	target, err := resolveRuntimeMount(cfg, selector)
 	if err != nil {
 		if isResolveUsage(err) {
 			return usageError{err}
@@ -161,7 +161,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		return err
 	}
 	engine := sessionEngine(cfg)
-	coordinated := target.Library && versioned && engine.Versioned
+	coordinated := target.Library && engine.Versioned
 	var blockPaths []string
 	if !coordinated {
 		blockPaths, err = validateMountTarget(cfg, target, flags, stackErr)
@@ -294,20 +294,14 @@ func validateMountTarget(cfg config.Config, target image.Target, flags mountFlag
 	return blockPaths, nil
 }
 
-func resolveMountTarget(cfg config.Config, selector string) (image.Target, bool, error) {
+// resolveRuntimeMount keeps legacy command fixtures isolated from the product
+// path. Normal commands accept only v3 repositories.
+func resolveRuntimeMount(cfg config.Config, selector string) (image.Target, error) {
 	target, err := image.ResolveVersionMount(cfg, selector)
-	if err == nil {
-		return target, target.Library, nil
+	if err == nil || !legacyBuild {
+		return target, err
 	}
-	// Legacy command fixtures remain available until the coherent runtime
-	// activation removes the old execution path. V3 repositories never fall
-	// back after selector, metadata, or payload validation errors.
-	if !strings.Contains(err.Error(), "legacy layout or unreadable marker") &&
-		!strings.Contains(err.Error(), "file does not exist") {
-		return image.Target{}, false, err
-	}
-	target, legacyErr := image.ResolveMount(cfg, selector)
-	return target, false, legacyErr
+	return image.ResolveMount(cfg, selector)
 }
 
 // resolveMountSession applies the session priority: the --session

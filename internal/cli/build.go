@@ -31,7 +31,7 @@ var (
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
 	incrSmoke   func(string) error
-	legacyBuild bool
+	legacyBuild bool // Test-only compatibility switch for legacy fixtures.
 	// rebaseMountedStack rewrites the desired stack of every live
 	// mount action serving one library image, after a build from the
 	// mounted view itself published a new stack. Tests replace it to
@@ -440,6 +440,7 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Compression: compression,
 		Refs:        session.Refs{Dir: cfg.SessionsDir},
 		Run:         packTool,
+		MountSmoke:  incrSmoke,
 	})
 	if err != nil {
 		return mapBuildPathError(err)
@@ -659,15 +660,16 @@ func latestVersionID(cfg config.Config, name string) string {
 	}
 	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
-		legacy, legacyErr := image.LoadManifest(repo.MetaPath())
-		if legacyErr != nil {
-			return ""
+		if legacyBuild {
+			legacy, legacyErr := image.LoadManifest(repo.MetaPath())
+			if legacyErr == nil {
+				root, fullErr := legacy.Full()
+				if fullErr == nil {
+					return root.ID
+				}
+			}
 		}
-		root, legacyErr := legacy.Full()
-		if legacyErr != nil {
-			return ""
-		}
-		return root.ID
+		return ""
 	}
 	stack, err := manifest.SelectVersion(name)
 	if err != nil || len(stack) == 0 {

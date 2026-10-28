@@ -153,6 +153,73 @@ func TestResolveValidatedVersionAndPinChecksNewLatest(t *testing.T) {
 	}
 }
 
+func TestVersionRuntimePinsBranchAcrossCloseAndReopen(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	f := withMountSeams(t, nil)
+	legacyBuild = false
+
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	rootID := buildVersionImage(t, lib, "alice/app", src)
+	mustSessionNew(t, lib, "dev")
+	view := filepath.Join(work, "view")
+	if err := os.Mkdir(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mountOK(t, lib, "mounted "+view+"\n",
+		"mount", "--session", "dev", "alice/app", view)
+
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	writeTestFile(t, filepath.Join(upper, "branch.txt"), "branch")
+	f.table = viewTable(imagesDir, "alice/app", view, upper)
+	t.Chdir(view)
+	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
+	if err != nil {
+		t.Fatalf("branch build: %v\n%s", err, stderr)
+	}
+	branchID := buildOutput(t, stdout)
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"),
+		rootID, branchID, rootID, rootID)
+
+	if out := mustCmd(t, append(lib, "session", "close", "dev")...); out != "closed dev\n" {
+		t.Fatalf("close output = %q", out)
+	}
+	f.table = nil
+	newSrc := filepath.Join(work, "new-root")
+	writeTestFile(t, filepath.Join(newSrc, "new.txt"), "new root")
+	newRootID := buildVersionImage(t, lib, "alice/app", newSrc)
+	if newRootID == rootID {
+		t.Fatalf("new root kept old id %s", rootID)
+	}
+
+	if out := mustCmd(t, append(lib, "session", "open", "dev")...); out != "opened dev\n" {
+		t.Fatalf("open output = %q", out)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"),
+		rootID, branchID, "", "")
+}
+
+func TestRuntimeMountRejectsLegacyRepository(t *testing.T) {
+	cfg, _ := handoffTestEngine(t)
+	repo, err := image.OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), []byte("version: '2.0'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyBuild = false
+	if _, err := resolveRuntimeMount(cfg, "alice/app"); err == nil ||
+		!strings.Contains(err.Error(), "rebuild images and sessions") {
+		t.Fatalf("legacy resolve = %v", err)
+	}
+}
+
 func handoffTestEngine(t *testing.T) (config.Config, *session.Engine) {
 	t.Helper()
 	root := t.TempDir()
