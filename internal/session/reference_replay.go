@@ -44,7 +44,7 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 			return err
 		}
 		path, _ := s.referenceBucketPath(bucket.Name, bucket.Tip)
-		if err := referenceCheckpoint("bucket", syncReferenceParents(filepath.Dir(path)), checkpoint); err != nil {
+		if err := referenceCheckpoint("bucket", s.syncReferenceParents(filepath.Dir(path)), checkpoint); err != nil {
 			return err
 		}
 		digest, err := s.referenceShardDigest(bucket.Name, bucket.Tip)
@@ -75,7 +75,7 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return referenceCheckpoint("removed", syncReferenceParents(filepath.Dir(path)), checkpoint)
+	return referenceCheckpoint("removed", s.syncReferenceParents(filepath.Dir(path)), checkpoint)
 }
 
 func (s Store) checkReferenceReplay(state ReferenceState, journal ReferenceJournal) (string, error) {
@@ -130,7 +130,7 @@ func (s Store) writeReferenceSource(name string, after *Record) error {
 	} else if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return syncReferenceParents(filepath.Dir(path))
+	return s.syncReferenceParents(filepath.Dir(path))
 }
 
 func (s Store) referenceRevision(rec Record) (ReferenceRevision, error) {

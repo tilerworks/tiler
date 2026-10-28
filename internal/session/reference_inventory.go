@@ -155,7 +155,7 @@ func (c ReferenceCoordinator) rebuildInventoryLocked(previous ReferenceState, so
 			return ReferenceState{}, err
 		}
 		path, _ := c.referenceBucketPath(bucket.Name, bucket.Tip)
-		if err := referenceCheckpoint("rebuild shard", syncReferenceParents(filepath.Dir(path)), checkpoint); err != nil {
+		if err := referenceCheckpoint("rebuild shard", c.syncReferenceParents(filepath.Dir(path)), checkpoint); err != nil {
 			return ReferenceState{}, err
 		}
 		digest, err := c.referenceShardDigest(bucket.Name, bucket.Tip)

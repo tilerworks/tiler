@@ -143,10 +143,13 @@ func (s Store) saveReferenceControl(name string, value referenceControl) error {
 	if err := writeAtomic(path, append(data, '\n')); err != nil {
 		return err
 	}
-	return syncReferenceParents(filepath.Dir(path))
+	return s.syncReferenceParents(filepath.Dir(path))
 }
 
-func syncReferenceParents(dir string) error {
+// syncReferenceParents persists changes through the store parent. Ancestors
+// above it are unchanged and must not trigger filesystem-wide sync work.
+func (s Store) syncReferenceParents(dir string) error {
+	stop := filepath.Dir(filepath.Clean(s.Dir))
 	for {
 		file, err := os.Open(dir)
 		if err != nil {
@@ -155,7 +158,7 @@ func syncReferenceParents(dir string) error {
 		if err := errors.Join(file.Sync(), file.Close()); err != nil {
 			return err
 		}
-		if parent := filepath.Dir(dir); parent != dir {
+		if parent := filepath.Dir(dir); dir != stop && parent != dir {
 			dir = parent
 		} else {
 			return nil
