@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/filelock"
 )
 
 func TestFullVersionObjectsPreserveHistoryAndStaging(t *testing.T) {
@@ -43,6 +45,41 @@ func TestFullVersionObjectsPreserveHistoryAndStaging(t *testing.T) {
 	manifest, _, err := loadVersionMeta(repo)
 	if err != nil || len(manifest.Images) != 2 {
 		t.Fatalf("history lost: %#v, %v", manifest, err)
+	}
+}
+
+func TestCallerLockedIncrementalPublishRejectsChangedBaseline(t *testing.T) {
+	repo := testRepo(t)
+	root := filepath.Dir(filepath.Dir(repo.Dir))
+	base := versionNode("old")
+	if _, err := PublishFullVersion(root, repo.Name(), writeSource(t, t.TempDir(), []byte("old")), base, false); err != nil {
+		t.Fatal(err)
+	}
+	next := versionNode("new")
+	next.Kind, next.Parent = KindIncremental, base.ID
+	release, err := LockLibrary(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if nested, err := LockLibrary(root, 0); !errors.Is(err, filelock.ErrHeld) {
+		if nested != nil {
+			nested()
+		}
+		t.Fatalf("library lock not held: %v", err)
+	}
+	changed := base
+	changed.Format.Compression = "changed"
+	stage := writeSource(t, t.TempDir(), []byte("new"))
+	if _, err := PublishIncrementalVersionLocked(root, repo.Name(), stage, next, changed, false); err == nil {
+		t.Fatal("changed baseline was published")
+	}
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 1 {
+		t.Fatalf("failed handoff changed manifest: %#v, %v", manifest, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirObjects, next.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed handoff left object: %v", err)
 	}
 }
 

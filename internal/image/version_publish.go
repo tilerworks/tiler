@@ -19,6 +19,15 @@ func PublishFullVersion(imagesDir, name, staged string, node ImageMeta, descript
 	return publishVersionLocked(imagesDir, name, staged, node, nil, descriptionSet)
 }
 
+// PublishFullVersionLocked publishes while the caller holds the library lock.
+// It exists for compound publication and reference mutations.
+func PublishFullVersionLocked(imagesDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
+	if node.Kind != KindFull {
+		return ImageMeta{}, errors.New("version publish: full image required")
+	}
+	return publishVersionCallerLocked(imagesDir, name, staged, node, nil, descriptionSet)
+}
+
 // PublishIncrementalVersion pins publication to a captured parent's identity.
 // The parent may be any retained version; staging remains caller-owned outside imagesDir.
 func PublishIncrementalVersion(imagesDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
@@ -28,16 +37,29 @@ func PublishIncrementalVersion(imagesDir, name, staged string, node, parent Imag
 	return publishVersionLocked(imagesDir, name, staged, node, &parent, descriptionSet)
 }
 
-func publishVersionLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
-	repo, err := OpenRepo(imagesDir, name)
-	if err != nil {
-		return ImageMeta{}, err
+// PublishIncrementalVersionLocked publishes against a pinned parent while the
+// caller holds the library lock.
+func PublishIncrementalVersionLocked(imagesDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
+	if node.Kind != KindIncremental || node.Parent != parent.ID || parent.ID == "" {
+		return ImageMeta{}, errors.New("version publish: incremental image requires its pinned parent")
 	}
+	return publishVersionCallerLocked(imagesDir, name, staged, node, &parent, descriptionSet)
+}
+
+func publishVersionLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	release, err := LockLibrary(imagesDir, DefaultLibraryLockTimeout)
 	if err != nil {
 		return ImageMeta{}, err
 	}
 	defer release()
+	return publishVersionCallerLocked(imagesDir, name, staged, node, parent, descriptionSet)
+}
+
+func publishVersionCallerLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return ImageMeta{}, err
+	}
 	if err := checkNamePlacement(imagesDir, repo.Segments); err != nil {
 		return ImageMeta{}, err
 	}

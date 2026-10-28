@@ -6,8 +6,53 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/jiangxin/tiler/internal/filelock"
+	"github.com/jiangxin/tiler/internal/image"
 )
+
+func TestVersionRebaseLockedExcludesCompetingReferenceMutation(t *testing.T) {
+	e, c, action := versionEngine(t)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RunMount("dev", action, func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := image.LockLibrary(c.ImagesDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		lock, lockErr := image.LockLibrary(c.ImagesDir, 0)
+		if lock != nil {
+			lock()
+		}
+		if !errors.Is(lockErr, filelock.ErrHeld) {
+			t.Errorf("competing mutation lock = %v", lockErr)
+		}
+	}()
+	close(start)
+	tip := strings.Repeat("e", 64)
+	if err := e.RebaseMountedStackLocked(action.Mountpoint, action.Name, action.FullID, tip); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	rec, err := c.LoadVersion("dev")
+	if err != nil || rec.Actions[0].TipID != tip || rec.Actions[0].ServedTip != action.ServedTip {
+		t.Fatalf("locked rebase = %#v, %v", rec, err)
+	}
+}
 
 func TestVersionRebaseRetainsServedAndReplayableBindings(t *testing.T) {
 	e, c, action := versionEngine(t)

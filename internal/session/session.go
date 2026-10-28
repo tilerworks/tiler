@@ -533,6 +533,15 @@ func (e *Engine) releaseMountActions(name, dir string) error {
 // action — a file-path mount records no identity — and the call is a
 // silent no-op.
 func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string) error {
+	return e.rebaseMountedStack(mountpoint, name, newFullID, newTipID, false)
+}
+
+// RebaseMountedStackLocked reuses a library lock held by a compound caller.
+func (e *Engine) RebaseMountedStackLocked(mountpoint, name, newFullID, newTipID string) error {
+	return e.rebaseMountedStack(mountpoint, name, newFullID, newTipID, true)
+}
+
+func (e *Engine) rebaseMountedStack(mountpoint, name, newFullID, newTipID string, libraryHeld bool) error {
 	var names []string
 	err := e.eachRecord(func(rec Record) bool {
 		if rec.State != StateActive {
@@ -550,7 +559,16 @@ func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string
 		return err
 	}
 	for _, sessionName := range names {
-		if err := e.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID); err != nil {
+		run := func(local *Engine) error {
+			return local.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		}
+		var err error
+		if libraryHeld {
+			err = e.WithVersionSessionLocked(sessionName, run)
+		} else {
+			err = e.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		}
+		if err != nil {
 			return err
 		}
 	}
