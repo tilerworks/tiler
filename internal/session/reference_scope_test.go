@@ -4,6 +4,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -14,11 +15,19 @@ import (
 )
 
 func TestReferenceScopeReusesStoreMutationsUnderBothLocks(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("library held=%t", held), func(t *testing.T) {
+			testReferenceScopeReusesStoreMutationsUnderBothLocks(t, held)
+		})
+	}
+}
+
+func testReferenceScopeReusesStoreMutationsUnderBothLocks(t *testing.T, held bool) {
 	c := newReferenceCoordinator(t)
 	rec := versionRecord(t)
 	tip, served := rec.Actions[0].TipID, rec.Actions[0].ServedTip
 	var retained Store
-	err := c.WithSession(rec.Name, func(s Store) error {
+	err := runReferenceScope(t, c, held, rec.Name, func(s Store) error {
 		retained = s
 		if release, err := image.LockLibrary(c.ImagesDir, 0); err == nil {
 			release()
@@ -88,12 +97,20 @@ func TestReferenceScopeReusesStoreMutationsUnderBothLocks(t *testing.T) {
 }
 
 func TestReferenceScopeRemovesAndRecreatesWithoutReacquiringLocks(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("library held=%t", held), func(t *testing.T) {
+			testReferenceScopeRemovesAndRecreatesWithoutReacquiringLocks(t, held)
+		})
+	}
+}
+
+func testReferenceScopeRemovesAndRecreatesWithoutReacquiringLocks(t *testing.T, held bool) {
 	c := newReferenceCoordinator(t)
 	before := versionRecord(t)
 	if err := c.Apply(nil, &before); err != nil {
 		t.Fatal(err)
 	}
-	err := c.WithSession(before.Name, func(s Store) error {
+	err := runReferenceScope(t, c, held, before.Name, func(s Store) error {
 		if err := s.deleteRecordFiles(before.Name); err != nil {
 			return err
 		}
@@ -123,6 +140,14 @@ func TestReferenceScopeRemovesAndRecreatesWithoutReacquiringLocks(t *testing.T) 
 }
 
 func TestReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("library held=%t", held), func(t *testing.T) {
+			testReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t, held)
+		})
+	}
+}
+
+func testReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t *testing.T, held bool) {
 	for _, mode := range []string{"source conflict", "new shard corruption"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newReferenceCoordinator(t)
@@ -132,7 +157,7 @@ func TestReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t *testing.T) {
 				t.Fatal(err)
 			}
 			var failure error
-			err := c.WithSession(before.Name, func(s Store) error {
+			err := runReferenceScope(t, c, held, before.Name, func(s Store) error {
 				after, err := s.Load(before.Name)
 				if err != nil {
 					return err
@@ -167,4 +192,88 @@ func TestReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func runReferenceScope(t *testing.T, c ReferenceCoordinator, held bool, name string, run func(Store) error) error {
+	t.Helper()
+	if !held {
+		return c.WithSession(name, run)
+	}
+	release, err := image.LockLibrary(c.ImagesDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	return c.WithSessionLocked(name, run)
+}
+
+func TestLibraryHeldScopeLeavesLibraryOwnershipWithCaller(t *testing.T) {
+	e, c, action := versionEngine(t)
+	release, err := image.LockLibrary(c.ImagesDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var retained *Engine
+	err = e.WithVersionSessionLocked("dev", func(local *Engine) error {
+		retained = local
+		if err := local.New("dev"); err != nil {
+			return err
+		}
+		_, err := local.Append("dev", action)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retained.Load("dev"); !errors.Is(err, ErrReferenceScopeClosed) {
+		t.Fatalf("escaped engine = %v", err)
+	}
+	start, results := make(chan struct{}), make(chan error, 1)
+	go func() {
+		<-start
+		results <- c.WithSession("competitor", func(Store) error {
+			t.Error("competing library mutation entered")
+			return nil
+		})
+	}()
+	close(start)
+	if err := <-results; !errors.Is(err, filelock.ErrHeld) {
+		t.Fatalf("caller lock lost after scope closed: %v", err)
+	}
+	if unlock, err := c.lockSession("dev", 0); err != nil {
+		t.Fatalf("session lock retained after scope: %v", err)
+	} else {
+		unlock()
+	}
+	release()
+	requireVersionOwners(t, c, action, 1, 1)
+	if e.scope != nil || e.Lock != nil {
+		t.Fatal("held scope mutated shared engine")
+	}
+}
+
+func TestLibraryHeldScopeRecoversPendingBeforeLockingRequestedSession(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	rec := versionRecord(t)
+	journal := ReferenceJournal{Version: ReferenceControlVersion, Generation: 1, After: &rec}
+	if err := c.SaveReferenceJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := runReferenceScope(t, c, true, rec.Name, func(s Store) error {
+		got, err := s.Load(rec.Name)
+		if err != nil || !sameReferenceRecord(&got, &rec) {
+			t.Fatalf("pending source not recovered: %#v, %v", got, err)
+		}
+		if nested := (ReferenceCoordinator{Store: s, ImagesDir: c.ImagesDir}); nested.WithSessionLocked(rec.Name, func(Store) error {
+			t.Fatal("nested scope entered")
+			return nil
+		}) == nil {
+			t.Fatal("nested scope accepted")
+		}
+		return s.WritebackMounted(rec.Name, 1, "", true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requireVersionOwners(t, c, rec.Actions[0], 1, 0)
 }

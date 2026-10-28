@@ -34,7 +34,23 @@ func (e *Engine) tryVersionSession(name string, run func(*Engine) error) error {
 
 func (e *Engine) withVersionSessionTimeout(name string, timeout time.Duration, run func(*Engine) error) error {
 	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: timeout}
-	return c.WithSession(name, func(store Store) error {
+	return c.WithSession(name, e.versionSessionCallback(name, run))
+}
+
+// WithVersionSessionLocked runs lifecycle operations under a caller-owned library
+// lock. The lock must cover ImagesDir and remain held until this method returns.
+// As with WithSessionLocked, callers must not already hold session locks. The
+// local engine and its Store must not escape run or be shared across goroutines.
+func (e *Engine) WithVersionSessionLocked(name string, run func(*Engine) error) error {
+	if !e.Versioned || run == nil {
+		return errors.New("session: invalid version mutation callback or unversioned engine")
+	}
+	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: e.lockTimeout()}
+	return c.WithSessionLocked(name, e.versionSessionCallback(name, run))
+}
+
+func (e *Engine) versionSessionCallback(name string, run func(*Engine) error) func(Store) error {
+	return func(store Store) error {
 		local := *e
 		local.Store = store
 		local.Lock = func(requested string, _ time.Duration) (func(), error) {
@@ -44,7 +60,7 @@ func (e *Engine) withVersionSessionTimeout(name string, timeout time.Duration, r
 			return func() {}, nil
 		}
 		return run(&local)
-	})
+	}
 }
 
 // Append keeps direct engine callers on the same write-ahead reference path.

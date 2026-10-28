@@ -15,13 +15,25 @@ var ErrReferenceScopeClosed = errors.New("session: reference mutation scope is c
 // Run must not call locking coordinator APIs or share compound Store operations
 // across goroutines. Retained stores are disabled before the locks are released.
 func (c ReferenceCoordinator) WithSession(name string, run func(Store) error) error {
+	return c.withSessionScope(name, run, false)
+}
+
+// WithSessionLocked reuses a library lock owned by the caller. The caller must
+// hold it for ImagesDir throughout this call, without already holding session
+// locks. This method acquires and releases session locks as needed; it never
+// releases the library lock. Store lifetime and callback rules match WithSession.
+func (c ReferenceCoordinator) WithSessionLocked(name string, run func(Store) error) error {
+	return c.withSessionScope(name, run, true)
+}
+
+func (c ReferenceCoordinator) withSessionScope(name string, run func(Store) error, libraryHeld bool) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
 	if run == nil || c.scope != nil {
 		return errors.New("session: invalid reference mutation callback or nested scope")
 	}
-	return c.withLibrary(func() error {
+	runLocked := func() error {
 		if _, err := c.ensureInventoryLocked(false, nil); err != nil {
 			return err
 		}
@@ -45,7 +57,11 @@ func (c ReferenceCoordinator) WithSession(name string, run func(Store) error) er
 			defer func() { err = errors.Join(err, scope.close()) }()
 			return run(Store{Dir: c.Dir, scope: scope})
 		})
-	})
+	}
+	if libraryHeld {
+		return runLocked()
+	}
+	return c.withLibrary(runLocked)
 }
 
 type referenceSessionScope struct {
