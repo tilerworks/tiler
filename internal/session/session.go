@@ -490,6 +490,9 @@ func (e *Engine) ReleaseMount(dir string) error {
 // releaseMountActions writebacks StatusUnmounted for every live
 // mount action at dir under one session.
 func (e *Engine) releaseMountActions(name, dir string) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.releaseMountActions(name, dir) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -561,6 +564,11 @@ func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string
 func (e *Engine) rebaseActions(
 	sessionName, mountpoint, name, newFullID, newTipID string,
 ) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(sessionName, func(local *Engine) error {
+			return local.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		})
+	}
 	release, err := e.lockExclusive(sessionName)
 	if err != nil {
 		return err
@@ -635,6 +643,14 @@ func firstNonEmpty(values ...string) string {
 // shape does not gate discard. The return reports whether the
 // record was deleted.
 func (e *Engine) Discard(name string, reused bool) (bool, error) {
+	if e.needsVersionScope() {
+		var removed bool
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			removed, err = local.Discard(name, reused)
+			return err
+		})
+		return removed, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return false, err
@@ -714,6 +730,9 @@ func removableIdle(rec Record, dir string, health HealthFunc) bool {
 // record is refused: close it first, so a session holding mounts is
 // never orphaned.
 func (e *Engine) Remove(name string) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.Remove(name) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
