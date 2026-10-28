@@ -134,6 +134,9 @@ type ImageMeta struct {
 	ID     string `yaml:"id"`
 	Kind   string `yaml:"kind"`
 	Parent string `yaml:"parent,omitempty"`
+	// Format and Description belong to individual nodes in the v3 layout.
+	Format      Format `yaml:"format,omitempty"`
+	Description string `yaml:"description,omitempty"`
 	// Size and SHA256 describe the whole logical payload of this
 	// node in both the single-file and the split form.
 	Size      int64     `yaml:"size"`
@@ -144,7 +147,7 @@ type ImageMeta struct {
 	// Deprecated marks an image flagged by the two-phase remove.
 	// ContentSHA256 is the logical content fingerprint of a dmg
 	// publish; both stay facts of the full root.
-	Deprecated    bool   `yaml:"deprecated"`
+	Deprecated    bool   `yaml:"deprecated,omitempty"`
 	ContentSHA256 string `yaml:"content_sha256,omitempty"`
 	// Blocks is the byte-block manifest of a split payload node. It
 	// stays empty for the single-file form.
