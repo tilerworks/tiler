@@ -31,7 +31,7 @@ fi
 
 src_dir=$HOME/src/app
 work_dir=$HOME/work/rec
-image=$HOME/.tiler/images/alice/app/image.dmg
+img_dir=$HOME/.tiler/images/alice/app
 shadow=$HOME/.tiler/sessions/rec/runtime/m1/upper.shadow
 
 if test -n "$tiler_bin"
@@ -51,6 +51,9 @@ test_expect_success TILER,MACOS 'a writable session mounts and status is healthy
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
+	id=$(cut -d" " -f3 build.out) &&
+	test -n "$id" &&
+	image=$img_dir/_objects/$id/image.dmg &&
 	test_path_is_file "$image" &&
 	"$tiler_bin" session new rec >new.out 2>new.err &&
 	test_grep -E "^created rec$" new.out &&

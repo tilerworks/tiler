@@ -6,7 +6,7 @@
 # upper.shadow in the session runtime, and does not retarget the live
 # attach. A file written immediately before bake is in a read-only
 # mount of that published image. images show reports one single-file
-# payload and chain length 1.
+# payload with no parent.
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
 # host without hdiutil_bin skips the file instead of failing.
@@ -32,7 +32,7 @@ fi
 src_dir=$HOME/src/app
 work_dir=$HOME/work/bake
 pub_dir=$HOME/work/published
-image=$HOME/.tiler/images/alice/app/image.dmg
+img_dir=$HOME/.tiler/images/alice/app
 shadow=$HOME/.tiler/sessions/dev/runtime/m1/upper.shadow
 
 if test -n "$tiler_bin"
@@ -54,6 +54,8 @@ test_expect_success TILER,MACOS 'a writable view is ready to bake' '
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	old_id=$(cut -d" " -f3 build.out) &&
 	test -n "$old_id" &&
+	old_image=$img_dir/_objects/$old_id/image.dmg &&
+	image=$old_image &&
 	test_path_is_file "$image" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	"$tiler_bin" mount --session dev alice/app "$work_dir" >mount.out 2>mount.err &&
@@ -79,6 +81,8 @@ test_expect_success TILER,MACOS 'baking publishes a new image and leaves the sha
 	new_id=$(cut -d" " -f3 bake.out) &&
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
+	image=$img_dir/_objects/$new_id/image.dmg &&
+	test_path_is_file "$old_image" &&
 	test_path_is_file "$image" &&
 	test_path_is_missing "${image%.dmg}.sqsh" &&
 	test_path_is_file "$shadow" &&
@@ -108,11 +112,11 @@ test_expect_success TILER,MACOS 'the live attach stays on the original shadow' '
 	{ grep -F "$work_dir" after.plist || grep -F "$work_phys" after.plist; }
 '
 
-test_expect_success TILER,MACOS 'images show reports a single file and chain length 1' '
+test_expect_success TILER,MACOS 'images show reports a single payload with no parent' '
 	"$tiler_bin" images show alice/app >show.out 2>show.err &&
 	test_grep -F "$new_id" show.out &&
-	test_grep -F "  form        single" show.out &&
-	test_grep -F "  chain       1" show.out &&
+	test_grep -F "  payload     single" show.out &&
+	test_grep -E "^  parent +-$" show.out &&
 	test_path_is_file "$image"
 '
 
