@@ -54,6 +54,9 @@ type CleanFunc func(mountpoint string) error
 type Engine struct {
 	// Store is the record store the lifecycle reads and writes.
 	Store
+	// Versioned routes core lifecycle writes through immutable-version references.
+	// Runtime callers opt in when the new image and session layouts are activated.
+	Versioned bool
 	// Now returns the current time. Nil uses the UTC wall clock.
 	Now func() time.Time
 	// LoadTable snapshots the host mount table for the health
@@ -128,6 +131,9 @@ func (e *Engine) NewRemovable(name string) error {
 // under the session's exclusive lock. A name already recorded is
 // refused.
 func (e *Engine) newRecord(name string, removeOnClose bool) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.newRecord(name, removeOnClose) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -140,12 +146,20 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 	case !errors.Is(err, ErrNotFound):
 		return err
 	}
-	return e.Save(Record{
+	rec := Record{
 		Name:          name,
 		State:         StateActive,
 		CreatedAt:     e.now(),
 		RemoveOnClose: removeOnClose,
-	})
+	}
+	if e.Versioned {
+		rec, err = NewVersionRecord(name, rec.CreatedAt)
+		if err != nil {
+			return err
+		}
+		rec.RemoveOnClose = removeOnClose
+	}
+	return e.Save(rec)
 }
 
 // RunMount records one mount action write-ahead and executes it
@@ -155,6 +169,14 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 // status, so a later Open replays it, and returns the execution
 // error.
 func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, error) {
+	if e.needsVersionScope() {
+		var result Result
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			result, err = local.RunMount(name, action, mount)
+			return err
+		})
+		return result, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return Result{}, err
@@ -202,6 +224,9 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 // mount, so recovery is idempotent. Umount actions record teardowns
 // that already happened and restore nothing.
 func (e *Engine) Open(name string, mount MountFunc) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.Open(name, mount) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -303,6 +328,14 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 // reports whether the record was removed, which is how the command
 // layer tells a --rm deletion from an audit-kept close.
 func (e *Engine) Close(name string, umount UmountFunc) (bool, error) {
+	if e.needsVersionScope() {
+		var removed bool
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			removed, err = local.Close(name, umount)
+			return err
+		})
+		return removed, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return false, err
