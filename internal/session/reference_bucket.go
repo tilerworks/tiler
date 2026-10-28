@@ -52,11 +52,15 @@ func (s Store) referenceBucketPath(name, tip string) (string, error) {
 	if err := (ReferenceBucket{Name: name, Tip: tip}).validate(); err != nil {
 		return "", err
 	}
+	digest := sha256.Sum256([]byte(name))
+	return s.referencePath(hex.EncodeToString(digest[:]), tip+".json")
+}
+
+func (s Store) referencePath(parts ...string) (string, error) {
 	if strings.TrimSpace(s.Dir) == "" {
 		return "", fmt.Errorf("session: empty reference store directory")
 	}
-	digest := sha256.Sum256([]byte(name))
-	path := filepath.Join(s.Dir, referenceDir, hex.EncodeToString(digest[:]), tip+".json")
+	path := filepath.Join(append([]string{s.Dir, referenceDir}, parts...)...)
 	for current := path; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
