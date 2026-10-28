@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -248,7 +249,7 @@ func (s Store) List() ([]Record, error) {
 	}
 	var records []Record
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.EqualFold(entry.Name(), referenceDir) {
 			continue
 		}
 		rec, err := s.Load(entry.Name())

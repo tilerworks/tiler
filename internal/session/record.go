@@ -156,7 +156,7 @@ const windowsDirReserved = `<>:"/\|?*`
 // sessionNameMax bytes, and not a Windows device name such as CON
 // or COM1. Session names never carry structure.
 func ValidateName(name string) error {
-	if name == "" || name == "." || name == ".." ||
+	if name == "" || name == "." || name == ".." || strings.EqualFold(name, referenceDir) ||
 		len(name) > sessionNameMax ||
 		strings.HasSuffix(name, ".") ||
 		strings.ContainsAny(name, windowsDirReserved) ||
