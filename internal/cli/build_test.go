@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -248,6 +249,97 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 	}
 }
 
+func TestBuildStoresDescriptionsFromMessagesFilesAndStdin(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	descriptionFile := filepath.Join(work, "description.txt")
+	writeTestFile(t, descriptionFile, "From file\r\n\r\nDetails\n")
+
+	cases := []struct {
+		name  string
+		args  []string
+		stdin string
+		want  string
+	}{
+		{name: "messages", args: []string{"-m", "Subject", "-m", "Body\nDetails"}, want: "Subject\n\nBody\nDetails"},
+		{name: "file", args: []string{"-F", descriptionFile}, want: "From file\n\nDetails"},
+		{name: "stdin", args: []string{"-F", "-"}, stdin: "From stdin\n\nDetails\n", want: "From stdin\n\nDetails"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "alice/" + tc.name
+			args := append(append(append([]string{}, lib...), "build", "--image", name), tc.args...)
+			args = append(args, src)
+			_, stderr, err := runCmdInput(t, tc.stdin, args...)
+			if err != nil {
+				t.Fatalf("build: %v\n%s", err, stderr)
+			}
+			repo, err := image.OpenRepo(imagesDir, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := image.LoadVersionManifest(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := manifest.Images[0].Description; got != tc.want {
+				t.Fatalf("description = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildDescriptionFlagsRejectInvalidCombinationsAndConflicts(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "empty values are mutually exclusive", args: []string{"-m=", "-F="}, want: "mutually exclusive"},
+		{name: "duplicate file", args: []string{"-F", "one", "-F", "two"}, want: "only once"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(append(append([]string{}, lib...), "build", "--image", "alice/app"), tc.args...)
+			args = append(args, src)
+			_, _, _, err := runCmd(t, args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	buildArgs := append(append([]string{}, lib...), "build", "--image", "alice/app", "-m", "Original", src)
+	if _, stderr, _, err := runCmd(t, buildArgs...); err != nil {
+		t.Fatalf("initial build: %v\n%s", err, stderr)
+	}
+	conflictArgs := append(append([]string{}, lib...), "build", "--image", "alice/app", "-m", "Changed", src)
+	_, _, _, err := runCmd(t, conflictArgs...)
+	if err == nil || !strings.Contains(err.Error(), "use images describe") {
+		t.Fatalf("duplicate description conflict = %v", err)
+	}
+}
+
+func runCmdInput(t *testing.T, stdin string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := NewRootCmd()
+	var out, errBuf bytes.Buffer
+	cmd.SetIn(strings.NewReader(stdin))
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs(args)
+	err = cmd.Execute()
+	return out.String(), errBuf.String(), err
+}
+
 func TestBuildHelpShowsSplit(t *testing.T) {
 	_, _ = withWorkspace(t)
 	stdout, stderr, _, err := runCmd(t, "build", "--help")
@@ -441,6 +533,45 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 	}
 	if len(manifest.Images) != 2 || manifest.Images[1].ID != layer {
 		t.Fatalf("chain = %+v", manifest.Images[1:])
+	}
+}
+
+func TestBuildIncrementalForwardsDescriptionAndRejectsDuplicateChange(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	buildVersionImage(t, lib, "alice/app", src)
+	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(merged)
+
+	_, stderr, _, err := runCmd(t, append(lib,
+		"build", "--incremental", "-m", "Incremental details")...)
+	if err != nil {
+		t.Fatalf("incremental build: %v\n%s", err, stderr)
+	}
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Images[1].Description; got != "Incremental details" {
+		t.Fatalf("incremental description = %q", got)
+	}
+
+	_, _, _, err = runCmd(t, append(lib,
+		"build", "--incremental", "-m", "Changed")...)
+	if err == nil || !strings.Contains(err.Error(), "use images describe") {
+		t.Fatalf("duplicate incremental description conflict = %v", err)
 	}
 }
 

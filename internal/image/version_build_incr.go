@@ -3,6 +3,7 @@ package image
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,6 +57,9 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 		return node, err
 	}
 	if parent.ID == ID(sum) {
+		if req.DescriptionSet && parent.Description != req.Description {
+			return node, fmt.Errorf("version publish: use images describe %s:%s to change description", repo.Name(), parent.ID)
+		}
 		return parent, nil
 	}
 	node, err = incrNode(Manifest{}, parent.ID, ID(sum), sum, tmp, buildNow(full), nil)

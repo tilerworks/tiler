@@ -754,6 +754,86 @@ func TestDMGViewBakePublishesImmutableDMGVersion(t *testing.T) {
 	}
 }
 
+func TestDMGCreateForwardsDescriptionAndRejectsDuplicateChange(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	legacyBuild = false
+	useDarwinHost(t)
+	installHdiutil(t, []byte("described-dmg"))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	_, stderr, _, err := runCmd(t, append(lib,
+		"build", "--image", "alice/app", "-m", "DMG create details", src)...)
+	if err != nil {
+		t.Fatalf("dmg create: %v\n%s", err, stderr)
+	}
+	assertVersionDescription(t, imagesDir, "alice/app", "DMG create details")
+
+	_, _, _, err = runCmd(t, append(lib,
+		"build", "--image", "alice/app", "-m=", src)...)
+	if err == nil || !strings.Contains(err.Error(), "use images describe") {
+		t.Fatalf("duplicate dmg create description conflict = %v", err)
+	}
+}
+
+func TestDMGBakeForwardsDescriptionAndRejectsDuplicateChange(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	legacyBuild = false
+	useDarwinHost(t)
+	installHdiutil(t, []byte("base-dmg"))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	stdout, stderr, _, err := runCmd(t, append(lib,
+		"build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("initial dmg: %v\n%s", err, stderr)
+	}
+	baseID := buildOutput(t, stdout)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	writeTestFile(t, shadow, "live-shadow")
+	basePath := filepath.Join(imagesDir, "alice", "app", "_objects", baseID, image.ImageDMG)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return []mountinfo.Mount{{Point: work, FSType: "fuse.dmg", Source: basePath, Upper: shadow}}, nil
+	}
+	action := libraryAction("alice/app", work, session.ModeRW)
+	action.FullID, action.TipID = baseID, baseID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+	t.Chdir(work)
+	installHdiutil(t, []byte("baked-dmg"))
+
+	_, stderr, err = runCmdInput(t, "", append(lib,
+		"build", "-F", "-", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("dmg bake: %v\n%s", err, stderr)
+	}
+	assertVersionDescription(t, imagesDir, "alice/app", "")
+
+	_, _, _, err = runCmd(t, append(lib,
+		"build", "-m", "Changed", "--image", "alice/app")...)
+	if err == nil || !strings.Contains(err.Error(), "use images describe") {
+		t.Fatalf("duplicate dmg bake description conflict = %v", err)
+	}
+}
+
+func assertVersionDescription(t *testing.T, imagesDir, name, want string) {
+	t.Helper()
+	repo, err := image.OpenRepo(imagesDir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Images[len(manifest.Images)-1].Description; got != want {
+		t.Fatalf("description = %q, want %q", got, want)
+	}
+}
+
 func TestDMGViewBakeAcceptsEquivalentDirs(t *testing.T) {
 	forms := []struct {
 		name   string
