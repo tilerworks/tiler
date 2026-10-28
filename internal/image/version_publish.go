@@ -13,6 +13,22 @@ import (
 // PublishFullVersion publishes a staged single-file full version under a lock.
 // Staging must be outside imagesDir; the caller always owns its cleanup.
 func PublishFullVersion(imagesDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
+	if node.Kind != KindFull {
+		return ImageMeta{}, errors.New("version publish: full image required")
+	}
+	return publishVersionLocked(imagesDir, name, staged, node, nil, descriptionSet)
+}
+
+// PublishIncrementalVersion pins publication to a captured parent's identity.
+// The parent may be any retained version; staging remains caller-owned outside imagesDir.
+func PublishIncrementalVersion(imagesDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
+	if node.Kind != KindIncremental || node.Parent != parent.ID || parent.ID == "" {
+		return ImageMeta{}, errors.New("version publish: incremental image requires its pinned parent")
+	}
+	return publishVersionLocked(imagesDir, name, staged, node, &parent, descriptionSet)
+}
+
+func publishVersionLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	repo, err := OpenRepo(imagesDir, name)
 	if err != nil {
 		return ImageMeta{}, err
@@ -25,17 +41,34 @@ func PublishFullVersion(imagesDir, name, staged string, node ImageMeta, descript
 	if err := checkNamePlacement(imagesDir, repo.Segments); err != nil {
 		return ImageMeta{}, err
 	}
-	return publishFullVersion(imagesDir, repo, staged, node, descriptionSet, hooks{})
+	return publishVersion(imagesDir, repo, staged, node, parent, descriptionSet, hooks{})
 }
 
 func publishFullVersion(imagesDir string, repo Repo, staged string, node ImageMeta, descriptionSet bool, seam hooks) (ImageMeta, error) {
-	if node.Kind != KindFull || len(node.Blocks) != 0 {
-		return ImageMeta{}, errors.New("version publish: single-file full image required")
+	if node.Kind != KindFull {
+		return ImageMeta{}, errors.New("version publish: full image required")
 	}
-	if err := (VersionManifest{Version: VersionManifestVersion, Name: repo.Name(), Images: []ImageMeta{node}}).Validate(); err != nil {
+	return publishVersion(imagesDir, repo, staged, node, nil, descriptionSet, seam)
+}
+
+func publishVersion(imagesDir string, repo Repo, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool, seam hooks) (ImageMeta, error) {
+	if len(node.Blocks) != 0 {
+		return ImageMeta{}, errors.New("version publish: single-file image required")
+	}
+	manifest, _, err := loadVersionMeta(repo)
+	if err != nil {
 		return ImageMeta{}, err
 	}
-	if _, _, err := loadVersionMeta(repo); err != nil {
+	if parent != nil {
+		var found bool
+		for _, old := range manifest.Images {
+			found = found || (old.ID == parent.ID && sameVersionIdentity(old, *parent))
+		}
+		if !found || node.Kind != KindIncremental || node.Parent != parent.ID {
+			return ImageMeta{}, errors.New("version publish: pinned parent is missing or changed")
+		}
+	}
+	if err := versionWithNode(manifest, node).Validate(); err != nil {
 		return ImageMeta{}, err
 	}
 	dst, err := repo.ObjectPayloadPath(node)
@@ -67,7 +100,7 @@ func publishFullVersion(imagesDir string, repo Repo, staged string, node ImageMe
 		}
 		dir = filepath.Dir(dir)
 	}
-	return appendFullVersion(repo, node, descriptionSet, seam)
+	return appendVersion(repo, node, descriptionSet, seam)
 }
 
 func verifyVersionFile(path string, node ImageMeta) (os.FileInfo, error) {

@@ -14,16 +14,19 @@ func appendFullVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hook
 	if node.Kind != KindFull {
 		return ImageMeta{}, errors.New("version publish: full image required")
 	}
+	return appendVersion(repo, node, descriptionSet, seam)
+}
+
+func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (ImageMeta, error) {
 	var err error
 	if node.Description, err = NormalizeDescription(node.Description); err != nil {
 		return ImageMeta{}, err
 	}
-	candidate := VersionManifest{Version: VersionManifestVersion, Name: repo.Name(), Images: []ImageMeta{node}}
-	if err := candidate.Validate(); err != nil {
-		return ImageMeta{}, err
-	}
 	manifest, previous, err := loadVersionMeta(repo)
 	if err != nil {
+		return ImageMeta{}, err
+	}
+	if err := versionWithNode(manifest, node).Validate(); err != nil {
 		return ImageMeta{}, err
 	}
 	for _, old := range manifest.Images {
@@ -50,6 +53,18 @@ func appendFullVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hook
 		return ImageMeta{}, err
 	}
 	return node, nil
+}
+
+func versionWithNode(manifest VersionManifest, node ImageMeta) VersionManifest {
+	manifest.Images = slices.Clone(manifest.Images)
+	for i, old := range manifest.Images {
+		if old.ID == node.ID {
+			manifest.Images[i] = node
+			return manifest
+		}
+	}
+	manifest.Images = append(manifest.Images, node)
+	return manifest
 }
 
 // Builder, timestamps and description describe publication, not payload identity.
