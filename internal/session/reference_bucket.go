@@ -1,7 +1,6 @@
 package session
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -108,10 +107,7 @@ func (s Store) SaveReferenceBucket(bucket ReferenceBucket) error {
 		return err
 	}
 	bucket.Owners = slices.Clone(bucket.Owners)
-	slices.SortFunc(bucket.Owners, func(a, b ReferenceOwner) int {
-		return cmp.Or(cmp.Compare(a.Session, b.Session), cmp.Compare(a.InstanceID, b.InstanceID),
-			cmp.Compare(a.ActionID, b.ActionID), cmp.Compare(a.Role, b.Role))
-	})
+	slices.SortFunc(bucket.Owners, compareReferenceOwners)
 	data, err := json.MarshalIndent(bucket, "", "  ")
 	if err != nil {
 		return err
