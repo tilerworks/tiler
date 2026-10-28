@@ -402,7 +402,15 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	stack, err := manifest.SelectVersion(decision.Name.String())
+	baseTip, err := mountedBuildTip(cfg.SessionsDir, *decision)
+	if err != nil {
+		return false, err
+	}
+	selector := decision.Name.String()
+	if baseTip != "" {
+		selector += ":" + baseTip
+	}
+	stack, err := manifest.SelectVersion(selector)
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
@@ -533,6 +541,10 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return err
 	}
+	baseTip, err := mountedBuildTip(cfg.SessionsDir, decision)
+	if err != nil {
+		return err
+	}
 	res, err := publishIncr(image.IncrRequest{
 		Config:         cfg,
 		Name:           decision.Name.String(),
@@ -541,6 +553,7 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Description:    description.text,
 		DescriptionSet: description.set,
 		Upper:          decision.Upper,
+		BaseTip:        baseTip,
 		Refs:           session.Refs{Dir: cfg.SessionsDir},
 		Run:            packTool,
 		MountSmoke:     incrSmoke,
@@ -552,6 +565,32 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	rebaseView(cmd.ErrOrStderr(), cfg, decision, fullID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
+}
+
+// mountedBuildTip selects the stack actually serving the writable upper.
+// A rebase only changes the desired stack until the next mount.
+func mountedBuildTip(sessionsDir string, decision mountinfo.Decision) (string, error) {
+	records, err := (session.Store{Dir: sessionsDir}).List()
+	if err != nil {
+		return "", fmt.Errorf("build: read mounted version: %w", err)
+	}
+	for _, rec := range records {
+		if rec.State != session.StateActive {
+			continue
+		}
+		for _, action := range rec.Actions {
+			if action.Type != session.TypeMount || action.Status == session.StatusUnmounted ||
+				action.Name != decision.Name.String() ||
+				!session.SameMountPoint(action.Mountpoint, decision.MountPoint) {
+				continue
+			}
+			if action.ServedTip != "" {
+				return action.ServedTip, nil
+			}
+			return action.TipID, nil
+		}
+	}
+	return "", nil
 }
 
 func versionRootID(cfg config.Config, name, tip string) string {
