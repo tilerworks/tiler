@@ -36,7 +36,7 @@ func (r Refs) Holder(ref image.Ref) (string, bool, error) {
 	if ref.Name == "" || ref.FullID == "" {
 		return "", false, nil
 	}
-	store := Store(r)
+	store := Store{Dir: r.Dir}
 	names, err := store.names()
 	if err != nil {
 		return "", false, err

@@ -32,24 +32,32 @@ func (c ReferenceCoordinator) Apply(before, after *Record) error {
 		if err != nil {
 			return err
 		}
-		if state.Generation == ^uint64(0) {
-			return errors.New("session: reference generation exhausted")
-		}
-		journal.Generation = state.Generation + 1
 		return c.withSession(referenceJournalName(journal), func() error {
-			current, err := c.loadReferenceSource(referenceJournalName(journal))
-			if err != nil {
-				return err
-			}
-			if !sameReferenceRecord(current, before) {
-				return ErrReferenceConflict
-			}
-			if err := c.SaveReferenceJournal(journal); err != nil {
-				return err
-			}
-			return c.replayReferenceJournal(state, journal, nil)
+			return c.applyReferenceLocked(state, before, after)
 		})
 	})
+}
+
+// applyReferenceLocked requires the library/session locks and trusted shards.
+func (c ReferenceCoordinator) applyReferenceLocked(state ReferenceState, before, after *Record) error {
+	if state.Generation == ^uint64(0) {
+		return errors.New("session: reference generation exhausted")
+	}
+	journal := ReferenceJournal{Version: ReferenceControlVersion, Generation: state.Generation + 1, Before: before, After: after}
+	if err := journal.validate(); err != nil {
+		return err
+	}
+	current, err := c.loadReferenceSource(referenceJournalName(journal))
+	if err != nil {
+		return err
+	}
+	if !sameReferenceRecord(current, before) {
+		return ErrReferenceConflict
+	}
+	if err := c.SaveReferenceJournal(journal); err != nil {
+		return err
+	}
+	return c.replayReferenceJournal(state, journal, nil)
 }
 
 // Recover completes a pending journal under its own session lock. Missing state,

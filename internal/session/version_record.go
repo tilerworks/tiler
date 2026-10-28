@@ -77,6 +77,9 @@ func completeHash(value string) bool {
 // SaveVersion validates the new schema before using the existing atomic store.
 // Callers must hold the same locks required by Save.
 func (s Store) SaveVersion(rec Record) error {
+	if s.scope != nil {
+		return s.Save(rec)
+	}
 	if err := rec.ValidateVersion(); err != nil {
 		return err
 	}

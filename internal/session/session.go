@@ -701,6 +701,9 @@ func (e *Engine) Remove(name string) error {
 // record, lock, and any runtime subtree beneath it. The caller holds
 // the session's exclusive lock.
 func (s Store) deleteRecordFiles(name string) error {
+	if s.scope != nil {
+		return s.scope.remove(name)
+	}
 	dir, err := s.sessionDir(name)
 	if err != nil {
 		return err
