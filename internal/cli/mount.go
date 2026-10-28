@@ -200,7 +200,7 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 				}
 				result, actionErr = local.RunMount(name, pinnedAction,
 					func(stored session.Action) (session.Result, error) {
-						return runVersionMountEngine(cfg, stored, dir, flags,
+						return runVersionMountEngine(cfg, name, stored, dir, flags,
 							sessionRuntimeDir(cfg, name, stored))
 					})
 				return actionErr

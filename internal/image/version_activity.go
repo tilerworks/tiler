@@ -32,6 +32,25 @@ func AppendVersionActivityLocked(repo Repo, sourceID string, ev activity.Event, 
 	return versionActivityBatch{repo: repo, clock: clock}.append(sourceID, ev)
 }
 
+// AppendVersionStackActivityLocked records one logical activity event
+// for a stack whose tip and complete root-to-tip chain the caller
+// already resolved. The mount boundary uses it: the chain came from the
+// manifest that resolved the view, so the batch reuses that chain
+// instead of walking it again, writes one record per member in a single
+// traversal, and never propagates a member on its own. The caller must
+// hold the library lock.
+//
+// The tip records the event itself. Each ancestor records
+// image.dependency.activity naming the tip and the source event, so a
+// dependency use never reads like a direct mount or creation of that
+// ancestor. The chain is checked against the manifest's own stack of
+// tip, so a stale, reordered, or foreign chain records nothing. One
+// timestamp covers the batch and the writes run root to tip, exactly as
+// AppendVersionActivityLocked documents.
+func AppendVersionStackActivityLocked(repo Repo, tip string, chain []ImageMeta, ev activity.Event, clock activity.Clock) error {
+	return versionActivityBatch{repo: repo, clock: clock}.appendStack(tip, chain, ev)
+}
+
 // EnsureVersionActivityLocked writes the one initialization record of a
 // version that has no usable log yet, and a dependency initialization
 // record for every ancestor of its chain. The caller must hold the
@@ -98,6 +117,53 @@ func (b versionActivityBatch) append(sourceID string, ev activity.Event) error {
 		return err
 	}
 	return b.writeChain(chain, at, ev, sourceID)
+}
+
+// appendStack writes one event along a chain the caller resolved.
+func (b versionActivityBatch) appendStack(tip string, chain []ImageMeta, ev activity.Event) error {
+	if err := ev.Validate(); err != nil {
+		return fmt.Errorf("image %s: activity %w", b.repo.Name(), err)
+	}
+	if err := b.checkResolvedStack(tip, chain); err != nil {
+		return fmt.Errorf("image %s: activity %s: %w", b.repo.Name(), ev.Event, err)
+	}
+	if err := b.prepare(chain); err != nil {
+		return fmt.Errorf("image %s: activity %s: %w", b.repo.Name(), ev.Event, err)
+	}
+	at, err := b.batchTime(chain)
+	if err != nil {
+		return err
+	}
+	return b.writeChain(chain, at, ev, tip)
+}
+
+// checkResolvedStack proves a caller-resolved chain is the manifest's
+// own root-to-tip stack of tip. Reusing the chain saves the second walk
+// over the forest; comparing it to the manifest keeps a chain that
+// drifted from the published forest from recording activity against the
+// wrong versions.
+func (b versionActivityBatch) checkResolvedStack(tip string, chain []ImageMeta) error {
+	if len(chain) == 0 {
+		return errors.New("a resolved stack is required")
+	}
+	if last := chain[len(chain)-1].ID; last != tip {
+		return fmt.Errorf("resolved stack tip is %s, not %s", last, tip)
+	}
+	published, err := b.chain(tip)
+	if err != nil {
+		return err
+	}
+	if len(published) != len(chain) {
+		return fmt.Errorf("resolved stack of %s holds %d versions, not %d",
+			tip, len(published), len(chain))
+	}
+	for i, node := range published {
+		if node.ID != chain[i].ID {
+			return fmt.Errorf("resolved stack of %s lists %s at position %d, not %s",
+				tip, node.ID, i, chain[i].ID)
+		}
+	}
+	return nil
 }
 
 // ensure initializes the chain of one legacy version exactly once.

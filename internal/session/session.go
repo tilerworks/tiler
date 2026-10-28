@@ -117,6 +117,13 @@ type Engine struct {
 	// sessions root is set. It is called while the session's
 	// exclusive lock is held, so tests inject write failures here.
 	Activity func(name string) (*activity.Writer, error)
+	// HealthyMount, when set, reports one recorded mount a replay
+	// adopted because the view still answers reads. The mount itself
+	// never runs again, so the hook is the only chance to renew the
+	// activity of the image stack the view keeps serving; nil reports
+	// nothing. It runs inside the version scope, so the caller already
+	// holds the library lock.
+	HealthyMount func(name string, action Action) error
 }
 
 // New creates one fresh active record under the session's exclusive
@@ -176,7 +183,9 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 // before the mount runs, and the outcome is written back after. A
 // failed execution keeps the write-ahead record with a failed
 // status, so a later Open replays it, and returns the execution
-// error.
+// error. A callback that reports ErrActivityFailed mounted the view
+// and only lost a record of it, so the action is written back as
+// mounted and the error is reported without tearing the view down.
 func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, error) {
 	if e.needsVersionScope() {
 		var result Result
@@ -218,6 +227,11 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 	}
 	result, mountErr := mount(stored)
 	logErr := finish(mountErr)
+	if mountedWithLostRecord(mountErr) {
+		// The view is up; only its record is missing. The failed
+		// write-back would strand a live view behind status=failed.
+		mountErr = nil
+	}
 	if mountErr != nil {
 		if wbErr := e.Writeback(name, stored.Seq, StatusFailed, ""); wbErr != nil {
 			return Result{}, fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
@@ -296,6 +310,9 @@ func (e *Engine) openRecord(name string, rec Record, mount MountFunc) error {
 			// already-mounted action is left untouched: a healthy
 			// mounted view carrying served ids still serves the
 			// replaced stack.
+			if err := e.reportHealthyMount(name, action); err != nil {
+				return err
+			}
 			if action.Status != StatusMounted {
 				if err := e.WritebackMounted(name, action.Seq, "", true); err != nil {
 					return err
@@ -311,6 +328,17 @@ func (e *Engine) openRecord(name string, rec Record, mount MountFunc) error {
 		return e.reopen(name)
 	}
 	return nil
+}
+
+// reportHealthyMount renews the activity of one view a replay adopted
+// instead of remounting. A nil hook reports nothing, and the activity
+// failure fails the open: a stack the caller cannot account for is
+// never adopted silently.
+func (e *Engine) reportHealthyMount(name string, action Action) error {
+	if e.HealthyMount == nil {
+		return nil
+	}
+	return e.HealthyMount(name, action)
 }
 
 // reopen flips one replayed closed record back to active: its views
@@ -351,19 +379,28 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 	result, mountErr := mount(action)
 	if mountErr != nil {
 		mountErr = replayError(name, action.Seq, mountErr)
-		logErr := finish(mountErr)
+	}
+	logErr := finish(mountErr)
+	if mountErr != nil && !mountedWithLostRecord(mountErr) {
 		if wbErr := e.Writeback(name, action.Seq, StatusFailed, ""); wbErr != nil {
 			return fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
 		}
 		return logErr
 	}
-	logErr := finish(nil)
 	// An adopted (Reused) view still serves the stack its served
-	// ids name, so only a real remount clears them.
+	// ids name, so only a real remount clears them. A rebuilt view
+	// with a lost record keeps the mounted write-back too: only its
+	// activity entry is missing, and the error still reports that.
 	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused); wbErr != nil {
 		return wbErr
 	}
 	return logErr
+}
+
+// mountedWithLostRecord reports a mount callback that mounted the view
+// and lost a record of it, which must not be written back as a failure.
+func mountedWithLostRecord(err error) bool {
+	return errors.Is(err, ErrActivityFailed)
 }
 
 // replayError adds the replay context of one action to its error.

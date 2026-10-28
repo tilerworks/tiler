@@ -508,6 +508,65 @@ func TestMountActivityFailureAfterMountReportsCompletedOperation(t *testing.T) {
 	}
 }
 
+// TestMountCallbackRecordFailureKeepsTheMountedAction keeps the view a
+// mount callback reported as mounted with a lost record instead of
+// writing a live action down as failed.
+func TestMountCallbackRecordFailureKeepsTheMountedAction(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	point := "/mnt/dev"
+	result, err := e.RunMount("dev", mountAction(point), func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, ErrActivityFailed
+	})
+	if !errors.Is(err, ErrActivityFailed) {
+		t.Fatalf("RunMount err = %v, want ErrActivityFailed", err)
+	}
+	if result.Mountpoint != point {
+		t.Fatalf("mountpoint = %q, want %s", result.Mountpoint, point)
+	}
+	rec, loadErr := e.Load("dev")
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if rec.Actions[0].Status != StatusMounted || rec.Actions[0].Mountpoint != point {
+		t.Fatalf("action = %+v, want the mounted view", rec.Actions[0])
+	}
+}
+
+// TestReplayRecordFailureKeepsTheMountedAction keeps a rebuilt view whose
+// record is missing, and still reports the failure.
+func TestReplayRecordFailureKeepsTheMountedAction(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	point := "/mnt/dev"
+	if _, err := e.RunMount("dev", mountAction(point), func(Action) (Result, error) {
+		return Result{}, errors.New("mount boom")
+	}); err == nil {
+		t.Fatal("RunMount accepted a failed mount")
+	}
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error { return nil }
+	err := e.Open("dev", func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, ErrActivityFailed
+	})
+	if !errors.Is(err, ErrActivityFailed) {
+		t.Fatalf("Open err = %v, want ErrActivityFailed", err)
+	}
+	rec, loadErr := e.Load("dev")
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if rec.Actions[0].Status != StatusMounted || rec.Actions[0].Mountpoint != point {
+		t.Fatalf("action = %+v, want the rebuilt view", rec.Actions[0])
+	}
+}
+
 // TestOpenReplayRecordsMountActivity logs a remount with the sequence
 // of the action it rebuilt.
 func TestOpenReplayRecordsMountActivity(t *testing.T) {

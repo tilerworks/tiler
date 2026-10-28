@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
@@ -270,6 +271,9 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 		CacheDir:     cfg.CacheDir,
 		CacheEnabled: cfg.CacheEnabled,
 	}
+	engine.HealthyMount = func(name string, action session.Action) error {
+		return recordHealthyMountActivity(cfg, name, action)
+	}
 	if readHdiutilInfo != nil {
 		reader := readHdiutilInfo
 		engine.LoadDiskImages = func() ([]session.DiskImage, error) {
@@ -318,12 +322,27 @@ func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountF
 			pruneUpper: replayPruneUpper(cfg, action, target, warn),
 		}
 		if action.Name != "" && versionTarget(target) {
-			return runVersionMountEngine(cfg, action, action.Mountpoint, flags,
+			return runVersionMountEngine(cfg, name, action, action.Mountpoint, flags,
 				sessionRuntimeDir(cfg, name, action))
 		}
 		return runMountEngine(cfg, target, action.Mountpoint, flags,
 			sessionRuntimeDir(cfg, name, action), nil)
 	}
+}
+
+// recordHealthyMountActivity renews the image activity of one view a replay
+// adopted because it still answers reads. The mount never runs again, so this
+// record is the only evidence that the healthy open kept the stack in use. A
+// file mount carries no library pin and records nothing.
+func recordHealthyMountActivity(cfg config.Config, name string, action session.Action) error {
+	if action.Name == "" || action.FullID == "" {
+		return nil
+	}
+	stack, err := action.VersionStack(cfg.ImagesDir, true)
+	if err != nil {
+		return fmt.Errorf("session: activity %s: %w", action.Image, err)
+	}
+	return recordVersionStackActivity(cfg, name, action, stack, activity.PhaseSucceeded, nil)
 }
 
 func versionTarget(target image.Target) bool {

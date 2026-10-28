@@ -856,6 +856,108 @@ func TestPublishActivityReportsAFailedCreationWrite(t *testing.T) {
 	}
 }
 
+// resolvedStack returns the manifest's root-to-tip stack of one
+// version, which is the chain a mount boundary hands to the stack
+// activity entry point.
+func resolvedStack(t *testing.T, repo Repo, tip string) []ImageMeta {
+	t.Helper()
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	stack, err := manifest.SelectVersion(repo.Name() + ":" + tip)
+	if err != nil {
+		t.Fatalf("select stack of %s: %v", tip, err)
+	}
+	return stack
+}
+
+// TestStackActivityRecordsTheTipAndEachAncestorOnce records one mount
+// phase for a resolved F-A-B chain: the tip carries the event, every
+// ancestor one dependency record, and the untouched sibling of the root
+// records nothing.
+func TestStackActivityRecordsTheTipAndEachAncestorOnce(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	mid := incrementalNode(base, "mid")
+	tip := incrementalNode(mid, "tip")
+	sibling := incrementalNode(base, "sibling")
+	seedVersions(t, repo, base, mid, tip, sibling)
+	stack := resolvedStack(t, repo, tip.ID)
+	if len(stack) != 3 || stack[0].ID != base.ID || stack[2].ID != tip.ID {
+		t.Fatalf("resolved stack = %#v", stack)
+	}
+	for _, phase := range []string{activity.PhaseStarted, activity.PhaseSucceeded} {
+		ev := activity.Event{Event: activity.EventMount, Phase: phase,
+			Session: "dev", Seq: 2, Mountpoint: "/view"}
+		if err := AppendVersionStackActivityLocked(repo, tip.ID, stack, ev, activityClock); err != nil {
+			t.Fatalf("append %s: %v", phase, err)
+		}
+	}
+	wantPhases := []string{activity.PhaseStarted, activity.PhaseSucceeded}
+	for _, node := range []ImageMeta{base, mid, tip} {
+		lines := readVersionActivity(t, repo, node.ID)
+		if len(lines) != len(wantPhases) {
+			t.Fatalf("version %s lines = %+v, want one record per phase",
+				node.Description, lines)
+		}
+		for i, line := range lines {
+			if line.Phase != wantPhases[i] || line.Version != node.ID ||
+				line.Session != "dev" || line.Seq != 2 || line.Mountpoint != "/view" {
+				t.Fatalf("version %s line %d = %+v", node.Description, i, line)
+			}
+			if line.Time != lines[0].Time {
+				t.Fatalf("version %s lines = %+v, want one batch instant", node.Description, lines)
+			}
+			if node.ID == tip.ID {
+				if line.Event != activity.EventMount || line.SourceVersion != "" {
+					t.Fatalf("tip line %d = %+v, want the mount event itself", i, line)
+				}
+				continue
+			}
+			if line.Event != activity.EventImageDependency || line.SourceVersion != tip.ID ||
+				line.SourceEvent != activity.EventMount || line.Image != repo.Name() {
+				t.Fatalf("ancestor %s line %d = %+v, want a dependency on the tip",
+					node.Description, i, line)
+			}
+		}
+	}
+	requireNoActivityLog(t, repo, sibling.ID)
+}
+
+// TestStackActivityRejectsAChainThatDriftedFromTheManifest refuses a
+// chain the forest does not publish, and records nothing for it.
+func TestStackActivityRejectsAChainThatDriftedFromTheManifest(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	mid := incrementalNode(base, "mid")
+	tip := incrementalNode(mid, "tip")
+	seedVersions(t, repo, base, mid, tip)
+	stack := resolvedStack(t, repo, tip.ID)
+	ev := activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded}
+	cases := map[string]struct {
+		tip   string
+		chain []ImageMeta
+	}{
+		"empty chain":  {tip.ID, nil},
+		"foreign tip":  {mid.ID, stack},
+		"short chain":  {tip.ID, stack[2:]},
+		"reordered":    {tip.ID, []ImageMeta{mid, base, tip}},
+		"dropped root": {tip.ID, stack[1:]},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := AppendVersionStackActivityLocked(repo, tc.tip, tc.chain, ev, activityClock)
+			if err == nil {
+				t.Fatalf("append accepted a %s", name)
+			}
+			for _, node := range []ImageMeta{base, mid, tip} {
+				requireNoActivityLog(t, repo, node.ID)
+			}
+		})
+	}
+}
+
 // TestPublishActivityCoversEveryPublicationPath records a creation from
 // the split, imported external, and caller-locked entry points.
 func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {

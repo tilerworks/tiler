@@ -35,7 +35,7 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	branch := versionNode("d", image.KindIncremental, newRoot.ID, newRoot.CreatedAt.Add(time.Minute))
 	writeVersionForest(t, cfg.ImagesDir, "alice/app", base, child, newRoot, branch)
 
-	req, err := versionMountRequest(cfg, action, "/view", mountFlags{readOnly: true}, "/runtime")
+	req, _, err := versionMountRequest(cfg, action, "/view", mountFlags{readOnly: true}, "/runtime")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestVersionMountRequestCachesAndMaterializesEverySplitMember(t *testing.T) 
 		return filepath.Join(cfg.CacheDir, sum+image.SquashExt), nil
 	}
 	t.Cleanup(func() { assembleBlocks = original })
-	req, err := versionMountRequest(cfg, versionMountAction(base.ID, child.ID),
+	req, _, err := versionMountRequest(cfg, versionMountAction(base.ID, child.ID),
 		"/view", mountFlags{}, "/runtime")
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 		}
 		return &workspace.Workspace{MergedDir: req.MergedDir}, nil
 	}
-	if _, err := runVersionMountEngine(cfg, versionMountAction(node.ID, node.ID),
+	if _, err := runVersionMountEngine(cfg, "dev", versionMountAction(node.ID, node.ID),
 		filepath.Join(t.TempDir(), "view"), mountFlags{}, filepath.Join(t.TempDir(), "runtime")); err != nil {
 		t.Fatal(err)
 	}
