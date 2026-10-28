@@ -226,10 +226,14 @@ func (m Manifest) Has(id string) bool {
 // first. It fails when tip is unknown, its ancestors loop, or the
 // ancestor path does not start at the full root.
 func (m Manifest) Stack(tip string) ([]ImageMeta, error) {
+	return walkStack(tip, m.Node)
+}
+
+func walkStack(tip string, lookup func(string) (ImageMeta, bool)) ([]ImageMeta, error) {
 	var reversed []ImageMeta
-	onPath := make(map[string]bool, len(m.Images))
+	onPath := make(map[string]bool)
 	for id := tip; id != ""; {
-		img, ok := m.Node(id)
+		img, ok := lookup(id)
 		if !ok {
 			return nil, fmt.Errorf("manifest: unknown image id %q", id)
 		}
