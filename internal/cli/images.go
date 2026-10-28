@@ -45,13 +45,14 @@ func newImagesDescribeCmd() *cobra.Command {
 			if !ok {
 				return errors.New("images describe: configuration is not loaded")
 			}
-			description, err := readDescribeDescription(cmd, messages, files)
-			if err != nil {
-				return err
-			}
 			view, err := collectVersionShow(cfg.ImagesDir, args[0])
 			if err != nil {
 				return fmt.Errorf("images describe: %w", err)
+			}
+			description, err := readDescribeDescription(cmd, messages, files,
+				view.Selected.Description)
+			if err != nil {
+				return err
 			}
 			changed, err := image.UpdateVersionDescription(cfg.ImagesDir, view.Name,
 				view.Selected.ID, view.Selected.Description, description)
@@ -74,9 +75,9 @@ func newImagesDescribeCmd() *cobra.Command {
 	return cmd
 }
 
-func readDescribeDescription(cmd *cobra.Command, messages, files []string) (string, error) {
+func readDescribeDescription(cmd *cobra.Command, messages, files []string, current string) (string, error) {
 	if !cmd.Flags().Changed("message") && !cmd.Flags().Changed("file") {
-		return "", usageError{errors.New("images describe: use --message or --file")}
+		return editDescription(cmd, current)
 	}
 	description, err := readDescriptionInput(cmd, messages, files, "images describe")
 	return description.text, err
