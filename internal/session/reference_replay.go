@@ -80,15 +80,8 @@ func (s Store) checkReferenceReplay(state ReferenceState, journal ReferenceJourn
 	if rec == nil {
 		rec = journal.Before
 	}
-	path, _ := s.recordPath(rec.Name)
-	if _, err := s.safeStoreFile(path); err != nil {
-		return "", err
-	}
-	current, err := s.LoadVersion(rec.Name)
-	var source *Record
-	if err == nil {
-		source = &current
-	} else if !errors.Is(err, ErrNotFound) {
+	source, err := s.loadReferenceSource(rec.Name)
+	if err != nil {
 		return "", err
 	}
 	after := sameReferenceRecord(source, journal.After)
@@ -96,6 +89,21 @@ func (s Store) checkReferenceReplay(state ReferenceState, journal ReferenceJourn
 		return "", errors.New("session: reference journal conflicts with source record")
 	}
 	return rec.Name, nil
+}
+
+func (s Store) loadReferenceSource(name string) (*Record, error) {
+	path, err := s.recordPath(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.safeStoreFile(path); err != nil {
+		return nil, err
+	}
+	rec, err := s.LoadVersion(name)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return &rec, err
 }
 
 func sameReferenceRecord(a, b *Record) bool {
