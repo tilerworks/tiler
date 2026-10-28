@@ -56,10 +56,14 @@ func (s Store) referenceBucketPath(name, tip string) (string, error) {
 }
 
 func (s Store) referencePath(parts ...string) (string, error) {
+	path := filepath.Join(append([]string{s.Dir, referenceDir}, parts...)...)
+	return s.safeStoreFile(path)
+}
+
+func (s Store) safeStoreFile(path string) (string, error) {
 	if strings.TrimSpace(s.Dir) == "" {
 		return "", fmt.Errorf("session: empty reference store directory")
 	}
-	path := filepath.Join(append([]string{s.Dir, referenceDir}, parts...)...)
 	for current := path; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
