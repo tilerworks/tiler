@@ -8,7 +8,9 @@ import (
 	"github.com/jiangxin/tiler/internal/activity"
 )
 
-// Reasons a session GC plan keeps a session out of its removal list.
+// Reasons a session GC keeps a session out of its removal list. The first
+// four are what a plan can see; an execution adds the last four, because it
+// also sees what happened between the preview and the deletion.
 const (
 	// GCSkipAttached keeps a session whose view is still mounted, even
 	// when its FUSE daemon died.
@@ -18,8 +20,22 @@ const (
 	// GCSkipInitialized keeps a session whose activity log this scan
 	// created, so its expiry window starts now instead of ending today.
 	GCSkipInitialized = "initialized"
-	// GCSkipUnreadable keeps a session the scan could not inspect.
+	// GCSkipUnreadable keeps a session the scan or the execution could
+	// not inspect.
 	GCSkipUnreadable = "unreadable"
+	// GCSkipChanged keeps a session whose record or activity log no
+	// longer matches the approved snapshot, or whose last activity is no
+	// longer before the plan's cutoff.
+	GCSkipChanged = "changed"
+	// GCSkipGone reports a session another process removed after the
+	// preview, so there is nothing left to delete.
+	GCSkipGone = "gone"
+	// GCSkipUnlocked keeps a session because the host cannot take an
+	// exclusive lock, so no deletion could be proven exclusive.
+	GCSkipUnlocked = "unlocked"
+	// GCSkipFailed keeps a session whose removal failed or was refused
+	// after the preview. Its directory may be partly removed.
+	GCSkipFailed = "failed"
 )
 
 // GCCandidate is one expired session a plan offers for removal. The
@@ -50,7 +66,7 @@ type sessionStamp struct {
 	Size       int64
 }
 
-// GCSkip is one session a plan kept, with the reason it did.
+// GCSkip is one session a plan or an execution kept, with the reason it did.
 type GCSkip struct {
 	// Name is the session name.
 	Name string
@@ -181,12 +197,9 @@ func (p *GCPlan) keep(skip GCSkip) {
 // written are errors, so the session is kept instead of expired. A session
 // that already has a valid log is never renewed by this call.
 func (e *Engine) inspectActivity(rec Record) (activity.Revision, bool, error) {
-	w, err := e.activityLog(rec.Name)
+	w, err := e.activityWriter(rec.Name)
 	if err != nil {
 		return activity.Revision{}, false, err
-	}
-	if w == nil {
-		return activity.Revision{}, false, errors.New("no sessions root is configured")
 	}
 	initialized, rev, err := w.Inspect(activity.Event{
 		Event:      activity.EventInitialize,
@@ -195,6 +208,20 @@ func (e *Engine) inspectActivity(rec Record) (activity.Revision, bool, error) {
 		InstanceID: rec.InstanceID,
 	})
 	return rev, initialized, err
+}
+
+// activityWriter opens the activity log of one session. A missing sessions
+// root is an error, because a scan that cannot place a log cannot tell an
+// uninitialized object from one whose log was lost.
+func (e *Engine) activityWriter(name string) (*activity.Writer, error) {
+	w, err := e.activityLog(name)
+	if err != nil {
+		return nil, err
+	}
+	if w == nil {
+		return nil, errors.New("no sessions root is configured")
+	}
+	return w, nil
 }
 
 // recordStamp pins one stored record through the digest the reference
