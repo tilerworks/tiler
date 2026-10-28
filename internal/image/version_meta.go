@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,6 +19,16 @@ type VersionManifest struct {
 	Version string      `yaml:"version"`
 	Name    string      `yaml:"name"`
 	Images  []ImageMeta `yaml:"images"`
+}
+
+// LoadVersionManifest reads one committed v3 snapshot, never creating metadata.
+// Callers coordinate recovery and subsequent payload I/O with the library lock.
+func LoadVersionManifest(repo Repo) (VersionManifest, error) {
+	manifest, body, err := loadVersionMeta(repo)
+	if err == nil && body == nil {
+		err = os.ErrNotExist
+	}
+	return manifest, err
 }
 
 // Validate checks v3 payload facts without imposing a shared root or format.
