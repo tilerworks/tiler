@@ -56,16 +56,10 @@ func TestImagesListJSONGoldens(t *testing.T) {
 		}
 	})
 
-	t.Run("all repositories with archives", func(t *testing.T) {
-		stdout := mustListJSON(t, lib, "--archives", "--json")
-		assertGolden(t, "images_ls_archives", []byte(stdout))
-		doc := parseImagesDocument(t, stdout)
-		alice := doc.Images[0]
-		if len(alice.Archives) != 1 || alice.Archives[0] != goldenArchiveID {
-			t.Fatalf("archives = %v, want [%s]", alice.Archives, goldenArchiveID)
-		}
-		if len(alice.Holds) != 1 || alice.Holds[0] != goldenHoldID {
-			t.Fatalf("holds = %v, want [%s]", alice.Holds, goldenHoldID)
+	t.Run("archives flag is retired", func(t *testing.T) {
+		_, _, _, err := runCmd(t, append(lib, "images", "list", "--archives")...)
+		if ExitCode(err) != 2 {
+			t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 		}
 	})
 

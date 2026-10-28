@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
@@ -22,8 +22,10 @@ type versionImageView struct {
 
 func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 	if len(views) == 0 {
-		return nil
+		_, err := fmt.Fprintln(w, "No images found.")
+		return err
 	}
+	collides := false
 	for i, view := range views {
 		if i > 0 {
 			if _, err := fmt.Fprintln(w); err != nil {
@@ -44,13 +46,17 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 			return err
 		}
 		depths := make(map[string]int, len(view.Images))
+		shortIDs := make(map[string]bool, len(view.Images))
 		for _, node := range view.Images {
+			short := listID(node.ID)
+			collides = collides || shortIDs[short]
+			shortIDs[short] = true
 			depth := 0
 			if node.Parent != "" {
 				depth = depths[node.Parent] + 1
 			}
 			depths[node.ID] = depth
-			description := image.DescriptionSummary(node.Description)
+			description := terminalText(image.DescriptionSummary(node.Description))
 			if description == "" {
 				description = "-"
 			}
@@ -61,7 +67,23 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 			}
 		}
 	}
+	if collides {
+		_, err := fmt.Fprintln(w, "Short IDs collide; use images list --json for full IDs.")
+		return err
+	}
 	return nil
+}
+
+func terminalText(text string) string {
+	var out strings.Builder
+	for _, r := range text {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&out, "\\u%04x", r)
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 func versionCreatedAt(created time.Time) string {
@@ -76,20 +98,26 @@ func writeVersionImageDetail(w io.Writer, view versionImageView) error {
 	if _, err := fmt.Fprintln(w, view.Name); err != nil {
 		return err
 	}
-	fields := [][2]string{{"id", node.ID}, {"head", node.ID},
-		{"created", node.CreatedAt.UTC().Format(time.RFC3339)},
+	parent := node.Parent
+	if parent == "" {
+		parent = "-"
+	}
+	fields := [][2]string{{"id", node.ID}, {"parent", parent},
+		{"created", versionCreatedAt(node.CreatedAt)}, {"format", formatDetail(node.Format)},
 		{"size", fmt.Sprintf("%d (%s)", node.Size, formatSize(node.Size))},
-		{"sha256", node.SHA256}, {"form", versionPayloadKind(*node)},
-		{"format", formatDetail(node.Format)}, {"chain", strconv.Itoa(len(view.Stack) - 1)},
-		{"branches", strconv.Itoa(len(view.Images) - len(view.Stack))}, {"archives", "0"}, {"holds", "0"}}
+		{"payload", versionPayloadKind(*node)}, {"description", node.Description}}
 	for _, field := range fields {
 		if err := writeDetailField(w, field[0], field[1]); err != nil {
 			return err
 		}
 	}
-	for _, parent := range view.Stack[1:] {
-		if _, err := fmt.Fprintf(w, "    %s  parent=%s  %s  %s\n", parent.ID,
-			parent.Parent, formatSize(parent.Size), parent.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+	if len(view.Stack) > 1 {
+		if _, err := fmt.Fprintln(w, "  ancestors"); err != nil {
+			return err
+		}
+	}
+	for _, ancestor := range view.Stack[:len(view.Stack)-1] {
+		if _, err := fmt.Fprintf(w, "    %s\n", ancestor.ID); err != nil {
 			return err
 		}
 	}
@@ -99,14 +127,43 @@ func writeVersionImageDetail(w io.Writer, view versionImageView) error {
 type versionImageJSON struct {
 	Name     string            `json:"name"`
 	LatestID *string           `json:"latest_id"`
-	Images   []image.ImageMeta `json:"images"`
+	Images   []versionNodeJSON `json:"images"`
+}
+
+type versionNodeJSON struct {
+	ID          string            `json:"id"`
+	Parent      *string           `json:"parent"`
+	Kind        string            `json:"kind"`
+	CreatedAt   string            `json:"created_at"`
+	Format      versionFormatJSON `json:"format"`
+	Size        int64             `json:"size"`
+	PayloadKind string            `json:"payload_kind"`
+	Description string            `json:"description"`
+	Summary     string            `json:"summary"`
+}
+
+type versionFormatJSON struct {
+	Type        string `json:"type"`
+	Compression string `json:"compression"`
 }
 
 func newVersionImageJSON(view versionImageView) versionImageJSON {
-	out := versionImageJSON{Name: view.Name, Images: view.Images}
+	out := versionImageJSON{Name: view.Name, Images: make([]versionNodeJSON, 0, len(view.Images))}
 	if view.Latest != nil {
 		id := view.Latest.ID
 		out.LatestID = &id
+	}
+	for _, node := range view.Images {
+		var parent *string
+		if node.Parent != "" {
+			value := node.Parent
+			parent = &value
+		}
+		out.Images = append(out.Images, versionNodeJSON{ID: node.ID, Parent: parent,
+			Kind: node.Kind, CreatedAt: versionCreatedAt(node.CreatedAt),
+			Format: versionFormatJSON{Type: node.Format.Type, Compression: node.Format.Compression},
+			Size:   node.Size, PayloadKind: versionPayloadKind(node), Description: node.Description,
+			Summary: image.DescriptionSummary(node.Description)})
 	}
 	return out
 }

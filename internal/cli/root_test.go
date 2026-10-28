@@ -44,6 +44,7 @@ func TestListAndRemoveAbbreviations(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"images", "list"},
+		{"image", "list"},
 		{"images", "ls"},
 		{"session", "list"},
 		{"session", "ls"},

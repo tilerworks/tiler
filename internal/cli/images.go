@@ -16,8 +16,9 @@ import (
 
 func newImagesCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "images",
-		Short: "Manage the local image library",
+		Use:     "images",
+		Aliases: []string{"image"},
+		Short:   "Manage the local image library",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -84,7 +85,6 @@ func readDescribeDescription(cmd *cobra.Command, messages, files []string, curre
 }
 
 func newImagesListCmd() *cobra.Command {
-	var archives bool
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -106,10 +106,9 @@ func newImagesListCmd() *cobra.Command {
 			if !ok {
 				return errors.New("images list: configuration is not loaded")
 			}
-			return listAllImages(cmd.OutOrStdout(), cfg, archives, asJSON)
+			return listAllImages(cmd.OutOrStdout(), cfg, false, asJSON)
 		},
 	}
-	cmd.Flags().BoolVar(&archives, "archives", false, "include archive and held chain ids")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
 	return cmd
 }

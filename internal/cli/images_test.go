@@ -183,10 +183,7 @@ func TestImagesListEmptyLibrary(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
-	if out := mustList(t, lib); out != "" {
-		t.Fatalf("empty library printed %q", out)
-	}
-	if out := mustList(t, lib, "--archives"); out != "" {
+	if out := mustList(t, lib); out != "No images found.\n" {
 		t.Fatalf("empty library printed %q", out)
 	}
 }

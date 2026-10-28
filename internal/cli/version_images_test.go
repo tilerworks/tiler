@@ -164,6 +164,23 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 	}
 }
 
+func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
+	base := time.Date(2026, 10, 28, 1, 0, 0, 0, time.UTC)
+	one := versionNode("a", image.KindFull, "", base)
+	two := versionNode("b", image.KindFull, "", base.Add(time.Hour))
+	two.ID = one.ID[:10] + two.ID[10:]
+	var out bytes.Buffer
+	view := versionImageView{Name: "alice/app", Latest: &two,
+		Images: []image.ImageMeta{one, two}}
+	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(out.String(),
+		"Short IDs collide; use images list --json for full IDs.\n") {
+		t.Fatalf("collision output = %q", out.String())
+	}
+}
+
 func TestCollectVersionShowPinsSelectedAncestorStack(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Now().UTC()
@@ -238,4 +255,56 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	if err := listAllImages(&out, cfg, false, false); err == nil || !strings.Contains(err.Error(), "legacy layout") {
 		t.Fatalf("mixed layout error = %v", err)
 	}
+}
+
+func TestVersionImageOutputGoldens(t *testing.T) {
+	base := time.Date(2026, 10, 28, 1, 0, 0, 0, time.UTC)
+	root := versionNode("a", image.KindFull, "", base)
+	root.Description = "Original base"
+	child := versionNode("b", image.KindIncremental, root.ID, base.Add(time.Hour))
+	child.Format = image.Format{Type: "erofs", Compression: "lz4hc"}
+	child.Description = "Install tools\nPinned toolchain"
+	grandchild := versionNode("c", image.KindIncremental, child.ID, base.Add(2*time.Hour))
+	grandchild.Blocks = []image.BlockEntry{{}}
+	grandchild.Description = "Application layer\nBuilt from release sources"
+	branch := versionNode("d", image.KindIncremental, root.ID, base.Add(4*time.Hour))
+	branch.Description = "Newer historical branch"
+	collision := versionNode("e", image.KindFull, "", base.Add(3*time.Hour))
+	collision.ID = root.ID[:10] + collision.ID[10:]
+	collision.SHA256 = collision.ID
+	collision.Description = "Colliding root"
+	view := versionImageView{Name: "alice/app", Latest: &branch,
+		Images: []image.ImageMeta{root, child, grandchild, branch, collision}}
+
+	var out bytes.Buffer
+	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "version_images_list", out.Bytes())
+	out.Reset()
+	if err := writeVersionImagesJSON(&out, []versionImageView{view}); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "version_images_list_json", out.Bytes())
+
+	view.Selected = &grandchild
+	view.Stack = []image.ImageMeta{root, child, grandchild}
+	out.Reset()
+	if err := writeVersionImageDetail(&out, view); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "version_images_show", out.Bytes())
+}
+
+func TestVersionImageEmptyLibraryGoldens(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeVersionImageTable(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "version_images_empty", out.Bytes())
+	out.Reset()
+	if err := writeVersionImagesJSON(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "version_images_empty_json", out.Bytes())
 }
