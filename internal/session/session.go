@@ -694,6 +694,14 @@ func (e *Engine) closeRemovable(
 	health HealthFunc,
 	umount UmountFunc,
 ) (string, error) {
+	if e.needsVersionScope() {
+		var closed string
+		err := e.tryVersionSession(name, func(local *Engine) (err error) {
+			closed, err = local.closeRemovable(name, dir, health, umount)
+			return err
+		})
+		return closed, err
+	}
 	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {

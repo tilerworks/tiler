@@ -1,8 +1,11 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/filelock"
 )
 
 func (e *Engine) needsVersionScope() bool {
@@ -12,7 +15,25 @@ func (e *Engine) needsVersionScope() bool {
 // withVersionSession copies the engine so concurrent operations never replace
 // its shared Store or Lock. The inner lock is redundant only in this scope.
 func (e *Engine) withVersionSession(name string, run func(*Engine) error) error {
-	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: e.lockTimeout()}
+	return e.withVersionSessionTimeout(name, e.lockTimeout(), run)
+}
+
+// tryVersionSession skips contention before entering the cleanup algorithm.
+func (e *Engine) tryVersionSession(name string, run func(*Engine) error) error {
+	entered := false
+	err := e.withVersionSessionTimeout(name, -1, func(local *Engine) error {
+		entered = true
+		return run(local)
+	})
+	if !entered && (errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) ||
+		errors.Is(err, filelock.ErrHeld) || errors.Is(err, filelock.ErrUnavailable)) {
+		return nil
+	}
+	return err
+}
+
+func (e *Engine) withVersionSessionTimeout(name string, timeout time.Duration, run func(*Engine) error) error {
+	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: timeout}
 	return c.WithSession(name, func(store Store) error {
 		local := *e
 		local.Store = store
