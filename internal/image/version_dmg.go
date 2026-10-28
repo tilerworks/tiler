@@ -71,6 +71,9 @@ func commitDMGVersion(repo Repo, req DMGRequest, staged, content string) (ImageM
 		return ImageMeta{}, err
 	}
 	defer release()
+	if err := recoverVersionRemoval(req.Config.ImagesDir, hooks{}); err != nil {
+		return ImageMeta{}, err
+	}
 	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
 		return ImageMeta{}, err
 	}

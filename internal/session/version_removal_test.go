@@ -5,8 +5,11 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +72,107 @@ func TestPlanVersionRemovalFindsOnlyDescendantOwners(t *testing.T) {
 			t.Fatalf("external file action became a blocker: %#v", owner)
 		}
 	}
+}
+
+func TestRemoveVersionSubtreeRejectsReferencedDescendant(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	nodes := writeRemovalFixture(t, c)
+	rec := removalRecord("blocked", StateActive, nodes[1].ID, "")
+	if err := c.Apply(nil, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RemoveVersionSubtree("alice/app", nodes[0].ID); err == nil {
+		t.Fatal("referenced subtree removal succeeded")
+	}
+	repo, _ := image.OpenRepo(c.ImagesDir, "alice/app")
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != len(nodes) {
+		t.Fatalf("blocked removal changed manifest = %#v, %v", manifest, err)
+	}
+}
+
+func TestConcurrentReferenceCreationPrecedesSubtreeRemoval(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	c.Timeout = time.Second
+	nodes := writeRemovalFixture(t, c)
+	rec := removalRecord("racing", StateActive, nodes[1].ID, "")
+	entered, save := make(chan struct{}), make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results <- c.WithSession(rec.Name, func(store Store) error {
+			close(entered)
+			<-save
+			return store.Save(rec)
+		})
+	}()
+	<-entered
+	go func() {
+		defer wg.Done()
+		_, err := c.RemoveVersionSubtree("alice/app", nodes[0].ID)
+		results <- err
+	}()
+	close(save)
+	wg.Wait()
+	close(results)
+	var succeeded, blocked int
+	for err := range results {
+		if err == nil {
+			succeeded++
+		} else if strings.Contains(err.Error(), "referenced by sessions") {
+			blocked++
+		} else {
+			t.Fatalf("competing mutation = %v", err)
+		}
+	}
+	if succeeded != 1 || blocked != 1 {
+		t.Fatalf("race results: succeeded=%d blocked=%d", succeeded, blocked)
+	}
+}
+
+func writeRemovalFixture(t *testing.T, c ReferenceCoordinator) []image.ImageMeta {
+	t.Helper()
+	bodies := [][]byte{[]byte("root"), []byte("child")}
+	nodes := make([]image.ImageMeta, len(bodies))
+	for i, body := range bodies {
+		sum := sha256.Sum256(body)
+		id := hex.EncodeToString(sum[:])
+		parent := ""
+		kind := image.KindFull
+		if i != 0 {
+			parent, kind = nodes[i-1].ID, image.KindIncremental
+		}
+		nodes[i] = image.ImageMeta{ID: id, SHA256: id, Size: int64(len(body)), Parent: parent,
+			Kind: kind, Builder: "test", Format: image.Format{Type: image.FormatSquashfs, Compression: "gzip"},
+			CreatedAt: time.Date(2026, 1, 1, 0, i, 0, 0, time.UTC)}
+	}
+	repo, err := image.OpenRepo(c.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := image.VersionManifest{Version: image.VersionManifestVersion, Name: repo.Name(), Images: nodes}
+	body, err := image.EncodeVersionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i, node := range nodes {
+		path, _ := repo.ObjectPayloadPath(node)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, bodies[i], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return nodes
 }
 
 func removalIDs() []string {

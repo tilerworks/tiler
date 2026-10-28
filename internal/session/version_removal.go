@@ -1,6 +1,10 @@
 package session
 
-import "github.com/jiangxin/tiler/internal/image"
+import (
+	"fmt"
+
+	"github.com/jiangxin/tiler/internal/image"
+)
 
 // VersionRemovalPlan is a child-before-parent deletion set and every trusted
 // reference bucket that blocks deleting it.
@@ -50,4 +54,30 @@ func (c ReferenceCoordinator) PlanVersionRemovalLocked(
 		}
 	}
 	return VersionRemovalPlan{Images: nodes, Blockers: blockers}, nil
+}
+
+// RemoveVersionSubtree checks references and commits deletion while retaining
+// the shared library lock, excluding concurrent reference creation.
+func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.ImageMeta, error) {
+	var removed []image.ImageMeta
+	err := c.withLibrary(func() error {
+		repo, err := image.OpenRepo(c.ImagesDir, name)
+		if err != nil {
+			return err
+		}
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			return err
+		}
+		plan, err := c.PlanVersionRemovalLocked(name, manifest.Images, root)
+		if err != nil {
+			return err
+		}
+		if len(plan.Blockers) != 0 {
+			return fmt.Errorf("image %s: versions are referenced by sessions", name)
+		}
+		removed, err = image.RemoveVersionSubtreeLocked(c.ImagesDir, name, root)
+		return err
+	})
+	return removed, err
 }
