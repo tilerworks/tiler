@@ -64,7 +64,12 @@ type Writer struct {
 	lockPath    string
 	clock       Clock
 	lockTimeout time.Duration
+	maxBytes    int
+	keepBytes   int
 	openLog     func() (logFile, error)
+	makeTemp    func() (tempFile, error)
+	rename      func(oldpath, newpath string) error
+	syncDir     func(dir string)
 }
 
 // OpenLog binds a writer to dir/actions.log. dir must already exist
@@ -84,8 +89,13 @@ func OpenLog(root, dir string, clock Clock) (*Writer, error) {
 		lockPath:    filepath.Join(filepath.Clean(dir), LockName),
 		clock:       clock,
 		lockTimeout: DefaultLockTimeout,
+		maxBytes:    MaxLogBytes,
+		keepBytes:   CompactKeepBytes,
+		rename:      os.Rename,
+		syncDir:     syncDirectory,
 	}
 	w.openLog = w.openAppend
+	w.makeTemp = w.createTemp
 	return w, nil
 }
 
@@ -141,10 +151,14 @@ func (w *Writer) lock() (func(), error) {
 	}, nil
 }
 
-// write appends the encoded line, then syncs and closes the log. Any
-// failure is reported: a torn or unsynced record must never pass as
-// a complete one.
+// write appends the encoded line, then syncs and closes the log. A
+// full log is compacted first, under the same lock, so the file stays
+// bounded. Any failure is reported: a torn or unsynced record must
+// never pass as a complete one.
 func (w *Writer) write(line []byte) error {
+	if err := w.makeRoom(len(line)); err != nil {
+		return err
+	}
 	file, err := w.openLog()
 	if err != nil {
 		return err
@@ -167,6 +181,16 @@ func (w *Writer) write(line []byte) error {
 // non-regular file. The log file stays open only for this record.
 func (w *Writer) openAppend() (logFile, error) {
 	file, err := openRegular(w.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+// createTemp creates the scratch file of one compaction beside the
+// log, so the replacement rename stays on one filesystem.
+func (w *Writer) createTemp() (tempFile, error) {
+	file, err := os.CreateTemp(w.dir, "."+LogName+".tmp-*")
 	if err != nil {
 		return nil, err
 	}
