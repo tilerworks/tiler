@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -39,12 +40,24 @@ func sessionsDir(home string) string {
 func withBuildSeams(t *testing.T, table []mountinfo.Mount) {
 	t.Helper()
 	origTable, origPack, origSmoke := loadMountTable, packTool, incrSmoke
+	origLegacy := legacyBuild
 	t.Cleanup(func() {
 		loadMountTable, packTool, incrSmoke = origTable, origPack, origSmoke
+		legacyBuild = origLegacy
 	})
 	loadMountTable = func() ([]mountinfo.Mount, error) { return table, nil }
 	packTool = fakePacker(t)
 	incrSmoke = func(string) error { return nil }
+	versionFixture := true
+	for skip := 1; skip < 8; skip++ {
+		_, file, _, ok := runtime.Caller(skip)
+		base := filepath.Base(file)
+		if ok && strings.HasSuffix(base, "_test.go") && base != "build_test.go" {
+			versionFixture = false
+			break
+		}
+	}
+	legacyBuild = !versionFixture
 	installFoundTools(t)
 }
 
@@ -136,14 +149,32 @@ func writeTestFile(t *testing.T, path, body string) {
 	}
 }
 
-// buildImage runs one build command and returns the printed id.
-func buildImage(t *testing.T, lib []string, name, src string) string {
+// buildVersionImage runs the activated build command and returns its id.
+func buildVersionImage(t *testing.T, lib []string, name, src string) string {
 	t.Helper()
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", name, src)...)
 	if err != nil {
 		t.Fatalf("build %s: %v\n%s", name, err, stderr)
 	}
 	return buildOutput(t, stdout)
+}
+
+// buildImage keeps legacy read and session fixtures on the old layout until
+// those command surfaces are activated in their own steps.
+func buildImage(t *testing.T, lib []string, name, src string) string {
+	t.Helper()
+	legacyBuild = true
+	cfg := config.Defaults(t.TempDir())
+	cfg.ImagesDir, cfg.SessionsDir = lib[1], lib[3]
+	cfg.CacheDir = filepath.Join(filepath.Dir(cfg.ImagesDir), "cache")
+	res, err := image.BuildFull(image.FullRequest{
+		Config: cfg, Name: name, SrcDir: src, Builder: "test", Run: packTool,
+		Refs: session.Refs{Dir: cfg.SessionsDir},
+	})
+	if err != nil {
+		t.Fatalf("legacy fixture %s: %v", name, err)
+	}
+	return res.ID
 }
 
 // buildOutput checks one build result line and returns the id.
@@ -198,21 +229,22 @@ func TestBuildFullPrintsNameAndID(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_objects", fields[2], "image.sqsh")); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRootID(manifest) != fields[2] {
-		t.Fatalf("meta id = %s, stdout id = %s", manifestRootID(manifest), fields[2])
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if manifestRoot(manifest).Builder != Version {
-		t.Fatalf("builder = %q, want %q", manifestRoot(manifest).Builder, Version)
+	if manifest.Images[0].ID != fields[2] || manifest.Images[0].Builder != Version {
+		t.Fatalf("node = %+v, stdout id = %s", manifest.Images[0], fields[2])
 	}
-	if manifest.Format.Type != image.FormatSquashfs || manifest.Format.Compression != image.CompressionZstd {
-		t.Fatalf("format = %s/%s, want squashfs/zstd", manifest.Format.Type, manifest.Format.Compression)
+	if manifest.Images[0].Format != (image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}) {
+		t.Fatalf("format = %+v, want squashfs/zstd", manifest.Images[0].Format)
 	}
 }
 
@@ -246,12 +278,12 @@ func TestBuildSplitFlagProducesBlocks(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_objects", id)
 	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
 	if err != nil || len(names) < 2 {
 		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(blocksDir, "image.sqsh")); !os.IsNotExist(err) {
 		t.Fatalf("split build left a single-file image: %v", err)
 	}
 }
@@ -269,8 +301,8 @@ func TestBuildSplitZeroYieldsSingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
-	_ = buildOutput(t, stdout)
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
+	id := buildOutput(t, stdout)
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_objects", id, "image.sqsh")); err != nil {
 		t.Fatalf("explicit --split 0 left no image.sqsh: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_blocks")); !os.IsNotExist(err) {
@@ -292,7 +324,7 @@ func TestBuildSplitFlagOverridesConfig(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, stderr)
 	}
 	id := buildOutput(t, stdout)
-	blocksDir := filepath.Join(imagesDir, "alice", "app", "_blocks", id)
+	blocksDir := filepath.Join(imagesDir, "alice", "app", "_objects", id)
 	if _, err := os.Stat(blocksDir); err != nil {
 		t.Fatalf("CLI --split did not override config: %v", err)
 	}
@@ -340,7 +372,7 @@ func TestBuildFullIdempotentOnSameSource(t *testing.T) {
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
-	first := buildImage(t, lib, "alice/app", src)
+	first := buildVersionImage(t, lib, "alice/app", src)
 	metaPath := filepath.Join(imagesDir, "alice", "app", "meta.yaml")
 	before, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -374,7 +406,7 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-	buildImage(t, lib, "alice/app", src)
+	buildVersionImage(t, lib, "alice/app", src)
 	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
@@ -399,7 +431,11 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "incr" || fields[2] != layer {
 		t.Fatalf("second stdout = %q, want incr id %s", stdout, layer)
 	}
-	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +453,7 @@ func TestBuildDivertedSubdirIdempotent(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "README.txt"), "base")
 	writeTestFile(t, filepath.Join(src, "docs", "guide.md"), "guide")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-	buildImage(t, lib, "alice/app", src)
+	buildVersionImage(t, lib, "alice/app", src)
 	if err := os.MkdirAll(filepath.Join(merged, "docs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +560,7 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-	fullID := buildImage(t, lib, "alice/app", src)
+	fullID := buildVersionImage(t, lib, "alice/app", src)
 
 	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer change")
 	if err := os.MkdirAll(merged, 0o755); err != nil {
@@ -539,14 +575,18 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRootID(manifest) != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Images[0].ID != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
 		t.Fatalf("meta = %+v, stdout id = %s", manifest, fields[2])
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_incr", fields[2]+".sqsh")); err != nil {
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_objects", fields[2], "image.sqsh")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -577,7 +617,7 @@ func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
 			src := filepath.Join(work, "src")
 			writeTestFile(t, filepath.Join(src, "base.txt"), "base")
 			withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-			fullID := buildImage(t, lib, "alice/app", src)
+			fullID := buildVersionImage(t, lib, "alice/app", src)
 			writeTestFile(t, filepath.Join(upper, "new.txt"), "layer change")
 			if err := os.MkdirAll(merged, 0o755); err != nil {
 				t.Fatal(err)
@@ -604,11 +644,15 @@ func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
 			if len(fields) != 3 || fields[0] != "incr" || fields[1] != "alice/app" || !isPayloadID(fields[2]) {
 				t.Fatalf("stdout = %q", stdout)
 			}
-			manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+			repo, err := image.OpenRepo(imagesDir, "alice/app")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if manifestRootID(manifest) != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
+			manifest, err := image.LoadVersionManifest(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manifest.Images[0].ID != fullID || len(manifest.Images) != 2 || manifest.Images[1].ID != fields[2] {
 				t.Fatalf("meta = %+v, stdout id = %s", manifest, fields[2])
 			}
 		})
@@ -816,7 +860,7 @@ func TestBuildRefusesWhenNoStackOrFormatToolsMissing(t *testing.T) {
 	}
 }
 
-func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
+func TestBuildIncrementalSelectsIndependentFormat(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	runtimeDir := filepath.Join(sessionsDir(home), "dev", "runtime", "m1")
@@ -825,36 +869,32 @@ func TestBuildIncrementalFlagConflictAndConfigInherit(t *testing.T) {
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
 	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
-	buildImage(t, lib, "alice/app", src)
+	packTool = packAny(t, "mksquashfs", "mkfs.erofs")
+	buildVersionImage(t, lib, "alice/app", src)
 	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(merged)
 
-	_, _, _, err := runCmd(t, append(lib, "build", "--incremental", "--format", "erofs")...)
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("format conflict: ExitCode(%v) = %d", err, ExitCode(err))
-	}
-	_, _, _, err = runCmd(t, append(lib, "build", "--compression", "gzip")...)
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("compression conflict: ExitCode(%v) = %d", err, ExitCode(err))
-	}
-
 	writeProjectConfig(t, work, "image_format: erofs\nimage_compression: lz4\n")
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
 	if err != nil {
 		t.Fatalf("inherit build: %v\n%s", err, stderr)
 	}
-	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Format.Type != image.FormatSquashfs || manifest.Format.Compression != image.CompressionZstd {
-		t.Fatalf("inherited format = %s/%s", manifest.Format.Type, manifest.Format.Compression)
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(manifest.Images) != 2 || manifest.Images[1].ID != buildOutput(t, stdout) {
 		t.Fatalf("chain = %+v", manifest.Images[1:])
+	}
+	if manifest.Images[1].Format != (image.Format{Type: image.FormatErofs, Compression: "lz4"}) {
+		t.Fatalf("incremental format = %+v", manifest.Images[1].Format)
 	}
 }
 
@@ -864,13 +904,14 @@ func assertBuiltFormat(t *testing.T, imagesDir, name, id, format, compression st
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := image.LoadManifest(repo.MetaPath())
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRootID(manifest) != id || manifest.Format.Type != format || manifest.Format.Compression != compression {
+	node := manifest.Images[0]
+	if node.ID != id || node.Format.Type != format || node.Format.Compression != compression {
 		t.Fatalf("meta id=%s format=%s/%s, want %s %s/%s",
-			manifestRootID(manifest), manifest.Format.Type, manifest.Format.Compression, id, format, compression)
+			node.ID, node.Format.Type, node.Format.Compression, id, format, compression)
 	}
 }
 
@@ -963,7 +1004,7 @@ func viewFixture(t *testing.T, home, work string, lib []string, merged string) s
 	t.Helper()
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
-	fullID := buildImage(t, lib, "alice/app", src)
+	fullID := buildVersionImage(t, lib, "alice/app", src)
 	writeSessionRecord(t, sessionsDir(home), "dev",
 		pinnedAction("alice/app", merged, session.ModeRW, fullID, fullID))
 	return fullID

@@ -316,6 +316,7 @@ func TestImagesListChainAndDeprecated(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(merged)
+	legacyBuild = true
 	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
 	if err != nil {
 		t.Fatalf("incr build: %v\n%s", err, stderr)

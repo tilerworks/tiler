@@ -55,6 +55,9 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 	if err != nil {
 		return node, err
 	}
+	if parent.ID == ID(sum) {
+		return parent, nil
+	}
 	node, err = incrNode(Manifest{}, parent.ID, ID(sum), sum, tmp, buildNow(full), nil)
 	if err != nil {
 		return node, err

@@ -30,7 +30,8 @@ var (
 	// darwin. Tests install a recorder and do not exec hdiutil.
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
-	incrSmoke func(string) error
+	incrSmoke   func(string) error
+	legacyBuild bool
 	// rebaseMountedStack rewrites the desired stack of every live
 	// mount action serving one library image, after a build from the
 	// mounted view itself published a new stack. Tests replace it to
@@ -343,25 +344,44 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	manifest, err := image.LoadManifest(repo.MetaPath())
+	if legacyBuild {
+		manifest, err := image.LoadManifest(repo.MetaPath())
+		if err != nil {
+			return false, fmt.Errorf("build: %w", err)
+		}
+		root, err := manifest.Full()
+		if err != nil {
+			return false, fmt.Errorf("build: %w", err)
+		}
+		return promoteBySize(stderr, root.Size, chainBytes(manifest), decision.Upper)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	root, err := manifest.Full()
+	stack, err := manifest.SelectVersion(decision.Name.String())
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	upper, err := treeBytes(decision.Upper)
+	root := stack[0]
+	var layers int64
+	for _, node := range stack[1:] {
+		layers += node.Size
+	}
+	return promoteBySize(stderr, root.Size, layers, decision.Upper)
+}
+
+func promoteBySize(stderr io.Writer, base, layers int64, upperDir string) (bool, error) {
+	upper, err := treeBytes(upperDir)
 	if err != nil {
 		return false, fmt.Errorf("build: upper: %w", err)
 	}
-	layers := chainBytes(manifest)
-	if !exceedsHalfBase(root.Size, layers, upper) {
+	if !exceedsHalfBase(base, layers, upper) {
 		return false, nil
 	}
 	_, err = fmt.Fprintf(stderr,
 		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
-		layers+upper, root.Size)
+		layers+upper, base)
 	return err == nil, err
 }
 
@@ -411,7 +431,7 @@ func treeBytes(root string) (int64, error) {
 }
 
 func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, format, compression string) error {
-	res, err := image.BuildFull(image.FullRequest{
+	res, err := publishFull(image.FullRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
 		SrcDir:      decision.SrcDir,
@@ -467,19 +487,7 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return err
 	}
-	// The active full root id names the base of the rebased stack;
-	// an incremental build never moves it.
-	var fullID string
-	if active, root, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
-		fullID = root
-		if err := image.FormatConflict(active, typ, comp); err != nil {
-			return usageError{err}
-		}
-		if err := gateFormatTools("build", active.Type); err != nil {
-			return err
-		}
-	}
-	res, err := image.BuildIncr(image.IncrRequest{
+	res, err := publishIncr(image.IncrRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
 		Format:      typ,
@@ -489,34 +497,37 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Run:         packTool,
 		MountSmoke:  incrSmoke,
 	})
-	if errors.Is(err, image.ErrFormatConflict) {
-		return usageError{err}
-	}
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	fullID := versionRootID(cfg, decision.Name.String(), res.ID)
 	rebaseView(cmd.ErrOrStderr(), cfg, decision, fullID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
 }
 
-// readActiveFormat loads the container format and the full root id
-// recorded on the active image. A missing image is left for BuildIncr
-// to report.
-func readActiveFormat(cfg config.Config, name string) (image.Format, string, error) {
+func versionRootID(cfg config.Config, name, tip string) string {
 	repo, err := image.OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
-		return image.Format{}, "", err
+		return ""
 	}
-	manifest, err := image.LoadManifest(repo.MetaPath())
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
-		return image.Format{}, "", err
+		legacy, legacyErr := image.LoadManifest(repo.MetaPath())
+		if legacyErr != nil {
+			return ""
+		}
+		root, legacyErr := legacy.Full()
+		if legacyErr != nil {
+			return ""
+		}
+		return root.ID
 	}
-	root, err := manifest.Full()
-	if err != nil {
-		return image.Format{}, "", err
+	stack, err := manifest.SelectVersion(name + ":" + tip)
+	if err != nil || len(stack) == 0 {
+		return ""
 	}
-	return manifest.Format, root.ID, nil
+	return stack[0].ID
 }
 
 // runDMGCreate packs a directory into a new dmg image. A build from
@@ -533,11 +544,9 @@ func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	// A missing or unreadable image only disables the check.
 	activeRoot := ""
 	if decision.MountPoint != "" {
-		if _, root, err := readActiveFormat(cfg, decision.Name.String()); err == nil {
-			activeRoot = root
-		}
+		activeRoot = latestVersionID(cfg, decision.Name.String())
 	}
-	res, err := image.BuildDMG(image.DMGRequest{
+	res, err := publishDMG(image.DMGRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
 		SrcDir:      decision.SrcDir,
@@ -598,10 +607,8 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 	// the image that was already active, and then nothing was
 	// published. An unreadable image only disables the check.
 	activeRoot := ""
-	if _, root, err := readActiveFormat(cfg, decision.Name.String()); err == nil {
-		activeRoot = root
-	}
-	res, err := image.BuildDMG(image.DMGRequest{
+	activeRoot = latestVersionID(cfg, decision.Name.String())
+	res, err := publishDMG(image.DMGRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
 		Shadow:      shadow,
@@ -619,6 +626,54 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err
+}
+
+func publishFull(req image.FullRequest) (image.ImageMeta, error) {
+	if legacyBuild {
+		res, err := image.BuildFull(req)
+		return image.ImageMeta{ID: res.ID}, err
+	}
+	return image.BuildFullVersion(req)
+}
+
+func publishIncr(req image.IncrRequest) (image.ImageMeta, error) {
+	if legacyBuild {
+		res, err := image.BuildIncr(req)
+		return image.ImageMeta{ID: res.ID}, err
+	}
+	return image.BuildIncrVersion(req)
+}
+
+func publishDMG(req image.DMGRequest) (image.ImageMeta, error) {
+	if legacyBuild {
+		res, err := image.BuildDMG(req)
+		return image.ImageMeta{ID: res.ID}, err
+	}
+	return image.BuildDMGVersion(req)
+}
+
+func latestVersionID(cfg config.Config, name string) string {
+	repo, err := image.OpenRepo(cfg.ImagesDir, name)
+	if err != nil {
+		return ""
+	}
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		legacy, legacyErr := image.LoadManifest(repo.MetaPath())
+		if legacyErr != nil {
+			return ""
+		}
+		root, legacyErr := legacy.Full()
+		if legacyErr != nil {
+			return ""
+		}
+		return root.ID
+	}
+	stack, err := manifest.SelectVersion(name)
+	if err != nil || len(stack) == 0 {
+		return ""
+	}
+	return stack[len(stack)-1].ID
 }
 
 // warnDMGBakeKeepsOldBase is the stderr warning a successful bake

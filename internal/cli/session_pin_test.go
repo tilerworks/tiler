@@ -371,6 +371,7 @@ func buildInsideView(t *testing.T, lib []string, merged string, args ...string) 
 		t.Fatal(err)
 	}
 	t.Chdir(merged)
+	legacyBuild = true
 	cmdArgs := append(lib, "build")
 	stdout, stderr, _, err := runCmd(t, append(cmdArgs, args...)...)
 	if err != nil {

@@ -203,6 +203,40 @@ func TestDarwinDirectoryBuildPublishesImageDMG(t *testing.T) {
 	}
 }
 
+func TestDarwinDirectoryBuildPublishesImmutableDMGVersion(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	legacyBuild = false
+	useDarwinHost(t)
+	installHdiutil(t, []byte("created-version-dmg"))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, stderr)
+	}
+	id := buildOutput(t, stdout)
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_objects", id, image.ImageDMG),
+		"created-version-dmg")
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", image.ImageDMG)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mutable dmg path exists: %v", err)
+	}
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Images) != 1 || manifest.Images[0].ID != id ||
+		manifest.Images[0].Format.Type != image.FormatDMG {
+		t.Fatalf("manifest images = %+v", manifest.Images)
+	}
+}
+
 func TestDarwinForeignFormatIsUsage(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
@@ -665,6 +699,58 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 			assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"),
 				action.FullID, "", "", "")
 		})
+	}
+}
+
+func TestDMGViewBakePublishesImmutableDMGVersion(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	withBuildSeams(t, nil)
+	legacyBuild = false
+	useDarwinHost(t)
+	installSeqHdiutil(t, []byte("base-version-dmg"), []byte("baked-version-dmg"))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app", src)...)
+	if err != nil {
+		t.Fatalf("initial build: %v\n%s", err, stderr)
+	}
+	baseID := buildOutput(t, stdout)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	writeTestFile(t, shadow, "live-shadow")
+	basePath := filepath.Join(imagesDir, "alice", "app", "_objects", baseID, image.ImageDMG)
+	loadMountTable = func() ([]mountinfo.Mount, error) {
+		return []mountinfo.Mount{{Point: work, FSType: "fuse.dmg", Source: basePath, Upper: shadow}}, nil
+	}
+	action := libraryAction("alice/app", work, session.ModeRW)
+	action.FullID, action.TipID = baseID, baseID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+	t.Chdir(work)
+
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("bake: %v\n%s", err, stderr)
+	}
+	bakedID := buildOutput(t, stdout)
+	if bakedID == baseID {
+		t.Fatalf("bake reused base id %s", baseID)
+	}
+	assertFileText(t, basePath, "base-version-dmg")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_objects", bakedID, image.ImageDMG),
+		"baked-version-dmg")
+	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", image.ImageDMG)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mutable dmg path exists: %v", err)
+	}
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Images) != 2 || manifest.Images[0].ID != baseID || manifest.Images[1].ID != bakedID {
+		t.Fatalf("manifest images = %+v", manifest.Images)
 	}
 }
 
