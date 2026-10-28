@@ -5,6 +5,7 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,6 +89,53 @@ func TestRemoveVersionSubtreeRejectsReferencedDescendant(t *testing.T) {
 	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil || len(manifest.Images) != len(nodes) {
 		t.Fatalf("blocked removal changed manifest = %#v, %v", manifest, err)
+	}
+}
+
+func TestRemoveVersionRepositoryProtectsEveryVersionAndRejectsSelector(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	nodes := writeRemovalFixture(t, c)
+	rec := removalRecord("historical", StateClosed, nodes[0].ID, "")
+	if err := c.Apply(nil, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RemoveVersionRepository("alice/app"); err == nil ||
+		!strings.Contains(err.Error(), "referenced by sessions") {
+		t.Fatalf("referenced repository removal = %v", err)
+	}
+	if _, err := c.RemoveVersionRepository("alice/app:"); !errors.Is(err, image.ErrInvalidName) {
+		t.Fatalf("empty selector removal = %v", err)
+	}
+}
+
+func TestRemoveVersionRepositoryDeletesAllRootsAndEmptyRepository(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	nodes := writeRemovalFixture(t, c)
+	second := nodes[0]
+	second.ID, second.SHA256 = strings.Repeat("9", 64), strings.Repeat("9", 64)
+	second.CreatedAt = second.CreatedAt.Add(3 * time.Minute)
+	repo, _ := image.OpenRepo(c.ImagesDir, "alice/app")
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Images = append(manifest.Images, second)
+	body, err := image.EncodeVersionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := c.RemoveVersionRepository(repo.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != len(nodes)+1 {
+		t.Fatalf("removed = %#v", removed)
+	}
+	if _, err := os.Stat(repo.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository remains: %v", err)
 	}
 }
 

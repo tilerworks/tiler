@@ -20,6 +20,7 @@ type removalJournal struct {
 	Before VersionManifest `json:"before"`
 	After  VersionManifest `json:"after"`
 	IDs    []string        `json:"ids"`
+	Delete bool            `json:"delete_repository,omitempty"`
 }
 
 // RemoveVersionSubtreeLocked commits removal of root and all descendants.
@@ -63,6 +64,42 @@ func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, erro
 	return nodes, nil
 }
 
+// RemoveVersionRepositoryLocked commits removal of every version and then
+// removes the repository leaf. The journal and library lock remain outside it.
+func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) {
+	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+		return nil, err
+	}
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		return nil, err
+	}
+	forest, err := NewForest(manifest.Images)
+	if err != nil {
+		return nil, err
+	}
+	nodes := forest.Topology()
+	slices.Reverse(nodes)
+	ids := make([]string, len(nodes))
+	for i := range nodes {
+		ids[i] = nodes[i].ID
+	}
+	after := manifest
+	after.Images = nil
+	j := removalJournal{Name: name, Before: manifest, After: after, IDs: ids, Delete: true}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		return nil, err
+	}
+	if err := replayVersionRemoval(imagesDir, j, hooks{}); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
 func recoverVersionRemoval(imagesDir string, seam hooks) error {
 	body, err := os.ReadFile(filepath.Join(imagesDir, versionRemovalJournal))
 	if errors.Is(err, os.ErrNotExist) {
@@ -84,6 +121,15 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 	after, afterErr := EncodeVersionManifest(j.After)
 	if err != nil || beforeErr != nil || afterErr != nil || !validRemovalJournal(j) {
 		return errors.Join(err, beforeErr, afterErr, errors.New("version removal: invalid journal"))
+	}
+	if err == nil && j.Delete {
+		if _, statErr := os.Stat(repo.MetaPath()); errors.Is(statErr, os.ErrNotExist) {
+			if removeErr := os.RemoveAll(repo.Dir); removeErr != nil {
+				return fmt.Errorf("%w: %v", ErrCleanupPending, removeErr)
+			}
+			removeEmptyAncestors(filepath.Dir(repo.Dir), imagesDir)
+			return finishRemovalJournal(imagesDir, seam)
+		}
 	}
 	current, previous, err := loadVersionMeta(repo)
 	if err != nil {
@@ -114,6 +160,16 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 			return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 		}
 	}
+	if j.Delete {
+		if err := os.RemoveAll(repo.Dir); err != nil {
+			return fmt.Errorf("%w: %v", ErrCleanupPending, err)
+		}
+		removeEmptyAncestors(filepath.Dir(repo.Dir), imagesDir)
+	}
+	return finishRemovalJournal(imagesDir, seam)
+}
+
+func finishRemovalJournal(imagesDir string, seam hooks) error {
 	if err := os.Remove(filepath.Join(imagesDir, versionRemovalJournal)); err != nil {
 		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 	}
@@ -121,7 +177,7 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 }
 
 func validRemovalJournal(j removalJournal) bool {
-	if len(j.IDs) == 0 || j.Before.Name != j.Name || j.After.Name != j.Name {
+	if (!j.Delete && len(j.IDs) == 0) || j.Before.Name != j.Name || j.After.Name != j.Name {
 		return false
 	}
 	removed := make(map[string]bool, len(j.IDs))
@@ -132,6 +188,9 @@ func validRemovalJournal(j removalJournal) bool {
 		removed[id] = true
 	}
 	want := slices.DeleteFunc(slices.Clone(j.Before.Images), func(node ImageMeta) bool { return removed[node.ID] })
+	if j.Delete && len(want) != 0 {
+		return false
+	}
 	return slices.EqualFunc(want, j.After.Images, func(a, b ImageMeta) bool { return a.ID == b.ID }) &&
 		len(want)+len(removed) == len(j.Before.Images)
 }

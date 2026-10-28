@@ -110,6 +110,49 @@ func TestRemoveVersionSubtreeLockedCreatesAndCompletesJournal(t *testing.T) {
 	}
 }
 
+func TestRemoveVersionRepositoryLockedDeletesLeaf(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	removed, err := RemoveVersionRepositoryLocked(imagesDir, repo.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 3 || removed[0].ID != nodes[2].ID || removed[2].ID != nodes[0].ID {
+		t.Fatalf("removed = %#v", removed)
+	}
+	if _, err := os.Stat(repo.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository leaf remains: %v", err)
+	}
+}
+
+func TestRemoveEmptyVersionRepositoryAndRecoverMissingLeaf(t *testing.T) {
+	imagesDir := t.TempDir()
+	repo, _ := OpenRepo(imagesDir, "alice/empty")
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := removalManifest(repo, nil)
+	body, err := EncodeVersionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := removalJournal{Name: repo.Name(), Before: manifest, After: manifest, Delete: true}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(repo.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(imagesDir, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal remains: %v", err)
+	}
+}
+
 func removalFixture(t *testing.T) (string, Repo, []ImageMeta) {
 	t.Helper()
 	imagesDir := t.TempDir()

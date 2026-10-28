@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
@@ -39,6 +40,24 @@ func (c ReferenceCoordinator) PlanVersionRemovalLocked(
 	if err != nil {
 		return VersionRemovalPlan{}, err
 	}
+	return c.planVersionNodesLocked(name, nodes)
+}
+
+// PlanVersionRepositoryRemovalLocked checks every historical version in a
+// repository and returns them in child-before-parent deletion order.
+func (c ReferenceCoordinator) PlanVersionRepositoryRemovalLocked(name string,
+	images []image.ImageMeta) (VersionRemovalPlan, error) {
+	forest, err := image.NewForest(images)
+	if err != nil {
+		return VersionRemovalPlan{}, err
+	}
+	nodes := forest.Topology()
+	slices.Reverse(nodes)
+	return c.planVersionNodesLocked(name, nodes)
+}
+
+func (c ReferenceCoordinator) planVersionNodesLocked(name string,
+	nodes []image.ImageMeta) (VersionRemovalPlan, error) {
 	targets := make([]ReferenceTarget, len(nodes))
 	for i, node := range nodes {
 		targets[i] = ReferenceTarget{Name: name, Tip: node.ID}
@@ -77,6 +96,32 @@ func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.I
 			return fmt.Errorf("image %s: versions are referenced by sessions", name)
 		}
 		removed, err = image.RemoveVersionSubtreeLocked(c.ImagesDir, name, root)
+		return err
+	})
+	return removed, err
+}
+
+// RemoveVersionRepository checks every historical reference and removes the
+// named leaf while retaining the shared library lock.
+func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.ImageMeta, error) {
+	var removed []image.ImageMeta
+	err := c.withLibrary(func() error {
+		repo, err := image.OpenRepo(c.ImagesDir, name)
+		if err != nil {
+			return err
+		}
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			return err
+		}
+		plan, err := c.PlanVersionRepositoryRemovalLocked(name, manifest.Images)
+		if err != nil {
+			return err
+		}
+		if len(plan.Blockers) != 0 {
+			return fmt.Errorf("image %s: versions are referenced by sessions", name)
+		}
+		removed, err = image.RemoveVersionRepositoryLocked(c.ImagesDir, name)
 		return err
 	})
 	return removed, err
