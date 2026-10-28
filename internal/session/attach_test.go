@@ -233,8 +233,16 @@ func TestAttachedReportsAnUnreadableTable(t *testing.T) {
 
 func TestAttachedRejectsAnInvalidSessionName(t *testing.T) {
 	e := attachEngine(t, nil)
+	loads := 0
+	e.LoadTable = func() ([]mountinfo.Mount, error) {
+		loads++
+		return nil, mountinfo.ErrUnavailable
+	}
 	if _, err := e.Attached(Record{Name: "bad/name"}); !errors.Is(err, ErrInvalidName) {
 		t.Fatalf("Attached error = %v, want ErrInvalidName", err)
+	}
+	if loads != 0 {
+		t.Fatalf("table loads = %d, want the name rejected before the host query", loads)
 	}
 }
 

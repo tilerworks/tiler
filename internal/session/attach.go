@@ -19,29 +19,65 @@ import (
 // recorded point count as well, and so does any mount under the session
 // directory, which covers the runtime intermediate layers of a view.
 func (e *Engine) Attached(rec Record) (string, error) {
+	// Reject a name that cannot belong to a session before querying the
+	// host, so a bad argument reports the argument and never pays for a
+	// mount table or an hdiutil info run.
 	if err := ValidateName(rec.Name); err != nil {
 		return "", fmt.Errorf("session: attachment: %w", err)
 	}
-	roots := ownerRoots(rec, e.SessionsDir)
-	if e.useDiskImages() {
-		images, err := e.diskImages()
-		if err != nil {
-			return "", err
-		}
-		return attachedDiskPoint(images, roots), nil
-	}
-	table, err := e.attachTable()
+	host, err := e.attachment()
 	if err != nil {
 		return "", err
 	}
-	return attachedTablePoint(table, roots), nil
+	return host.point(rec, e.SessionsDir)
 }
 
-// attachTable snapshots the host mount table for the attachment guard. A
-// missing seam loads the real table, because the guard cannot tell an
-// unattached session from an unread table, and a platform that cannot read the
-// table reports that error.
-func (e *Engine) attachTable() ([]mountinfo.Mount, error) {
+// attachment is one host snapshot the attachment guard classifies against: the
+// mount table, or the disk listing on a host that reconciles through hdiutil
+// info. A scan reads it once and answers for every record, so a plan never
+// runs hdiutil info or parses the table once per session.
+type attachment struct {
+	disk   bool
+	table  []mountinfo.Mount
+	images []DiskImage
+}
+
+// attachment snapshots the host for the guard.
+func (e *Engine) attachment() (attachment, error) {
+	if e.useDiskImages() {
+		images, err := e.diskImages()
+		if err != nil {
+			return attachment{}, err
+		}
+		return attachment{disk: true, images: images}, nil
+	}
+	table, err := e.hostTable()
+	if err != nil {
+		return attachment{}, err
+	}
+	return attachment{table: table}, nil
+}
+
+// point returns the mount point that keeps one record attached, or the empty
+// string when it is unattached. It resolves the record's roots and reads the
+// snapshot, so it never reloads the host.
+func (a attachment) point(rec Record, sessionsDir string) (string, error) {
+	if err := ValidateName(rec.Name); err != nil {
+		return "", fmt.Errorf("session: attachment: %w", err)
+	}
+	roots := ownerRoots(rec, sessionsDir)
+	if a.disk {
+		return attachedDiskPoint(a.images, roots), nil
+	}
+	return attachedTablePoint(a.table, roots), nil
+}
+
+// hostTable snapshots the host mount table for the attachment guard. A missing
+// seam loads the real table, because the guard cannot tell an unattached
+// session from an unread table, and a platform that cannot read the table
+// reports that error. That is why this does not reuse loadTable, which reports
+// an empty table when no seam is set.
+func (e *Engine) hostTable() ([]mountinfo.Mount, error) {
 	if e.LoadTable != nil {
 		return e.loadTable()
 	}

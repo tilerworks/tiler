@@ -376,3 +376,64 @@ func TestEnsureInitializedConcurrentScansInitializeOnce(t *testing.T) {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
 }
+
+// TestRevisionPinsTheNewestRecord keeps an expiry snapshot tied to the
+// record it saw: an unchanged log reports the same revision, and one
+// appended or replaced record changes the digest.
+func TestRevisionPinsTheNewestRecord(t *testing.T) {
+	w, dir := openTestWriter(t, fixedClock(testTime))
+	ev := Event{Event: EventInitialize, Phase: PhaseInitialized}
+	initialized, first, err := w.Inspect(ev)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if !initialized || first.Digest == "" || !first.Last.Equal(testTime) {
+		t.Fatalf("Inspect = %v %+v, want one initialized record at %v", initialized, first, testTime)
+	}
+
+	again, err := w.Revision()
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	if again != first {
+		t.Fatalf("revision = %+v, want the unchanged %+v", again, first)
+	}
+
+	if _, err := w.Append(Event{Event: EventSessionOpen, Phase: PhaseSucceeded}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	after, err := w.Revision()
+	if err != nil {
+		t.Fatalf("Revision after append: %v", err)
+	}
+	if after.Digest == first.Digest {
+		t.Fatalf("digest %q survived an append", after.Digest)
+	}
+	if !after.Last.After(first.Last) && !after.Last.Equal(first.Last) {
+		t.Fatalf("revision time %v went back from %v", after.Last, first.Last)
+	}
+
+	last, err := w.LastActivity()
+	if err != nil {
+		t.Fatalf("LastActivity: %v", err)
+	}
+	if !last.Equal(after.Last) {
+		t.Fatalf("LastActivity = %v, want the revision time %v", last, after.Last)
+	}
+	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 2 {
+		t.Fatalf("records = %d, want 2", len(lines))
+	}
+}
+
+// TestRevisionReportsMissingAndDamagedLogs never invents activity for
+// a log a scan cannot read.
+func TestRevisionReportsMissingAndDamagedLogs(t *testing.T) {
+	w, dir := openTestWriter(t, fixedClock(testTime))
+	if _, err := w.Revision(); !errors.Is(err, ErrNoActivity) {
+		t.Fatalf("missing log: err = %v, want ErrNoActivity", err)
+	}
+	writeLog(t, dir, []byte("{truncated"))
+	if _, err := w.Revision(); !errors.Is(err, ErrDamagedLog) {
+		t.Fatalf("damaged log: err = %v, want ErrDamagedLog", err)
+	}
+}

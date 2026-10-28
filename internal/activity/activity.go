@@ -137,8 +137,8 @@ func (w *Writer) Append(ev Event) (time.Time, error) {
 	case errors.Is(err, ErrNoActivity):
 	case err != nil:
 		return time.Time{}, err
-	case last.After(now):
-		at = last
+	case last.Last.After(now):
+		at = last.Last
 	}
 	line, err := encodeLine(ev, at)
 	if err != nil {
