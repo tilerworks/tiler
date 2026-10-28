@@ -57,10 +57,7 @@ func (repo Repo) objectPath(id, name string) (string, error) {
 // checkObjectComponents inspects existing components within the library root.
 // Callers must coordinate subsequent I/O; this is not a race-free open.
 func (repo Repo) checkObjectComponents(target string, directory bool) error {
-	root := filepath.Clean(repo.Dir)
-	for range repo.Segments {
-		root = filepath.Dir(root)
-	}
+	root := libraryRoot(repo)
 	for current := target; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -45,6 +45,11 @@ type Event struct {
 	Error         string
 }
 
+// Validate rejects an event that cannot carry a meaningful record. A
+// caller that appends several records for one logical event checks it
+// first, so a malformed event never leaves a partial batch behind.
+func (ev Event) Validate() error { return ev.check() }
+
 // check rejects an event that cannot carry a meaningful record.
 func (ev Event) check() error {
 	if ev.Event == "" {
