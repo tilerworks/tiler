@@ -208,17 +208,26 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := mount(stored)
+	// The started record lands after the write-ahead action, so it can
+	// carry the sequence, and before the mount runs: a log that cannot
+	// be written leaves the pending action for a later Open instead of
+	// creating a view nothing records.
+	finish, err := e.beginActionActivity(name, activity.EventMount, stored)
 	if err != nil {
-		if wbErr := e.Writeback(name, stored.Seq, StatusFailed, ""); wbErr != nil {
-			return Result{}, fmt.Errorf("%w (writeback: %v)", err, wbErr)
-		}
 		return Result{}, err
+	}
+	result, mountErr := mount(stored)
+	logErr := finish(mountErr)
+	if mountErr != nil {
+		if wbErr := e.Writeback(name, stored.Seq, StatusFailed, ""); wbErr != nil {
+			return Result{}, fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
+		}
+		return Result{}, logErr
 	}
 	if wbErr := e.Writeback(name, stored.Seq, StatusMounted, result.Mountpoint); wbErr != nil {
 		return result, wbErr
 	}
-	return result, nil
+	return result, logErr
 }
 
 // Open replays one record into a consistent mounted state: the
@@ -317,7 +326,10 @@ func (e *Engine) reopen(name string) error {
 }
 
 // replay cleans one stale action and rebuilds it through the mount
-// seam, writing the outcome back to the record. A real remount —
+// seam, writing the outcome back to the record. The started record
+// lands before the clean: a log that cannot be written leaves the
+// stale view attached and the record untouched instead of tearing a
+// view down that nothing would rebuild. A real remount —
 // not the adoption of an already-healthy view — serves the desired
 // stack again, so the mounted status and the emptied served stack
 // ids land in the same atomic write and the old stack stops being
@@ -327,21 +339,36 @@ func (e *Engine) reopen(name string) error {
 // the post-rebase steady state, so no later open could tell the two
 // apart and heal it.
 func (e *Engine) replay(name string, action Action, clean CleanFunc, mount MountFunc) error {
-	if action.Mountpoint != "" {
-		if err := clean(action.Mountpoint); err != nil {
-			return err
-		}
-	}
-	result, err := mount(action)
+	finish, err := e.beginActionActivity(name, activity.EventMount, action)
 	if err != nil {
-		if wbErr := e.Writeback(name, action.Seq, StatusFailed, ""); wbErr != nil {
-			return fmt.Errorf("%w (writeback: %v)", err, wbErr)
-		}
-		return fmt.Errorf("session: %s: replay seq %d: %w", name, action.Seq, err)
+		return err
 	}
+	if action.Mountpoint != "" {
+		if cleanErr := clean(action.Mountpoint); cleanErr != nil {
+			return finish(replayError(name, action.Seq, cleanErr))
+		}
+	}
+	result, mountErr := mount(action)
+	if mountErr != nil {
+		mountErr = replayError(name, action.Seq, mountErr)
+		logErr := finish(mountErr)
+		if wbErr := e.Writeback(name, action.Seq, StatusFailed, ""); wbErr != nil {
+			return fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
+		}
+		return logErr
+	}
+	logErr := finish(nil)
 	// An adopted (Reused) view still serves the stack its served
 	// ids name, so only a real remount clears them.
-	return e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused)
+	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused); wbErr != nil {
+		return wbErr
+	}
+	return logErr
+}
+
+// replayError adds the replay context of one action to its error.
+func replayError(name string, seq int, err error) error {
+	return fmt.Errorf("session: %s: replay seq %d: %w", name, seq, err)
 }
 
 // Close tears every recorded mount down in reverse record order. A
@@ -407,9 +434,20 @@ func (e *Engine) closeRecord(name string, rec Record, umount UmountFunc) (bool, 
 			action.Status == StatusUnmounted {
 			continue
 		}
-		if err := umount(action.Mountpoint); err != nil {
-			return false, fmt.Errorf("session: %s: close seq %d: %w",
-				name, action.Seq, err)
+		finish, err := e.beginActionActivity(name, activity.EventUnmount, action)
+		if err != nil {
+			return false, err
+		}
+		umountErr := umount(action.Mountpoint)
+		if umountErr != nil {
+			umountErr = fmt.Errorf("session: %s: close seq %d: %w",
+				name, action.Seq, umountErr)
+		}
+		if err := finish(umountErr); err != nil {
+			return false, err
+		}
+		if umountErr != nil {
+			return false, umountErr
 		}
 		if err := e.Writeback(name, action.Seq, StatusUnmounted, ""); err != nil {
 			return false, err

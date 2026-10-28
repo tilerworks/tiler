@@ -14,11 +14,13 @@ import (
 
 // activityRecord is one decoded session activity record.
 type activityRecord struct {
-	Time    string `json:"time"`
-	Event   string `json:"event"`
-	Phase   string `json:"phase"`
-	Session string `json:"session"`
-	Error   string `json:"error"`
+	Time       string `json:"time"`
+	Event      string `json:"event"`
+	Phase      string `json:"phase"`
+	Session    string `json:"session"`
+	Seq        int    `json:"seq"`
+	Mountpoint string `json:"mountpoint"`
+	Error      string `json:"error"`
 }
 
 // readActivityLog decodes the activity log of one session; a missing
@@ -147,7 +149,17 @@ func TestOpenRecordsFailedPhaseWhenReplayFails(t *testing.T) {
 		t.Fatalf("Open err = %v, want the mount failure", err)
 	}
 	records := readActivityLog(t, dir, "dev")
-	last := records[len(records)-1]
+	tail := records[len(records)-2:]
+	if tail[0].Event != activity.EventMount || tail[0].Phase != activity.PhaseFailed {
+		t.Fatalf("replay record = %+v, want a failed replay mount", tail[0])
+	}
+	if tail[0].Seq != 1 || tail[0].Mountpoint != "/mnt/dev" {
+		t.Fatalf("replay record = %+v, want seq 1 at /mnt/dev", tail[0])
+	}
+	if !strings.Contains(tail[0].Error, "mount boom") {
+		t.Fatalf("replay error = %q, want the mount failure", tail[0].Error)
+	}
+	last := tail[1]
 	if last.Event != activity.EventSessionOpen || last.Phase != activity.PhaseFailed {
 		t.Fatalf("last record = %+v, want a failed open", last)
 	}
@@ -307,7 +319,17 @@ func TestCloseRecordsFailedPhaseWhenUmountFails(t *testing.T) {
 		t.Fatalf("Close = %v, %v, want the umount failure", removed, err)
 	}
 	records := readActivityLog(t, dir, "dev")
-	last := records[len(records)-1]
+	tail := records[len(records)-2:]
+	if tail[0].Event != activity.EventUnmount || tail[0].Phase != activity.PhaseFailed {
+		t.Fatalf("teardown record = %+v, want a failed unmount", tail[0])
+	}
+	if tail[0].Seq != 1 || tail[0].Mountpoint != "/mnt/dev" {
+		t.Fatalf("teardown record = %+v, want seq 1 at /mnt/dev", tail[0])
+	}
+	if !strings.Contains(tail[0].Error, "umount boom") {
+		t.Fatalf("teardown error = %q, want the umount failure", tail[0].Error)
+	}
+	last := tail[1]
 	if last.Event != activity.EventSessionClose || last.Phase != activity.PhaseFailed {
 		t.Fatalf("last record = %+v, want a failed close", last)
 	}
@@ -358,6 +380,317 @@ func TestOpenOfClosedSessionRecordsReopen(t *testing.T) {
 	}
 	if reopened.State != StateActive || !reopened.ClosedAt.IsZero() {
 		t.Fatalf("record = %+v, want an active record without ClosedAt", reopened)
+	}
+}
+
+// TestRunMountRecordsSeqAndMountpoint pairs every mount log line with
+// the action the record stores.
+func TestRunMountRecordsSeqAndMountpoint(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	point := "/mnt/dev"
+	if _, err := e.RunMount("dev", mountAction(point), func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}); err != nil {
+		t.Fatalf("RunMount: %v", err)
+	}
+	records := readActivityLog(t, dir, "dev")
+	want := activity.EventMount + "/" + activity.PhaseStarted + "," +
+		activity.EventMount + "/" + activity.PhaseSucceeded
+	if got := activityPhases(records[1:]); got != want {
+		t.Fatalf("phases = %q, want %q", got, want)
+	}
+	for _, rec := range records[1:] {
+		if rec.Seq != 1 || rec.Mountpoint != point {
+			t.Fatalf("record = %+v, want seq 1 at %s", rec, point)
+		}
+	}
+}
+
+// TestRunMountRecordsFailedPhaseWhenMountFails keeps the diagnostic
+// text of a failed mount and records the failed action.
+func TestRunMountRecordsFailedPhaseWhenMountFails(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("mount boom")
+	if _, err := e.RunMount("dev", mountAction("/mnt/dev"), func(Action) (Result, error) {
+		return Result{}, failure
+	}); !errors.Is(err, failure) {
+		t.Fatalf("RunMount err = %v, want the mount failure", err)
+	}
+	records := readActivityLog(t, dir, "dev")
+	last := records[len(records)-1]
+	if last.Event != activity.EventMount || last.Phase != activity.PhaseFailed {
+		t.Fatalf("last record = %+v, want a failed mount", last)
+	}
+	if !strings.Contains(last.Error, "mount boom") {
+		t.Fatalf("failed mount error = %q, want the mount failure", last.Error)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Actions[0].Status != StatusFailed {
+		t.Fatalf("status = %q, want failed", rec.Actions[0].Status)
+	}
+}
+
+// TestStartedMountActivityFailureLeavesTheActionPending refuses to
+// mount when the started record cannot be written. The write-ahead
+// action stays pending, so a later Open replays it.
+func TestStartedMountActivityFailureLeavesTheActionPending(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	e.Activity = func(string) (*activity.Writer, error) { return nil, errors.New("log boom") }
+	mounts := &callLog{}
+	_, err := e.RunMount("dev", mountAction("/mnt/dev"), func(a Action) (Result, error) {
+		mounts.add("mount %s", a.Mountpoint)
+		return Result{Mountpoint: a.Mountpoint}, nil
+	})
+	if err == nil {
+		t.Fatal("RunMount succeeded without its started record")
+	}
+	if len(mounts.calls) != 0 {
+		t.Fatalf("mount ran after a failed started record: %v", mounts.calls)
+	}
+	rec, loadErr := e.Load("dev")
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(rec.Actions) != 1 || rec.Actions[0].Status != StatusPending {
+		t.Fatalf("actions = %+v, want one pending action", rec.Actions)
+	}
+}
+
+// TestMountActivityFailureAfterMountReportsCompletedOperation keeps
+// the mounted view and its writeback when only the result record
+// fails.
+func TestMountActivityFailureAfterMountReportsCompletedOperation(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	logDir := t.TempDir()
+	e.Activity = func(string) (*activity.Writer, error) {
+		return activity.OpenLog(logDir, logDir, e.Now)
+	}
+	point := "/mnt/dev"
+	result, err := e.RunMount("dev", mountAction(point), func(a Action) (Result, error) {
+		// Removing the log directory between the started and the
+		// result record fails exactly the outcome append.
+		if rmErr := os.RemoveAll(logDir); rmErr != nil {
+			t.Fatalf("remove log directory: %v", rmErr)
+		}
+		return Result{Mountpoint: a.Mountpoint}, nil
+	})
+	if !errors.Is(err, ErrActivityFailed) {
+		t.Fatalf("RunMount err = %v, want ErrActivityFailed", err)
+	}
+	if result.Mountpoint != point {
+		t.Fatalf("mountpoint = %q, want %s", result.Mountpoint, point)
+	}
+	rec, loadErr := e.Load("dev")
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if rec.Actions[0].Status != StatusMounted || rec.Actions[0].Mountpoint != point {
+		t.Fatalf("action = %+v, want the mounted view", rec.Actions[0])
+	}
+}
+
+// TestOpenReplayRecordsMountActivity logs a remount with the sequence
+// of the action it rebuilt.
+func TestOpenReplayRecordsMountActivity(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("mount boom")
+	if _, err := e.RunMount("dev", mountAction("/mnt/dev"), func(Action) (Result, error) {
+		return Result{}, failure
+	}); !errors.Is(err, failure) {
+		t.Fatalf("RunMount err = %v, want the mount failure", err)
+	}
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error { return nil }
+	if err := e.Open("dev", func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	records := readActivityLog(t, dir, "dev")
+	tail := records[len(records)-4:]
+	want := strings.Join([]string{
+		activity.EventSessionOpen + "/" + activity.PhaseStarted,
+		activity.EventMount + "/" + activity.PhaseStarted,
+		activity.EventMount + "/" + activity.PhaseSucceeded,
+		activity.EventSessionOpen + "/" + activity.PhaseSucceeded,
+	}, ",")
+	if got := activityPhases(tail); got != want {
+		t.Fatalf("replay phases = %q, want %q", got, want)
+	}
+	if tail[1].Seq != 1 || tail[1].Mountpoint != "/mnt/dev" {
+		t.Fatalf("replay record = %+v, want seq 1 at /mnt/dev", tail[1])
+	}
+}
+
+// TestReplayRecordsFailedPhaseWhenCleanFails keeps the stale point
+// untouched and records the failure when the clean fails.
+func TestReplayRecordsFailedPhaseWhenCleanFails(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", "/mnt/dev")
+	e.Health = func(string) bool { return false }
+	failure := errors.New("clean boom")
+	e.Clean = func(string) error { return failure }
+	mounts := &callLog{}
+	err := e.Open("dev", func(a Action) (Result, error) {
+		mounts.add("mount %s", a.Mountpoint)
+		return Result{Mountpoint: a.Mountpoint}, nil
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Open err = %v, want the clean failure", err)
+	}
+	if len(mounts.calls) != 0 {
+		t.Fatalf("mount ran after a failed clean: %v", mounts.calls)
+	}
+	records := readActivityLog(t, dir, "dev")
+	tail := records[len(records)-2:]
+	if tail[0].Event != activity.EventMount || tail[0].Phase != activity.PhaseFailed {
+		t.Fatalf("replay record = %+v, want a failed replay mount", tail[0])
+	}
+	if tail[0].Seq != 1 || !strings.Contains(tail[0].Error, "clean boom") {
+		t.Fatalf("replay record = %+v, want seq 1 with the clean failure", tail[0])
+	}
+	if tail[1].Event != activity.EventSessionOpen || tail[1].Phase != activity.PhaseFailed {
+		t.Fatalf("last record = %+v, want a failed open", tail[1])
+	}
+}
+
+// TestStartedReplayActivityFailureKeepsTheStaleView refuses to clean
+// a stale point when the replay started record cannot be written.
+func TestStartedReplayActivityFailureKeepsTheStaleView(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := e.Append("dev", mountAction("/mnt/dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Writeback("dev", stored.Seq, StatusMounted, "/mnt/dev"); err != nil {
+		t.Fatal(err)
+	}
+	e.Health = func(string) bool { return false }
+	calls := 0
+	e.Activity = func(name string) (*activity.Writer, error) {
+		calls++
+		if calls > 1 {
+			return nil, errors.New("log boom")
+		}
+		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+	}
+	seams := &callLog{}
+	e.Clean = func(string) error {
+		seams.add("clean")
+		return nil
+	}
+	err = e.Open("dev", func(a Action) (Result, error) {
+		seams.add("mount %s", a.Mountpoint)
+		return Result{Mountpoint: a.Mountpoint}, nil
+	})
+	if err == nil {
+		t.Fatal("Open succeeded without its replay started record")
+	}
+	if len(seams.calls) != 0 {
+		t.Fatalf("replay side effects ran after a failed started record: %v", seams.calls)
+	}
+	records := readActivityLog(t, dir, "dev")
+	tail := records[len(records)-2:]
+	if activityPhases(tail) != activity.EventSessionOpen+"/"+activity.PhaseStarted+","+
+		activity.EventSessionOpen+"/"+activity.PhaseFailed {
+		t.Fatalf("phases = %q, want one failed open", activityPhases(tail))
+	}
+}
+
+// TestCloseRecordsUnmountActivityInReverseOrder pairs every teardown
+// with the action it took down.
+func TestCloseRecordsUnmountActivityInReverseOrder(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedMounted(t, e, "dev", "/mnt/one", "/mnt/two")
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	records := readActivityLog(t, dir, "dev")
+	tail := records[len(records)-6:]
+	want := strings.Join([]string{
+		activity.EventSessionClose + "/" + activity.PhaseStarted,
+		activity.EventUnmount + "/" + activity.PhaseStarted,
+		activity.EventUnmount + "/" + activity.PhaseSucceeded,
+		activity.EventUnmount + "/" + activity.PhaseStarted,
+		activity.EventUnmount + "/" + activity.PhaseSucceeded,
+		activity.EventSessionClose + "/" + activity.PhaseSucceeded,
+	}, ",")
+	if got := activityPhases(tail); got != want {
+		t.Fatalf("close phases = %q, want %q", got, want)
+	}
+	if tail[1].Seq != 2 || tail[1].Mountpoint != "/mnt/two" {
+		t.Fatalf("first teardown = %+v, want seq 2 at /mnt/two", tail[1])
+	}
+	if tail[3].Seq != 1 || tail[3].Mountpoint != "/mnt/one" {
+		t.Fatalf("second teardown = %+v, want seq 1 at /mnt/one", tail[3])
+	}
+}
+
+// TestStartedUnmountActivityFailureBlocksTeardown keeps every view up
+// when an unmount started record cannot be written.
+func TestStartedUnmountActivityFailureBlocksTeardown(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Append("dev", mountAction("/mnt/dev")); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e.Activity = func(name string) (*activity.Writer, error) {
+		calls++
+		if calls > 1 {
+			return nil, errors.New("log boom")
+		}
+		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+	}
+	umounts := &callLog{}
+	removed, err := e.Close("dev", func(point string) error {
+		umounts.add("umount %s", point)
+		return nil
+	})
+	if err == nil || removed {
+		t.Fatalf("Close = %v, %v, want a refused close", removed, err)
+	}
+	if len(umounts.calls) != 0 {
+		t.Fatalf("a view was torn down after a failed started record: %v", umounts.calls)
+	}
+	records := readActivityLog(t, dir, "dev")
+	tail := records[len(records)-2:]
+	want := activity.EventSessionClose + "/" + activity.PhaseStarted + "," +
+		activity.EventSessionClose + "/" + activity.PhaseFailed
+	if got := activityPhases(tail); got != want {
+		t.Fatalf("close phases = %q, want %q", got, want)
 	}
 }
 

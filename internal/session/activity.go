@@ -32,59 +32,65 @@ func (e *Engine) activityLog(name string) (*activity.Writer, error) {
 	return activity.OpenLog(e.Dir, dir, e.now)
 }
 
-// beginActivity writes the started record of one lifecycle action and
-// returns the closure that records its outcome. A started write
-// failure returns before the action runs, so a session whose log
-// cannot be written is never opened or closed without the activity
-// that protects it. The closure keeps the action error and only adds
-// the log failure when the outcome record itself fails.
+// beginActivity writes the started record of one session-level
+// lifecycle action and returns the closure that records its outcome.
 func (e *Engine) beginActivity(name, event string) (func(error) error, error) {
+	return e.beginEvent(name, activity.Event{Event: event, Session: name})
+}
+
+// beginActionActivity writes the started record of one mount or
+// unmount action, carrying the action's sequence and mountpoint so a
+// log line names the view the record lists. A failed started write
+// returns before the action runs, so a log that cannot be written
+// never leaves an unrecorded side effect behind.
+func (e *Engine) beginActionActivity(name, event string, action Action) (func(error) error, error) {
+	return e.beginEvent(name, activity.Event{
+		Event:      event,
+		Session:    name,
+		Seq:        action.Seq,
+		Mountpoint: action.Mountpoint,
+	})
+}
+
+// beginEvent writes the started phase of one event and returns the
+// closure that records its outcome: the success or the failure with
+// the action's diagnostic text. The closure keeps the action error
+// and only adds the log failure when the outcome record itself
+// fails, so a completed action is never reported as a rollback.
+func (e *Engine) beginEvent(name string, started activity.Event) (func(error) error, error) {
 	w, err := e.activityLog(name)
 	if err == nil {
-		err = startActivity(w, name, event)
+		started.Phase = activity.PhaseStarted
+		err = appendEvent(w, started)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("session: %s: activity %s started: %w", name, event, err)
+		return nil, fmt.Errorf("session: %s: activity %s started: %w",
+			name, started.Event, err)
 	}
 	return func(opErr error) error {
-		if err := finishActivity(w, name, event, opErr); err != nil {
+		outcome := started
+		outcome.Phase = activity.PhaseSucceeded
+		if opErr != nil {
+			outcome.Phase = activity.PhaseFailed
+			outcome.Error = opErr.Error()
+		}
+		if err := appendEvent(w, outcome); err != nil {
 			if opErr != nil {
-				return fmt.Errorf("%w (activity %s failed: %v)", opErr, event, err)
+				return fmt.Errorf("%w (activity %s failed: %v)",
+					opErr, outcome.Event, err)
 			}
-			return fmt.Errorf("%w: session %s %s: %w", ErrActivityFailed, name, event, err)
+			return fmt.Errorf("%w: session %s %s: %w",
+				ErrActivityFailed, name, outcome.Event, err)
 		}
 		return opErr
 	}, nil
 }
 
-// startActivity appends the started phase of one event. A nil writer
-// records nothing.
-func startActivity(w *activity.Writer, name, event string) error {
+// appendEvent appends one record. A nil writer means no sessions root
+// is configured, so nothing is recorded.
+func appendEvent(w *activity.Writer, ev activity.Event) error {
 	if w == nil {
 		return nil
-	}
-	_, err := w.Append(activity.Event{
-		Event:   event,
-		Phase:   activity.PhaseStarted,
-		Session: name,
-	})
-	return err
-}
-
-// finishActivity appends the succeeded or failed phase of one event
-// and keeps the diagnostic text of a failed action.
-func finishActivity(w *activity.Writer, name, event string, opErr error) error {
-	if w == nil {
-		return nil
-	}
-	ev := activity.Event{
-		Event:   event,
-		Phase:   activity.PhaseSucceeded,
-		Session: name,
-	}
-	if opErr != nil {
-		ev.Phase = activity.PhaseFailed
-		ev.Error = opErr.Error()
 	}
 	_, err := w.Append(ev)
 	return err
@@ -96,17 +102,14 @@ func finishActivity(w *activity.Writer, name, event string, opErr error) error {
 // session.
 func (e *Engine) recordCreated(name string) error {
 	w, err := e.activityLog(name)
+	if err == nil {
+		err = appendEvent(w, activity.Event{
+			Event:   activity.EventSessionCreate,
+			Phase:   activity.PhaseSucceeded,
+			Session: name,
+		})
+	}
 	if err != nil {
-		return fmt.Errorf("%w: session %s create: %w", ErrActivityFailed, name, err)
-	}
-	if w == nil {
-		return nil
-	}
-	if _, err := w.Append(activity.Event{
-		Event:   activity.EventSessionCreate,
-		Phase:   activity.PhaseSucceeded,
-		Session: name,
-	}); err != nil {
 		return fmt.Errorf("%w: session %s create: %w", ErrActivityFailed, name, err)
 	}
 	return nil
