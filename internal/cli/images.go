@@ -567,14 +567,11 @@ func newMetaJSON(manifest image.Manifest) metaJSON {
 func newImagesGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
-		Short: "Reclaim branch layers, promote holds, expire archives, clean sessions",
-		Long: "One garbage collection entry manages three kinds of expired\n" +
-			"objects: it reclaims the branch layers of an active image\n" +
-			"that neither the head nor a pinned stack tip reaches,\n" +
-			"deleting their _incr and _blocks payloads; it promotes every\n" +
-			"unreferenced image hold into archives; it deletes archives\n" +
-			"past the keep_versions and max_age keys in .tiler.yaml; and\n" +
-			"then cleans the session records — deleting closed records\n" +
+		Short: "Recover image cleanup and clean sessions",
+		Long: "Garbage collection recovers interrupted version removal and\n" +
+			"removes orphan object directories. Every version retained by\n" +
+			"image metadata is preserved regardless of its age or history.\n" +
+			"It then cleans session records — deleting closed records\n" +
 			"past the session_max_age key in .tiler.yaml and reporting\n" +
 			"active sessions whose mounts are all stale. Active session\n" +
 			"records are never deleted automatically, except a --rm one\n" +

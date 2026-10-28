@@ -28,27 +28,108 @@ type GCEvent struct {
 	FullID string
 }
 
-// GC reclaims the unreferenced parts of the library: branch layers
-// of an active DAG that neither the head nor a pinned tip reaches,
-// every unreferenced hold promoted into archives, and the archives
-// that exceed the retention count or age. A zero keep_versions or
-// max_age leaves that rule unlimited; with both set, an archive
-// beyond either rule is deleted. Held archives, active images,
-// referenced holds, and session records are never deleted. An
-// unreadable archive is kept.
+// GC recovers interrupted version removal and deletes object directories not
+// referenced by v3 metadata. Retained versions are never age- or count-based
+// garbage. The legacy path remains isolated for repositories not yet on v3.
 func GC(cfg config.Config, refs Refs, now time.Time) ([]GCEvent, error) {
+	release, err := LockLibrary(cfg.ImagesDir, DefaultLibraryLockTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("gc: %w", err)
+	}
+	defer release()
+	if err := recoverVersionRemoval(cfg.ImagesDir, hooks{}); err != nil {
+		return nil, fmt.Errorf("gc: %w", err)
+	}
 	repos, err := ListRepos(cfg.ImagesDir)
 	if err != nil {
 		return nil, fmt.Errorf("gc: %w", err)
 	}
 	var events []GCEvent
 	for _, repo := range repos {
+		manifest, loadErr := LoadVersionManifest(repo)
+		if loadErr == nil {
+			repoEvents, cleanErr := removeOrphanVersionObjects(repo, manifest)
+			events = append(events, repoEvents...)
+			if cleanErr != nil {
+				return events, fmt.Errorf("gc: %s: %w", repo.Name(), cleanErr)
+			}
+			continue
+		}
+		legacy, probeErr := isLegacyRepoLayout(repo)
+		if probeErr != nil || !legacy {
+			return events, fmt.Errorf("gc: %s: %w", repo.Name(), loadErr)
+		}
 		repoEvents, err := gcRepo(repo, cfg, refs, now)
 		events = append(events, repoEvents...)
 		if err != nil {
 			return events, fmt.Errorf("gc: %s: %w", repo.Name(), err)
 		}
 	}
+	return events, nil
+}
+
+func isLegacyRepoLayout(repo Repo) (bool, error) {
+	if _, err := os.Lstat(filepath.Join(repo.Dir, dirObjects)); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	body, err := os.ReadFile(repo.MetaPath())
+	if err == nil {
+		version, probeErr := probeDocVersion(body)
+		if probeErr != nil || version == VersionManifestVersion {
+			return false, probeErr
+		}
+		if version == "" || version == MetaVersion || version == ManifestVersion {
+			return true, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	for _, name := range []string{ImageFile, ImageDMG, dirIncr, dirBlocks, dirHold, dirArchives} {
+		if _, err := os.Lstat(filepath.Join(repo.Dir, name)); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// removeOrphanVersionObjects removes complete object directories that are not
+// named by metadata. Historical versions remain reachable metadata entries and
+// are never candidates, regardless of age or retention configuration.
+func removeOrphanVersionObjects(repo Repo, manifest VersionManifest) ([]GCEvent, error) {
+	dir := filepath.Join(repo.Dir, dirObjects)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	retained := make(map[string]bool, len(manifest.Images))
+	for _, node := range manifest.Images {
+		retained[node.ID] = true
+	}
+	var events []GCEvent
+	for _, entry := range entries {
+		id := entry.Name()
+		if !entry.IsDir() || checkID(id) != nil || retained[id] {
+			continue
+		}
+		path, pathErr := repo.ObjectDirPath(id)
+		if pathErr != nil {
+			return events, pathErr
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return events, err
+		}
+		events = append(events, GCEvent{
+			Name: repo.Name(), Action: GCActionRemoved, FullID: id,
+		})
+	}
+	removeEmpty(dir)
 	return events, nil
 }
 

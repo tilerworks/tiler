@@ -22,6 +22,69 @@ func gcRepoFixture(t *testing.T) (config.Config, Repo) {
 	return cfg, repo
 }
 
+func TestGCV3KeepsHistoryAndRemovesOnlyOrphanObjects(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	orphan := strings.Repeat("f", 64)
+	orphanDir, err := repo.ObjectDirPath(orphan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		ImagesDir: imagesDir, KeepVersions: 1, MaxAge: time.Nanosecond,
+	}
+	events, err := GC(cfg, nil, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Action != GCActionRemoved ||
+		events[0].FullID != orphan {
+		t.Fatalf("events = %#v", events)
+	}
+	for _, node := range nodes {
+		dir, pathErr := repo.ObjectDirPath(node.ID)
+		if pathErr != nil {
+			t.Fatal(pathErr)
+		}
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("historical object %s was removed: %v", node.ID, statErr)
+		}
+	}
+	if _, err := os.Stat(orphanDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan remains: %v", err)
+	}
+}
+
+func TestGCV3CorruptMetadataFailsWithoutRemovingObjects(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	orphan := strings.Repeat("f", 64)
+	orphanDir, err := repo.ObjectDirPath(orphan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), []byte("version: '3.0'\nimages: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if events, err := GC(config.Config{ImagesDir: imagesDir}, nil, time.Now()); err == nil {
+		t.Fatalf("GC succeeded with events %#v", events)
+	}
+	for _, id := range append([]string{orphan}, nodes[0].ID, nodes[1].ID) {
+		dir, pathErr := repo.ObjectDirPath(id)
+		if pathErr != nil {
+			t.Fatal(pathErr)
+		}
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("object %s was removed: %v", id, statErr)
+		}
+	}
+}
+
 // makeArchive lays one archive directory out with a real manifest
 // whose root created_at controls retention ranking.
 func makeArchive(t *testing.T, repo Repo, data []byte, createdAt time.Time) Manifest {
