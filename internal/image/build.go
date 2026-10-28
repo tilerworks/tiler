@@ -60,6 +60,11 @@ type FullRequest struct {
 	// gitscene.Prepare when the source looks like a git repository;
 	// non-git sources are skipped without invoking git.
 	PrepareScene func(dir string) error
+	// Description fields apply only to immutable version builds.
+	Description    string
+	DescriptionSet bool
+	// MountSmoke overrides the immutable build quality gate in tests.
+	MountSmoke func(string) error
 }
 
 // FullResult reports one successful full build.
