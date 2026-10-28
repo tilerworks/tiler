@@ -82,16 +82,6 @@ func mountCapable() error {
 	return nil
 }
 
-// mustCmd runs one command through the production seams.
-func mustCmd(t *testing.T, args ...string) string {
-	t.Helper()
-	stdout, stderr, _, err := runCmd(t, args...)
-	if err != nil {
-		t.Fatalf("command %v: %v\n%s", args, err, stderr)
-	}
-	return stdout
-}
-
 // failCmd runs one command expecting a failure and returns the error.
 func failCmd(t *testing.T, args ...string) error {
 	t.Helper()

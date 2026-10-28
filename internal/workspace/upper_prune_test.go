@@ -18,7 +18,26 @@ const fixtureMtime = int64(1600000000)
 // fixtureRoots creates the empty upper and lower comparison roots.
 func fixtureRoots(t *testing.T) (upper, lower string) {
 	t.Helper()
-	dir := t.TempDir()
+	return fixtureRootsIn(t, t.TempDir())
+}
+
+// shortFixtureRoots is fixtureRoots under a short temporary path, so
+// a unix socket inside the upper fits sun_path (104 bytes on macOS)
+// even when the test name would make a t.TempDir path overflow it.
+func shortFixtureRoots(t *testing.T) (upper, lower string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "prune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return fixtureRootsIn(t, dir)
+}
+
+// fixtureRootsIn creates the empty upper and lower comparison roots
+// below dir.
+func fixtureRootsIn(t *testing.T, dir string) (upper, lower string) {
+	t.Helper()
 	upper = filepath.Join(dir, "upper")
 	lower = filepath.Join(dir, "lower")
 	for _, root := range []string{upper, lower} {
@@ -280,7 +299,13 @@ func TestPruneUpperEmptyUpperIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantReport(t, report, PruneReport{})
+	want := PruneReport{}
+	if runtime.GOOS != "linux" {
+		// Off Linux the root marker probe fails first and keeps the
+		// whole tree with one counted error.
+		want.Errors = 1
+	}
+	wantReport(t, report, want)
 	assertExists(t, upper)
 }
 
@@ -456,7 +481,7 @@ func TestPruneUpperHardLinkedFileKept(t *testing.T) {
 
 func TestPruneUpperSpecialFilesKept(t *testing.T) {
 	t.Run("fifo and socket kept", func(t *testing.T) {
-		upper, lower := fixtureRoots(t)
+		upper, lower := shortFixtureRoots(t)
 		fifo := filepath.Join(upper, "fifo")
 		if err := syscall.Mknod(fifo, syscall.S_IFIFO|0o644, 0); err != nil {
 			t.Skipf("fifo creation unavailable: %v", err)

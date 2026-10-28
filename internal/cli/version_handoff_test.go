@@ -247,3 +247,13 @@ func handoffVersionNode(t *testing.T, body string) (image.ImageMeta, string) {
 		MtimeUnix: info.ModTime().Unix(), CreatedAt: time.Now().UTC(), Builder: "test",
 		Format: image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}}, stage
 }
+
+// mustCmd runs one command through the production seams.
+func mustCmd(t *testing.T, args ...string) string {
+	t.Helper()
+	stdout, stderr, _, err := runCmd(t, args...)
+	if err != nil {
+		t.Fatalf("command %v: %v\n%s", args, err, stderr)
+	}
+	return stdout
+}

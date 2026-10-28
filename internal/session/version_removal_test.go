@@ -156,7 +156,14 @@ func TestConcurrentReferenceCreationPrecedesSubtreeRemoval(t *testing.T) {
 			return store.Save(rec)
 		})
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case err := <-results:
+		t.Fatalf("reference creation failed before entering callback: %v", err)
+	case <-time.After(5 * time.Second):
+		close(save)
+		t.Fatal("reference creation did not enter callback")
+	}
 	go func() {
 		defer wg.Done()
 		_, err := c.RemoveVersionSubtree("alice/app", nodes[0].ID)
