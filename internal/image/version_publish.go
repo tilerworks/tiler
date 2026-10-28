@@ -142,6 +142,18 @@ func verifyVersionFile(path string, node ImageMeta) (os.FileInfo, error) {
 	return info, nil
 }
 
+// verifyVersionPayload verifies a published library leaf. The leaf may
+// be a plain file, a symlink, or a path-ref to an external image, so
+// the real bytes are resolved before the size and digest are compared.
+func verifyVersionPayload(leaf string, node ImageMeta) error {
+	path, err := ResolvePayloadBytesPath(leaf)
+	if err != nil {
+		return err
+	}
+	_, err = verifyVersionFile(path, node)
+	return err
+}
+
 func copyVersionFile(src, dst string) error {
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if errors.Is(err, os.ErrExist) {

@@ -76,11 +76,20 @@ func mountedDMGVersion(repo Repo, manifest VersionManifest, id string) (ImageMet
 		if node.ID != id || node.Kind != KindFull || node.Format.Type != FormatDMG {
 			continue
 		}
-		path, err := repo.ObjectPayloadPath(node)
-		if err == nil {
-			_, err = verifyVersionFile(path, node)
+		leaf, err := repo.ObjectPayloadPath(node)
+		if err != nil {
+			return ImageMeta{}, "", err
 		}
-		return node, path, err
+		// A linked version stores its payload as a symlink or a
+		// path-ref, so convert and verify the external file itself.
+		path, err := ResolvePayloadBytesPath(leaf)
+		if err != nil {
+			return ImageMeta{}, "", err
+		}
+		if _, err := verifyVersionFile(path, node); err != nil {
+			return ImageMeta{}, "", err
+		}
+		return node, path, nil
 	}
 	return ImageMeta{}, "", errors.New("version bake: pinned full DMG version not found")
 }

@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+func TestDMGVersionBakeConvertsLinkedPayload(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
+	external := writeFakeDMG(t, t.TempDir(), []byte("linked"))
+	if err := LinkExternal(cfg.ImagesDir, repo.Name(), external, "test"); err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := loadVersionMeta(repo)
+	if err != nil || len(manifest.Images) != 1 {
+		t.Fatalf("linked manifest: %#v, %v", manifest, err)
+	}
+	runner := &dmgRunner{body: []byte("baked")}
+	_, err = BuildDMGVersion(DMGRequest{Config: cfg, Name: repo.Name(), MountedID: manifest.Images[0].ID,
+		Shadow: writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("before")), Builder: "test", Now: fixedNow, Run: runner.run})
+	if err != nil {
+		t.Fatalf("bake from linked payload: %v", err)
+	}
+	if !strings.Contains(strings.Join(runner.calls[0], " "), external) {
+		t.Fatalf("convert did not use the linked file: %q", runner.calls)
+	}
+}
+
 func TestDMGVersionBakePinsBaseAndReusesPostConvertContent(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")

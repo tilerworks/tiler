@@ -99,7 +99,7 @@ func commitDMGVersion(repo Repo, req DMGRequest, staged, content string) (ImageM
 	if node, found := forest.Latest(); found {
 		path, err := repo.ObjectPayloadPath(node)
 		if err == nil {
-			_, err = verifyVersionFile(path, node)
+			err = verifyVersionPayload(path, node)
 		}
 		if err != nil {
 			return ImageMeta{}, err
