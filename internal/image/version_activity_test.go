@@ -153,6 +153,257 @@ func TestVersionActivityRejectsAnInvalidEvent(t *testing.T) {
 	}
 }
 
+// TestEnsureVersionActivityInitializesAMissingChild keeps an existing
+// parent log and adds the dependency initialization record to it.
+func TestEnsureVersionActivityInitializesAMissingChild(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	tip := incrementalNode(base, "tip")
+	seedVersions(t, repo, base, tip)
+	if err := AppendVersionActivityLocked(repo, base.ID,
+		activity.Event{Event: activity.EventImageCreateFull, Phase: activity.PhaseSucceeded}, activityClock); err != nil {
+		t.Fatalf("create the parent log: %v", err)
+	}
+	written, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if strings.Join(written, ",") != base.ID+","+tip.ID {
+		t.Fatalf("written = %v, want root then source", written)
+	}
+	parent := readVersionActivity(t, repo, base.ID)
+	if len(parent) != 2 {
+		t.Fatalf("parent lines = %+v, want the create and the initialization", parent)
+	}
+	init := parent[1]
+	if init.Event != activity.EventImageDependency || init.Phase != activity.PhaseInitialized {
+		t.Fatalf("parent record = %+v, want a dependency initialization", init)
+	}
+	if init.Version != base.ID || init.SourceVersion != tip.ID ||
+		init.SourceEvent != activity.EventInitialize {
+		t.Fatalf("parent attribution = %+v", init)
+	}
+	source := readVersionActivity(t, repo, tip.ID)
+	if len(source) != 1 || source[0].Event != activity.EventInitialize ||
+		source[0].Phase != activity.PhaseInitialized || source[0].SourceVersion != "" {
+		t.Fatalf("source record = %+v, want the initialization itself", source)
+	}
+}
+
+// TestEnsureVersionActivityInitializesTheWholeChain builds every
+// missing log from the dependency records.
+func TestEnsureVersionActivityInitializesTheWholeChain(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	mid := incrementalNode(base, "mid")
+	tip := incrementalNode(mid, "tip")
+	seedVersions(t, repo, base, mid, tip)
+	written, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if len(written) != 3 {
+		t.Fatalf("written = %v, want the whole chain", written)
+	}
+	for _, node := range []ImageMeta{base, mid, tip} {
+		lines := readVersionActivity(t, repo, node.ID)
+		if len(lines) != 1 || lines[0].Phase != activity.PhaseInitialized {
+			t.Fatalf("version %s lines = %+v, want one initialization", node.Description, lines)
+		}
+	}
+}
+
+// TestEnsureVersionActivityDoesNotRenewAnExistingLog keeps repeated
+// scans and plain reads from writing anything.
+func TestEnsureVersionActivityDoesNotRenewAnExistingLog(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	tip := incrementalNode(base, "tip")
+	seedVersions(t, repo, base, tip)
+	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); err != nil {
+		t.Fatalf("first ensure: %v", err)
+	}
+	before := readVersionActivity(t, repo, base.ID)
+	for range 2 {
+		written, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock)
+		if err != nil {
+			t.Fatalf("repeated ensure: %v", err)
+		}
+		if len(written) != 0 {
+			t.Fatalf("repeated ensure wrote %v, want nothing", written)
+		}
+	}
+	after := readVersionActivity(t, repo, base.ID)
+	if len(after) != len(before) {
+		t.Fatalf("ancestor lines = %d, want %d", len(after), len(before))
+	}
+}
+
+// TestEnsureVersionActivityRejectsADamagedTail leaves every log alone
+// when an ancestor tail cannot be read.
+func TestEnsureVersionActivityRejectsADamagedTail(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	mid := incrementalNode(base, "mid")
+	tip := incrementalNode(mid, "tip")
+	seedVersions(t, repo, base, mid, tip)
+	if err := os.WriteFile(activityLogPath(t, repo, mid.ID), []byte("{\n"), 0o600); err != nil {
+		t.Fatalf("damage the tail: %v", err)
+	}
+	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); !errors.Is(err, activity.ErrDamagedLog) {
+		t.Fatalf("ensure err = %v, want ErrDamagedLog", err)
+	}
+	requireNoActivityLog(t, repo, base.ID)
+	requireNoActivityLog(t, repo, tip.ID)
+}
+
+// TestEnsureVersionActivityReportsTheVersionsWrittenBeforeAFailure
+// returns the ancestors that were initialized even when the source
+// record cannot be written.
+func TestEnsureVersionActivityReportsTheVersionsWrittenBeforeAFailure(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	mid := incrementalNode(base, "mid")
+	tip := incrementalNode(mid, "tip")
+	seedVersions(t, repo, base, mid, tip)
+	boom := errors.New("log boom")
+	opens := map[string]int{}
+	batch := versionActivityBatch{
+		repo:  repo,
+		clock: activityClock,
+		open: func(repo Repo, id string, clock activity.Clock) (*activity.Writer, error) {
+			// The source is opened for its pre-check, for the batch
+			// time, and then for the initialization write.
+			opens[id]++
+			if id == tip.ID && opens[id] > 2 {
+				return nil, boom
+			}
+			dir, err := repo.ObjectDirPath(id)
+			if err != nil {
+				return nil, err
+			}
+			return activity.OpenLog(libraryRoot(repo), dir, clock)
+		},
+	}
+	written, err := batch.ensure(tip.ID)
+	if !errors.Is(err, boom) {
+		t.Fatalf("ensure err = %v, want the injected failure", err)
+	}
+	if strings.Join(written, ",") != base.ID+","+mid.ID {
+		t.Fatalf("written = %v, want the ancestors alone", written)
+	}
+	for _, node := range []ImageMeta{base, mid} {
+		lines := readVersionActivity(t, repo, node.ID)
+		if len(lines) != 1 || lines[0].Phase != activity.PhaseInitialized {
+			t.Fatalf("version %s lines = %+v, want one initialization", node.Description, lines)
+		}
+	}
+	requireNoActivityLog(t, repo, tip.ID)
+}
+
+// TestEnsureVersionActivitySharesTheNewestTailTime stamps the whole
+// initialization with a future ancestor time instead of the clock.
+func TestEnsureVersionActivitySharesTheNewestTailTime(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	tip := incrementalNode(base, "tip")
+	seedVersions(t, repo, base, tip)
+	future := testActivityNow.Add(2 * time.Hour)
+	line := fmt.Sprintf("{\"time\":%q,\"event\":%q,\"phase\":%q}\n",
+		future.Format(time.RFC3339Nano), activity.EventMount, activity.PhaseSucceeded)
+	if err := os.WriteFile(activityLogPath(t, repo, base.ID), []byte(line), 0o600); err != nil {
+		t.Fatalf("seed ancestor tail: %v", err)
+	}
+	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	want := future.Format(time.RFC3339Nano)
+	parent := readVersionActivity(t, repo, base.ID)
+	if len(parent) != 2 || parent[1].Time != want {
+		t.Fatalf("parent lines = %+v, want the initialization at %s", parent, want)
+	}
+	source := readVersionActivity(t, repo, tip.ID)
+	if len(source) != 1 || source[0].Time != want {
+		t.Fatalf("source lines = %+v, want the initialization at %s", source, want)
+	}
+}
+
+// TestEnsureVersionActivityHealsAnInterruptedInitialization finishes
+// a propagation that stopped after the source record landed.
+func TestEnsureVersionActivityHealsAnInterruptedInitialization(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	tip := incrementalNode(base, "tip")
+	seedVersions(t, repo, base, tip)
+	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); err != nil {
+		t.Fatalf("first ensure: %v", err)
+	}
+	if err := os.Remove(activityLogPath(t, repo, base.ID)); err != nil {
+		t.Fatalf("drop the ancestor log: %v", err)
+	}
+	if written, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); err != nil || len(written) != 0 {
+		t.Fatalf("source ensure = %v, %v, want a no-op", written, err)
+	}
+	written, err := EnsureVersionActivityLocked(repo, base.ID, activityClock)
+	if err != nil {
+		t.Fatalf("ancestor ensure: %v", err)
+	}
+	if strings.Join(written, ",") != base.ID {
+		t.Fatalf("written = %v, want the ancestor alone", written)
+	}
+}
+
+// TestEnsureVersionActivityScanOrderDoesNotChangeTheOutcome initializes
+// the same chain from opposite scan orders: every order leaves one
+// readable log per version holding only initialization records, and a
+// second pass over the whole library writes nothing.
+func TestEnsureVersionActivityScanOrderDoesNotChangeTheOutcome(t *testing.T) {
+	scan := func(t *testing.T, order []int) map[string]bool {
+		t.Helper()
+		repo := testRepo(t)
+		base := versionNode("base")
+		mid := incrementalNode(base, "mid")
+		tip := incrementalNode(mid, "tip")
+		nodes := []ImageMeta{base, mid, tip}
+		seedVersions(t, repo, nodes...)
+		touched := make(map[string]bool, len(nodes))
+		for _, i := range order {
+			written, err := EnsureVersionActivityLocked(repo, nodes[i].ID, activityClock)
+			if err != nil {
+				t.Fatalf("ensure %s: %v", nodes[i].Description, err)
+			}
+			for _, id := range written {
+				touched[id] = true
+			}
+		}
+		for _, node := range nodes {
+			lines := readVersionActivity(t, repo, node.ID)
+			if len(lines) == 0 {
+				t.Fatalf("version %s has no log after the scan", node.Description)
+			}
+			for _, line := range lines {
+				if line.Phase != activity.PhaseInitialized {
+					t.Fatalf("version %s line = %+v, want only initialization", node.Description, line)
+				}
+			}
+			if again, err := EnsureVersionActivityLocked(repo, node.ID, activityClock); err != nil || len(again) != 0 {
+				t.Fatalf("rescan of %s = %v, %v, want a no-op", node.Description, again, err)
+			}
+		}
+		return touched
+	}
+	first := scan(t, []int{0, 1, 2})
+	second := scan(t, []int{2, 0, 1})
+	if len(first) != 3 || len(second) != 3 {
+		t.Fatalf("scans touched %d and %d versions, want the whole chain", len(first), len(second))
+	}
+	for id := range first {
+		if !second[id] {
+			t.Fatalf("version %s received no record in the reverse order", id)
+		}
+	}
+}
+
 // TestVersionActivityPropagatesAlongTheParentChain records one event
 // on the source and one attributed dependency record on every
 // ancestor, leaving sibling branches alone.

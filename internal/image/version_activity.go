@@ -31,6 +31,29 @@ func AppendVersionActivityLocked(repo Repo, sourceID string, ev activity.Event, 
 	return versionActivityBatch{repo: repo, clock: clock}.append(sourceID, ev)
 }
 
+// EnsureVersionActivityLocked writes the one initialization record of a
+// version that has no usable log yet, and a dependency initialization
+// record for every ancestor of its chain. The caller must hold the
+// library lock. A version that already has a readable log causes no
+// write and no propagation, so repeated scans, tail reads, and
+// compaction never renew an existing log.
+//
+// The ancestor records land first, each as a dependency
+// initialization, so an existing ancestor log is refreshed the one time
+// this migration is allowed to. The source record is written last,
+// through the activity helper that probes and appends under one log
+// lock, so a version is never initialized twice even from a caller that
+// skipped the library lock.
+//
+// The returned versions receive a record in this call — every ancestor
+// of the chain, root first, then the source when it was written — so a
+// caller can exclude them from this round's expiry decision. Versions
+// written before a failure are returned with the error for the same
+// reason.
+func EnsureVersionActivityLocked(repo Repo, sourceID string, clock activity.Clock) ([]string, error) {
+	return versionActivityBatch{repo: repo, clock: clock}.ensure(sourceID)
+}
+
 // versionActivityBatch writes one logical event along a parent chain.
 // Tests replace open to inject a failure in the middle of a batch.
 type versionActivityBatch struct {
@@ -51,6 +74,80 @@ func (b versionActivityBatch) append(sourceID string, ev activity.Event) error {
 	if err != nil {
 		return err
 	}
+	return b.writeChain(chain, at, ev, sourceID)
+}
+
+// ensure initializes the chain of one legacy version exactly once.
+func (b versionActivityBatch) ensure(sourceID string) ([]string, error) {
+	chain, err := b.chain(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("image %s: activity %s: %w",
+			b.repo.Name(), activity.EventInitialize, err)
+	}
+	missing, err := b.uninitialized(sourceID)
+	if err != nil || !missing {
+		return nil, err
+	}
+	at, err := b.batchTime(chain)
+	if err != nil {
+		return nil, err
+	}
+	ev := activity.Event{Event: activity.EventInitialize, Phase: activity.PhaseInitialized}
+	written := make([]string, 0, len(chain))
+	for _, node := range chain[:len(chain)-1] {
+		if err := b.write(node.ID, at, versionActivityRecord(ev, b.repo.Name(), sourceID, node.ID)); err != nil {
+			return written, err
+		}
+		written = append(written, node.ID)
+	}
+	wrote, err := b.initialize(sourceID, at, versionActivityRecord(ev, b.repo.Name(), sourceID, sourceID))
+	if err != nil {
+		return written, err
+	}
+	if wrote {
+		written = append(written, sourceID)
+	}
+	return written, nil
+}
+
+// initialize writes the source record of an initialization and reports
+// whether this call wrote it.
+func (b versionActivityBatch) initialize(id string, at time.Time, ev activity.Event) (bool, error) {
+	w, err := b.writer(id, func() time.Time { return at })
+	var wrote bool
+	if err == nil {
+		wrote, _, err = w.EnsureInitialized(ev)
+	}
+	if err != nil {
+		return false, fmt.Errorf("image %s: activity %s %s at version %s: %w",
+			b.repo.Name(), ev.Event, ev.Phase, id, err)
+	}
+	return wrote, nil
+}
+
+// uninitialized reports a source log that is missing or empty. An
+// unreadable or damaged log is an error: a non-empty log is never
+// treated as a legacy object and never rewritten.
+func (b versionActivityBatch) uninitialized(id string) (bool, error) {
+	w, err := b.writer(id, b.resolvedClock())
+	if err != nil {
+		return false, fmt.Errorf("image %s: activity tail of version %s: %w",
+			b.repo.Name(), id, err)
+	}
+	_, err = w.LastActivity()
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, activity.ErrNoActivity):
+		return true, nil
+	default:
+		return false, fmt.Errorf("image %s: activity tail of version %s: %w",
+			b.repo.Name(), id, err)
+	}
+}
+
+// writeChain writes one record per chain member, root to source.
+func (b versionActivityBatch) writeChain(chain []ImageMeta, at time.Time, ev activity.Event, sourceID string) error {
 	for _, node := range chain {
 		if err := b.write(node.ID, at, versionActivityRecord(ev, b.repo.Name(), sourceID, node.ID)); err != nil {
 			return err
