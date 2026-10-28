@@ -26,8 +26,6 @@ src_dir=$HOME/src/app
 work_dir=$HOME/work/app
 alice_meta=$HOME/.tiler/images/alice/app/meta.yaml
 bob_meta=$HOME/.tiler/images/bob/docs/meta.yaml
-alice_img=$HOME/.tiler/images/alice/app/image.sqsh
-bob_img=$HOME/.tiler/images/bob/docs/image.sqsh
 
 if test -n "$tiler_bin"
 then
@@ -46,7 +44,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build publishes 
 	test_grep -E "^full alice/app [0-9a-f]+" full1.out &&
 	id1=$(cut -d" " -f3 full1.out) &&
 	test -n "$id1" &&
-	test_path_is_file "$alice_img" &&
+	test_path_is_file "$HOME/.tiler/images/alice/app/_objects/$id1/image.sqsh" &&
 	cp "$alice_meta" full1.meta
 '
 
@@ -57,9 +55,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempot
 	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&
 	test "$id1" = "$id2" &&
-	test_cmp full1.meta "$alice_meta" &&
-	test_path_is_missing "$HOME/.tiler/images/alice/app/_archives" &&
-	test_path_is_missing "$HOME/.tiler/images/alice/app/_hold"
+	test_cmp full1.meta "$alice_meta"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental build of an unchanged upper is idempotent' '
@@ -84,7 +80,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental build of an unchange
 	test "$layer" = "$layer2" &&
 	test_cmp incr1.meta "$alice_meta" &&
 	"$tiler_bin" images show alice/app >show.out 2>show.err &&
-	test_grep -E "^  chain +1$" show.out
+	test_grep -E "^  parent +$id1$" show.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'subdir of a mount packs a different image idempotently' '
@@ -93,16 +89,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'subdir of a mount packs a differ
 	test_grep -E "^full bob/docs [0-9a-f]+" div1.out &&
 	bob_id=$(cut -d" " -f3 div1.out) &&
 	test -n "$bob_id" &&
-	test_path_is_file "$bob_img" &&
+	test_path_is_file "$HOME/.tiler/images/bob/docs/_objects/$bob_id/image.sqsh" &&
 	cp "$bob_meta" div1.meta &&
 	"$tiler_bin" build --image bob/docs "$work_dir/docs" >div2.out 2>div2.err &&
 	test_grep -E "^full bob/docs [0-9a-f]+" div2.out &&
 	bob_id2=$(cut -d" " -f3 div2.out) &&
 	test "$bob_id" = "$bob_id2" &&
 	test_cmp div1.meta "$bob_meta" &&
-	test_path_is_missing "$HOME/.tiler/images/bob/docs/_archives" &&
 	"$tiler_bin" images show alice/app >alice-show.out 2>alice-show.err &&
-	test_grep -E "^  chain +1$" alice-show.out
+	test_grep -E "^  parent +$id1$" alice-show.out
 '
 
 test_done

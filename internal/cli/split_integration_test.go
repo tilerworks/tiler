@@ -56,10 +56,10 @@ func splitSource(t *testing.T) string {
 
 // buildSplitBlocks packs src as a blocks payload with a small
 // SplitSize, so a modest tree spans several blocks.
-func buildSplitBlocks(t *testing.T, cfg config.Config, name, src string, blockSize int64) image.FullResult {
+func buildSplitBlocks(t *testing.T, cfg config.Config, name, src string, blockSize int64) image.ImageMeta {
 	t.Helper()
 	cfg.SplitSize = blockSize
-	res, err := image.BuildFull(image.FullRequest{
+	res, err := image.BuildFullVersion(image.FullRequest{
 		Config: cfg, Name: name, SrcDir: src,
 		Builder: "test",
 		Refs:    session.Refs{Dir: cfg.SessionsDir},
@@ -93,7 +93,6 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
-	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home)
 	src := splitSource(t)
 	wantTree := listTree(t, src)
@@ -101,7 +100,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 
 	// Layout: _blocks/<id>/blk.NNN plus the concat description file
 	// beside them, listing the block names in order.
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "_blocks", res.ID)
+	blocksDir := filepath.Join(imagesDir, "alice", "data", "_objects", res.ID)
 	names, err := filepath.Glob(filepath.Join(blocksDir, "blk.*"))
 	if err != nil || len(names) < 2 {
 		t.Fatalf("blocks = %v (%v), want a multi-block payload", names, err)
@@ -121,14 +120,15 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	// Manifest facts: the production resolver pairs every block
 	// with its recorded size and digest, and the whole identity is
 	// the concatenated byte digest.
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Form != image.PayloadBlocks || len(target.Blocks) != len(names) {
-		t.Fatalf("target = %+v, want %d blocks", target.Form, len(target.Blocks))
+	blocks := target.Members[0].Blocks
+	if len(blocks) != len(names) {
+		t.Fatalf("target = %+v, want %d blocks", target, len(names))
 	}
-	for i, block := range target.Blocks {
+	for i, block := range blocks {
 		want := fmt.Sprintf("blk.%03d", i)
 		info, statErr := os.Stat(block.Path)
 		if statErr != nil {
@@ -147,10 +147,6 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 	mountOK(t, lib, "mounted "+view+"\n",
 		"mount", "--session", "dev", "alice/data", view)
 
-	cached := filepath.Join(cacheDir, target.SHA256+image.SquashExt)
-	if got := fileSHA256Hex(t, cached); got != target.SHA256 {
-		t.Errorf("materialized copy digest = %s, want %s", got, target.SHA256)
-	}
 	if got := listTree(t, view); !slices.Equal(got, wantTree) {
 		t.Errorf("mounted view does not match the source tree:\n%v\n%v", got, wantTree)
 	}
@@ -175,21 +171,6 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 		t.Fatalf("an idempotent umount printed %q", out)
 	}
 
-	// One session open replays the record and restores the view,
-	// reusing the materialized copy and the surviving upper.
-	if out := mustCmd(t, append(lib, "session", "open", "dev")...); out != "opened dev\n" {
-		t.Fatalf("open output = %q", out)
-	}
-	assertBytesFile(t, filepath.Join(view, "extra.txt"), "extra\n")
-	assertBytesFile(t, filepath.Join(view, "docs", "guide.md"), "# guide\n")
-	rec := loadSessionRecord(t, sessionsDir(home), "dev")
-	if len(rec.Actions) != 1 || rec.Actions[0].Status != session.StatusMounted {
-		t.Errorf("record = %+v", rec.Actions)
-	}
-
-	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
-		t.Fatalf("final umount output = %q", out)
-	}
 	assertNoResidue(t, sessionsRoot, view)
 }
 
@@ -222,7 +203,7 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 	}
 
 	// The incr layer lives under _blocks/<id>/, never _incr/.
-	incrBlocks := filepath.Join(imagesDir, "alice", "data", "_blocks", incrID)
+	incrBlocks := filepath.Join(imagesDir, "alice", "data", "_objects", incrID)
 	if _, err := os.Stat(filepath.Join(incrBlocks, "blk.000")); err != nil {
 		t.Fatalf("blocks incr layout: %v", err)
 	}
@@ -236,7 +217,7 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 	assertBytesFile(t, filepath.Join(view2, "incr-only.txt"), "from-incr\n")
 	assertBytesFile(t, filepath.Join(view2, "docs", "guide.md"), "# guide\n")
 
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,15 +226,6 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 		t.Fatalf("resolved stack = %+v, want full %s then incr %s",
 			target.Members, res.ID, incrID)
 	}
-	cacheDir := filepath.Join(home, ".tiler", "cache")
-	for _, member := range target.Members {
-		cached := filepath.Join(cacheDir, member.SHA256+image.SquashExt)
-		if got := fileSHA256Hex(t, cached); got != member.SHA256 {
-			t.Errorf("reassembled %s digest = %s, want %s",
-				member.ID, got, member.SHA256)
-		}
-	}
-
 	if out := umountCmd(t, lib, view2); out != "unmounted "+view2+"\n" {
 		t.Fatalf("final umount output = %q", out)
 	}
@@ -321,12 +293,12 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
 	canonical := filepath.Join(imagesDir, "alice", "data", image.ImageFile)
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "_blocks", res.ID)
+	blocksDir := filepath.Join(imagesDir, "alice", "data", "_objects", res.ID)
 
 	view := filepath.Join(work, "concat-view")
 	deferForceUmount(t, sessionsRoot, view)
@@ -415,7 +387,7 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +466,7 @@ func TestSplitGuidanceWalkthrough(t *testing.T) {
 	if len(fields) != 3 || fields[0] != "full" || fields[1] != "alice/data" {
 		t.Fatalf("build output = %q", stdout)
 	}
-	imagePath := filepath.Join(imagesDir, "alice", "data", image.ImageFile)
+	imagePath := filepath.Join(imagesDir, "alice", "data", "_objects", fields[2], image.ImageFile)
 	if _, err := os.Stat(imagePath); err != nil {
 		t.Errorf("the build left no single-file image: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -45,7 +46,8 @@ type Store struct {
 	// Dir is the sessions root; each session owns one subdirectory
 	// <name>/ holding its session.json record, session.lock, and
 	// runtime subtree.
-	Dir string
+	Dir   string
+	scope *referenceSessionScope
 }
 
 // sessionDir validates the name and returns the session's own
@@ -81,6 +83,9 @@ func (s Store) lockPath(name string) (string, error) {
 // ErrNotFound; a corrupt file reports its parse failure instead of
 // loading a half-understood record.
 func (s Store) Load(name string) (Record, error) {
+	if s.scope != nil {
+		return s.scope.load(name)
+	}
 	path, err := s.recordPath(name)
 	if err != nil {
 		return Record{}, err
@@ -109,6 +114,9 @@ func (s Store) Load(name string) (Record, error) {
 // Save validates the record and writes it atomically, so a reader
 // never sees a half-written record.
 func (s Store) Save(rec Record) error {
+	if s.scope != nil {
+		return s.scope.save(rec)
+	}
 	if err := rec.Validate(); err != nil {
 		return err
 	}
@@ -248,7 +256,7 @@ func (s Store) List() ([]Record, error) {
 	}
 	var records []Record
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.EqualFold(entry.Name(), referenceDir) {
 			continue
 		}
 		rec, err := s.Load(entry.Name())

@@ -21,8 +21,9 @@ var ErrInvalidName = errors.New("invalid image name")
 var ErrNameConflict = errors.New("image name conflict")
 
 // ParseName accepts one to five non-empty segments separated by
-// slashes. The input is cleaned first with the same lexical rules as
-// path.Clean: repeated slashes collapse, "." segments drop, and a
+// slashes. Colons are rejected before cleaning because they separate
+// names from version selectors. The input is then cleaned with the
+// same lexical rules as path.Clean: repeated slashes collapse, "." segments drop, and a
 // ".." segment cancels the preceding segment. Cleaning uses slash
 // rules on every platform. Segments of the cleaned name cannot be
 // empty, ".", or ".."; cannot start with "." or "_"; cannot equal a
@@ -34,6 +35,9 @@ var ErrNameConflict = errors.New("image name conflict")
 // 1-to-5 segment shape so command users know what to pass (for
 // example build --image).
 func ParseName(s string) ([]string, error) {
+	if strings.Contains(s, ":") {
+		return nil, invalidNameShape(s)
+	}
 	cleaned := cleanImageName(s)
 	if path.IsAbs(cleaned) || cleaned == "." {
 		return nil, invalidNameShape(s)
@@ -58,7 +62,7 @@ func cleanImageName(s string) string {
 
 func checkSegment(seg string) error {
 	if seg == "" || seg == "." || seg == ".." ||
-		strings.Contains(seg, "/") || badSegmentRune(seg) ||
+		strings.ContainsAny(seg, "/:") || badSegmentRune(seg) ||
 		seg[0] == '.' || seg[0] == '_' ||
 		isReservedLeafName(seg) || isChainIDShaped(seg) {
 		return invalidName(seg)

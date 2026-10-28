@@ -60,6 +60,11 @@ type FullRequest struct {
 	// gitscene.Prepare when the source looks like a git repository;
 	// non-git sources are skipped without invoking git.
 	PrepareScene func(dir string) error
+	// Description fields apply only to immutable version builds.
+	Description    string
+	DescriptionSet bool
+	// MountSmoke overrides the immutable build quality gate in tests.
+	MountSmoke func(string) error
 }
 
 // FullResult reports one successful full build.
@@ -94,36 +99,19 @@ type FullResult struct {
 // the stored manifest. A failed packer leaves no active image and no
 // temporary file behind.
 func BuildFull(req FullRequest) (FullResult, error) {
-	if req.BlockSize <= 0 && req.Config.SplitSize > 0 {
-		req.BlockSize = req.Config.SplitSize
-	}
-	if req.BlockSize > 0 {
-		return buildBlocks(req)
-	}
-	repo, err := validateFull(&req)
+	node, err := BuildFullVersion(req)
 	if err != nil {
 		return FullResult{}, err
 	}
-	if err := prepareScene(req); err != nil {
-		return FullResult{}, err
-	}
-	need, err := estimateTree(req.SrcDir)
+	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
 		return FullResult{}, err
 	}
-	if err := ensureSpace(spaceWrite{path: repo.Dir, bytes: need}); err != nil {
-		return FullResult{}, err
+	path, err := repo.ObjectPayloadPath(node)
+	if len(node.Blocks) != 0 {
+		path, err = repo.ObjectDirPath(node.ID)
 	}
-	imgTmp, err := packTemp(repo, req.SrcDir, toolRunner(req), req.Format, req.Compression)
-	if err != nil {
-		return FullResult{}, err
-	}
-	res, err := finishFull(repo, req, imgTmp, buildNow(req))
-	if err != nil {
-		removeFile(imgTmp)
-		return FullResult{}, err
-	}
-	return res, nil
+	return FullResult{ID: node.ID, Path: path, SHA256: node.SHA256}, err
 }
 
 // toolRunner is the injected runner of a request or the exec
@@ -294,32 +282,6 @@ func packContainer(run ToolRunner, src, dst, typ, compression string, incr bool)
 // single-node manifest, publishes both, and verifies the published
 // bytes. A full build restarts the DAG: the full image is the only
 // node and the head.
-func finishFull(repo Repo, req FullRequest, imgTmp string, now func() time.Time) (FullResult, error) {
-	manifest, err := packedManifest(repo, req, imgTmp, now)
-	if err != nil {
-		return FullResult{}, err
-	}
-	body, err := EncodeManifest(manifest)
-	if err != nil {
-		return FullResult{}, fmt.Errorf("build: %w", err)
-	}
-	metaTmp, err := writeTemp(repo.Dir, fileMeta, body, hooks{})
-	if err != nil {
-		return FullResult{}, fmt.Errorf("build: %w", err)
-	}
-	if err := publishStaged(repo, manifest, req.Refs, imgTmp, metaTmp, hooks{}); err != nil {
-		return FullResult{}, err
-	}
-	root, err := manifest.Full()
-	if err != nil {
-		return FullResult{}, fmt.Errorf("build: %w", err)
-	}
-	if err := verifyFileSHA256(repo.ImagePath(), root.SHA256); err != nil {
-		return FullResult{}, fmt.Errorf("build: %w", err)
-	}
-	return FullResult{ID: root.ID, Path: repo.ImagePath(), SHA256: root.SHA256}, nil
-}
-
 // packedManifest hashes the packed temporary file and assembles the
 // full image manifest from the bytes that landed on disk.
 func packedManifest(repo Repo, req FullRequest, tmp string, now func() time.Time) (Manifest, error) {

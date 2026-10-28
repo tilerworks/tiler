@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
@@ -257,7 +259,8 @@ func sessionCommandEngine(cmd *cobra.Command, label, name string) (
 // same seam discipline the engines follow.
 var sessionEngine = func(cfg config.Config) *session.Engine {
 	engine := &session.Engine{
-		Store: session.Store{Dir: cfg.SessionsDir},
+		Store:     session.Store{Dir: cfg.SessionsDir},
+		Versioned: true,
 		LoadTable: func() ([]mountinfo.Mount, error) {
 			return loadMountTable()
 		},
@@ -275,23 +278,19 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 	return engine
 }
 
-// resolveStackTip expands one recorded pin (name, full id, tip id)
-// into its resolved stack target. Replay resolves the desired pin of
-// a mount action and the served pin a rebase froze through it. It is
-// a variable so command tests can inject fake stack resolutions;
-// production keeps the real resolver.
-var resolveStackTip = image.ResolveStackTip
+// resolveStackTip is a variable so command tests can inject a resolver.
+// Production resolves the exact immutable tip recorded by the session.
+var resolveStackTip = func(cfg config.Config, name, fullID, tipID string) (image.Target, error) {
+	target, err := image.ResolveVersionMount(cfg, name+":"+tipID)
+	if err == nil && target.ID != fullID {
+		return image.Target{}, fmt.Errorf("recorded root %s does not match tip %s", fullID, tipID)
+	}
+	return target, err
+}
 
 // sessionMount resolves one recorded action back into an engine
 // request: a pin (name + FullID + TipID) is the desired stack the
-// record froze at mount or rebase time. ResolveStackTip expands it
-// through the active leaf while that still roots at FullID and holds
-// TipID, and through the hold leaf otherwise, so a rebased record
-// mounts the new image and a stack an external build replaced stays
-// paired with the recorded upper. Replay never chases a later head
-// move; the DAG keeps branch tips resolvable. An empty TipID keeps
-// the full-id-only semantics of older records, and an empty FullID
-// keeps today's name-only ResolveMount. A rebased record also names
+// record froze at mount or rebase time. A rebased record also names
 // the served stack its live view froze at; when that stack resolves
 // to other lower layers than the desired stack, the request asks the
 // engine to prune the reused upper of what the new lowers already
@@ -307,17 +306,32 @@ func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountF
 		if action.Name != "" && action.FullID != "" {
 			target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
 		} else {
-			target, err = image.ResolveMount(cfg, action.Image)
+			target, err = image.ResolveVersionMount(cfg, action.Image)
 		}
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}
-		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
+		flags := mountFlags{
 			readOnly:   action.Mode == session.ModeRO,
 			subdir:     action.Subdir,
 			pruneUpper: replayPruneUpper(cfg, action, target, warn),
-		}, sessionRuntimeDir(cfg, name, action), nil)
+		}
+		if action.Name != "" && versionTarget(target) {
+			return runVersionMountEngine(cfg, action, action.Mountpoint, flags,
+				sessionRuntimeDir(cfg, name, action))
+		}
+		return runMountEngine(cfg, target, action.Mountpoint, flags,
+			sessionRuntimeDir(cfg, name, action), nil)
 	}
+}
+
+func versionTarget(target image.Target) bool {
+	for _, member := range target.Members {
+		if strings.Contains(filepath.ToSlash(member.Path), "/_objects/") {
+			return true
+		}
+	}
+	return false
 }
 
 // replayPruneUpper reports whether replaying one recorded action

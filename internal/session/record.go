@@ -73,11 +73,10 @@ type Action struct {
 	FullID string `json:"full_id,omitempty"`
 	// TipID is the tip of the desired stack: the topmost layer id
 	// the mount resolved, equal to FullID when the stack holds only
-	// the full image and empty for a file-path image or a record
-	// written before the field existed. Replay reads an empty tip
-	// with the full-id-only semantics of those older records. The
-	// JSON key is additive and omitempty, so an older record
-	// round-trips unchanged.
+	// the full image. Legacy file-path records leave it empty;
+	// versioned file mounts store their complete content digest.
+	// An empty legacy tip replays with full-id-only semantics. The
+	// key is additive and omitempty, so old records round-trip unchanged.
 	TipID string `json:"tip_id,omitempty"`
 	// ServedID is the full image id a live mount actually serves
 	// when the desired stack moved past it, empty while the live
@@ -114,6 +113,10 @@ type Action struct {
 // Record is one session: its state and the ordered action log that
 // crash recovery replays and reverse lookup matches against.
 type Record struct {
+	// Version and InstanceID identify the new schema and one session incarnation.
+	// Legacy runtime records omit both until the new layout is activated.
+	Version    string `json:"version,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
 	// Name is the session name and the record file stem.
 	Name string `json:"name"`
 	// State is active or closed.
@@ -153,7 +156,7 @@ const windowsDirReserved = `<>:"/\|?*`
 // sessionNameMax bytes, and not a Windows device name such as CON
 // or COM1. Session names never carry structure.
 func ValidateName(name string) error {
-	if name == "" || name == "." || name == ".." ||
+	if name == "" || name == "." || name == ".." || strings.EqualFold(name, referenceDir) ||
 		len(name) > sessionNameMax ||
 		strings.HasSuffix(name, ".") ||
 		strings.ContainsAny(name, windowsDirReserved) ||

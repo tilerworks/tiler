@@ -5,7 +5,7 @@
 # Companion to t0023-mount-file-link.sh (Linux squashfs link). On macOS:
 #
 #   1. build a dmg outside images_dir,
-#   2. mount --file registers symlink + meta.yaml and mounts by library name,
+#   2. mount --file registers a payload reference and mounts by name,
 #   3. a writable mount writes through upper.shadow,
 #   4. full bake materializes image.dmg while the NAS file stays put,
 #   5. mount --file with squashfs magic is refused (exit 2).
@@ -43,7 +43,6 @@ pub_dir=$HOME/work/published
 sqsh_try_dir=$HOME/work/sqsh-refuse
 img_dir=$HOME/.tiler/images/nas/vendor
 meta_file=$img_dir/meta.yaml
-payload=$img_dir/image.dmg
 shadow=$HOME/.tiler/sessions/dev/runtime/m1/upper.shadow
 images_dir=$HOME/.tiler/images
 
@@ -67,7 +66,9 @@ test_expect_success TILER,MACOS 'build a dmg outside images_dir' '
 	echo "hello vendor" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image scratch/vendor "$src_dir" >build.out 2>build.err &&
 	test_grep -E "^full scratch/vendor [0-9a-f]+" build.out &&
-	staged=$HOME/.tiler/images/scratch/vendor/image.dmg &&
+	staged_id=$(cut -d" " -f3 build.out) &&
+	test -n "$staged_id" &&
+	staged=$HOME/.tiler/images/scratch/vendor/_objects/$staged_id/image.dmg &&
 	test_path_is_file "$staged" &&
 	mv "$staged" "$dmg" &&
 	rm -rf "$HOME/.tiler/images/scratch" &&
@@ -81,18 +82,19 @@ test_expect_success TILER,MACOS 'build a dmg outside images_dir' '
 	esac
 '
 
-test_expect_success TILER,MACOS 'mount --file registers symlink meta and mounts with shadow' '
+test_expect_success TILER,MACOS 'mount --file registers a payload reference and mounts with shadow' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	test_grep -E "^created dev$" new.out &&
 	"$tiler_bin" mount --session dev --file "$dmg" "$lib_name" "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
-	test_path_is_symlink "$payload" &&
-	test "$(readlink "$payload")" = "$dmg" &&
 	test_path_is_file "$meta_file" &&
-	test_grep -E "^head: \"?[0-9a-f]+\"?$" "$meta_file" &&
-	base_id=$(sed -n "s/^head: //p" "$meta_file" | tr -d "\"") &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
+	base_id=$(sed -n "s/^[[:space:]]*- id: //p" "$meta_file") &&
 	test -n "$base_id" &&
+	payload=$img_dir/_objects/$base_id/image.dmg &&
+	test_path_is_file "$payload" &&
+	test "$(cat "$payload")" = "$dmg" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	echo linked >"$work_dir/LINK.txt" &&
 	test_path_is_file "$shadow" &&
@@ -115,8 +117,10 @@ test_expect_success TILER,MACOS 'full bake materializes the active dmg' '
 	test -n "$new_id" &&
 	test "$new_id" != "$base_id" &&
 	test_path_is_file "$payload" &&
+	test "$(cat "$payload")" = "$dmg" &&
+	payload=$img_dir/_objects/$new_id/image.dmg &&
+	test_path_is_file "$payload" &&
 	test ! -L "$payload" &&
-	test_path_is_file "$img_dir/_hold/$base_id/image.dmg" &&
 	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
 	test_path_is_file "$dmg"

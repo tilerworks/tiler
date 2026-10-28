@@ -12,9 +12,6 @@
 #   2. mounting that image, writing the upper, and building --incremental
 #      with the same --split publishes _blocks/<incr-id>/ (not
 #      _incr/<id>.sqsh); a fresh remount shows the upper file,
-#   3. a second full --split of the same name, while the first image
-#      is still mounted, retires the old full and its incr into a
-#      session-pinned _hold/<old-id>/_blocks/ (not _archives),
 #   4. a build with no --split, and a build under a project
 #      split_size: 0, each stay a single image.sqsh.
 #
@@ -82,15 +79,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'full --split 64k publishes more 
 	test_grep -E "^full alice/split [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_path_is_dir "$img_dir/_blocks/$id1" &&
-	set -- "$img_dir/_blocks/$id1"/blk.[0-9][0-9][0-9] &&
+	test_path_is_dir "$img_dir/_objects/$id1" &&
+	set -- "$img_dir/_objects/$id1"/blk.[0-9][0-9][0-9] &&
 	test $# -gt 1 &&
-	test_path_is_file "$img_dir/_blocks/$id1/blk.000" &&
+	test_path_is_file "$img_dir/_objects/$id1/blk.000" &&
 	test_path_is_missing "$img_dir/image.sqsh" &&
 	"$tiler_bin" images show alice/split >ls.out 2>ls.err &&
-	test_grep -E "^  form +blocks$" ls.out &&
-	test_grep -E "^  blocks +[2-9][0-9]*$" ls.out &&
-	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
+	test_grep -E "^  payload +blocks$" ls.out &&
+	test_grep -E "^[[:space:]]*- id: $id1$" "$meta_file" &&
 	echo "$id1" >full.id
 '
 
@@ -108,15 +104,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount, edit the upper, and incr 
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
-	test_path_is_dir "$img_dir/_blocks/$layer" &&
-	test_path_is_file "$img_dir/_blocks/$layer/blk.000" &&
+	test_path_is_dir "$img_dir/_objects/$layer" &&
+	test_path_is_file "$img_dir/_objects/$layer/blk.000" &&
 	test_path_is_missing "$img_dir/_incr/$layer.sqsh" &&
 	test_path_is_missing "$img_dir/_incr" &&
 	test_grep -E "^[[:space:]]*- id: \"?$layer\"?$" "$meta_file" &&
 	test_grep -E "^[[:space:]]*- name: blk.000$" "$meta_file" &&
 	"$tiler_bin" images show alice/split >ls-incr.out 2>ls-incr.err &&
-	test_grep -E "^  chain +1$" ls-incr.out &&
-	test_grep -E "^  form +blocks$" ls-incr.out &&
+	test_grep -E "^  parent +$id1$" ls-incr.out &&
+	test_grep -E "^  payload +blocks$" ls-incr.out &&
 	echo "$layer" >layer.id
 '
 
@@ -134,10 +130,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the split
 	test_grep -E "^unmounted " umount2.out
 '
 
-# verify_dir stays mounted across this case so its session pins the
-# retired full id. An unpinned replace would archive the chain instead
-# of leaving it in _hold/.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split chain into a pinned hold' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full preserves the pinned split chain' '
 	id1=$(cat full.id) &&
 	layer=$(cat layer.id) &&
 	"$tiler_bin" mount alice/split "$verify_dir" >pin.out 2>pin.err &&
@@ -151,21 +144,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full retires the split cha
 	test -n "$id2" &&
 	test "$id2" != "$id1" &&
 	test "$id2" != "$layer" &&
-	test_grep -E "^head: \"?$id2\"?$" "$meta_file" &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
-	test_path_is_dir "$img_dir/_blocks/$id2" &&
-	test_path_is_file "$img_dir/_blocks/$id2/blk.000" &&
-	test_path_is_missing "$img_dir/_blocks/$id1" &&
-	test_path_is_missing "$img_dir/_blocks/$layer" &&
-	test_path_is_file "$img_dir/_hold/$id1/meta.yaml" &&
-	test_path_is_file "$img_dir/_hold/$id1/_blocks/$id1/blk.000" &&
-	test_path_is_file "$img_dir/_hold/$id1/_blocks/$layer/blk.000" &&
-	test_path_is_missing "$img_dir/_archives" &&
+	test_grep -E "^[[:space:]]*- id: $id2$" "$meta_file" &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 3 &&
+	test_path_is_file "$img_dir/_objects/$id2/blk.000" &&
+	test_path_is_file "$img_dir/_objects/$id1/blk.000" &&
 	"$tiler_bin" images show alice/split >ls-new.out 2>ls-new.err &&
-	test_grep -E "^  chain +0$" ls-new.out &&
-	test_grep -E "^  form +blocks$" ls-new.out &&
-	"$tiler_bin" images show alice/split >ls-hold.out 2>ls-hold.err &&
-	test_grep -E "^    $id1$" ls-hold.out &&
+	test_grep -E "^  id +$id2$" ls-new.out &&
+	test_grep -E "^  payload +blocks$" ls-new.out &&
+	"$tiler_bin" images list >ls-hold.out 2>ls-hold.err &&
+	test_grep "${id1%${id1#??????????}}" ls-hold.out &&
 	"$tiler_bin" umount "$verify_dir" >unpin.out 2>unpin.err &&
 	test_grep -E "^unmounted " unpin.out
 '
@@ -175,12 +162,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a build with no --split stays a 
 	echo plain >"$plain_src/README.txt" &&
 	"$tiler_bin" build --image bob/plain "$plain_src" >plain.out 2>plain.err &&
 	test_grep -E "^full bob/plain [0-9a-f]+" plain.out &&
-	test_path_is_file "$plain_dir/image.sqsh" &&
+	plain_id=$(cut -d" " -f3 plain.out) &&
+	test_path_is_file "$plain_dir/_objects/$plain_id/image.sqsh" &&
 	test_path_is_missing "$plain_dir/_blocks" &&
 	"$tiler_bin" images show bob/plain >ls-plain.out 2>ls-plain.err &&
-	test_grep -E "^  chain +0$" ls-plain.out &&
-	test_grep -E "^  form +single$" ls-plain.out &&
-	test_grep ! -E "^  form +blocks$" ls-plain.out
+	test_grep -E "^  payload +single$" ls-plain.out
 '
 
 # Project split_size: 0 is an explicit off, same as omitting the key.
@@ -195,11 +181,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'project split_size 0 stays a sin
 		"$tiler_bin" build --image carol/zero src
 	) >zero.out 2>zero.err &&
 	test_grep -E "^full carol/zero [0-9a-f]+" zero.out &&
-	test_path_is_file "$zero_dir/image.sqsh" &&
+	zero_id=$(cut -d" " -f3 zero.out) &&
+	test_path_is_file "$zero_dir/_objects/$zero_id/image.sqsh" &&
 	test_path_is_missing "$zero_dir/_blocks" &&
 	"$tiler_bin" images show carol/zero >ls-zero.out 2>ls-zero.err &&
-	test_grep -E "^  form +single$" ls-zero.out &&
-	test_grep ! -E "^  form +blocks$" ls-zero.out
+	test_grep -E "^  payload +single$" ls-zero.out
 '
 
 test_done

@@ -1,0 +1,12 @@
+alice/app
+  id          cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  parent      bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  created     2026-10-28T03:00:00Z
+  format      squashfs/zstd
+  size        1 (1 B)
+  payload     blocks
+  description  Application layer
+Built from release sources
+  ancestors
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

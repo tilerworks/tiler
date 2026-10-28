@@ -408,8 +408,6 @@ func TestLibraryNameMapping(t *testing.T) {
 	}
 	bad := []string{
 		testImages + "/alice/app/meta.yaml",
-		testImages + "/alice/app/_archives/0123456789abcdef/image.sqsh",
-		testImages + "/alice/app/_hold/0123456789abcdef/image.sqsh",
 		testImages + "/alice/app/_incr/not-hex.sqsh",
 		testImages + "/alice/app/_incr/fedcba9876543210",
 		"/elsewhere/alice/app/image.sqsh",

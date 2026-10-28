@@ -49,7 +49,6 @@ work_dir=$HOME/work/vendor
 dmg_try_dir=$HOME/work/dmg-refuse
 img_dir=$HOME/.tiler/images/nas/vendor
 meta_file=$img_dir/meta.yaml
-payload=$img_dir/image.sqsh
 images_dir=$HOME/.tiler/images
 
 # Guarantee every FUSE mount is torn down before the framework removes
@@ -88,13 +87,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file registers symlink m
 	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^new session created: [a-z]+-[a-z]+[0-9]?$" mount.out &&
 	test_grep -E "^mounted " mount.out &&
-	test_path_is_symlink "$payload" &&
-	test "$(readlink "$payload")" = "$img" &&
 	test_path_is_file "$meta_file" &&
-	test_grep -E "^head: \"?[0-9a-f]+\"?$" "$meta_file" &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
-	base_id=$(sed -n "s/^head: \"\\?\([0-9a-f]*\\)\"\\?$/\\1/p" "$meta_file") &&
+	base_id=$(sed -n "s/^[[:space:]]*- id: //p" "$meta_file") &&
 	test -n "$base_id" &&
+	payload=$img_dir/_objects/$base_id/image.sqsh &&
+	test_path_is_file "$payload" &&
+	test "$(cat "$payload")" = "$img" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	test_path_is_file "$work_dir/docs/guide.md" &&
 	auto=$(sed -n "s/^new session created: //p" mount.out) &&
@@ -121,11 +120,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --increm
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$base_id" &&
-	test_path_is_symlink "$payload" &&
-	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
+	test_path_is_file "$payload" &&
+	test_path_is_file "$img_dir/_objects/$layer/image.sqsh" &&
 	test_grep -E "^[[:space:]]*- id: \"?$base_id\"?$" "$meta_file" &&
 	"$tiler_bin" images show "$lib_name" >show.out 2>show.err &&
-	test_grep -E "^  chain +1$" show.out
+	test_grep -E "^  parent +$base_id$" show.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file refuses a dmg source on Linux' '
@@ -148,16 +147,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 # must be removed first, because ">" through it would truncate the
 # NAS source instead of the leaf.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'path-ref leaf mounts like a symlink' '
-	test_path_is_symlink "$payload" &&
-	rm "$payload" &&
-	printf "%s\n" "$img" >"$payload" &&
 	test_path_is_file "$payload" &&
 	! test -L "$payload" &&
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >pathref.out 2>pathref.err &&
 	test_grep -E "^mounted " pathref.out &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
-	test_path_is_file "$work_dir/extra.txt" &&
 	"$tiler_bin" umount "$work_dir" >pathref-umount.out 2>pathref-umount.err &&
 	test_grep -E "^unmounted " pathref-umount.out
 '

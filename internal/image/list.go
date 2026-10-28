@@ -8,20 +8,6 @@ import (
 	"strings"
 )
 
-// State is the listing of one repository: its active manifest plus
-// the chains parked beside it.
-type State struct {
-	// Active is the active image manifest. HasActive reports whether
-	// an active manifest loaded; a repository mid-publish or fully
-	// archived has none.
-	Active    Manifest
-	HasActive bool
-	// Archives and Holds list the chain ids under _archives/ and
-	// _hold/, sorted by name. Transient parked entries never list.
-	Archives []string
-	Holds    []string
-}
-
 // ListRepos enumerates every leaf repository under the image
 // library, walking at most maxNameSegments deep. A directory that
 // carries a leaf marker is recorded and not descended into.
@@ -86,7 +72,7 @@ func isLeafDir(dir string) bool {
 	for _, entry := range entries {
 		name := entry.Name()
 		switch name {
-		case fileMeta, ImageFile, ImageDMG, dirIncr, dirArchives, dirHold, dirBlocks:
+		case fileMeta, ImageFile, ImageDMG, dirIncr, dirBlocks, dirObjects:
 			return true
 		}
 		if strings.HasPrefix(name, ".") {
@@ -142,42 +128,13 @@ func findDeeperLeaf(dir string, segments []string) (string, bool) {
 	return "", false
 }
 
-// Inspect collects the listing state of one repository. An unreadable
-// archive still lists by id; a corrupt active meta fails the call.
-func Inspect(repo Repo) (State, error) {
-	var state State
-	manifest, exists, err := loadActiveManifest(repo)
-	if err != nil {
-		return State{}, err
-	}
-	state.Active, state.HasActive = manifest, exists
-	state.Archives, err = chainDirIDs(filepath.Join(repo.Dir, dirArchives))
-	if err != nil {
-		return State{}, err
-	}
-	state.Holds, err = listHoldIDs(repo)
-	if err != nil {
-		return State{}, err
-	}
-	return state, nil
-}
-
-// chainDirIDs lists the valid chain directory names under dir in
-// lexical order. Full sha256 names and legacy 16-hex names count;
-// foreign and transient entries are skipped.
-func chainDirIDs(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+func loadActiveManifest(repo Repo) (Manifest, bool, error) {
+	manifest, err := LoadManifest(repo.MetaPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return Manifest{}, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return Manifest{}, false, err
 	}
-	var ids []string
-	for _, entry := range entries {
-		if entry.IsDir() && onDiskID(entry.Name()) {
-			ids = append(ids, entry.Name())
-		}
-	}
-	return ids, nil
+	return manifest, true, nil
 }

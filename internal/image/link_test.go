@@ -41,34 +41,36 @@ func TestLinkExternalSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := repo.ImagePath()
-	target, err := os.Readlink(payload)
+	manifest, err := LoadVersionManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != src {
+	root := manifest.Images[0]
+	payload, err := repo.ObjectPayloadPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok, err := readExternalLinkTarget(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || target != src {
 		t.Fatalf("symlink target = %q, want %q", target, src)
 	}
-	manifest := mustLoadManifest(t, repo.MetaPath())
-	root := rootOf(manifest)
 	sum := sha256.Sum256(append([]byte("hsqs"), []byte("vendor-payload")...))
 	want := hex.EncodeToString(sum[:])
 	if root.SHA256 != want || root.ID != want {
 		t.Fatalf("meta digest = %s id = %s", root.SHA256, root.ID)
 	}
-	if manifest.Format.Type != FormatSquashfs || root.Builder != "test-builder" {
+	if root.Format.Type != FormatSquashfs || root.Builder != "test-builder" {
 		t.Fatalf("meta = %+v", manifest)
 	}
 	if len(manifest.Images) != 1 {
 		t.Fatalf("chain = %+v", manifest.Images)
 	}
-	rel, err := lookupSHA256(repo, root.SHA256)
-	if err != nil || rel != indexRelActive {
-		t.Fatalf("index lookup = %q, %v", rel, err)
-	}
 }
 
-func TestLinkExternalIdleRebuildsMissingIndexes(t *testing.T) {
+func TestLinkExternalDuplicateContentKeepsOriginalSource(t *testing.T) {
 	withLinuxLinkPolicy(t)
 	images := t.TempDir()
 	nas := t.TempDir()
@@ -80,21 +82,21 @@ func TestLinkExternalIdleRebuildsMissingIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{fileSHA256Index, fileContentSHA256Index} {
-		if err := os.Remove(filepath.Join(repo.Dir, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := LinkExternal(images, "alice/app", src, "other-builder"); err != nil {
+	duplicate := filepath.Join(t.TempDir(), "duplicate.sqsh")
+	body, _ := os.ReadFile(src)
+	if err := os.WriteFile(duplicate, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !indexesPresent(repo) {
-		t.Fatal("idle link did not rebuild missing indexes")
+	if err := LinkExternal(images, "alice/app", duplicate, "other-builder"); err != nil {
+		t.Fatal(err)
 	}
-	manifest := mustLoadManifest(t, repo.MetaPath())
-	rel, err := lookupSHA256(repo, rootOf(manifest).SHA256)
-	if err != nil || rel != indexRelActive {
-		t.Fatalf("index lookup = %q, %v", rel, err)
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 1 {
+		t.Fatalf("manifest = %#v, %v", manifest, err)
+	}
+	payload, _ := repo.ObjectPayloadPath(manifest.Images[0])
+	if target, ok, err := readExternalLinkTarget(payload); err != nil || !ok || target != src {
+		t.Fatalf("target = %q, %v", target, err)
 	}
 }
 
@@ -126,7 +128,7 @@ func TestLinkExternalIdempotent(t *testing.T) {
 	}
 }
 
-func TestLinkExternalIdempotentWithChain(t *testing.T) {
+func TestLinkExternalAddsIndependentFullVersions(t *testing.T) {
 	withLinuxLinkPolicy(t)
 	images := t.TempDir()
 	nas := t.TempDir()
@@ -138,73 +140,13 @@ func TestLinkExternalIdempotentWithChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Grow the active image with one incremental layer, the way a
-	// build --incremental inside the linked view does.
-	manifest := mustLoadManifest(t, repo.MetaPath())
-	layer := testID("abc1234567890def")
-	manifest = withNode(manifest, validNode(rootID(manifest), layer))
-	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
-		t.Fatal(err)
-	}
-	incr, err := repo.IncrPath(layer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(incr), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(incr, []byte("layer"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Re-registering the same external file is still a no-op: the
-	// chain guard must not fire for a link that replaces nothing.
-	if err := LinkExternal(images, "alice/app", src, "other-builder"); err != nil {
-		t.Fatalf("re-link with chain = %v", err)
-	}
-	after, err := os.ReadFile(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(before) {
-		t.Fatal("idempotent link rewrote meta")
-	}
-	if got := mustLoadManifest(t, repo.MetaPath()); len(got.Images) != 2 {
-		t.Fatalf("chain after re-link = %+v", got.Images)
-	}
-	// A different external file still hits the chain guard.
 	other := writeFakeSquashfs(t, nas, []byte("other-bytes"))
-	err = LinkExternal(images, "alice/app", other, "test")
-	if err == nil || !strings.Contains(err.Error(), "incremental chain") {
-		t.Fatalf("conflicting re-link = %v, want chain refusal", err)
+	if err := LinkExternal(images, "alice/app", other, "test"); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestLinkExternalConflictChain(t *testing.T) {
-	withLinuxLinkPolicy(t)
-	repo := testRepo(t)
-	seedActive(t, repo, []byte("local-full"), true)
-	nas := t.TempDir()
-	src := writeFakeSquashfs(t, nas, []byte("external"))
-	err := LinkExternal(linkImagesRoot(repo), repo.Name(), src, "test")
-	if err == nil || !strings.Contains(err.Error(), "incremental chain") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestLinkExternalConflictPayload(t *testing.T) {
-	withLinuxLinkPolicy(t)
-	repo := testRepo(t)
-	seedActive(t, repo, []byte("local-full"), false)
-	nas := t.TempDir()
-	src := writeFakeSquashfs(t, nas, []byte("external"))
-	err := LinkExternal(linkImagesRoot(repo), repo.Name(), src, "test")
-	if err == nil || !strings.Contains(err.Error(), "external link") {
-		t.Fatalf("error = %v", err)
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 2 {
+		t.Fatalf("versions = %#v, %v", manifest.Images, err)
 	}
 }
 
@@ -217,13 +159,13 @@ func TestLinkExternalConflictDifferentTarget(t *testing.T) {
 	if err := LinkExternal(images, "alice/app", first, "test"); err != nil {
 		t.Fatal(err)
 	}
-	err := LinkExternal(images, "alice/app", second, "test")
-	if err == nil {
-		t.Fatal("expected conflict")
+	if err := LinkExternal(images, "alice/app", second, "test"); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "does not match") &&
-		!strings.Contains(err.Error(), "points elsewhere") {
-		t.Fatalf("error = %v", err)
+	repo, _ := OpenRepo(images, "alice/app")
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 2 {
+		t.Fatalf("versions = %#v, %v", manifest.Images, err)
 	}
 }
 
@@ -311,11 +253,14 @@ func TestLinkExternalFixedNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := mustLoadManifest(t, repo.MetaPath())
-	if !rootOf(manifest).CreatedAt.Equal(linkNow()) {
-		t.Fatalf("created_at = %v", rootOf(manifest).CreatedAt)
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if manifest.Format.Compression != CompressionZstd {
-		t.Fatalf("compression = %q", manifest.Format.Compression)
+	if !manifest.Images[0].CreatedAt.Equal(linkNow()) {
+		t.Fatalf("created_at = %v", manifest.Images[0].CreatedAt)
+	}
+	if manifest.Images[0].Format.Compression != CompressionZstd {
+		t.Fatalf("compression = %q", manifest.Images[0].Format.Compression)
 	}
 }

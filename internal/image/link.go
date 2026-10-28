@@ -26,55 +26,77 @@ var linkDarwinHost = func() bool { return runtime.GOOS == "darwin" }
 // path-ref fallback when the host cannot create symlinks.
 var linkSymlink = os.Symlink
 
-// LinkExternal registers an external image file in the library leaf
-// name under imagesDir. It writes an absolute symlink to
-// image.sqsh or image.dmg when possible, otherwise a path-ref
-// regular file whose content is the absolute source path, plus
-// meta.yaml, without copying payload bytes. The same external
-// target and digest is idempotent.
+// LinkExternal registers an external image as an immutable full version.
 func LinkExternal(imagesDir, name, srcPath, builder string) error {
+	_, err := LinkExternalVersion(imagesDir, name, srcPath, builder)
+	return err
+}
+
+// LinkExternalVersion registers an external image and returns its full ID.
+func LinkExternalVersion(imagesDir, name, srcPath, builder string) (string, error) {
 	repo, err := OpenRepo(imagesDir, name)
 	if err != nil {
-		return fmt.Errorf("link: %w", err)
+		return "", fmt.Errorf("link: %w", err)
 	}
 	absSrc, err := filepath.Abs(srcPath)
 	if err != nil {
-		return fmt.Errorf("link: %w", err)
+		return "", fmt.Errorf("link: %w", err)
 	}
 	if err := validateLinkSource(absSrc, imagesDir); err != nil {
-		return err
+		return "", err
 	}
 	typ, comp, err := detectLinkFormat(absSrc)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := refuseLinkFormat(typ); err != nil {
-		return err
+		return "", err
 	}
 	sum, size, mtime, err := digestRegularFile(absSrc)
 	if err != nil {
-		return fmt.Errorf("link: %w", err)
+		return "", fmt.Errorf("link: %w", err)
 	}
 	next := linkMeta(repo, typ, comp, sum, size, mtime, builder)
-	idle, err := checkLinkIdle(repo, absSrc, next)
+	node, err := next.Full()
 	if err != nil {
-		return err
+		return "", fmt.Errorf("link: %w", err)
 	}
-	if idle {
-		return rebuildIndexes(repo)
+	release, err := LockLibrary(imagesDir, DefaultLibraryLockTimeout)
+	if err != nil {
+		return "", fmt.Errorf("link: %w", err)
 	}
-	payloadPath := filepath.Join(repo.Dir, activeImageName(typ))
-	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
-		return fmt.Errorf("link: %w", err)
+	defer release()
+	if err := checkNamePlacement(imagesDir, repo.Segments); err != nil {
+		return "", fmt.Errorf("link: %w", err)
+	}
+	manifest, _, err := loadVersionMeta(repo)
+	if err != nil {
+		return "", fmt.Errorf("link: %w", err)
+	}
+	for _, old := range manifest.Images {
+		if old.ID != node.ID {
+			continue
+		}
+		if !sameVersionIdentity(old, node) {
+			return "", fmt.Errorf("link: identity conflict for %s", node.ID)
+		}
+		return node.ID, nil
+	}
+	payloadPath, err := repo.ObjectPayloadPath(node)
+	if err != nil {
+		return "", fmt.Errorf("link: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(payloadPath), 0o755); err != nil {
+		return "", fmt.Errorf("link: %w", err)
 	}
 	if err := writeLinkExternal(absSrc, payloadPath); err != nil {
-		return err
+		return "", err
 	}
-	if err := writeLinkMeta(repo, next, hooks{}); err != nil {
+	if _, err := appendFullVersion(repo, node, false, hooks{}); err != nil {
 		removeFile(payloadPath)
-		return err
+		return "", fmt.Errorf("link: %w", err)
 	}
-	return rebuildIndexes(repo)
+	return node.ID, nil
 }
 
 func validateLinkSource(absSrc, imagesDir string) error {
@@ -176,6 +198,7 @@ func linkMeta(repo Repo, typ, comp string, sum [32]byte, size, mtime int64, buil
 	return fullManifest(repo.Name(), Format{Type: typ, Compression: comp}, ImageMeta{
 		ID:        digest,
 		Kind:      KindFull,
+		Format:    Format{Type: typ, Compression: comp},
 		Size:      size,
 		SHA256:    digest,
 		MtimeUnix: mtime,
@@ -308,9 +331,6 @@ func writeLinkExternal(absSrc, payloadPath string) error {
 		return fmt.Errorf("link: active payload is not an external link")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("link: %w", err)
-	}
-	if err := linkSymlink(absSrc, payloadPath); err == nil {
-		return nil
 	}
 	if err := writePathRef(absSrc, payloadPath); err != nil {
 		return fmt.Errorf("link: %w", err)

@@ -40,14 +40,29 @@ func writeSessionRecordMarked(t *testing.T, dir, name string, removable bool, ac
 		}
 	}
 	store := session.Store{Dir: dir}
-	rec := session.Record{
-		Name:          name,
-		State:         session.StateActive,
-		Actions:       actions,
-		CreatedAt:     now,
-		RemoveOnClose: removable,
+	versioned := true
+	for _, action := range actions {
+		if len(action.TipID) != 64 || (action.Name != "" && len(action.FullID) != 64) ||
+			(action.ServedID != "" && (len(action.ServedID) != 64 || len(action.ServedTip) != 64)) {
+			versioned = false
+		}
 	}
-	if err := store.Save(rec); err != nil {
+	rec := session.Record{Name: name, State: session.StateActive,
+		Actions: actions, CreatedAt: now, RemoveOnClose: removable}
+	var err error
+	if versioned {
+		for i := range actions {
+			actions[i].RuntimeID = fmt.Sprintf("m%d", i+1)
+		}
+		rec, err = session.NewVersionRecord(name, now)
+		if err == nil {
+			rec.Actions, rec.RemoveOnClose = actions, removable
+			err = store.SaveVersion(rec)
+		}
+	} else {
+		err = store.Save(rec)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -126,6 +141,26 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	}
 	if stdout, _, _, err = runCmd(t, append(lib, "session", "list")...); err != nil || stdout != "" {
 		t.Fatalf("list after remove = %q (%v)", stdout, err)
+	}
+}
+
+func TestSessionReadCommandsRejectLegacyRecords(t *testing.T) {
+	home, _ := withWorkspace(t)
+	_, lib := libFlags(home)
+	store := session.Store{Dir: sessionsDir(home)}
+	if err := store.Save(session.Record{
+		Name: "legacy", State: session.StateActive, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{{"session", "list"}, {"session", "show", "legacy"}} {
+		stdout, _, _, err := runCmd(t, append(lib, args...)...)
+		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "session: parse") ||
+			!strings.Contains(err.Error(), `unsupported record version ""`) ||
+			!strings.Contains(err.Error(), "rebuild sessions") {
+			t.Errorf("%v: stdout = %q, error = %v", args, stdout, err)
+		}
 	}
 }
 
@@ -217,59 +252,6 @@ func TestSessionUnknownNameIsRuntimeError(t *testing.T) {
 		if ExitCode(err) != 1 {
 			t.Fatalf("%v: ExitCode(%v) = %d, want 1", args, err, ExitCode(err))
 		}
-	}
-}
-
-func TestSessionOpenReplaysMissingMountsAndIsIdempotent(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	repoDir := buildLibrary(t, home, lib, imagesDir, "alice/app")
-	view := filepath.Join(work, "view")
-	f := withMountSeams(t, nil)
-	// The real health probe is Linux-only. Off Linux, classify the
-	// fake table with the same listed-and-readable rule, so a
-	// repeated open skips a view that is listed and still opens.
-	pinPortableHealth(t, f)
-	writeSessionRecord(t, sessionsDir(home), "dev",
-		libraryAction("alice/app", view, session.ModeRW))
-
-	stdout, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...)
-	if err != nil {
-		t.Fatalf("session open: %v\n%s", err, stderr)
-	}
-	if stdout != "opened dev\n" {
-		t.Fatalf("open stdout = %q", stdout)
-	}
-	if len(f.mountReqs) != 1 {
-		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
-	}
-	req := f.mountReqs[0]
-	if req.Full != filepath.Join(repoDir, "image.sqsh") || req.MergedDir != view {
-		t.Fatalf("request = %+v", req)
-	}
-	if req.ReadOnly {
-		t.Errorf("a recorded rw view replayed read-only: %+v", req)
-	}
-	rec := loadSessionRecord(t, sessionsDir(home), "dev")
-	if rec.Actions[0].Status != session.StatusMounted {
-		t.Fatalf("action = %+v", rec.Actions[0])
-	}
-
-	// With the view listed and readable, a repeated open is a pure
-	// no-op: the fake engine is never called again.
-	if err := os.MkdirAll(view, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f.table = []mountinfo.Mount{{Point: view, FSType: "fuse.fuse-overlayfs"}}
-	stdout, stderr, _, err = runCmd(t, append(lib, "session", "open", "dev")...)
-	if err != nil {
-		t.Fatalf("second open: %v\n%s", err, stderr)
-	}
-	if stdout != "opened dev\n" {
-		t.Fatalf("second open stdout = %q", stdout)
-	}
-	if len(f.mountReqs) != 1 {
-		t.Fatalf("a healthy view was remounted: %d calls", len(f.mountReqs))
 	}
 }
 

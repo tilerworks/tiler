@@ -61,6 +61,9 @@ type Entry struct {
 // fields keep the writable merged view the incremental build and its
 // quality gate rely on.
 type Request struct {
+	// Members overrides the legacy Full/Layers fields with a root-to-tip
+	// stack. Each path must already be materialized; Concat cannot be combined.
+	Members []MountMember
 	// Full is the full image file mounted as the base layer.
 	Full string
 	// Layers lists incremental image files in chain order, oldest
@@ -73,7 +76,7 @@ type Request struct {
 	// LayerFSNames overrides layer identities, indexed like Layers.
 	// An empty entry keeps that layer's path as the identity.
 	LayerFSNames []string
-	// Format is the container type of every stack layer, for example
+	// Format is the legacy container type of every stack layer, for example
 	// "squashfs" or "erofs". Library mounts copy it from metadata
 	// after the file magic agrees. File-path mounts take it from
 	// detection. Empty is refused.
@@ -123,6 +126,14 @@ type Request struct {
 	// selects the platform exec: hdiutil on PATH on darwin, and
 	// ErrUnavailable on every other host. FUSE mounts ignore it.
 	Hdiutil func(argv []string, consErr error) ([]byte, error)
+}
+
+// MountMember carries one layer's payload path, optional published identity,
+// and container type. Split payloads are materialized by the caller.
+type MountMember struct {
+	Path   string
+	FSName string
+	Format string
 }
 
 // ConcatSource describes the concat view of a byte-block payload
@@ -231,6 +242,7 @@ func Mount(req Request) (*Workspace, error) {
 }
 
 func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
+	req = memberRequest(req)
 	if req.Format == container.DMG().Type() {
 		return mountDMG(req, seam)
 	}
@@ -790,23 +802,32 @@ func preflight(req Request) error {
 // needs unsquashfs; erofs probes with the client already listed.
 // The writable upper stays on the shared fuse-overlayfs.
 func requiredTools(req Request) ([]string, error) {
-	if req.Format == "" {
-		return nil, errors.New("workspace: container format is required")
-	}
-	format, err := container.Lookup(req.Format)
-	if err != nil {
-		return nil, fmt.Errorf("workspace: %w", err)
-	}
-	client, err := fuseClient(format)
+	members, err := stack(req)
 	if err != nil {
 		return nil, err
 	}
-	tools := []string{client, "fusermount3"}
-	if !req.ReadOnly || len(req.Layers) > 0 {
-		tools = append(tools, "fuse-overlayfs")
+	var tools []string
+	for _, m := range members {
+		if m.format == "" {
+			return nil, errors.New("workspace: container format is required")
+		}
+		format, err := container.Lookup(m.format)
+		if err != nil {
+			return nil, fmt.Errorf("workspace: %w", err)
+		}
+		client, err := fuseClient(format)
+		if err != nil {
+			return nil, err
+		}
+		for _, tool := range []string{client, subdirProbe(format, req.Subdir)} {
+			if tool != "" && !slices.Contains(tools, tool) {
+				tools = append(tools, tool)
+			}
+		}
 	}
-	if probe := subdirProbe(format, req.Subdir); probe != "" {
-		tools = append(tools, probe)
+	tools = append(tools, "fusermount3")
+	if !req.ReadOnly || len(members) > 1 {
+		tools = append(tools, "fuse-overlayfs")
 	}
 	if req.Concat != nil {
 		tools = append(tools, "concatfs")
@@ -845,6 +866,17 @@ func lookTools(tools ...string) error {
 // stack normalizes the request into mount order: newest increment
 // first and the full image last, matching the lower-N numbering.
 func stack(req Request) ([]member, error) {
+	if len(req.Members) > 0 {
+		if req.Concat != nil {
+			return nil, errors.New("workspace: explicit members require materialized payloads")
+		}
+		for _, m := range req.Members {
+			if m.Path == "" {
+				return nil, errors.New("workspace: member payload path is required")
+			}
+		}
+		req = memberRequest(req)
+	}
 	if depth := 1 + len(req.Layers); depth > maxStackDepth {
 		return nil, fmt.Errorf(
 			"workspace: stack holds %d members; the limit is %d",
@@ -852,10 +884,14 @@ func stack(req Request) ([]member, error) {
 	}
 	members := make([]member, 0, len(req.Layers)+1)
 	for i := len(req.Layers) - 1; i >= 0; i-- {
+		format := req.Format
+		if len(req.Members) > 0 {
+			format = req.Members[i+1].Format
+		}
 		members = append(members, member{
 			path:   req.Layers[i],
 			fsname: layerFSName(req, i),
-			format: req.Format,
+			format: format,
 		})
 	}
 	fsname := req.FullFSName
@@ -863,6 +899,21 @@ func stack(req Request) ([]member, error) {
 		fsname = req.Full
 	}
 	return append(members, member{path: req.Full, fsname: fsname, format: req.Format}), nil
+}
+
+// memberRequest projects explicit members onto the legacy runtime path fields.
+func memberRequest(req Request) Request {
+	if len(req.Members) == 0 {
+		return req
+	}
+	base := req.Members[0]
+	req.Full, req.FullFSName, req.Format = base.Path, base.FSName, base.Format
+	req.Layers, req.LayerFSNames = nil, nil
+	for _, m := range req.Members[1:] {
+		req.Layers = append(req.Layers, m.Path)
+		req.LayerFSNames = append(req.LayerFSNames, m.FSName)
+	}
+	return req
 }
 
 // layerFSName is the identity one layer publishes: its override when

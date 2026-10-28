@@ -41,8 +41,6 @@ alice_dir=$HOME/.tiler/images/alice/app
 bob_dir=$HOME/.tiler/images/bob/docs
 alice_meta=$alice_dir/meta.yaml
 bob_meta=$bob_dir/meta.yaml
-alice_img=$alice_dir/image.dmg
-bob_img=$bob_dir/image.dmg
 shadow=$HOME/.tiler/sessions/dev/runtime/m1/upper.shadow
 
 if test -n "$tiler_bin"
@@ -62,6 +60,7 @@ test_expect_success TILER,MACOS 'plain directory dmg create publishes alice/app'
 	test_grep -E "^full alice/app [0-9a-f]+" full1.out &&
 	id1=$(cut -d" " -f3 full1.out) &&
 	test -n "$id1" &&
+	alice_img=$alice_dir/_objects/$id1/image.dmg &&
 	test_path_is_file "$alice_img" &&
 	test_path_is_missing "${alice_img%.dmg}.sqsh" &&
 	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
@@ -75,9 +74,7 @@ test_expect_success TILER,MACOS 'plain directory dmg create is idempotent' '
 	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&
 	test "$id1" = "$id2" &&
-	test_cmp full1.meta "$alice_meta" &&
-	test_path_is_missing "$alice_dir/_archives" &&
-	test_path_is_missing "$alice_dir/_hold"
+	test_cmp full1.meta "$alice_meta"
 '
 
 test_expect_success TILER,MACOS 'shadow bake publishes a new full from the live view' '
@@ -98,6 +95,9 @@ test_expect_success TILER,MACOS 'shadow bake publishes a new full from the live 
 	test_grep -E "^full alice/app [0-9a-f]+" bake1.out &&
 	bake_id=$(cut -d" " -f3 bake1.out) &&
 	test -n "$bake_id" &&
+	alice_img=$alice_dir/_objects/$bake_id/image.dmg &&
+	test_path_is_file "$alice_img" &&
+	test_path_is_file "$alice_dir/_objects/$id1/image.dmg" &&
 	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
 	cp "$alice_meta" bake1.meta
 '
@@ -125,6 +125,7 @@ test_expect_success TILER,MACOS 'subdir of a mount packs a different dmg without
 	test_grep ! -F "dmg has no incremental layer" div1.err &&
 	bob_id=$(cut -d" " -f3 div1.out) &&
 	test -n "$bob_id" &&
+	bob_img=$bob_dir/_objects/$bob_id/image.dmg &&
 	test_path_is_file "$bob_img" &&
 	test_path_is_missing "${bob_img%.dmg}.sqsh" &&
 	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$bob_meta" &&
@@ -139,7 +140,6 @@ test_expect_success TILER,MACOS 'subdir divert build is idempotent' '
 	bob_id2=$(cut -d" " -f3 div2.out) &&
 	test "$bob_id" = "$bob_id2" &&
 	test_cmp div1.meta "$bob_meta" &&
-	test_path_is_missing "$bob_dir/_archives" &&
 	test_path_is_file "$shadow"
 '
 

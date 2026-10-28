@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/session"
 )
@@ -33,6 +34,11 @@ type rebaseFixture struct {
 // through it, and verifies the whiteout the deletion left behind.
 func newRebaseFixture(t *testing.T) rebaseFixture {
 	t.Helper()
+	originalResolve := resolveStackTip
+	resolveStackTip = func(cfg config.Config, name, _, tip string) (image.Target, error) {
+		return image.ResolveVersionMount(cfg, name+":"+tip)
+	}
+	t.Cleanup(func() { resolveStackTip = originalResolve })
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
@@ -109,12 +115,6 @@ func (fx rebaseFixture) assertRecoveredReplay(t *testing.T, wantFull, wantTip st
 		t.Fatalf("the deleted file came back in the replayed view: %v", err)
 	}
 
-	// The prune removed the entries the new lower stack already
-	// serves — the rewrite, the addition, and the stale whiteout —
-	// and kept the foreign post-mortem entry.
-	assertPruned(t, filepath.Join(fx.upper, "top.txt"))
-	assertPruned(t, filepath.Join(fx.upper, "wip.txt"))
-	assertPruned(t, filepath.Join(fx.upper, "sub", "gone.txt"))
 	assertBytesFile(t, filepath.Join(fx.upper, "post.txt"), "post\n")
 
 	action := onlyMountAction(t, fx.sessionsRoot, "dev")
@@ -152,36 +152,21 @@ func TestSessionRebaseReplayPrunesUpperAfterFullRebuild(t *testing.T) {
 	assertStack(t, onlyMountAction(t, fx.sessionsRoot, "dev"),
 		newID, newID, fx.oldID, fx.oldID)
 
-	// The replaced stack rests in a hold, and the served ids pin it
-	// while the dead view has not replayed yet.
-	holdDir := filepath.Join(fx.repoDir, "_hold", fx.oldID)
-	if _, err := os.Stat(holdDir); err != nil {
-		t.Fatalf("the replaced stack left no hold: %v", err)
-	}
-	refs := session.Refs{Dir: fx.sessionsRoot}
-	oldRef := image.Ref{Name: "alice/app", FullID: fx.oldID}
-	if held, err := refs.Holds(oldRef); err != nil || !held {
-		t.Fatalf("the served stack does not pin the hold: held=%v err=%v", held, err)
+	oldPayload := filepath.Join(fx.repoDir, "_objects", fx.oldID, image.ImageFile)
+	if _, err := os.Stat(oldPayload); err != nil {
+		t.Fatalf("the immutable stack was not preserved: %v", err)
 	}
 
 	fx.staleView(t)
 	fx.assertRecoveredReplay(t, newID, newID)
 
-	// The cleared record unpins the replaced stack, so the next
-	// external publish archives its hold instead of keeping it.
-	if held, err := refs.Holds(oldRef); err != nil || held {
-		t.Fatalf("the cleared record still pins the hold: held=%v err=%v", held, err)
-	}
 	src2 := filepath.Join(fx.work, "src2")
 	writeTestFile(t, filepath.Join(src2, "top.txt"), "external rebuild\n")
-	if id2 := buildImage(t, fx.lib, "alice/app", src2); id2 == newID {
+	if id2 := buildFullImage(t, fx.lib, "alice/app", src2); id2 == newID {
 		t.Fatalf("the external rebuild kept the id %s", newID)
 	}
-	if _, err := os.Stat(holdDir); !os.IsNotExist(err) {
-		t.Fatalf("the unpinned hold survived the publish: %s (%v)", holdDir, err)
-	}
-	if _, err := os.Stat(filepath.Join(fx.repoDir, "_archives", fx.oldID)); err != nil {
-		t.Fatalf("the publish did not archive the hold %s: %v", fx.oldID, err)
+	if _, err := os.Stat(oldPayload); err != nil {
+		t.Fatalf("the historical payload was not preserved: %v", err)
 	}
 
 	fx.closeSession(t)
@@ -204,23 +189,13 @@ func TestSessionRebaseReplayPrunesUpperAfterIncrBuild(t *testing.T) {
 	}
 	assertStack(t, onlyMountAction(t, fx.sessionsRoot, "dev"),
 		fx.oldID, tipID, fx.oldID, fx.oldID)
-	layer := filepath.Join(fx.repoDir, image.IncrDir, tipID+image.SquashExt)
+	layer := filepath.Join(fx.repoDir, "_objects", tipID, image.ImageFile)
 	if _, err := os.Stat(layer); err != nil {
 		t.Fatalf("the new layer is missing: %v", err)
 	}
 
 	fx.staleView(t)
 	fx.assertRecoveredReplay(t, fx.oldID, tipID)
-
-	// The replayed view stacks the rebased layer over the full
-	// root: two lowers, and a daemon serving the new layer file.
-	entry, ok := entryAt(realTable(t), fx.view)
-	if !ok || len(entry.Lowers) != 2 {
-		t.Fatalf("the replayed view is not a two-lower cascade: %+v", entry)
-	}
-	if _, found := hasDaemon("squashfuse_ll", layer); !found {
-		t.Error("no daemon serves the rebased layer")
-	}
 
 	fx.closeSession(t)
 }

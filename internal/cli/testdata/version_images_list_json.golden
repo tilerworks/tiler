@@ -1,0 +1,81 @@
+{
+  "schema_version": "3.0",
+  "repositories": [
+    {
+      "name": "alice/app",
+      "latest_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "images": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "parent": null,
+          "kind": "full",
+          "created_at": "2026-10-28T01:00:00Z",
+          "format": {
+            "type": "squashfs",
+            "compression": "zstd"
+          },
+          "size": 1,
+          "payload_kind": "single",
+          "description": "Original base",
+          "summary": "Original base"
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "parent": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "incremental",
+          "created_at": "2026-10-28T02:00:00Z",
+          "format": {
+            "type": "erofs",
+            "compression": "lz4hc"
+          },
+          "size": 1,
+          "payload_kind": "single",
+          "description": "Install tools\nPinned toolchain",
+          "summary": "Install tools"
+        },
+        {
+          "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "parent": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": "incremental",
+          "created_at": "2026-10-28T03:00:00Z",
+          "format": {
+            "type": "squashfs",
+            "compression": "zstd"
+          },
+          "size": 1,
+          "payload_kind": "blocks",
+          "description": "Application layer\nBuilt from release sources",
+          "summary": "Application layer"
+        },
+        {
+          "id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "parent": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "incremental",
+          "created_at": "2026-10-28T05:00:00Z",
+          "format": {
+            "type": "squashfs",
+            "compression": "zstd"
+          },
+          "size": 1,
+          "payload_kind": "single",
+          "description": "Newer historical branch",
+          "summary": "Newer historical branch"
+        },
+        {
+          "id": "aaaaaaaaaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "parent": null,
+          "kind": "full",
+          "created_at": "2026-10-28T04:00:00Z",
+          "format": {
+            "type": "squashfs",
+            "compression": "zstd"
+          },
+          "size": 1,
+          "payload_kind": "single",
+          "description": "Colliding root",
+          "summary": "Colliding root"
+        }
+      ]
+    }
+  ]
+}

@@ -30,8 +30,6 @@ const (
 	// concat FUSE tool recognize it as a concat description.
 	fileConcatView = fileImage + "-concat-view"
 	dirIncr        = IncrDir
-	dirArchives    = "_archives"
-	dirHold        = "_hold"
 	dirBlocks      = "_blocks"
 	squashExt      = SquashExt
 
@@ -110,22 +108,10 @@ func (repo Repo) IncrPath(id string) (string, error) {
 	return filepath.Join(repo.Dir, dirIncr, id+squashExt), nil
 }
 
-// ArchivePath is _archives/<id> for a retired chain. id is a full
-// sha256, or a legacy 16-hex directory left on disk.
-func (repo Repo) ArchivePath(id string) (string, error) {
-	return repo.idSubdir(dirArchives, id, true)
-}
-
-// HoldPath is _hold/<id> for a chain waiting on a reference. id is a
-// full sha256, or a legacy 16-hex directory left on disk.
-func (repo Repo) HoldPath(id string) (string, error) {
-	return repo.idSubdir(dirHold, id, true)
-}
-
 // BlocksDirPath is _blocks/<full-id>, the directory holding the byte
 // blocks of one split payload. New block trees always use a full id.
 func (repo Repo) BlocksDirPath(id string) (string, error) {
-	return repo.idSubdir(dirBlocks, id, false)
+	return repo.idSubdir(dirBlocks, id)
 }
 
 // BlockPath is _blocks/<full-id>/<name> for one manifest block. The
@@ -163,8 +149,8 @@ func isBlockName(name string) bool {
 	return true
 }
 
-func (repo Repo) idSubdir(kind, id string, allowLegacy bool) (string, error) {
-	if checkID(id) == nil || (allowLegacy && legacyID(id)) {
+func (repo Repo) idSubdir(kind, id string) (string, error) {
+	if checkID(id) == nil {
 		return filepath.Join(repo.Dir, kind, id), nil
 	}
 	return "", invalidPath(id)
@@ -181,16 +167,8 @@ func checkID(id string) error {
 	return checkRel(id)
 }
 
-// legacyID reports a 16-hex directory name written before stored ids
-// were the full sha256. Those directories are left in place.
-func legacyID(id string) bool {
-	return isLowerHex(id, idHexLen)
-}
-
-// onDiskID reports a chain directory name tiler may list or resolve:
-// a full sha256, or a legacy 16-hex name still on disk.
 func onDiskID(id string) bool {
-	return checkID(id) == nil || legacyID(id)
+	return checkID(id) == nil || isLowerHex(id, idHexLen)
 }
 
 // resolveID returns the one candidate that has ref as a prefix.

@@ -10,8 +10,8 @@ fmt: ## golangci-lint fmt
 lint: ## golangci-lint run
 	golangci-lint run
 
-test: ## go test ./... -race -cover
-	go test ./... -race -cover
+test: ## go test ./... -race -cover -timeout 5m
+	go test ./... -race -cover -timeout 5m
 
 cover: ## write coverage.out and open the HTML report
 	go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out

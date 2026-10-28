@@ -54,6 +54,9 @@ type CleanFunc func(mountpoint string) error
 type Engine struct {
 	// Store is the record store the lifecycle reads and writes.
 	Store
+	// Versioned routes core lifecycle writes through immutable-version references.
+	// Runtime callers opt in when the new image and session layouts are activated.
+	Versioned bool
 	// Now returns the current time. Nil uses the UTC wall clock.
 	Now func() time.Time
 	// LoadTable snapshots the host mount table for the health
@@ -128,6 +131,9 @@ func (e *Engine) NewRemovable(name string) error {
 // under the session's exclusive lock. A name already recorded is
 // refused.
 func (e *Engine) newRecord(name string, removeOnClose bool) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.newRecord(name, removeOnClose) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -140,12 +146,20 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 	case !errors.Is(err, ErrNotFound):
 		return err
 	}
-	return e.Save(Record{
+	rec := Record{
 		Name:          name,
 		State:         StateActive,
 		CreatedAt:     e.now(),
 		RemoveOnClose: removeOnClose,
-	})
+	}
+	if e.Versioned {
+		rec, err = NewVersionRecord(name, rec.CreatedAt)
+		if err != nil {
+			return err
+		}
+		rec.RemoveOnClose = removeOnClose
+	}
+	return e.Save(rec)
 }
 
 // RunMount records one mount action write-ahead and executes it
@@ -155,6 +169,14 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 // status, so a later Open replays it, and returns the execution
 // error.
 func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, error) {
+	if e.needsVersionScope() {
+		var result Result
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			result, err = local.RunMount(name, action, mount)
+			return err
+		})
+		return result, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return Result{}, err
@@ -202,6 +224,9 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 // mount, so recovery is idempotent. Umount actions record teardowns
 // that already happened and restore nothing.
 func (e *Engine) Open(name string, mount MountFunc) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.Open(name, mount) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -303,6 +328,14 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 // reports whether the record was removed, which is how the command
 // layer tells a --rm deletion from an audit-kept close.
 func (e *Engine) Close(name string, umount UmountFunc) (bool, error) {
+	if e.needsVersionScope() {
+		var removed bool
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			removed, err = local.Close(name, umount)
+			return err
+		})
+		return removed, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return false, err
@@ -457,6 +490,9 @@ func (e *Engine) ReleaseMount(dir string) error {
 // releaseMountActions writebacks StatusUnmounted for every live
 // mount action at dir under one session.
 func (e *Engine) releaseMountActions(name, dir string) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.releaseMountActions(name, dir) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -497,6 +533,15 @@ func (e *Engine) releaseMountActions(name, dir string) error {
 // action — a file-path mount records no identity — and the call is a
 // silent no-op.
 func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string) error {
+	return e.rebaseMountedStack(mountpoint, name, newFullID, newTipID, false)
+}
+
+// RebaseMountedStackLocked reuses a library lock held by a compound caller.
+func (e *Engine) RebaseMountedStackLocked(mountpoint, name, newFullID, newTipID string) error {
+	return e.rebaseMountedStack(mountpoint, name, newFullID, newTipID, true)
+}
+
+func (e *Engine) rebaseMountedStack(mountpoint, name, newFullID, newTipID string, libraryHeld bool) error {
 	var names []string
 	err := e.eachRecord(func(rec Record) bool {
 		if rec.State != StateActive {
@@ -514,7 +559,16 @@ func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string
 		return err
 	}
 	for _, sessionName := range names {
-		if err := e.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID); err != nil {
+		run := func(local *Engine) error {
+			return local.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		}
+		var err error
+		if libraryHeld {
+			err = e.WithVersionSessionLocked(sessionName, run)
+		} else {
+			err = e.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -528,6 +582,11 @@ func (e *Engine) RebaseMountedStack(mountpoint, name, newFullID, newTipID string
 func (e *Engine) rebaseActions(
 	sessionName, mountpoint, name, newFullID, newTipID string,
 ) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(sessionName, func(local *Engine) error {
+			return local.rebaseActions(sessionName, mountpoint, name, newFullID, newTipID)
+		})
+	}
 	release, err := e.lockExclusive(sessionName)
 	if err != nil {
 		return err
@@ -602,6 +661,14 @@ func firstNonEmpty(values ...string) string {
 // shape does not gate discard. The return reports whether the
 // record was deleted.
 func (e *Engine) Discard(name string, reused bool) (bool, error) {
+	if e.needsVersionScope() {
+		var removed bool
+		err := e.withVersionSession(name, func(local *Engine) (err error) {
+			removed, err = local.Discard(name, reused)
+			return err
+		})
+		return removed, err
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return false, err
@@ -645,6 +712,14 @@ func (e *Engine) closeRemovable(
 	health HealthFunc,
 	umount UmountFunc,
 ) (string, error) {
+	if e.needsVersionScope() {
+		var closed string
+		err := e.tryVersionSession(name, func(local *Engine) (err error) {
+			closed, err = local.closeRemovable(name, dir, health, umount)
+			return err
+		})
+		return closed, err
+	}
 	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
@@ -681,6 +756,9 @@ func removableIdle(rec Record, dir string, health HealthFunc) bool {
 // record is refused: close it first, so a session holding mounts is
 // never orphaned.
 func (e *Engine) Remove(name string) error {
+	if e.needsVersionScope() {
+		return e.withVersionSession(name, func(local *Engine) error { return local.Remove(name) })
+	}
 	release, err := e.lockExclusive(name)
 	if err != nil {
 		return err
@@ -701,6 +779,9 @@ func (e *Engine) Remove(name string) error {
 // record, lock, and any runtime subtree beneath it. The caller holds
 // the session's exclusive lock.
 func (s Store) deleteRecordFiles(name string) error {
+	if s.scope != nil {
+		return s.scope.remove(name)
+	}
 	dir, err := s.sessionDir(name)
 	if err != nil {
 		return err
@@ -800,11 +881,17 @@ func (e *Engine) now() time.Time {
 // List returns every record for command rendering, ordered by file
 // name. A corrupt record is reported, never silently dropped.
 func (e *Engine) List() ([]Record, error) {
+	if e.Versioned {
+		return e.ListVersion()
+	}
 	return e.Store.List()
 }
 
 // Show returns one record for command rendering.
 func (e *Engine) Show(name string) (Record, error) {
+	if e.Versioned {
+		return e.LoadVersion(name)
+	}
 	return e.Load(name)
 }
 

@@ -33,6 +33,9 @@ type IncrRequest struct {
 	// Compression, when set, must match the active image compression.
 	// Empty inherits it. A mismatch is ErrFormatConflict.
 	Compression string
+	// Description fields apply only to immutable version builds.
+	Description    string
+	DescriptionSet bool
 	// Upper is the writable upper directory to pack. It lives under
 	// the runtime tree, so no reserved-tree check applies.
 	Upper string

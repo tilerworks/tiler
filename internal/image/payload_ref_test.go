@@ -67,18 +67,25 @@ func TestResolvePayloadBytesPathRefQuickCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Lstat(repo.ImagePath())
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := repo.ObjectPayloadPath(manifest.Images[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("expected path-ref regular file")
 	}
-	manifest := mustLoadManifest(t, repo.MetaPath())
-	if err := QuickCheck(rootOf(manifest), repo.ImagePath()); err != nil {
+	if err := QuickCheck(manifest.Images[0], payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifySHA256(rootOf(manifest), repo.ImagePath()); err != nil {
+	if err := VerifySHA256(manifest.Images[0], payload); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -100,7 +107,15 @@ func TestLinkExternalPathRefFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(repo.ImagePath())
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := repo.ObjectPayloadPath(manifest.Images[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(payload)
 	if err != nil {
 		t.Fatal(err)
 	}

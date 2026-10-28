@@ -195,23 +195,22 @@ func (e *Engine) cachedAttachPath(action Action) string {
 	return filepath.Join(e.CacheDir, sum+image.SquashExt)
 }
 
-// libraryDigest is the sha256 metadata records for the pinned
-// library payload (active or hold). attach uses that digest as the
-// cache file name. Empty FullID keeps today's active-only read.
+// libraryDigest returns the digest of the exact immutable version.
 func (e *Engine) libraryDigest(action Action) (string, bool) {
-	metaPath, ok := pinnedMetaPath(action, e.ImagesDir)
-	if !ok {
+	repo, err := image.OpenRepo(e.ImagesDir, action.Name)
+	if err != nil || action.FullID == "" {
 		return "", false
 	}
-	manifest, err := image.LoadManifest(metaPath)
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		return "", false
 	}
-	root, err := manifest.Full()
-	if err != nil || root.SHA256 == "" {
-		return "", false
+	for _, node := range manifest.Images {
+		if node.ID == action.FullID && node.SHA256 != "" {
+			return node.SHA256, true
+		}
 	}
-	return root.SHA256, true
+	return "", false
 }
 
 // fileDigest is the lowercase sha256 of path. attach hashes a
@@ -235,8 +234,7 @@ func fileDigest(path string) (string, bool) {
 // the action. attachImages turns a relative file path into the
 // absolute path attach used and adds the cache copy when the cache
 // is on. A library mount with the cache off stays on image.dmg under
-// the pinned leaf (active or hold). Empty FullID keeps today's
-// active-only path.
+// the immutable object selected by the recorded full ID.
 func recordedImage(action Action, imagesDir string) string {
 	if action.Name != "" && imagesDir != "" {
 		root, ok := pinnedLeafRoot(action, imagesDir)
@@ -248,33 +246,17 @@ func recordedImage(action Action, imagesDir string) string {
 	return action.Image
 }
 
-// pinnedLeafRoot is the absolute library leaf for a recorded action:
-// LocatePinned when FullID is set, otherwise the active repo root.
-// A pin that cannot be located falls back to the active root so
-// fixtures and legacy short FullID records still reconcile against
-// image.dmg under the library name; sessionMount never uses this
-// fallback and fails closed on a bad pin.
+// pinnedLeafRoot returns the immutable object directory selected by the action.
 func pinnedLeafRoot(action Action, imagesDir string) (string, bool) {
 	repo, err := image.OpenRepo(imagesDir, action.Name)
 	if err != nil {
 		return "", false
 	}
-	if action.FullID != "" {
-		root, err := image.LocatePinned(imagesDir, action.Name, action.FullID)
-		if err == nil {
-			return root, true
-		}
-	}
-	return repo.Dir, true
-}
-
-// pinnedMetaPath is meta.yaml under the pinned leaf root.
-func pinnedMetaPath(action Action, imagesDir string) (string, bool) {
-	root, ok := pinnedLeafRoot(action, imagesDir)
-	if !ok {
+	if action.FullID == "" {
 		return "", false
 	}
-	return filepath.Join(root, "meta.yaml"), true
+	root, err := repo.ObjectDirPath(action.FullID)
+	return root, err == nil
 }
 
 // recordedShadow is the writable shadow for one mount action, or

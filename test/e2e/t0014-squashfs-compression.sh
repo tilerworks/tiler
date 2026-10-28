@@ -75,11 +75,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gzip full build records squashfs
 	test_grep -E "^full alice/gzip [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_path_is_file "$img_dir/image.sqsh" &&
+	test_path_is_file "$img_dir/_objects/$id1/image.sqsh" &&
 	test_path_is_missing "$img_dir/_blocks" &&
-	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
-	test_grep "^    type: squashfs$" "$meta_file" &&
-	test_grep "^    compression: gzip$" "$meta_file" &&
+	test_grep -E "^[[:space:]]*- id: $id1$" "$meta_file" &&
+	test_grep -E "^[[:space:]]+type: squashfs$" "$meta_file" &&
+	test_grep -E "^[[:space:]]+compression: gzip$" "$meta_file" &&
 	"$tiler_bin" images show alice/gzip >show.out 2>show.err &&
 	test_grep -E "^  format +squashfs/gzip$" show.out
 '
@@ -99,13 +99,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable mount and same-format i
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
-	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
-	test_grep "^    type: squashfs$" "$meta_file" &&
-	test_grep "^    compression: gzip$" "$meta_file" &&
+	test_path_is_file "$img_dir/_objects/$id1/image.sqsh" &&
+	test_path_is_file "$img_dir/_objects/$layer/image.sqsh" &&
+	test_grep -E "^[[:space:]]+compression: zstd$" "$meta_file" &&
 	"$tiler_bin" images show alice/gzip >show-incr.out 2>show-incr.err &&
-	test_grep -E "^  format +squashfs/gzip$" show-incr.out &&
-	test_grep -E "^  chain +1$" show-incr.out
+	test_grep -E "^  format +squashfs/zstd$" show-incr.out &&
+	test_grep -E "^  parent +$id1$" show-incr.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the gzip incr' '

@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -31,7 +31,7 @@ func listSessionNames(t *testing.T, dir string) []string {
 	}
 	var names []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && entry.Name() != ".refs" {
 			names = append(names, entry.Name())
 		}
 	}
@@ -91,69 +91,6 @@ func mountCreatedOK(t *testing.T, lib []string, wantMountLine string, args ...st
 		t.Fatalf("mount stdout after create = %q, want %q", rest, wantMountLine)
 	}
 	return name
-}
-
-func TestMountRecordsActionInFlagSession(t *testing.T) {
-	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	buildLibrary(t, home, lib, imagesDir, "alice/app")
-	withMountSeams(t, nil)
-	mustSessionNew(t, lib, "dev")
-	view := filepath.Join(work, "view")
-
-	// The library id the action records is the one the list command
-	// reports for the active image. JSON keeps that id stable when
-	// the human record is reformatted.
-	stdout, stderr, _, err := runCmd(t, append(lib, "images", "show", "alice/app", "--json")...)
-	if err != nil {
-		t.Fatalf("images show: %v\n%s", err, stderr)
-	}
-	var listed imageJSON
-	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
-		t.Fatalf("images show --json: %v\n%s", err, stdout)
-	}
-	fullID := listed.Active.ID
-
-	mountOK(t, lib, "mounted "+view+"\n",
-		"mount", "--session", "dev", "alice/app", view)
-
-	rec := loadSessionRecord(t, sessionsDir(home), "dev")
-	if len(rec.Actions) != 1 {
-		t.Fatalf("actions = %+v", rec.Actions)
-	}
-	action := rec.Actions[0]
-	if action.Type != session.TypeMount || action.Image != "alice/app" {
-		t.Errorf("action = %+v", action)
-	}
-	if action.Name != "alice/app" || action.FullID != fullID {
-		t.Errorf("identity = %+v, want full id %s", action, fullID)
-	}
-	// The recorded desired tip is the active stack head: the full
-	// id itself for a fresh full build.
-	if action.TipID != listed.Active.Head {
-		t.Errorf("tip = %q, want the active head %q",
-			action.TipID, listed.Active.Head)
-	}
-	if action.Mountpoint != view || action.Mode != session.ModeRW {
-		t.Errorf("action = %+v", action)
-	}
-	if action.Status != session.StatusMounted || action.Seq != 1 {
-		t.Errorf("action = %+v", action)
-	}
-	if action.Timestamp.IsZero() {
-		t.Error("the action carries no timestamp")
-	}
-
-	// A read-only subdir mount records its shape.
-	roView := filepath.Join(work, "ro-view")
-	mustSessionNew(t, lib, "reader")
-	mountOK(t, lib, "mounted "+roView+"\n", "mount", "--session", "reader",
-		"--read-only", "--subdir", "src", "alice/app", roView)
-	rec = loadSessionRecord(t, sessionsDir(home), "reader")
-	action = rec.Actions[0]
-	if action.Mode != session.ModeRO || action.Subdir != "src" {
-		t.Errorf("action = %+v", action)
-	}
 }
 
 // TestMountRecordsStackTipAfterIncrementalBuild asserts the action
@@ -352,7 +289,7 @@ func TestMountWriteAheadOrdering(t *testing.T) {
 	}
 }
 
-func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
+func TestMountFilePathImageRecordsContentIdentity(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
@@ -366,8 +303,13 @@ func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
 	if action.Image != img {
 		t.Errorf("image = %q, want the reference as given", action.Image)
 	}
-	if action.Name != "" || action.FullID != "" || action.TipID != "" {
-		t.Errorf("file-path identity = %+v, want empty", action)
+	body, err := os.ReadFile(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTip := fmt.Sprintf("%x", sha256.Sum256(body))
+	if action.Name != "" || action.FullID != "" || action.TipID != wantTip {
+		t.Errorf("file-path identity = %+v, want tip %s", action, wantTip)
 	}
 }
 

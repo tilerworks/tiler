@@ -343,7 +343,7 @@ func (s Store) names() ([]string, error) {
 	}
 	var names []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.EqualFold(entry.Name(), referenceDir) {
 			continue
 		}
 		names = append(names, entry.Name())

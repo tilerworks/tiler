@@ -40,7 +40,7 @@ fi
 src_dir=$HOME/src/app
 work_dir=$HOME/work/app
 ro_dir=$HOME/work/ro
-image=$HOME/.tiler/images/alice/app/image.dmg
+img_dir=$HOME/.tiler/images/alice/app
 shadow=$HOME/.tiler/sessions/dev/runtime/m1/upper.shadow
 ro_shadow=$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow
 
@@ -63,6 +63,9 @@ test_expect_success TILER,MACOS 'build image.dmg from a directory' '
 	test_grep -E "^created dev$" new.out &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
+	id=$(cut -d" " -f3 build.out) &&
+	test -n "$id" &&
+	image=$img_dir/_objects/$id/image.dmg &&
 	test_path_is_file "$image" &&
 	test_path_is_missing "${image%.dmg}.sqsh"
 '

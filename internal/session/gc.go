@@ -107,6 +107,14 @@ func (e *Engine) cleanupOne(
 // non-blocking lock, re-checking the rule under the lock. A busy
 // record waits for a later round.
 func (e *Engine) removeExpired(name string, maxAge time.Duration, now time.Time) (*CleanupEvent, error) {
+	if e.needsVersionScope() {
+		var event *CleanupEvent
+		err := e.tryVersionSession(name, func(local *Engine) (err error) {
+			event, err = local.removeExpired(name, maxAge, now)
+			return err
+		})
+		return event, err
+	}
 	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
@@ -136,6 +144,14 @@ func (e *Engine) removeExpired(name string, maxAge time.Duration, now time.Time)
 // to closed under the non-blocking lock, re-checking the rule under
 // the lock so a concurrent recovery keeps the session open.
 func (e *Engine) closeStale(name string, now time.Time, health HealthFunc) (*CleanupEvent, error) {
+	if e.needsVersionScope() {
+		var event *CleanupEvent
+		err := e.tryVersionSession(name, func(local *Engine) (err error) {
+			event, err = local.closeStale(name, now, health)
+			return err
+		})
+		return event, err
+	}
 	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
@@ -178,6 +194,14 @@ func (e *Engine) purgeStaleRemovable(
 	health HealthFunc,
 	umount UmountFunc,
 ) (*CleanupEvent, error) {
+	if e.needsVersionScope() {
+		var event *CleanupEvent
+		err := e.tryVersionSession(name, func(local *Engine) (err error) {
+			event, err = local.purgeStaleRemovable(name, health, umount)
+			return err
+		})
+		return event, err
+	}
 	release, err := e.lockFor(name, 0)
 	if err != nil {
 		if errors.Is(err, ErrLockHeld) || errors.Is(err, ErrLockUnavailable) {
