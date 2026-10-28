@@ -85,8 +85,7 @@ func (r Refs) recordHolds(store Store, name string, ref image.Ref) (bool, error)
 // mount serves and the served stack (ServedID, ServedTip) the live
 // view still serves, so the full side matches either full id and the
 // tip side matches either tip. An empty ref tip asks about the full
-// image alone — a hold archive decision — and matches on the full
-// side without the tip constraint.
+// image alone and matches on the full side without the tip constraint.
 func recordPins(rec Record, ref image.Ref) bool {
 	if rec.State != StateActive {
 		return false

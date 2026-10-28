@@ -158,7 +158,6 @@ func TestVersionRuntimePinsBranchAcrossCloseAndReopen(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	f := withMountSeams(t, nil)
-	legacyBuild = false
 
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
@@ -213,7 +212,6 @@ func TestRuntimeMountRejectsLegacyRepository(t *testing.T) {
 	if err := os.WriteFile(repo.MetaPath(), []byte("version: '2.0'\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	legacyBuild = false
 	if _, err := resolveRuntimeMount(cfg, "alice/app"); err == nil ||
 		!strings.Contains(err.Error(), "rebuild images and sessions") {
 		t.Fatalf("legacy resolve = %v", err)

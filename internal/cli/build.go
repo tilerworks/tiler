@@ -30,8 +30,7 @@ var (
 	// darwin. Tests install a recorder and do not exec hdiutil.
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
-	incrSmoke   func(string) error
-	legacyBuild bool // Test-only compatibility switch for legacy fixtures.
+	incrSmoke func(string) error
 	// rebaseMountedStack rewrites the desired stack of every live
 	// mount action serving one library image, after a build from the
 	// mounted view itself published a new stack. Tests replace it to
@@ -399,17 +398,6 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	if legacyBuild {
-		manifest, err := image.LoadManifest(repo.MetaPath())
-		if err != nil {
-			return false, fmt.Errorf("build: %w", err)
-		}
-		root, err := manifest.Full()
-		if err != nil {
-			return false, fmt.Errorf("build: %w", err)
-		}
-		return promoteBySize(stderr, root.Size, chainBytes(manifest), decision.Upper)
-	}
 	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
@@ -654,8 +642,7 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 	if err != nil {
 		return err
 	}
-	// The live shadow belongs to the session's full id. After the
-	// first publish that id rests in _hold/, not at image.dmg.
+	// The live shadow belongs to the exact version recorded by the session.
 	mounted, err := mountedFullID(cfg.SessionsDir, shadow)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
@@ -693,26 +680,14 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 }
 
 func publishFull(req image.FullRequest) (image.ImageMeta, error) {
-	if legacyBuild {
-		res, err := image.BuildFull(req)
-		return image.ImageMeta{ID: res.ID}, err
-	}
 	return image.BuildFullVersion(req)
 }
 
 func publishIncr(req image.IncrRequest) (image.ImageMeta, error) {
-	if legacyBuild {
-		res, err := image.BuildIncr(req)
-		return image.ImageMeta{ID: res.ID}, err
-	}
 	return image.BuildIncrVersion(req)
 }
 
 func publishDMG(req image.DMGRequest) (image.ImageMeta, error) {
-	if legacyBuild {
-		res, err := image.BuildDMG(req)
-		return image.ImageMeta{ID: res.ID}, err
-	}
 	return image.BuildDMGVersion(req)
 }
 
@@ -723,15 +698,6 @@ func latestVersionID(cfg config.Config, name string) string {
 	}
 	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
-		if legacyBuild {
-			legacy, legacyErr := image.LoadManifest(repo.MetaPath())
-			if legacyErr == nil {
-				root, fullErr := legacy.Full()
-				if fullErr == nil {
-					return root.ID
-				}
-			}
-		}
 		return ""
 	}
 	stack, err := manifest.SelectVersion(name)

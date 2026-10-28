@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -41,24 +40,12 @@ func sessionsDir(home string) string {
 func withBuildSeams(t *testing.T, table []mountinfo.Mount) {
 	t.Helper()
 	origTable, origPack, origSmoke := loadMountTable, packTool, incrSmoke
-	origLegacy := legacyBuild
 	t.Cleanup(func() {
 		loadMountTable, packTool, incrSmoke = origTable, origPack, origSmoke
-		legacyBuild = origLegacy
 	})
 	loadMountTable = func() ([]mountinfo.Mount, error) { return table, nil }
 	packTool = fakePacker(t)
 	incrSmoke = func(string) error { return nil }
-	versionFixture := true
-	for skip := 1; skip < 8; skip++ {
-		_, file, _, ok := runtime.Caller(skip)
-		base := filepath.Base(file)
-		if ok && strings.HasSuffix(base, "_test.go") && base != "build_test.go" {
-			versionFixture = false
-			break
-		}
-	}
-	legacyBuild = !versionFixture
 	installFoundTools(t)
 }
 
@@ -162,16 +149,15 @@ func buildVersionImage(t *testing.T, lib []string, name, src string) string {
 
 func buildImage(t *testing.T, lib []string, name, src string) string {
 	t.Helper()
-	legacyBuild = true
 	cfg := config.Defaults(t.TempDir())
 	cfg.ImagesDir, cfg.SessionsDir = lib[1], lib[3]
 	cfg.CacheDir = filepath.Join(filepath.Dir(cfg.ImagesDir), "cache")
 	res, err := image.BuildFull(image.FullRequest{
 		Config: cfg, Name: name, SrcDir: src, Builder: "test", Run: packTool,
-		Refs: session.Refs{Dir: cfg.SessionsDir},
+		Refs: session.Refs{Dir: cfg.SessionsDir}, MountSmoke: func(string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("legacy fixture %s: %v", name, err)
+		t.Fatalf("image fixture %s: %v", name, err)
 	}
 	return res.ID
 }
@@ -482,9 +468,6 @@ func TestBuildFullIdempotentOnSameSource(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("idle rebuild rewrote meta:\n%s\n%s", before, after)
-	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("idle rebuild archived the image: %v", err)
 	}
 }
 

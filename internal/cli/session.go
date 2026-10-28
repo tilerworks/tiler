@@ -278,23 +278,19 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 	return engine
 }
 
-// resolveStackTip expands one recorded pin (name, full id, tip id)
-// into its resolved stack target. Replay resolves the desired pin of
-// a mount action and the served pin a rebase froze through it. It is
-// a variable so command tests can inject fake stack resolutions;
-// production keeps the real resolver.
-var resolveStackTip = image.ResolveStackTip
+// resolveStackTip is a variable so command tests can inject a resolver.
+// Production resolves the exact immutable tip recorded by the session.
+var resolveStackTip = func(cfg config.Config, name, fullID, tipID string) (image.Target, error) {
+	target, err := image.ResolveVersionMount(cfg, name+":"+tipID)
+	if err == nil && target.ID != fullID {
+		return image.Target{}, fmt.Errorf("recorded root %s does not match tip %s", fullID, tipID)
+	}
+	return target, err
+}
 
 // sessionMount resolves one recorded action back into an engine
 // request: a pin (name + FullID + TipID) is the desired stack the
-// record froze at mount or rebase time. ResolveStackTip expands it
-// through the active leaf while that still roots at FullID and holds
-// TipID, and through the hold leaf otherwise, so a rebased record
-// mounts the new image and a stack an external build replaced stays
-// paired with the recorded upper. Replay never chases a later head
-// move; the DAG keeps branch tips resolvable. An empty TipID keeps
-// the full-id-only semantics of older records, and an empty FullID
-// keeps today's name-only ResolveMount. A rebased record also names
+// record froze at mount or rebase time. A rebased record also names
 // the served stack its live view froze at; when that stack resolves
 // to other lower layers than the desired stack, the request asks the
 // engine to prune the reused upper of what the new lowers already
@@ -308,19 +304,9 @@ func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountF
 			err    error
 		)
 		if action.Name != "" && action.FullID != "" {
-			if action.RuntimeID != "" && len(action.FullID) == 64 && len(action.TipID) == 64 {
-				target, err = image.ResolveVersionMount(cfg, action.Name+":"+action.TipID)
-				if err == nil && target.ID != action.FullID {
-					err = fmt.Errorf("recorded root %s does not match tip %s",
-						action.FullID, action.TipID)
-				}
-			}
-			if target.Name == "" && (err == nil ||
-				strings.Contains(err.Error(), "legacy layout or unreadable marker")) {
-				target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
-			}
+			target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
 		} else {
-			target, err = image.ResolveMount(cfg, action.Image)
+			target, err = image.ResolveVersionMount(cfg, action.Image)
 		}
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)

@@ -293,7 +293,7 @@ func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
 	src := splitSource(t)
 	wantTree := listTree(t, src)
 	buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveMount(cfg, "alice/data")
+	target, err := image.ResolveVersionMount(cfg, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}

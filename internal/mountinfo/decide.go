@@ -320,9 +320,7 @@ func (p PathIdentity) Lookup(mountPoint string) (Name, bool, error) {
 // LibraryName maps a library file path to its image identity. Only
 // <images_dir>/<name>/image.sqsh, <images_dir>/<name>/image.dmg, and
 // <images_dir>/<name>/_incr/<id>.sqsh count, where <name> is 1 to 5
-// segments. Paths under _archives, _hold, or _blocks never carry an
-// identity. Blocks-form mounts publish the canonical image.sqsh
-// path, so they resolve without a blocks shape here.
+// segments. Paths under the legacy blocks layout never carry an identity.
 func LibraryName(imagesDir, path string) (Name, bool) {
 	if imagesDir == "" || !strings.HasPrefix(path, imagesDir+"/") {
 		return "", false
@@ -330,7 +328,7 @@ func LibraryName(imagesDir, path string) (Name, bool) {
 	parts := strings.Split(path[len(imagesDir)+1:], "/")
 	for _, p := range parts {
 		switch p {
-		case "_archives", "_hold", "_blocks":
+		case "_blocks":
 			return "", false
 		}
 	}

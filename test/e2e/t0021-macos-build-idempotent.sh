@@ -75,9 +75,7 @@ test_expect_success TILER,MACOS 'plain directory dmg create is idempotent' '
 	test_grep -E "^full alice/app [0-9a-f]+" full2.out &&
 	id2=$(cut -d" " -f3 full2.out) &&
 	test "$id1" = "$id2" &&
-	test_cmp full1.meta "$alice_meta" &&
-	test_path_is_missing "$alice_dir/_archives" &&
-	test_path_is_missing "$alice_dir/_hold"
+	test_cmp full1.meta "$alice_meta"
 '
 
 test_expect_success TILER,MACOS 'shadow bake publishes a new full from the live view' '
@@ -139,7 +137,6 @@ test_expect_success TILER,MACOS 'subdir divert build is idempotent' '
 	bob_id2=$(cut -d" " -f3 div2.out) &&
 	test "$bob_id" = "$bob_id2" &&
 	test_cmp div1.meta "$bob_meta" &&
-	test_path_is_missing "$bob_dir/_archives" &&
 	test_path_is_file "$shadow"
 '
 

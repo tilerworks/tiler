@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -55,9 +54,6 @@ func mustRemove(t *testing.T, lib []string, target string) string {
 
 func buildImmutableImage(t *testing.T, lib []string, name, src string) string {
 	t.Helper()
-	previous := legacyBuild
-	legacyBuild = false
-	defer func() { legacyBuild = previous }()
 	return buildVersionImage(t, lib, name, src)
 }
 
@@ -130,54 +126,6 @@ func TestFormatSizeUsesBinaryUnits(t *testing.T) {
 	for _, tt := range cases {
 		if got := formatSize(tt.n); got != tt.want {
 			t.Errorf("formatSize(%d) = %q, want %q", tt.n, got, tt.want)
-		}
-	}
-}
-
-func TestImageTableSuffixAndDetail(t *testing.T) {
-	created := time.Date(2026, 10, 20, 9, 14, 3, 0, time.UTC)
-	state := image.State{
-		Active: image.Manifest{
-			Head: "1111111111111111",
-			Images: []image.ImageMeta{
-				{
-					ID: "0123456789abcdef", Kind: image.KindFull, Size: 128 << 20,
-					SHA256:     strings.Repeat("ab", 32),
-					CreatedAt:  created,
-					Builder:    "dev",
-					Deprecated: true,
-				},
-				{
-					ID: "1111111111111111", Kind: image.KindIncremental,
-					Parent: "0123456789abcdef",
-					Size:   12 << 20, CreatedAt: created.Add(time.Hour),
-				},
-			},
-		},
-		HasActive: true,
-		Archives:  []string{"2222222222222222"},
-	}
-	var buf bytes.Buffer
-	if err := writeImageTable(&buf, []namedState{{name: "alice/app", state: state}}, false); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(buf.String(), "\t") || !strings.Contains(buf.String(), "deprecated") {
-		t.Fatalf("short row:\n%s", buf.String())
-	}
-	buf.Reset()
-	if err := writeImageDetail(&buf, "alice/app", state); err != nil {
-		t.Fatal(err)
-	}
-	detail := buf.String()
-	for _, want := range []string{
-		"  deprecated  true\n",
-		"    1111111111111111  parent=0123456789abcdef  12 MiB  2026-10-20T10:14:03Z\n",
-		"  archives    1\n    2222222222222222\n",
-		"  holds       0\n",
-		"134217728 (128 MiB)",
-	} {
-		if !strings.Contains(detail, want) {
-			t.Fatalf("detail missing %q:\n%s", want, detail)
 		}
 	}
 }
@@ -572,8 +520,7 @@ func TestImagesRemoveBadTargets(t *testing.T) {
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	for _, target := range []string{
-		"_foo", ".bar", "a/b/c/d/e/f", "alice/app/_archives",
-		"alice/app/_archives/not-hex", "bad owner/app",
+		"_foo", ".bar", "a/b/c/d/e/f", "bad owner/app",
 	} {
 		_, _, _, err := runCmd(t, append(lib, "images", "rm", target)...)
 		if ExitCode(err) != 2 {

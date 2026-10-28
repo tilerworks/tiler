@@ -294,14 +294,8 @@ func validateMountTarget(cfg config.Config, target image.Target, flags mountFlag
 	return blockPaths, nil
 }
 
-// resolveRuntimeMount keeps legacy command fixtures isolated from the product
-// path. Normal commands accept only v3 repositories.
 func resolveRuntimeMount(cfg config.Config, selector string) (image.Target, error) {
-	target, err := image.ResolveVersionMount(cfg, selector)
-	if err == nil || !legacyBuild {
-		return target, err
-	}
-	return image.ResolveMount(cfg, selector)
+	return image.ResolveVersionMount(cfg, selector)
 }
 
 // resolveMountSession applies the session priority: the --session

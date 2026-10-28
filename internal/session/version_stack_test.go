@@ -95,7 +95,7 @@ func TestVersionStackReopensRecordedDesiredAndServedHistory(t *testing.T) {
 }
 
 func TestVersionStackRejectsInvalidPinsAndLayouts(t *testing.T) {
-	for _, kind := range []string{"missing tip", "short tip", "wrong root", "missing repo", "wrong name", "legacy", "external", "served root"} {
+	for _, kind := range []string{"missing tip", "short tip", "wrong root", "missing repo", "wrong name", "external", "served root"} {
 		t.Run(kind, func(t *testing.T) {
 			root, m := t.TempDir(), sessionVersionManifest()
 			repo := saveSessionVersionManifest(t, root, m)
@@ -113,8 +113,6 @@ func TestVersionStackRejectsInvalidPinsAndLayouts(t *testing.T) {
 			case "wrong name":
 				body, _ := image.EncodeVersionManifest(image.VersionManifest{Version: m.Version, Name: "bob/app", Images: m.Images})
 				_ = os.WriteFile(repo.MetaPath(), body, 0o644)
-			case "legacy":
-				_ = os.Mkdir(filepath.Join(repo.Dir, "_hold"), 0o755)
 			case "external":
 				a.Name, a.FullID, a.Image = "", "", filepath.Join(t.TempDir(), "external.sqsh")
 			case "served root":
