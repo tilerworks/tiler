@@ -90,6 +90,24 @@ func (f Forest) Latest() (ImageMeta, bool) {
 // Topology returns parents before children with chronological sibling ordering.
 func (f Forest) Topology() []ImageMeta { return cloneForestNodes(f.topology) }
 
+// Descendants returns root and every node that depends on it, ordered so
+// children can be removed before their parents.
+func (f Forest) Descendants(root string) ([]ImageMeta, error) {
+	if _, exists := f.nodes[root]; !exists {
+		return nil, fmt.Errorf("forest: image %q not found", root)
+	}
+	included := map[string]bool{root: true}
+	var nodes []ImageMeta
+	for _, node := range f.topology {
+		if node.ID == root || included[node.Parent] {
+			included[node.ID] = true
+			nodes = append(nodes, node)
+		}
+	}
+	slices.Reverse(nodes)
+	return cloneForestNodes(nodes), nil
+}
+
 // Stack returns the selected tip's ancestors, starting at its full root.
 func (f Forest) Stack(tip string) ([]ImageMeta, error) {
 	return walkStack(tip, func(id string) (ImageMeta, bool) {
