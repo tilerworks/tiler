@@ -80,7 +80,7 @@ func TestMountFilePrecedencePreservesColonFilenames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{"app:abcd", "./app:abcd"} {
-		target, err := ResolveMount(buildConfig(t), ref)
+		target, err := ResolveVersionMount(buildConfig(t), ref)
 		if err != nil || target.Library || len(target.Members) != 1 || filepath.Base(target.Members[0].Path) != "app:abcd" {
 			t.Fatalf("file precedence %q: %+v, %v", ref, target, err)
 		}

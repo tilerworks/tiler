@@ -78,8 +78,8 @@ func TestVersionIndexesCoverForestAndDescriptionRevisions(t *testing.T) {
 	}
 }
 
-func TestVersionIndexesRejectLegacyAndUnsafeCaches(t *testing.T) {
-	for _, marker := range []string{dirHold, dirArchives, fileSHA256Index} {
+func TestVersionIndexesRejectUnsafeCaches(t *testing.T) {
+	for _, marker := range []string{fileSHA256Index, fileContentSHA256Index} {
 		repo, manifest := testRepo(t), versionFixture()
 		manifest.Name = repo.Name()
 		storeVersionIndexFixture(t, repo, manifest)
@@ -88,7 +88,7 @@ func TestVersionIndexesRejectLegacyAndUnsafeCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := EnsureVersionIndexes(repo); err == nil {
-			t.Fatalf("accepted unsafe or legacy marker %s", marker)
+			t.Fatalf("accepted unsafe cache %s", marker)
 		}
 	}
 }

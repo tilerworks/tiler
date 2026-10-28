@@ -70,7 +70,7 @@ func TestVersionMetadataFailureRestoresPreviousDocument(t *testing.T) {
 }
 
 func TestVersionMetadataRejectsLegacyLibraries(t *testing.T) {
-	for _, marker := range []string{fileMeta, ImageFile, ImageDMG, dirIncr, dirBlocks, dirHold, dirArchives} {
+	for _, marker := range []string{fileMeta, ImageFile, ImageDMG, dirIncr, dirBlocks} {
 		repo := testRepo(t)
 		if _, err := appendFullVersion(repo, versionNode("old"), false, hooks{}); err != nil {
 			t.Fatal(err)

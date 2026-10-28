@@ -6,9 +6,63 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
-const fileVersionRevision = "meta.sha256.index"
+const (
+	fileSHA256Index        = "sha256.index"
+	fileContentSHA256Index = "content_sha256.index"
+	fileVersionRevision    = "meta.sha256.index"
+	indexRelActive         = "."
+)
+
+type indexRow struct {
+	key string
+	rel string
+}
+
+func appendIndexRow(sha, content, rel string, shaRows, contentRows *[]indexRow) {
+	*shaRows = append(*shaRows, indexRow{key: sha, rel: rel})
+	if content != "" {
+		*contentRows = append(*contentRows, indexRow{key: content, rel: rel})
+	}
+}
+
+func sortIndexRows(rows []indexRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].key != rows[j].key {
+			return rows[i].key < rows[j].key
+		}
+		return rows[i].rel < rows[j].rel
+	})
+}
+
+func encodeIndex(rows []indexRow) []byte {
+	var body strings.Builder
+	for _, row := range rows {
+		body.WriteString(row.key)
+		body.WriteByte(' ')
+		body.WriteString(row.rel)
+		body.WriteByte('\n')
+	}
+	return []byte(body.String())
+}
+
+func writeIndex(dir, name string, rows []indexRow) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := writeTemp(dir, name, encodeIndex(rows), hooks{})
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
+		removeFile(tmp)
+		return err
+	}
+	return syncDir(dir, hooks{})
+}
 
 // EnsureVersionIndexes refreshes derived indexes from all committed v3 nodes.
 // Callers must hold the library lock. The returned revision includes mutable

@@ -2,8 +2,7 @@ package image
 
 // Ref is one full image, and optionally one stack tip of its DAG,
 // that a holder may still pin. TipID is empty for a holder that
-// predates stack tips, or for a question about the full image alone
-// such as a hold archive decision.
+// predates stack tips, or for a question about the full image alone.
 type Ref struct {
 	Name   string
 	FullID string

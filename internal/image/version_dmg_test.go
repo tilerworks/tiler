@@ -46,9 +46,6 @@ func TestDMGVersionsReuseRetainedContentAndDescriptions(t *testing.T) {
 	}
 	repo, _ := OpenRepo(cfg.ImagesDir, req.Name)
 	assertBytes(t, filepath.Join(repo.Dir, dirObjects, first.ID, ImageDMG), []byte("first"))
-	if _, err := os.Stat(filepath.Join(repo.Dir, dirHold)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("created legacy hold directory")
-	}
 }
 
 func TestDMGVersionBuildRejectsInvalidOrFailedCreation(t *testing.T) {

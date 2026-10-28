@@ -47,12 +47,12 @@ func TestBuildFullRejectsNameConflict(t *testing.T) {
 	src := sourceDir(t)
 	runner := &fakeRunner{body: []byte("leaf")}
 	if _, err := BuildFull(FullRequest{
-		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run,
+		Config: cfg, Name: "alice/app", SrcDir: src, Builder: "test", Run: runner.run, MountSmoke: skipSmoke,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := BuildFull(FullRequest{
-		Config: cfg, Name: "alice/app/extra", SrcDir: src, Builder: "test", Run: runner.run,
+		Config: cfg, Name: "alice/app/extra", SrcDir: src, Builder: "test", Run: runner.run, MountSmoke: skipSmoke,
 	})
 	if !errors.Is(err, ErrNameConflict) {
 		t.Fatalf("error = %v, want ErrNameConflict", err)

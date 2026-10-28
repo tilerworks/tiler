@@ -150,30 +150,6 @@ func TestLinkExternalAddsIndependentFullVersions(t *testing.T) {
 	}
 }
 
-func TestLinkExternalConflictChain(t *testing.T) {
-	withLinuxLinkPolicy(t)
-	repo := testRepo(t)
-	seedActive(t, repo, []byte("local-full"), true)
-	nas := t.TempDir()
-	src := writeFakeSquashfs(t, nas, []byte("external"))
-	err := LinkExternal(linkImagesRoot(repo), repo.Name(), src, "test")
-	if err == nil || !strings.Contains(err.Error(), "legacy layout") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestLinkExternalConflictPayload(t *testing.T) {
-	withLinuxLinkPolicy(t)
-	repo := testRepo(t)
-	seedActive(t, repo, []byte("local-full"), false)
-	nas := t.TempDir()
-	src := writeFakeSquashfs(t, nas, []byte("external"))
-	err := LinkExternal(linkImagesRoot(repo), repo.Name(), src, "test")
-	if err == nil || !strings.Contains(err.Error(), "legacy layout") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestLinkExternalConflictDifferentTarget(t *testing.T) {
 	withLinuxLinkPolicy(t)
 	images := t.TempDir()

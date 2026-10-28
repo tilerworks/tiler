@@ -45,9 +45,7 @@ const (
 // MetaVersion is the legacy v1 metadata layout version. Version is
 // a reserved compatibility field: a loader refuses every value it
 // does not understand, so a future layout upgrade stays fail-closed.
-// LoadManifest still reads v1 documents and converts their linear
-// chain into a DAG; no writer produces v1 anymore, so rewriting a
-// lazily migrated hold or archive document upgrades it.
+// LoadManifest reads v1 documents only for isolated compatibility decoding.
 const MetaVersion = "1.0"
 
 // ManifestVersion is the DAG metadata layout version. LoadManifest
@@ -88,10 +86,8 @@ type BlockEntry struct {
 }
 
 // metaV1 is the legacy v1 YAML document stored beside an image
-// before the DAG layout. Only the loader reads this shape: v1
-// documents resting in _hold/ and _archives/ migrate lazily, so the
-// decoder must keep accepting them, but nothing writes one anymore.
-// Unknown fields are dropped on load.
+// before the DAG layout. Only the compatibility decoder reads this
+// shape; nothing writes it. Unknown fields are dropped on load.
 type metaV1 struct {
 	ID string `yaml:"id"`
 	// Name is the canonical library name this image belongs to.
@@ -144,7 +140,7 @@ type ImageMeta struct {
 	MtimeUnix int64     `yaml:"mtime_unix"`
 	CreatedAt time.Time `yaml:"created_at"`
 	Builder   string    `yaml:"builder"`
-	// Deprecated marks an image flagged by the two-phase remove.
+	// Deprecated is retained only in the v2 compatibility model.
 	// ContentSHA256 is the logical content fingerprint of a dmg
 	// publish; both stay facts of the full root.
 	Deprecated    bool   `yaml:"deprecated,omitempty"`
@@ -269,7 +265,7 @@ func (m Manifest) HeadStack() ([]ImageMeta, error) {
 // layerNodes returns every incremental node of the DAG: the union of
 // the reachability sets of all tips. These are the nodes whose layer
 // files (_incr/<id>.sqsh or _blocks/<id>/) travel between the active
-// slot and a hold; the full root's payload travels with the slot
+// active-slot layouts; the full root's payload travels with the slot
 // layout itself, so sweeping and reclaim callers never relocate it
 // as a layer.
 func (m Manifest) layerNodes() []ImageMeta {

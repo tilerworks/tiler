@@ -80,7 +80,7 @@ func loadVersionMeta(repo Repo) (VersionManifest, []byte, error) {
 	if err := repo.checkObjectComponents(repo.MetaPath(), false); err != nil {
 		return VersionManifest{}, nil, err
 	}
-	for _, name := range []string{ImageFile, ImageDMG, dirIncr, dirBlocks, dirHold, dirArchives} {
+	for _, name := range []string{ImageFile, ImageDMG, dirIncr, dirBlocks} {
 		if _, err := os.Lstat(filepath.Join(repo.Dir, name)); !errors.Is(err, os.ErrNotExist) {
 			return VersionManifest{}, nil, fmt.Errorf("version publish: legacy layout or unreadable marker %s", name)
 		}

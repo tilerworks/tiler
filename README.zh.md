@@ -172,19 +172,18 @@ tiler session close feature                # 逆序卸载，记录保留
   `<name|id>` 是 1 到 5 段的库名，或完整 payload sha256 / 唯一十六
   进制前缀（含 `images list` 打出的 10 位 id）。记录包括身份、一行
   `format`（例如 `squashfs/zstd`）、每一层增量、blocks 载荷块数
-  （若有），以及停放的归档和 hold id。`--json` 把同一仓库渲染成
-  一个对象，其中包含 `format`。
-- `tiler images gc` 把无引用的 hold 补归档，再按 `--keep-versions`
-  与 `--max-age` 删除过期归档。为 0 表示该项不限制。同一趟回收
-  一并清理 session 记录：closed 且完成时间超过 `--session-max-age`
+  及其版本拓扑。`--json` 输出相同的版本信息。
+- `tiler images gc` 恢复中断的版本删除，清除没有元数据引用的孤立
+  对象，并保留 `meta.yaml` 中记录的所有历史版本。同一趟回收一并
+  清理 session 记录：closed 且完成时间超过 `--session-max-age`
   的记录被删除；active 记录永不自动删除，但挂载全部失活的记录
   会报告 stale；开启 `session_autoclose_stale`（默认关）后，无挂
   载且超龄的 active 记录自动转 closed，进入之后的删除范围。
   唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
   都会被拆除视图、清理 runtime 并删除记录。
-- `tiler images remove <name | name/_archives/<id>>` 第一次调用标记
-  废弃，第二次物理删除。`<name>` 是 1 到 5 段的库名；归档目标使用
-  `/_archives/` 与完整 sha256 或唯一前缀。仍有引用时两次都拒绝。
+- `tiler image rm <name:hash>` 删除指定版本及其所有后代；
+  `tiler image rm <name>` 删除整个 image 及全部版本。任何待删除版本
+  被 session 引用时操作都会拒绝。
 - `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
   写：每个 squashfs 成员先只读挂到该 session 的
   `runtime/m<seq>/` 树下转接点，再由 `fuse-overlayfs` 叠加在

@@ -52,7 +52,6 @@ func TestParseNameRejectsIllegalShapes(t *testing.T) {
 		"alice/ap\u0080p",
 		"alice/ap\u009fp",
 		"alice/_incr",
-		"alice/_archives",
 		"alice/.hidden",
 		"_alice/app",
 		".alice/app",
