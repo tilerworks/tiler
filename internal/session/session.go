@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
@@ -111,6 +112,11 @@ type Engine struct {
 	// leave it nil; tests inject it where flock is unavailable or
 	// not the subject.
 	Lock func(name string, timeout time.Duration) (func(), error)
+	// Activity overrides the activity log of one session. Nil opens
+	// <sessions root>/<name>/actions.log and records nothing when no
+	// sessions root is set. It is called while the session's
+	// exclusive lock is held, so tests inject write failures here.
+	Activity func(name string) (*activity.Writer, error)
 }
 
 // New creates one fresh active record under the session's exclusive
@@ -159,7 +165,10 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 		}
 		rec.RemoveOnClose = removeOnClose
 	}
-	return e.Save(rec)
+	if err := e.Save(rec); err != nil {
+		return err
+	}
+	return e.recordCreated(name)
 }
 
 // RunMount records one mount action write-ahead and executes it
@@ -232,10 +241,27 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 		return err
 	}
 	defer release()
+	return e.openLocked(name, mount)
+}
+
+// openLocked records the open activity and replays the record under
+// the session's exclusive lock. The started record lands first, so a
+// session whose log cannot be written is left untouched.
+func (e *Engine) openLocked(name string, mount MountFunc) error {
 	rec, err := e.Load(name)
 	if err != nil {
 		return err
 	}
+	finish, err := e.beginActivity(name, activity.EventSessionOpen)
+	if err != nil {
+		return err
+	}
+	return finish(e.openRecord(name, rec, mount))
+}
+
+// openRecord replays one loaded record: healthy views are reconciled,
+// stale ones are cleaned and rebuilt, and a closed record reopens.
+func (e *Engine) openRecord(name string, rec Record, mount MountFunc) error {
 	if e.useDiskImages() {
 		return e.openFromDisk(name, rec, mount)
 	}
@@ -344,10 +370,10 @@ func (e *Engine) Close(name string, umount UmountFunc) (bool, error) {
 	return e.closeLocked(name, umount)
 }
 
-// closeLocked performs the reverse-order teardown of Close and then
-// either flips the record to closed or, for a --rm record, purges
-// its runtime and deletes it. The caller holds the session's
-// exclusive lock. The return reports whether the record was removed.
+// closeLocked records the close activity and tears the record down.
+// A closed record is a no-op without an activity record, so repeated
+// closes never renew an existing log. The caller holds the session's
+// exclusive lock.
 func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 	rec, err := e.Load(name)
 	if err != nil {
@@ -356,6 +382,25 @@ func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 	if rec.State == StateClosed {
 		return false, nil
 	}
+	finish, err := e.beginActivity(name, activity.EventSessionClose)
+	if err != nil {
+		return false, err
+	}
+	removed, opErr := e.closeRecord(name, rec, umount)
+	if err := finish(opErr); err != nil {
+		return removed, err
+	}
+	if !removed {
+		return false, nil
+	}
+	return true, e.purgeRemovable(name, rec)
+}
+
+// closeRecord tears every recorded mount down in reverse record order
+// and then either marks the record closed or reports that a --rm
+// record must be purged. The outcome activity is written before the
+// --rm purge removes the session directory, log included.
+func (e *Engine) closeRecord(name string, rec Record, umount UmountFunc) (bool, error) {
 	for i := len(rec.Actions) - 1; i >= 0; i-- {
 		action := rec.Actions[i]
 		if action.Type != TypeMount || action.Mountpoint == "" ||
@@ -371,7 +416,7 @@ func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 		}
 	}
 	if rec.RemoveOnClose {
-		return true, e.purgeRemovable(name, rec)
+		return true, nil
 	}
 	closed, err := e.Load(name)
 	if err != nil {
