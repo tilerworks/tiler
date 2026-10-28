@@ -22,7 +22,10 @@ func BuildFullVersion(req FullRequest) (node ImageMeta, err error) {
 	if err != nil {
 		return node, err
 	}
-	if runtime.GOOS != "linux" || req.Format == FormatDMG {
+	// The platform gate guards the real Linux-only toolchain. A caller
+	// that injects the packer owns that requirement, so tests can pack
+	// with a fake runner on any host.
+	if (req.Run == nil && runtime.GOOS != "linux") || req.Format == FormatDMG {
 		return node, errors.New("version build: full versions require Linux squashfs or erofs")
 	}
 	if err := prepareScene(req); err != nil {

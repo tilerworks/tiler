@@ -26,7 +26,10 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 	if err := resolveFullRequest(&full); err != nil {
 		return node, err
 	}
-	if runtime.GOOS != "linux" || full.Format == FormatDMG {
+	// The platform gate guards the real Linux-only toolchain. A caller
+	// that injects the packer owns that requirement, so tests can pack
+	// with a fake runner on any host.
+	if (req.Run == nil && runtime.GOOS != "linux") || full.Format == FormatDMG {
 		return node, errors.New("version build: incremental layers require Linux squashfs or erofs")
 	}
 	if err := checkSourceDir(req.Upper, config.Config{ImagesDir: req.Config.ImagesDir, CacheDir: req.Config.CacheDir}); err != nil {
