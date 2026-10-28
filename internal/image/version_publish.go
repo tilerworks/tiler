@@ -10,7 +10,7 @@ import (
 	"github.com/jiangxin/tiler/internal/config"
 )
 
-// PublishFullVersion publishes a staged single-file full version under a lock.
+// PublishFullVersion publishes a staged full file or split directory under a lock.
 // Staging must be outside imagesDir; the caller always owns its cleanup.
 func PublishFullVersion(imagesDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if node.Kind != KindFull {
@@ -52,9 +52,6 @@ func publishFullVersion(imagesDir string, repo Repo, staged string, node ImageMe
 }
 
 func publishVersion(imagesDir string, repo Repo, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool, seam hooks) (ImageMeta, error) {
-	if len(node.Blocks) != 0 {
-		return ImageMeta{}, errors.New("version publish: single-file image required")
-	}
 	manifest, _, err := loadVersionMeta(repo)
 	if err != nil {
 		return ImageMeta{}, err
@@ -77,6 +74,9 @@ func publishVersion(imagesDir string, repo Repo, staged string, node ImageMeta, 
 	}
 	if err := config.OutsideReserved(staged, config.Config{ImagesDir: imagesDir}); err != nil {
 		return ImageMeta{}, fmt.Errorf("version publish: invalid staging path %q: %w", staged, err)
+	}
+	if len(node.Blocks) != 0 {
+		return publishSplitVersion(repo, staged, node, descriptionSet, seam)
 	}
 	if _, err := verifyVersionFile(staged, node); err != nil {
 		return ImageMeta{}, err
