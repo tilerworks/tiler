@@ -638,21 +638,21 @@ func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
 	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	repoDir := filepath.Join(imagesDir, "nas", "vendor")
-	payload := filepath.Join(repoDir, image.ImageFile)
-	target, err := os.Readlink(payload)
+	repo, err := image.OpenRepo(imagesDir, libName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != external {
-		t.Fatalf("symlink target = %q, want %q", target, external)
-	}
-	manifest, err := image.LoadManifest(filepath.Join(repoDir, "meta.yaml"))
+	manifest, err := image.LoadVersionManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRoot(manifest).Builder != Version {
-		t.Fatalf("builder = %q, want %q", manifestRoot(manifest).Builder, Version)
+	node := manifest.Images[0]
+	payload, err := repo.ObjectPayloadPath(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Builder != Version {
+		t.Fatalf("builder = %q, want %q", node.Builder, Version)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d", len(f.mountReqs))
@@ -671,8 +671,46 @@ func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
 		t.Fatalf("actions = %+v", rec.Actions)
 	}
 	action := rec.Actions[0]
-	if action.Name != libName || action.FullID != manifestRootID(manifest) || action.Image != libName {
+	if action.Name != libName || action.FullID != node.ID || action.Image != libName {
 		t.Errorf("recorded action = %+v, want library identity", action)
+	}
+}
+
+func TestMountFileFlagSelectsRegisteredDuplicateVersion(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("squashfs external link is Linux policy")
+	}
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	first := filepath.Join(work, "first.sqsh")
+	second := filepath.Join(work, "second.sqsh")
+	writeTestFile(t, first, "hsqs-first")
+	writeTestFile(t, second, "hsqs-second")
+	const libName = "nas/vendor"
+	if err := image.LinkExternal(imagesDir, libName, first, Version); err != nil {
+		t.Fatal(err)
+	}
+	if err := image.LinkExternal(imagesDir, libName, second, Version); err != nil {
+		t.Fatal(err)
+	}
+
+	view := filepath.Join(work, "view")
+	stdout, stderr, _, err := runCmd(t, append(lib, "mount", "--file", first, libName, view)...)
+	if err != nil {
+		t.Fatalf("mount: %v\n%s", err, stderr)
+	}
+	name, _, ok := parseNewSessionCreated(stdout)
+	if !ok {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if len(f.mountReqs) != 1 || f.mountReqs[0].Full != first {
+		t.Fatalf("request = %+v, want registered file %s", f.mountReqs, first)
+	}
+	record := loadSessionRecord(t, sessionsDir(home), name)
+	wantID := sha256.Sum256([]byte("hsqs-first"))
+	if got := record.Actions[0].FullID; got != hex.EncodeToString(wantID[:]) {
+		t.Fatalf("recorded ID = %s, want first file digest", got)
 	}
 }
 

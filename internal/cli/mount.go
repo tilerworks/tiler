@@ -142,12 +142,19 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 	if err := workspace.CheckSubdir(flags.subdir); err != nil {
 		return usageError{err}
 	}
+	selector := args[0]
 	if flags.file != "" {
-		if err := linkMountFile(cfg, args[0], flags.file); err != nil {
+		var err error
+		selector, err = linkMountFile(cfg, args[0], flags.file)
+		if err != nil {
 			return err
 		}
 	}
-	target, err := image.ResolveMount(cfg, args[0])
+	resolve := image.ResolveMount
+	if flags.file != "" {
+		resolve = image.ResolveVersionMount
+	}
+	target, err := resolve(cfg, selector)
 	if err != nil {
 		if isResolveUsage(err) {
 			return usageError{err}
@@ -580,19 +587,20 @@ func ownedLibrarySource(imagesDir string) func(string) bool {
 // linkMountFile registers one external image under a library name
 // before the mount resolves that name. It refuses the combination
 // with a file-path first argument, which --file replaces.
-func linkMountFile(cfg config.Config, name, src string) error {
+func linkMountFile(cfg config.Config, name, src string) (string, error) {
 	cleaned := filepath.Clean(name)
 	if info, err := os.Stat(cleaned); err == nil && info.Mode().IsRegular() {
-		return usageError{errors.New(
+		return "", usageError{errors.New(
 			"mount: --file cannot be combined with a file-path image argument")}
 	}
-	if err := image.LinkExternal(cfg.ImagesDir, name, src, Version); err != nil {
+	id, err := image.LinkExternalVersion(cfg.ImagesDir, name, src, Version)
+	if err != nil {
 		if isLinkUsage(err) {
-			return usageError{err}
+			return "", usageError{err}
 		}
-		return fmt.Errorf("mount: %w", err)
+		return "", fmt.Errorf("mount: %w", err)
 	}
-	return nil
+	return name + ":" + id, nil
 }
 
 // isLinkUsage reports whether LinkExternal failed on argument shape
