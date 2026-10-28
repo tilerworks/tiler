@@ -92,7 +92,7 @@ type Member struct {
 	// ID is the full or incremental image id of the stack member, in
 	// both the single-file cascade and the blocks form. Empty only
 	// for file-path mounts, which no metadata names.
-	ID string
+	ID, Format string
 	// Size is the recorded payload size in bytes.
 	Size int64
 	// MtimeUnix is the recorded modification time.
