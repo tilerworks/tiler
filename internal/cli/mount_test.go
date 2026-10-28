@@ -398,11 +398,11 @@ func TestMountCacheCopiesAndKeepsIdentity(t *testing.T) {
 	if call.dir != cacheDir || call.src != original {
 		t.Errorf("cache call = %+v", call)
 	}
-	meta, err := image.Load(filepath.Join(repoDir, "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(repoDir, "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.want != meta.SHA256 {
+	if call.want != manifestRoot(manifest).SHA256 {
 		t.Errorf("cache key = %q, want the recorded digest", call.want)
 	}
 	req := f.mountReqs[0]
@@ -524,19 +524,21 @@ func TestMountRuntimeErrors(t *testing.T) {
 // exist, simulating a broken library.
 func addDanglingChain(t *testing.T, repoDir string) {
 	t.Helper()
-	meta, err := image.Load(filepath.Join(repoDir, "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(repoDir, "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	const id = "0123456789abcdef"
 	sum := strings.Repeat(id, 4)
-	meta.Chain = append(meta.Chain, image.ChainEntry{
-		ID: sum, Parent: meta.ID, Size: 4096,
+	manifest.Images = append(manifest.Images, image.ImageMeta{
+		ID: sum, Kind: image.KindIncremental,
+		Parent: manifestRootID(manifest), Size: 4096,
 		SHA256:    sum,
 		MtimeUnix: 1710000001,
 		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
 	})
-	if err := image.Store(filepath.Join(repoDir, "meta.yaml"), meta); err != nil {
+	manifest.Head = sum
+	if err := image.StoreManifest(filepath.Join(repoDir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -645,12 +647,12 @@ func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
 	if target != external {
 		t.Fatalf("symlink target = %q, want %q", target, external)
 	}
-	meta, err := image.Load(filepath.Join(repoDir, "meta.yaml"))
+	manifest, err := image.LoadManifest(filepath.Join(repoDir, "meta.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Builder != Version {
-		t.Fatalf("builder = %q, want %q", meta.Builder, Version)
+	if manifestRoot(manifest).Builder != Version {
+		t.Fatalf("builder = %q, want %q", manifestRoot(manifest).Builder, Version)
 	}
 	if len(f.mountReqs) != 1 {
 		t.Fatalf("engine calls = %d", len(f.mountReqs))
@@ -669,7 +671,7 @@ func TestMountFileFlagLinksAndMountsLibrary(t *testing.T) {
 		t.Fatalf("actions = %+v", rec.Actions)
 	}
 	action := rec.Actions[0]
-	if action.Name != libName || action.FullID != meta.ID || action.Image != libName {
+	if action.Name != libName || action.FullID != manifestRootID(manifest) || action.Image != libName {
 		t.Errorf("recorded action = %+v, want library identity", action)
 	}
 }
@@ -851,12 +853,12 @@ func TestMountFormatRefusalLeavesNamedSessionEmpty(t *testing.T) {
 		mustSessionNew(t, lib, "dev")
 		writeBlocksFixture(t, imagesDir, "alice/app", []string{"block-one-bytes", "tail"}, true)
 		repo := filepath.Join(imagesDir, "alice", "app")
-		meta, err := image.Load(filepath.Join(repo, "meta.yaml"))
+		manifest, err := image.LoadManifest(filepath.Join(repo, "meta.yaml"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		meta.Format.Type = image.FormatErofs
-		storeFixtureMeta(t, repo, meta)
+		manifest.Format.Type = image.FormatErofs
+		storeFixtureMeta(t, repo, manifest)
 		view := filepath.Join(work, "view")
 
 		_, _, _, err = runCmd(t, append(lib, "mount", "--session", "dev", "alice/app", view)...)
@@ -918,17 +920,22 @@ func writeLibraryContainer(t *testing.T, imagesDir, format string, body []byte) 
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	meta := image.Meta{
-		ID: image.ID(sum), Name: "alice/app", Version: image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: format, Compression: image.CompressionZstd},
-		Size:      int64(len(body)),
-		SHA256:    hex.EncodeToString(sum[:]),
-		MtimeUnix: when.Unix(),
-		CreatedAt: when,
-		Builder:   "tiler test",
+	manifest := image.Manifest{
+		Version: image.ManifestVersion,
+		Name:    "alice/app",
+		Format:  image.Format{Type: format, Compression: image.CompressionZstd},
+		Head:    image.ID(sum),
+		Images: []image.ImageMeta{{
+			ID:        image.ID(sum),
+			Kind:      image.KindFull,
+			Size:      int64(len(body)),
+			SHA256:    hex.EncodeToString(sum[:]),
+			MtimeUnix: when.Unix(),
+			CreatedAt: when,
+			Builder:   "tiler test",
+		}},
 	}
-	if err := image.Store(filepath.Join(repo, "meta.yaml"), meta); err != nil {
+	if err := image.StoreManifest(filepath.Join(repo, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 }

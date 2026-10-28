@@ -175,6 +175,7 @@ func TestDarwinDirectoryBuildPublishesImageDMG(t *testing.T) {
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	useDarwinHost(t)
+	forbidRebase(t)
 	calls := installHdiutil(t, []byte("created-dmg"))
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "hello.txt"), "hello")
@@ -185,7 +186,9 @@ func TestDarwinDirectoryBuildPublishesImageDMG(t *testing.T) {
 	if !strings.HasPrefix(stdout, "full alice/app ") {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if strings.Contains(stderr, "incremental") {
+	// A plain directory build carries no mount point: it neither
+	// rebases nor warns.
+	if stderr != "" {
 		t.Fatalf("directory build warned: %s", stderr)
 	}
 	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder "+src) {
@@ -317,6 +320,11 @@ func TestReadOnlyDMGViewDivertsDifferentImage(t *testing.T) {
 	}
 	if !strings.HasPrefix(stdout, "full bob/other ") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+	// An --image diversion carries no mount point: it neither
+	// rebases nor warns.
+	if stderr != "" {
+		t.Fatalf("diversion warned: %s", stderr)
 	}
 	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder") {
 		t.Fatalf("calls = %q", *calls)
@@ -453,27 +461,50 @@ func writeDMGFixture(t *testing.T, imagesDir, compression string) {
 		t.Fatal(err)
 	}
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	meta := image.Meta{
-		ID:        sum,
-		Name:      "alice/app",
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatDMG, Compression: compression},
-		Size:      info.Size(),
-		SHA256:    sum,
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
-		Builder:   "test",
-	}
-	if len(meta.Chain) != 0 {
-		t.Fatal("fixture chain is not empty")
-	}
-	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
+	manifest := dmgFixtureManifest(sum, sum, info.Size(),
+		info.ModTime().Unix(), compression)
+	if err := image.StoreManifest(filepath.Join(dir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Meta {
+// dmgFixtureManifest assembles the single-node dmg manifest the
+// fixtures store: the full image is the whole DAG and the head.
+func dmgFixtureManifest(id, sha string, size, mtime int64, compression string) image.Manifest {
+	return image.Manifest{
+		Version: image.ManifestVersion,
+		Name:    "alice/app",
+		Format:  image.Format{Type: image.FormatDMG, Compression: compression},
+		Head:    id,
+		Images: []image.ImageMeta{{
+			ID:        id,
+			Kind:      image.KindFull,
+			Size:      size,
+			SHA256:    sha,
+			MtimeUnix: mtime,
+			CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
+			Builder:   "test",
+		}},
+	}
+}
+
+// manifestRootID is the full-root id of a fixture manifest. Test
+// fixtures always hold a valid root, so the graph error cannot
+// occur; a broken helper input panics instead of passing silently.
+func manifestRootID(m image.Manifest) string {
+	return manifestRoot(m).ID
+}
+
+// manifestRoot is the full-root node of a fixture manifest.
+func manifestRoot(m image.Manifest) image.ImageMeta {
+	root, err := m.Full()
+	if err != nil {
+		panic(err)
+	}
+	return root
+}
+
+func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Manifest {
 	t.Helper()
 	dir := filepath.Join(imagesDir, "alice", "app")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -488,28 +519,15 @@ func writeHashedDMGFixture(t *testing.T, imagesDir string, body []byte) image.Me
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	meta := image.Meta{
-		ID:        image.ID(sum),
-		Name:      "alice/app",
-		Version:   image.MetaVersion,
-		Kind:      image.KindFull,
-		Format:    image.Format{Type: image.FormatDMG, Compression: "ulfo"},
-		Size:      info.Size(),
-		SHA256:    hex.EncodeToString(sum[:]),
-		MtimeUnix: info.ModTime().Unix(),
-		CreatedAt: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
-		Builder:   "test",
-	}
-	if len(meta.Chain) != 0 {
-		t.Fatal("fixture chain is not empty")
-	}
-	if err := image.Store(filepath.Join(dir, "meta.yaml"), meta); err != nil {
+	manifest := dmgFixtureManifest(image.ID(sum), hex.EncodeToString(sum[:]),
+		info.Size(), info.ModTime().Unix(), "ulfo")
+	if err := image.StoreManifest(filepath.Join(dir, "meta.yaml"), manifest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, image.ImageFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("fixture must not include image.sqsh")
 	}
-	return meta
+	return manifest
 }
 
 func installHdiutil(t *testing.T, body []byte) *[][]string {
@@ -522,6 +540,44 @@ func installHdiutil(t *testing.T, body []byte) *[][]string {
 	}
 	t.Cleanup(func() { hdiutilTool = prev })
 	return &calls
+}
+
+// installSeqHdiutil writes a different body on each hdiutil call, so
+// two consecutive bakes publish two distinct images instead of the
+// second one idling against the first one's content fingerprint.
+func installSeqHdiutil(t *testing.T, bodies ...[]byte) *[][]string {
+	t.Helper()
+	calls := [][]string{}
+	prev := hdiutilTool
+	hdiutilTool = func(name string, _ []string, args ...string) error {
+		i := len(calls)
+		calls = append(calls, append([]string{name}, args...))
+		if i >= len(bodies) {
+			i = len(bodies) - 1
+		}
+		return os.WriteFile(hdiutilDest(args), bodies[i], 0o644)
+	}
+	t.Cleanup(func() { hdiutilTool = prev })
+	return &calls
+}
+
+// forbidRebase fails the test if a dmg build rewrites the session
+// record. The dmg paths never call the rebase seam: the shadow is
+// bound to the attached base, so the record keeps its old id.
+func forbidRebase(t *testing.T) {
+	t.Helper()
+	prev := rebaseMountedStack
+	rebaseMountedStack = func(_ config.Config, point, name, fullID, tipID string) error {
+		t.Fatalf("dmg build rebased %s (%s) to (%s, %s)", point, name, fullID, tipID)
+		return nil
+	}
+	t.Cleanup(func() { rebaseMountedStack = prev })
+}
+
+// dmgID is the image id the fake hdiutil produces for a fixed body:
+// finishDMG derives the id from the sha256 of the published bytes.
+func dmgID(body string) string {
+	return image.ID(sha256.Sum256([]byte(body)))
 }
 
 func assertFileText(t *testing.T, path, want string) {
@@ -566,9 +622,10 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 				Upper:  shadow,
 			}})
 			useDarwinHost(t)
+			forbidRebase(t)
 			calls := installHdiutil(t, []byte("baked-dmg"))
 			action := libraryAction("alice/app", work, session.ModeRW)
-			action.FullID = meta.ID
+			action.FullID = manifestRootID(meta)
 			writeSessionRecord(t, sessionsDir(home), "dev", action)
 			args := append(lib, "build")
 			if flag != "" {
@@ -585,6 +642,9 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 			if !strings.Contains(stderr, "dmg has no incremental layer") {
 				t.Fatalf("stderr = %q", stderr)
 			}
+			// The keeps-old-base warning is a user contract: the
+			// golden pins its exact text for every bake flag.
+			assertGolden(t, "dmg_bake_warning", []byte(stderr))
 			joined := strings.Join((*calls)[0], " ")
 			if len(*calls) != 1 || !strings.Contains(joined, "-shadow "+shadow) {
 				t.Fatalf("calls = %q", *calls)
@@ -596,17 +656,14 @@ func TestDMGViewBakeWarnsAndKeepsShadow(t *testing.T) {
 				t.Fatalf("shadow = %q %v", body, readErr)
 			}
 			assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_hold", meta.ID, image.ImageDMG), "old-dmg")
+			assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_hold", manifestRootID(meta), image.ImageDMG), "old-dmg")
 			if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_archives")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("active session archived the pinned image: %v", statErr)
 			}
-			rec, err := (session.Store{Dir: sessionsDir(home)}).Load("dev")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if rec.Actions[0].FullID != action.FullID {
-				t.Fatalf("session full id = %s, want %s", rec.Actions[0].FullID, action.FullID)
-			}
+			// The bake never rebases: the record keeps the pinned
+			// base id and gains no served stack.
+			assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"),
+				action.FullID, "", "", "")
 		})
 	}
 }
@@ -642,9 +699,10 @@ func TestDMGViewBakeAcceptsEquivalentDirs(t *testing.T) {
 				Upper:  shadow,
 			}})
 			useDarwinHost(t)
+			forbidRebase(t)
 			calls := installHdiutil(t, []byte("baked-dmg"))
 			action := libraryAction("alice/app", work, session.ModeRW)
-			action.FullID = meta.ID
+			action.FullID = manifestRootID(meta)
 			writeSessionRecord(t, sessionsDir(home), "dev", action)
 			if form.parent {
 				t.Chdir(home)
@@ -693,6 +751,7 @@ func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
 		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
 	}})
 	useDarwinHost(t)
+	forbidRebase(t)
 	calls := installHdiutil(t, []byte("baked-dmg"))
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
 	if err != nil {
@@ -701,12 +760,16 @@ func TestDMGViewBakeArchivesUnreferencedImage(t *testing.T) {
 	if !strings.HasPrefix(stdout, "full alice/app ") {
 		t.Fatalf("stdout = %q", stdout)
 	}
+	// No session record pins a base here, so the keeps-old-base
+	// warning prints its id-less variant; the golden pins the exact
+	// text of that branch.
+	assertGolden(t, "dmg_bake_warning_unpinned", []byte(stderr))
 	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-shadow "+shadow) {
 		t.Fatalf("calls = %q", *calls)
 	}
 	assertFileText(t, shadow, "live-shadow")
 	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-dmg")
-	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", meta.ID, image.ImageDMG), "old-dmg")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", manifestRootID(meta), image.ImageDMG), "old-dmg")
 	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_hold")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unreferenced bake held the image: %v", statErr)
 	}
@@ -788,6 +851,7 @@ func TestImagesRemoveRefusesAttachedDMG(t *testing.T) {
 func TestBuildFromDiskInfoInfersUnresolvedSession(t *testing.T) {
 	t.Run("omitted image", func(t *testing.T) {
 		imagesDir, lib, shadow, resolved := diskInfoSession(t)
+		forbidRebase(t)
 		calls := installHdiutil(t, []byte("from-session"))
 		t.Chdir(resolved)
 		stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
@@ -812,6 +876,7 @@ func TestBuildFromDiskInfoInfersUnresolvedSession(t *testing.T) {
 	})
 	t.Run("different image packs the path", func(t *testing.T) {
 		imagesDir, lib, shadow, resolved := diskInfoSession(t)
+		forbidRebase(t)
 		calls := installHdiutil(t, []byte("diverted-from-view"))
 		t.Chdir(resolved)
 		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "bob/other")...)
@@ -846,7 +911,7 @@ func diskInfoSession(t *testing.T) (imagesDir string, lib []string, shadow, reso
 	}
 	recorded, resolved := symlinkView(t, home)
 	action := libraryAction("alice/app", recorded, session.ModeRW)
-	action.FullID = meta.ID
+	action.FullID = manifestRootID(meta)
 	writeSessionRecord(t, sessionsDir(home), "dev", action)
 	withBuildSeams(t, nil)
 	useDarwinHost(t)
@@ -923,6 +988,7 @@ func TestBuildUsesHdiutilInfoWhenMountTableIsUnavailable(t *testing.T) {
 	}
 	withBuildSeams(t, nil)
 	useDarwinHost(t)
+	forbidRebase(t)
 	restoreDiskSeams(t)
 	loadMountTable = func() ([]mountinfo.Mount, error) {
 		return nil, mountinfo.ErrUnavailable
@@ -1011,4 +1077,260 @@ func TestReadOnlyDiskInfoRefusesPublish(t *testing.T) {
 	if ExitCode(err) != 2 || !strings.Contains(err.Error()+"\n"+stderr, "read-only dmg") {
 		t.Fatalf("ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
 	}
+}
+
+// TestDMGViewBakeTwiceKeepsRecordedBase proves the repeated-bake
+// semantics survive the warning: the record keeps the old base id,
+// so mountedFullID keeps answering with it and the second bake still
+// converts the held copy of that base instead of the newer active.
+// A third round idling against the last convert publishes nothing
+// and keeps the keeps-old-base warning silent.
+func TestDMGViewBakeTwiceKeepsRecordedBase(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	meta := writeHashedDMGFixture(t, imagesDir, []byte("old-dmg"))
+	oldID := manifestRootID(meta)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("shadow-one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point: work, FSType: "fuse.dmg", Upper: shadow,
+		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+	}})
+	useDarwinHost(t)
+	forbidRebase(t)
+	calls := installSeqHdiutil(t, []byte("baked-one"), []byte("baked-two"))
+	action := libraryAction("alice/app", work, session.ModeRW)
+	action.FullID = oldID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+
+	holdBase := filepath.Join(imagesDir, "alice", "app", "_hold", oldID, image.ImageDMG)
+	wants := []string{dmgID("baked-one"), dmgID("baked-two")}
+	for i, want := range wants {
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
+		if err != nil {
+			t.Fatalf("bake %d: %v\n%s", i+1, err, stderr)
+		}
+		if got := "full alice/app " + want + "\n"; stdout != got {
+			t.Fatalf("bake %d stdout = %q, want %q", i+1, stdout, got)
+		}
+		if !strings.Contains(stderr, "the session record keeps "+oldID) {
+			t.Fatalf("bake %d stderr = %q", i+1, stderr)
+		}
+		// The record never moves, so mountedFullID keeps answering
+		// with the recorded old base for the next bake.
+		assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+		if id, idErr := mountedFullID(sessionsDir(home), shadow); idErr != nil || id != oldID {
+			t.Fatalf("bake %d: mountedFullID = %q, %v", i+1, id, idErr)
+		}
+		// A fresh shadow delta keeps the next bake off the idle path.
+		if err := os.WriteFile(shadow, []byte("shadow-two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("calls = %q", *calls)
+	}
+	// The first bake converts the active image; the second one must
+	// read the held copy of the recorded old base, not the newer
+	// active image the first bake published.
+	if got := strings.Join((*calls)[1], " "); !strings.Contains(got, holdBase) {
+		t.Fatalf("second bake base = %q, want %q", (*calls)[1], holdBase)
+	}
+	assertFileText(t, holdBase, "old-dmg")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-two")
+	assertFileText(t, shadow, "shadow-two")
+
+	// A third round with the untouched shadow idles: the content
+	// fingerprint matches the last convert, so BuildDMG answers
+	// with the active image itself and nothing was published. The
+	// keeps-old-base warning would claim a publish that never
+	// happened, so it stays silent and hdiutil never runs.
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("idle bake: %v\n%s", err, stderr)
+	}
+	if want := "full alice/app " + dmgID("baked-two") + "\n"; stdout != want {
+		t.Fatalf("idle stdout = %q, want %q", stdout, want)
+	}
+	if !strings.Contains(stderr, "dmg has no incremental layer") ||
+		strings.Contains(stderr, "published new image") {
+		t.Fatalf("idle stderr = %q", stderr)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("idle bake ran hdiutil: %q", *calls)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "baked-two")
+}
+
+// TestReadOnlyViewDMGCreateWarnsAndKeepsRecord covers the dmg create
+// path from inside a mounted view: a read-only view of a non-dmg
+// source packs as a dmg on a darwin host with --full (a read-only
+// dmg view itself is refused before publishing). The record's pin
+// diverges from the active root — a later publish moved the root —
+// so the warning must quote the id the session record pins for the
+// mounted view, not the active manifest root a fresh mount would
+// use. Like a bake, the create never rebases: the record keeps the
+// old id and the warning text is pinned by a golden. An idle rerun
+// publishes nothing and stays silent.
+func TestReadOnlyViewDMGCreateWarnsAndKeepsRecord(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	meta := writeHashedDMGFixture(t, imagesDir, []byte("ro-base"))
+	oldID := manifestRootID(meta)
+	// A later publish moves the active root past the record's pin:
+	// the view is still served by oldID while a fresh mount would
+	// use movedID.
+	moved := writeHashedDMGFixture(t, imagesDir, []byte("moved-base"))
+	movedID := manifestRootID(moved)
+	merged := filepath.Join(work, "merged")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(merged, "f.txt"), "x")
+	payload := filepath.Join(work, "base.sqsh")
+	body := make([]byte, 600)
+	copy(body, []byte("hsqs-fake"))
+	writeTestFile(t, payload, string(body))
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point:  merged,
+		FSType: "fuse",
+		Source: payload,
+	}})
+	useDarwinHost(t)
+	forbidRebase(t)
+	calls := installHdiutil(t, []byte("created-dmg"))
+	action := libraryAction("alice/app", merged, session.ModeRO)
+	action.FullID = oldID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+	t.Chdir(merged)
+
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("build --full: %v\n%s", err, stderr)
+	}
+	newID := dmgID("created-dmg")
+	if want := "full alice/app " + newID + "\n"; stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "-srcfolder "+merged) {
+		t.Fatalf("calls = %q", *calls)
+	}
+	// The golden pins the warning to the record's pin: the diverged
+	// active root movedID must not appear in it.
+	assertGolden(t, "dmg_create_warning", []byte(stderr))
+	if strings.Contains(stderr, movedID) {
+		t.Fatalf("warning quoted the active root instead of the record: %s", stderr)
+	}
+	// The create never rebases: the record keeps the pinned id and
+	// gains no served stack.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", image.ImageDMG), "created-dmg")
+	// The diverged active root was pinned by no record, so the
+	// publish archived it instead of holding it.
+	assertFileText(t, filepath.Join(imagesDir, "alice", "app", "_archives", movedID, image.ImageDMG), "moved-base")
+	if _, statErr := os.Stat(filepath.Join(imagesDir, "alice", "app", "_hold")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unreferenced active root was held: %v", statErr)
+	}
+
+	// An idle rerun publishes nothing: the source directory already
+	// matches the active image, so BuildDMG answers with that image
+	// itself and the keeps-old-base warning stays silent.
+	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--full", "--image", "alice/app")...)
+	if err != nil {
+		t.Fatalf("idle build --full: %v\n%s", err, stderr)
+	}
+	if want := "full alice/app " + newID + "\n"; stdout != want {
+		t.Fatalf("idle stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Fatalf("idle build warned: %s", stderr)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("idle build ran hdiutil: %q", *calls)
+	}
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+}
+
+// TestDMGBakeThenReplayAttachesRecordedBase chains the dmg exception
+// end to end where dmg is registered: two in-view bakes publish new
+// images while the record keeps the base the live attach serves,
+// and a replay of the dead view attaches that recorded base again —
+// resolved through the hold leaf the first bake parked it in — with
+// no prune request, because a dmg attach has no upper directory.
+// The cross-platform bake coverage lives in
+// TestDMGViewBakeTwiceKeepsRecordedBase.
+func TestDMGBakeThenReplayAttachesRecordedBase(t *testing.T) {
+	if _, err := container.Lookup(image.FormatDMG); err != nil {
+		t.Skip("dmg is not registered on this OS")
+	}
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	meta := writeHashedDMGFixture(t, imagesDir, []byte("old-dmg"))
+	oldID := manifestRootID(meta)
+	shadow := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper.shadow")
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte("shadow-one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withBuildSeams(t, []mountinfo.Mount{{
+		Point: work, FSType: "fuse.dmg", Upper: shadow,
+		Source: filepath.Join(imagesDir, "alice", "app", image.ImageDMG),
+	}})
+	useDarwinHost(t)
+	forbidRebase(t)
+	installSeqHdiutil(t, []byte("baked-one"), []byte("baked-two"))
+	action := libraryAction("alice/app", work, session.ModeRW)
+	action.FullID = oldID
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+
+	// Two bakes from the view: both succeed, both warn that the
+	// record keeps the old base, and the record never moves.
+	for i := 0; i < 2; i++ {
+		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--image", "alice/app")...)
+		if err != nil {
+			t.Fatalf("bake %d: %v\n%s", i+1, err, stderr)
+		}
+		if !strings.HasPrefix(stdout, "full alice/app ") {
+			t.Fatalf("bake %d stdout = %q", i+1, stdout)
+		}
+		if !strings.Contains(stderr, "the session record keeps "+oldID) {
+			t.Fatalf("bake %d stderr = %q", i+1, stderr)
+		}
+		assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
+		// A fresh shadow delta keeps the next bake off the idle path.
+		if err := os.WriteFile(shadow, []byte("shadow-two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The attach dies behind the record's back: the replay resolves
+	// the recorded base through the hold leaf and never asks for a
+	// prune.
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	if _, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...); err != nil {
+		t.Fatalf("session open: %v\n%s", err, stderr)
+	}
+	if len(f.mountReqs) != 1 {
+		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
+	}
+	req := f.mountReqs[0]
+	want := filepath.Join(imagesDir, "alice", "app", "_hold", oldID, image.ImageDMG)
+	if req.Full != want {
+		t.Fatalf("Full = %s, want the held recorded base %s", req.Full, want)
+	}
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want a dmg replay to keep the flag clear")
+	}
+	// The replay of a dmg view reattaches the recorded base and the
+	// record keeps pinning nothing else.
+	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, "", "", "")
 }

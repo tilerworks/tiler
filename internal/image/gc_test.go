@@ -22,14 +22,14 @@ func gcRepoFixture(t *testing.T) (config.Config, Repo) {
 	return cfg, repo
 }
 
-// makeArchive lays one archive directory out with a real meta whose
-// created_at controls retention ranking.
-func makeArchive(t *testing.T, repo Repo, data []byte, createdAt time.Time) Meta {
+// makeArchive lays one archive directory out with a real manifest
+// whose root created_at controls retention ranking.
+func makeArchive(t *testing.T, repo Repo, data []byte, createdAt time.Time) Manifest {
 	t.Helper()
-	meta := metaFor(data)
-	meta.Name = repo.Name()
-	meta.CreatedAt = createdAt.UTC()
-	dir, err := repo.ArchivePath(meta.ID)
+	manifest := manifestFor(data)
+	manifest.Name = repo.Name()
+	manifest.Images[0].CreatedAt = createdAt.UTC()
+	dir, err := repo.ArchivePath(rootID(manifest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,20 +39,20 @@ func makeArchive(t *testing.T, repo Repo, data []byte, createdAt time.Time) Meta
 	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
-	return meta
+	return manifest
 }
 
 // holdViaPublish replaces the active image while a reference pins
 // it, leaving the old chain in hold.
-func holdViaPublish(t *testing.T, repo Repo) Meta {
+func holdViaPublish(t *testing.T, repo Repo) Manifest {
 	t.Helper()
 	old := seedActive(t, repo, []byte("retired-full"), true)
-	refs := holdSet{ids: map[string]bool{old.ID: true}}
+	refs := holdSet{ids: map[string]bool{rootID(old): true}}
 	next := []byte("replacement-full")
-	if err := repo.Publish(next, metaFor(next), refs); err != nil {
+	if err := repo.Publish(next, manifestFor(next), refs); err != nil {
 		t.Fatal(err)
 	}
 	return old
@@ -65,20 +65,20 @@ func TestGCPromotesUnreferencedHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Action != GCActionArchived || events[0].FullID != old.ID {
+	if len(events) != 1 || events[0].Action != GCActionArchived || events[0].FullID != rootID(old) {
 		t.Fatalf("events = %+v", events)
 	}
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), []byte("retired-full"))
-	incr, err := chainIncr(arch, old.Chain[0].ID)
+	incr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, incr, []byte("layer"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold still present: %v", statErr)
 	}
 }
@@ -86,7 +86,7 @@ func TestGCPromotesUnreferencedHold(t *testing.T) {
 func TestGCLeavesReferencedHold(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	old := holdViaPublish(t, repo)
-	refs := holdSet{ids: map[string]bool{old.ID: true}}
+	refs := holdSet{ids: map[string]bool{rootID(old): true}}
 	events, err := GC(cfg, refs, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -94,12 +94,12 @@ func TestGCLeavesReferencedHold(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("events = %+v", events)
 	}
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(hold, fileImage), []byte("retired-full"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirArchives, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirArchives, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("referenced hold was archived: %v", statErr)
 	}
 }
@@ -115,15 +115,15 @@ func TestGCKeepsNewestVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Action != GCActionRemoved || events[0].FullID != oldest.ID {
+	if len(events) != 1 || events[0].Action != GCActionRemoved || events[0].FullID != rootID(oldest) {
 		t.Fatalf("events = %+v", events)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, oldest.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(oldest))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("oldest archive survived: %v", statErr)
 	}
-	assertBytes(t, filepath.Join(archPath(t, repo, middle.ID), fileImage),
+	assertBytes(t, filepath.Join(archPath(t, repo, rootID(middle)), fileImage),
 		[]byte("archive-middle"))
-	assertBytes(t, filepath.Join(archPath(t, repo, newest.ID), fileImage),
+	assertBytes(t, filepath.Join(archPath(t, repo, rootID(newest)), fileImage),
 		[]byte("archive-newest"))
 }
 
@@ -137,13 +137,14 @@ func archPath(t *testing.T, repo Repo, id string) string {
 }
 
 // makeLegacyHold lays a pre-sha256 _hold/<16-hex> directory. The
-// directory name is the legacy id used for pins; meta inside still
-// carries a full sha256 so Load succeeds under current validation.
+// directory name is the legacy id used for pins; the manifest inside
+// still carries a full sha256 so LoadManifest succeeds under current
+// validation.
 func makeLegacyHold(t *testing.T, repo Repo, data []byte) string {
 	t.Helper()
-	meta := metaFor(data)
-	meta.Name = repo.Name()
-	legacy := meta.ID[:idHexLen]
+	manifest := manifestFor(data)
+	manifest.Name = repo.Name()
+	legacy := rootID(manifest)[:idHexLen]
 	dir, err := repo.HoldPath(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -154,22 +155,22 @@ func makeLegacyHold(t *testing.T, repo Repo, data []byte) string {
 	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
 	return legacy
 }
 
 // makeLegacyArchive lays _archives/<legacy> with a Validate-passing
-// meta. legacy must be a 16-hex name.
-func makeLegacyArchive(t *testing.T, repo Repo, legacy string, data []byte, createdAt time.Time) Meta {
+// manifest. legacy must be a 16-hex name.
+func makeLegacyArchive(t *testing.T, repo Repo, legacy string, data []byte, createdAt time.Time) Manifest {
 	t.Helper()
 	if !legacyID(legacy) {
 		t.Fatalf("legacy id %q", legacy)
 	}
-	meta := metaFor(data)
-	meta.Name = repo.Name()
-	meta.CreatedAt = createdAt.UTC()
+	manifest := manifestFor(data)
+	manifest.Name = repo.Name()
+	manifest.Images[0].CreatedAt = createdAt.UTC()
 	dir, err := repo.ArchivePath(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -180,22 +181,25 @@ func makeLegacyArchive(t *testing.T, repo Repo, legacy string, data []byte, crea
 	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
-	return meta
+	return manifest
 }
 
-// plantArchive writes _archives/<id> with a Validate-passing meta
-// whose id equals sha256. The payload bytes need not hash to id.
-func plantArchive(t *testing.T, repo Repo, id string, data []byte, createdAt time.Time) Meta {
+// plantArchive writes _archives/<id> with a Validate-passing
+// manifest whose root id equals sha256. The payload bytes need not
+// hash to id.
+func plantArchive(t *testing.T, repo Repo, id string, data []byte, createdAt time.Time) Manifest {
 	t.Helper()
-	meta := validMeta()
-	meta.ID = id
-	meta.SHA256 = id
-	meta.Name = repo.Name()
-	meta.Size = int64(len(data))
-	meta.CreatedAt = createdAt.UTC()
+	manifest := validManifest()
+	manifest.Images = manifest.Images[:1]
+	manifest.Name = repo.Name()
+	manifest.Images[0].ID = id
+	manifest.Images[0].SHA256 = id
+	manifest.Images[0].Size = int64(len(data))
+	manifest.Images[0].CreatedAt = createdAt.UTC()
+	manifest.Head = id
 	dir, err := repo.ArchivePath(id)
 	if err != nil {
 		t.Fatal(err)
@@ -206,10 +210,10 @@ func plantArchive(t *testing.T, repo Repo, id string, data []byte, createdAt tim
 	if err := os.WriteFile(filepath.Join(dir, fileImage), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
-	return meta
+	return manifest
 }
 
 func TestGCDeletesExpiredByAge(t *testing.T) {
@@ -222,10 +226,10 @@ func TestGCDeletesExpiredByAge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].FullID != aged.ID {
+	if len(events) != 1 || events[0].FullID != rootID(aged) {
 		t.Fatalf("events = %+v", events)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, fresh.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(fresh))); statErr != nil {
 		t.Fatalf("fresh archive deleted: %v", statErr)
 	}
 }
@@ -262,7 +266,7 @@ func TestGCUnionsCountAndAgeRules(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 	gone := map[string]bool{events[0].FullID: true, events[1].FullID: true}
-	if !gone[old1.ID] || !gone[old2.ID] || gone[fresh.ID] {
+	if !gone[rootID(old1)] || !gone[rootID(old2)] || gone[rootID(fresh)] {
 		t.Fatalf("wrong archives deleted: %+v", events)
 	}
 }
@@ -272,7 +276,7 @@ func TestGCSkipsReferencedArchive(t *testing.T) {
 	cfg.MaxAge = time.Hour
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	pinned := makeArchive(t, repo, []byte("archive-pinned"), now.Add(-48*time.Hour))
-	refs := holdSet{ids: map[string]bool{pinned.ID: true}}
+	refs := holdSet{ids: map[string]bool{rootID(pinned): true}}
 	events, err := GC(cfg, refs, now)
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +284,7 @@ func TestGCSkipsReferencedArchive(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("events = %+v", events)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, pinned.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(pinned))); statErr != nil {
 		t.Fatalf("referenced archive deleted: %v", statErr)
 	}
 }
@@ -293,11 +297,9 @@ func TestGCChainParentProtectsArchive(t *testing.T) {
 	// The active chain was built on the archived full image: its
 	// second member parent still points at that id.
 	active := seedActive(t, repo, []byte("active-full"), false)
-	active.Chain = []ChainEntry{
-		validEntry(active.ID, base.ID),
-		validEntry(base.ID, "fedcba9876543210"),
-	}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	active = withNode(active, validNode(rootID(active), rootID(base)))
+	active = withNode(active, validNode(rootID(base), "fedcba9876543210"))
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	events, err := GC(cfg, nil, now)
@@ -307,7 +309,7 @@ func TestGCChainParentProtectsArchive(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("chain-referenced archive deleted: %+v", events)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, base.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(base))); statErr != nil {
 		t.Fatalf("archive deleted: %v", statErr)
 	}
 }
@@ -318,17 +320,15 @@ func TestGCProtectsMemberParentOfLiveChain(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	member := "fedcba9876543210"
 	base := makeArchive(t, repo, []byte("archive-with-member"), now.Add(-48*time.Hour))
-	// Rewrite the archive meta so its chain holds the member id.
-	base.Chain = []ChainEntry{validEntry(base.ID, member)}
-	if err := Store(filepath.Join(archPath(t, repo, base.ID), fileMeta), base); err != nil {
+	// Rewrite the archive manifest so its DAG holds the member id.
+	base = withNode(base, validNode(rootID(base), member))
+	if err := StoreManifest(filepath.Join(archPath(t, repo, rootID(base)), fileMeta), base); err != nil {
 		t.Fatal(err)
 	}
 	active := seedActive(t, repo, []byte("active-full"), false)
-	active.Chain = []ChainEntry{
-		validEntry(active.ID, member),
-		validEntry(member, "0000000000000001"),
-	}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	active = withNode(active, validNode(rootID(active), member))
+	active = withNode(active, validNode(member, "0000000000000001"))
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
 	events, err := GC(cfg, nil, now)
@@ -345,7 +345,7 @@ func TestGCKeepsUnreadableArchive(t *testing.T) {
 	cfg.MaxAge = time.Hour
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	broken := makeArchive(t, repo, []byte("archive-broken"), now.Add(-48*time.Hour))
-	dir := archPath(t, repo, broken.ID)
+	dir := archPath(t, repo, rootID(broken))
 	if err := os.WriteFile(filepath.Join(dir, fileMeta), []byte("::: not yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -410,13 +410,239 @@ func TestGCNeverTouchesSessionsOrActive(t *testing.T) {
 	}
 	assertBytes(t, record, []byte(sessionRecordBody))
 	assertBytes(t, repo.ImagePath(), []byte("active-full"))
-	loaded, err := Load(repo.MetaPath())
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(loaded) != rootID(active) {
+		t.Fatalf("active meta changed: %+v", loaded)
+	}
+}
+
+// tipRefs is a test Refs pinning one (full, tip) stack: it matches
+// the full id and the stack tip together, the shape a stack-aware
+// holder uses. A query with another tip — or none — is not held.
+type tipRefs struct {
+	name   string
+	fullID string
+	tipID  string
+}
+
+func (p tipRefs) Holds(ref Ref) (bool, error) {
+	return ref.Name == p.name && ref.FullID == p.fullID && ref.TipID == p.tipID, nil
+}
+
+func (p tipRefs) Holder(ref Ref) (string, bool, error) {
+	held, err := p.Holds(ref)
+	if held {
+		return "pinning-session", true, err
+	}
+	return "", false, err
+}
+
+// TestGCKeepsHeadReachableLayers proves the reclaim step leaves a
+// linear DAG alone: every layer sits on the head stack.
+func TestGCKeepsHeadReachableLayers(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest := seedActive(t, repo, []byte("linear-full"), true)
+	layer := manifest.Images[1].ID
+	events, err := GC(cfg, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.ID != active.ID {
-		t.Fatalf("active meta changed: %+v", loaded)
+	if len(events) != 0 {
+		t.Fatalf("head-reachable layers reclaimed: %+v", events)
 	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 2 || !loaded.Has(layer) {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+}
+
+// TestGCReclaimsUnreferencedBranch proves the reclaim step prunes a
+// branch node no pinned tip reaches: the node leaves the manifest
+// and its layer file is deleted, while the head stack survives.
+func TestGCReclaimsUnreferencedBranch(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest, layer, branch := seedBranchingActive(t, repo, []byte("branching-full"))
+	events, err := GC(cfg, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Action != GCActionRemoved ||
+		events[0].Name != "alice/app" || events[0].FullID != layer {
+		t.Fatalf("events = %+v, want the off-head layer %s removed", events, layer)
+	}
+	assertGone(t, mustIncrPath(t, repo, layer))
+	assertBytes(t, mustIncrPath(t, repo, branch), []byte("branch"))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if loaded.Has(layer) || !loaded.Has(branch) || loaded.Head != manifest.Head {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+	if got := loaded.Branches(); got != 0 {
+		t.Fatalf("branches = %d, want the pruned DAG linear", got)
+	}
+}
+
+// TestGCKeepsBranchPinnedByTip proves a branch layer survives while
+// a reference pins a tip whose reachable set covers it.
+func TestGCKeepsBranchPinnedByTip(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest, layer, branch := seedBranchingActive(t, repo, []byte("branching-full"))
+	refs := tipRefs{name: repo.Name(), fullID: rootID(manifest), tipID: layer}
+	events, err := GC(cfg, refs, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pinned branch reclaimed: %+v", events)
+	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+	assertBytes(t, mustIncrPath(t, repo, branch), []byte("branch"))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 3 || loaded.Head != manifest.Head {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+}
+
+// TestGCFullIDPinCoversBranchTips documents the conservative
+// matching of a holder that predates stack tips: its pin answers
+// held for every tip query on the full id, so branches survive
+// while the full image is pinned.
+func TestGCFullIDPinCoversBranchTips(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest, layer, _ := seedBranchingActive(t, repo, []byte("branching-full"))
+	refs := holdSet{ids: map[string]bool{rootID(manifest): true}}
+	events, err := GC(cfg, refs, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("full-id pin let the branch reclaim: %+v", events)
+	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+}
+
+// TestGCKeepsAncestorsOfPinnedDescendantTip seeds a two-node
+// off-head chain root→A→B beside a head branch root→C and pins only
+// the descendant tip B. The covering relation is ancestor-closed, so
+// A must survive too: pruning it would corrupt the stack a session
+// pinned at B still resolves through.
+func TestGCKeepsAncestorsOfPinnedDescendantTip(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	data := []byte("descendant-full")
+	manifest := manifestFor(data)
+	ancestor := validNode(manifest.Head, "aaaaaaaaaaaaaaaa")
+	descendant := validNode(ancestor.ID, "bbbbbbbbbbbbbbbb")
+	headLayer := validNode(manifest.Head, "cccccccccccccccc")
+	manifest = withNode(manifest, ancestor)
+	manifest = withNode(manifest, descendant)
+	manifest = withNode(manifest, headLayer)
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.ImagePath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	writeLayer(t, repo, ancestor.ID, []byte("ancestor"))
+	writeLayer(t, repo, descendant.ID, []byte("descendant"))
+	writeLayer(t, repo, headLayer.ID, []byte("head-layer"))
+
+	refs := tipRefs{name: repo.Name(), fullID: rootID(manifest), tipID: descendant.ID}
+	events, err := GC(cfg, refs, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pinned tip's ancestor chain reclaimed: %+v", events)
+	}
+	assertBytes(t, mustIncrPath(t, repo, ancestor.ID), []byte("ancestor"))
+	assertBytes(t, mustIncrPath(t, repo, descendant.ID), []byte("descendant"))
+	assertBytes(t, mustIncrPath(t, repo, headLayer.ID), []byte("head-layer"))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 4 || loaded.Head != manifest.Head ||
+		!loaded.Has(ancestor.ID) || !loaded.Has(descendant.ID) {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+}
+
+// TestGCReclaimsBlocksBranch is the blocks-form twin of
+// TestGCReclaimsUnreferencedBranch: the pruned node's _blocks/<id>/
+// directory is reclaimed, while the head branch's block directory
+// and the full image payload survive.
+func TestGCReclaimsBlocksBranch(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest, layer, branch := seedBlocksWithBranch(t, repo)
+	events, err := GC(cfg, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Action != GCActionRemoved ||
+		events[0].Name != "alice/app" || events[0].FullID != layer {
+		t.Fatalf("events = %+v, want the off-head blocks layer %s removed", events, layer)
+	}
+	assertGone(t, mustBlocksDir(t, repo, layer))
+	assertBytes(t, filepath.Join(mustBlocksDir(t, repo, branch), "blk.000"),
+		[]byte("branch-body"))
+	assertBytes(t, filepath.Join(finalPayloadDir(t, repo, rootID(manifest)), "blk.000"),
+		[]byte("full-a"))
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if loaded.Has(layer) || !loaded.Has(branch) || loaded.Head != manifest.Head {
+		t.Fatalf("manifest = %+v", loaded)
+	}
+}
+
+// publishDuringPin is a test Refs whose first pin query lands a
+// concurrent publish: it rewrites the active meta.yaml before
+// answering, simulating a build finishing between the reclaim
+// snapshot and the meta swap.
+type publishDuringPin struct {
+	publish func()
+	done    bool
+}
+
+func (p *publishDuringPin) Holds(Ref) (bool, error) {
+	if !p.done {
+		p.done = true
+		p.publish()
+	}
+	return false, nil
+}
+
+func (p *publishDuringPin) Holder(Ref) (string, bool, error) {
+	return "", false, nil
+}
+
+// TestGCSkipsReclaimAfterConcurrentPublish proves the reclaim step
+// abandons its snapshot when the active meta.yaml changed between
+// the load and the swap: the concurrently published manifest
+// survives intact and no layer file is deleted.
+func TestGCSkipsReclaimAfterConcurrentPublish(t *testing.T) {
+	cfg, repo := gcRepoFixture(t)
+	manifest, layer, branch := seedBranchingActive(t, repo, []byte("branching-full"))
+	published := withNode(manifest, validNode(rootID(manifest), "0011223344556678"))
+	refs := &publishDuringPin{publish: func() {
+		if err := StoreManifest(repo.MetaPath(), published); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	events, err := GC(cfg, refs, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("reclaim ran on a changed manifest: %+v", events)
+	}
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if !loaded.Has(published.Head) || !loaded.Has(layer) || !loaded.Has(branch) {
+		t.Fatalf("concurrent publish lost: %+v", loaded)
+	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+	assertBytes(t, mustIncrPath(t, repo, branch), []byte("branch"))
 }
 
 func TestGCEmptyLibrary(t *testing.T) {
@@ -457,11 +683,8 @@ func TestRemoveTargetWholeRepoTwoPhases(t *testing.T) {
 	if outcome != OutcomeDeprecated {
 		t.Fatalf("outcome = %s", outcome)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Deprecated || loaded.ID != active.ID {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if !rootOf(loaded).Deprecated || rootID(loaded) != rootID(active) {
 		t.Fatalf("meta = %+v", loaded)
 	}
 	if _, statErr := os.Stat(repo.ImagePath()); statErr != nil {
@@ -485,7 +708,7 @@ func TestRemoveTargetWholeRepoTwoPhases(t *testing.T) {
 func TestRemoveTargetRefusesWhileReferenced(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	active := seedActive(t, repo, []byte("pinned-full"), false)
-	refs := holdSet{ids: map[string]bool{active.ID: true}}
+	refs := holdSet{ids: map[string]bool{rootID(active): true}}
 	for i := 0; i < 2; i++ {
 		outcome, err := RemoveTarget(cfg, "alice/app", refs)
 		if err == nil || !strings.Contains(err.Error(), "referenced") {
@@ -499,11 +722,8 @@ func TestRemoveTargetRefusesWhileReferenced(t *testing.T) {
 			}
 		}
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Deprecated {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootOf(loaded).Deprecated {
 		t.Fatal("referenced target was deprecated")
 	}
 	if _, statErr := os.Stat(repo.ImagePath()); statErr != nil {
@@ -516,7 +736,7 @@ func TestRemoveTargetArchiveTwoPhases(t *testing.T) {
 	seedActive(t, repo, []byte("active-full"), false)
 	victim := makeArchive(t, repo, []byte("archive-victim"), time.Now())
 	survivor := makeArchive(t, repo, []byte("archive-survivor"), time.Now())
-	target := "alice/app/" + dirArchives + "/" + victim.ID
+	target := "alice/app/" + dirArchives + "/" + rootID(victim)
 	outcome, err := RemoveTarget(cfg, target, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -524,18 +744,12 @@ func TestRemoveTargetArchiveTwoPhases(t *testing.T) {
 	if outcome != OutcomeDeprecated {
 		t.Fatalf("outcome = %s", outcome)
 	}
-	archived, err := Load(filepath.Join(archPath(t, repo, victim.ID), fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !archived.Deprecated {
+	archived := mustLoadManifest(t, filepath.Join(archPath(t, repo, rootID(victim)), fileMeta))
+	if !rootOf(archived).Deprecated {
 		t.Fatal("archive meta not deprecated")
 	}
-	activeMeta, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if activeMeta.Deprecated {
+	activeMeta := mustLoadManifest(t, repo.MetaPath())
+	if rootOf(activeMeta).Deprecated {
 		t.Fatal("archive rm deprecated the active meta")
 	}
 	outcome, err = RemoveTarget(cfg, target, nil)
@@ -545,10 +759,10 @@ func TestRemoveTargetArchiveTwoPhases(t *testing.T) {
 	if outcome != OutcomeRemoved {
 		t.Fatalf("outcome = %s", outcome)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, victim.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(victim))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("archive dir still present: %v", statErr)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, survivor.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(survivor))); statErr != nil {
 		t.Fatalf("surviving archive deleted: %v", statErr)
 	}
 	if _, statErr := os.Stat(repo.ImagePath()); statErr != nil {
@@ -560,19 +774,17 @@ func TestRemoveTargetArchiveRefusedByChainParent(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	base := makeArchive(t, repo, []byte("archive-base"), time.Now())
 	active := seedActive(t, repo, []byte("active-full"), false)
-	active.Chain = []ChainEntry{
-		validEntry(active.ID, base.ID),
-		validEntry(base.ID, "fedcba9876543210"),
-	}
-	if err := Store(repo.MetaPath(), active); err != nil {
+	active = withNode(active, validNode(rootID(active), rootID(base)))
+	active = withNode(active, validNode(rootID(base), "fedcba9876543210"))
+	if err := StoreManifest(repo.MetaPath(), active); err != nil {
 		t.Fatal(err)
 	}
-	target := "alice/app/" + dirArchives + "/" + base.ID
+	target := "alice/app/" + dirArchives + "/" + rootID(base)
 	_, err := RemoveTarget(cfg, target, nil)
 	if err == nil || !strings.Contains(err.Error(), "referenced") {
 		t.Fatalf("err = %v", err)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, base.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(base))); statErr != nil {
 		t.Fatalf("referenced archive deleted: %v", statErr)
 	}
 }
@@ -580,7 +792,7 @@ func TestRemoveTargetArchiveRefusedByChainParent(t *testing.T) {
 func TestRemoveTargetWholeRepoRefusedByHoldReference(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	old := holdViaPublish(t, repo)
-	refs := holdSet{ids: map[string]bool{old.ID: true}}
+	refs := holdSet{ids: map[string]bool{rootID(old): true}}
 	_, err := RemoveTarget(cfg, "alice/app", refs)
 	if err == nil || !strings.Contains(err.Error(), "referenced") {
 		t.Fatalf("err = %v", err)
@@ -618,7 +830,7 @@ func TestRemoveTargetArchiveLegacyAmbiguousWithFullPrefix(t *testing.T) {
 	cfg, repo := gcRepoFixture(t)
 	seedActive(t, repo, []byte("active-full"), false)
 	full := makeArchive(t, repo, []byte("shared-archive-payload"), time.Now())
-	legacy := full.ID[:idHexLen]
+	legacy := rootID(full)[:idHexLen]
 	makeLegacyArchive(t, repo, legacy, []byte("legacy-archive-sibling"), time.Now())
 	target := "alice/app/" + dirArchives + "/" + legacy
 	_, err := RemoveTarget(cfg, target, nil)
@@ -628,7 +840,7 @@ func TestRemoveTargetArchiveLegacyAmbiguousWithFullPrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), strconv.Quote(legacy)) {
 		t.Fatalf("error %q does not quote %q", err, legacy)
 	}
-	if _, statErr := os.Stat(archPath(t, repo, full.ID)); statErr != nil {
+	if _, statErr := os.Stat(archPath(t, repo, rootID(full))); statErr != nil {
 		t.Fatalf("full archive touched: %v", statErr)
 	}
 	legacyDir, err := repo.ArchivePath(legacy)
@@ -719,18 +931,12 @@ func TestRemoveTargetArchivePrefixResolution(t *testing.T) {
 	if outcome != OutcomeDeprecated {
 		t.Fatalf("outcome = %s", outcome)
 	}
-	archived, err := Load(filepath.Join(archPath(t, repo, victimID), fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !archived.Deprecated {
+	archived := mustLoadManifest(t, filepath.Join(archPath(t, repo, victimID), fileMeta))
+	if !rootOf(archived).Deprecated {
 		t.Fatal("unique prefix did not deprecate the matching archive")
 	}
-	otherMeta, err := Load(filepath.Join(archPath(t, repo, otherID), fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if otherMeta.Deprecated {
+	otherMeta := mustLoadManifest(t, filepath.Join(archPath(t, repo, otherID), fileMeta))
+	if rootOf(otherMeta).Deprecated {
 		t.Fatal("unique prefix deprecated a different archive")
 	}
 
@@ -741,9 +947,8 @@ func TestRemoveTargetArchivePrefixResolution(t *testing.T) {
 	if !strings.Contains(err.Error(), strconv.Quote(shared)) {
 		t.Fatalf("ambiguous error %q does not quote %q", err, shared)
 	}
-	if loaded, loadErr := Load(filepath.Join(archPath(t, repo, otherID), fileMeta)); loadErr != nil {
-		t.Fatal(loadErr)
-	} else if loaded.Deprecated {
+	loaded := mustLoadManifest(t, filepath.Join(archPath(t, repo, otherID), fileMeta))
+	if rootOf(loaded).Deprecated {
 		t.Fatal("ambiguous prefix marked another archive")
 	}
 
@@ -786,11 +991,8 @@ func TestRemoveTargetArchiveLegacyExactName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := Load(filepath.Join(dir, fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !meta.Deprecated {
+	meta := mustLoadManifest(t, filepath.Join(dir, fileMeta))
+	if !rootOf(meta).Deprecated {
 		t.Fatal("exact legacy archive name was not selected")
 	}
 }

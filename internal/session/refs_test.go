@@ -29,6 +29,90 @@ func seedActionRecord(t *testing.T, e *Engine, name, status string) {
 	}
 }
 
+// servedFullID and servedTipID are the replaced stack ids the
+// dual-stack fixtures carry beside the desired pair rebaseFull and
+// rebaseTip from the engine fixtures.
+const (
+	servedFullID = "0123456789abcdef"
+	servedTipID  = "9999888877776666"
+)
+
+// seedRebasedRecord writes one active record whose single mounted
+// action carries both stacks of a rebased view: the desired pair the
+// next mount serves and the served pair the live view still serves.
+func seedRebasedRecord(t *testing.T, e *Engine, name, status string) {
+	t.Helper()
+	action := mountAction("/ws/view")
+	action.Seq = 1
+	action.Status = status
+	action.Timestamp = testNow
+	action.FullID = rebaseFull
+	action.TipID = rebaseTip
+	action.ServedID = servedFullID
+	action.ServedTip = servedTipID
+	rec := Record{Name: name, State: StateActive, Actions: []Action{action}, CreatedAt: testNow}
+	if err := e.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stackProbes are the identities a rebased record must pin: both
+// stacks, each asked with and without its tip.
+func stackProbes() []image.Ref {
+	return []image.Ref{
+		{Name: "alice/app", FullID: rebaseFull},
+		{Name: "alice/app", FullID: rebaseFull, TipID: rebaseTip},
+		{Name: "alice/app", FullID: servedFullID},
+		{Name: "alice/app", FullID: servedFullID, TipID: servedTipID},
+	}
+}
+
+func TestRefsPinsServedAndDesiredStacks(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedRebasedRecord(t, e, "dev", StatusMounted)
+	refs := Refs{Dir: dir}
+
+	for _, probe := range stackProbes() {
+		held, err := refs.Holds(probe)
+		if err != nil || !held {
+			t.Fatalf("probe %+v held = %v (%v)", probe, held, err)
+		}
+	}
+	// An unknown full, an unknown tip on a matching full, and
+	// another name pin nothing.
+	for _, probe := range []image.Ref{
+		{Name: "alice/app", FullID: "5555555555555555"},
+		{Name: "alice/app", FullID: rebaseFull, TipID: "5555555555555555"},
+		{Name: "alice/app", FullID: servedFullID, TipID: "5555555555555555"},
+		{Name: "bob/app", FullID: rebaseFull, TipID: rebaseTip},
+		{Name: "bob/app", FullID: servedFullID, TipID: servedTipID},
+	} {
+		held, err := refs.Holds(probe)
+		if err != nil || held {
+			t.Fatalf("probe %+v held = %v (%v)", probe, held, err)
+		}
+	}
+}
+
+func TestRefsReleasesBothStacksAfterUmount(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	seedRebasedRecord(t, e, "dev", StatusMounted)
+	refs := Refs{Dir: dir}
+	if err := e.Writeback("dev", 1, StatusUnmounted, ""); err != nil {
+		t.Fatal(err)
+	}
+	// The live view is down: neither the served nor the desired
+	// stack stays pinned through the released action.
+	for _, probe := range stackProbes() {
+		held, err := refs.Holds(probe)
+		if err != nil || held {
+			t.Fatalf("probe %+v held = %v (%v) after umount", probe, held, err)
+		}
+	}
+}
+
 func TestRefsHoldsActiveLibraryMounts(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)

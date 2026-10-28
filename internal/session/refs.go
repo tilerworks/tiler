@@ -80,16 +80,38 @@ func (r Refs) recordHolds(store Store, name string, ref image.Ref) (bool, error)
 }
 
 // recordPins reports whether one active record carries a live mount
-// action of the referenced image.
+// action of the referenced image. A rebased action names two stacks
+// and protects both: the desired stack (FullID, TipID) the next
+// mount serves and the served stack (ServedID, ServedTip) the live
+// view still serves, so the full side matches either full id and the
+// tip side matches either tip. An empty ref tip asks about the full
+// image alone — a hold archive decision — and matches on the full
+// side without the tip constraint.
 func recordPins(rec Record, ref image.Ref) bool {
 	if rec.State != StateActive {
 		return false
 	}
 	for _, action := range rec.Actions {
-		if action.Type == TypeMount && action.Status != StatusUnmounted &&
-			action.Name == ref.Name && action.FullID == ref.FullID {
+		if action.Type != TypeMount || action.Status == StatusUnmounted ||
+			action.Name != ref.Name {
+			continue
+		}
+		if pinsFull(action, ref.FullID) && pinsTip(action, ref.TipID) {
 			return true
 		}
 	}
 	return false
+}
+
+// pinsFull reports whether either side of the action's stacks roots
+// at the referenced full image.
+func pinsFull(action Action, fullID string) bool {
+	return fullID == action.FullID || fullID == action.ServedID
+}
+
+// pinsTip reports whether either side of the action's stacks tops at
+// the referenced tip. An empty tip is a question about the full image
+// alone and matches without consulting the tip side.
+func pinsTip(action Action, tipID string) bool {
+	return tipID == "" || tipID == action.TipID || tipID == action.ServedTip
 }

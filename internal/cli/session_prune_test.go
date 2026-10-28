@@ -1,0 +1,256 @@
+package cli
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
+	"github.com/jiangxin/tiler/internal/image"
+	"github.com/jiangxin/tiler/internal/session"
+	"github.com/jiangxin/tiler/internal/workspace"
+)
+
+// stackPin is one recorded pin (full id, tip id) the fake stack
+// resolver of the replay-prune tests answers.
+type stackPin struct {
+	fullID string
+	tipID  string
+}
+
+// fakeStackResolver replaces resolveStackTip with a table-driven
+// resolver: every pin maps to the ordered member ids of one
+// single-file stack of the given format, materialized as fake
+// container files in a temporary directory so the replay's format
+// checks pass. A pin the table lacks fails the way a vanished hold
+// leaf fails the real resolver. It returns the pins the resolver was
+// asked for, in call order.
+func fakeStackResolver(t *testing.T, format string, stacks map[stackPin][]string) *[]stackPin {
+	t.Helper()
+	dir := t.TempDir()
+	original := resolveStackTip
+	t.Cleanup(func() { resolveStackTip = original })
+	calls := &[]stackPin{}
+	resolveStackTip = func(_ config.Config, name, fullID, tipID string) (image.Target, error) {
+		pin := stackPin{fullID, tipID}
+		*calls = append(*calls, pin)
+		ids, ok := stacks[pin]
+		if !ok {
+			return image.Target{}, fmt.Errorf(
+				"mount: %s id %s: unknown stack tip of image %s", name, tipID, fullID)
+		}
+		members := make([]image.Member, 0, len(ids))
+		for _, id := range ids {
+			path := filepath.Join(dir, id+image.SquashExt)
+			writeTestFile(t, path, string(containerBody(format, id)))
+			members = append(members, image.Member{Path: path, ID: id})
+		}
+		return image.Target{
+			Library: true,
+			Name:    name,
+			ID:      ids[0],
+			Tip:     ids[len(ids)-1],
+			Format:  format,
+			Members: members,
+		}, nil
+	}
+	return calls
+}
+
+// writePruneRecord seeds the "dev" record with one library mount
+// action carrying the given desired and served pins.
+func writePruneRecord(
+	t *testing.T,
+	home, work, fullID, tipID, servedID, servedTip string,
+) {
+	t.Helper()
+	action := libraryAction("alice/app", filepath.Join(work, "view"), session.ModeRW)
+	action.FullID, action.TipID = fullID, tipID
+	action.ServedID, action.ServedTip = servedID, servedTip
+	writeSessionRecord(t, sessionsDir(home), "dev", action)
+}
+
+// openPruneSession replays the "dev" record and returns the one
+// captured mount request with the command's stderr.
+func openPruneSession(t *testing.T, lib []string, f *mountFake) (workspace.Request, string) {
+	t.Helper()
+	_, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...)
+	if err != nil {
+		t.Fatalf("session open: %v\n%s", err, stderr)
+	}
+	if len(f.mountReqs) != 1 {
+		t.Fatalf("engine calls = %d, want 1", len(f.mountReqs))
+	}
+	return f.mountReqs[0], stderr
+}
+
+// TestSessionReplayPrunesUpperWhenLowerStackChanged covers the
+// trigger: a rebased record names the served stack its live view
+// froze at, that stack resolves to other members than the desired
+// stack, so the lower layers changed and the replay request must ask
+// the engine to prune the reused upper.
+func TestSessionReplayPrunesUpperWhenLowerStackChanged(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	calls := fakeStackResolver(t, image.FormatSquashfs, map[stackPin][]string{
+		{"full-a", "tip-b"}:  {"full-a", "tip-b"},
+		{"full-a", "full-a"}: {"full-a"},
+	})
+	writePruneRecord(t, home, work, "full-a", "tip-b", "full-a", "full-a")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if !req.PruneUpper {
+		t.Fatal("PruneUpper = false, want the changed lower stack to prune")
+	}
+	if stderr != "" {
+		t.Fatalf("replay warned: %q", stderr)
+	}
+	// Both pins resolved: the desired stack for the mount and the
+	// served stack for the comparison.
+	if len(*calls) != 2 {
+		t.Fatalf("resolver calls = %v, want the desired and the served pin", *calls)
+	}
+}
+
+// TestSessionReplayKeepsUpperWhenServedStackMatches covers the
+// negative side of the comparison: two pins spelled differently but
+// resolving to the same ordered member ids are the same lower stack,
+// so the reused upper stays untouched.
+func TestSessionReplayKeepsUpperWhenServedStackMatches(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	// The served pin carries no tip, the pre-field spelling whose
+	// resolution expands to the leaf head stack — here the very
+	// stack the desired pin names.
+	calls := fakeStackResolver(t, image.FormatSquashfs, map[stackPin][]string{
+		{"full-a", "tip-b"}: {"full-a", "tip-b"},
+		{"full-a", ""}:      {"full-a", "tip-b"},
+	})
+	writePruneRecord(t, home, work, "full-a", "tip-b", "full-a", "")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want an unchanged lower stack to keep the upper")
+	}
+	if stderr != "" {
+		t.Fatalf("replay warned: %q", stderr)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("resolver calls = %v, want both pins resolved", *calls)
+	}
+}
+
+// TestSessionReplayOldRecordNeverPrunes pins the compatibility rule:
+// a record without served ids — written before the fields existed or
+// simply never rebased — resolves its desired stack alone and keeps
+// the upper untouched.
+func TestSessionReplayOldRecordNeverPrunes(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	calls := fakeStackResolver(t, image.FormatSquashfs, map[stackPin][]string{
+		{"full-a", "tip-b"}: {"full-a", "tip-b"},
+	})
+	writePruneRecord(t, home, work, "full-a", "tip-b", "", "")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want a record without served ids to keep the upper")
+	}
+	if stderr != "" {
+		t.Fatalf("replay warned: %q", stderr)
+	}
+	if len(*calls) != 1 || (*calls)[0] != (stackPin{"full-a", "tip-b"}) {
+		t.Fatalf("resolver calls = %v, want only the desired pin", *calls)
+	}
+}
+
+// TestSessionReplayDMGActionNeverPrunes covers the dmg side: a dmg
+// view is never rebased, so its recorded action carries no served
+// ids and the replay resolves no served stack and asks for no prune
+// — a dmg attach has no upper directory to prune in the first place.
+func TestSessionReplayDMGActionNeverPrunes(t *testing.T) {
+	if _, err := container.Lookup(image.FormatDMG); err != nil {
+		t.Skip("dmg is not registered on this OS")
+	}
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	calls := fakeStackResolver(t, image.FormatDMG, map[stackPin][]string{
+		{"full-a", "full-a"}: {"full-a"},
+	})
+	writePruneRecord(t, home, work, "full-a", "full-a", "", "")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want a dmg action to keep the flag clear")
+	}
+	if stderr != "" {
+		t.Fatalf("replay warned: %q", stderr)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("resolver calls = %v, want only the desired pin", *calls)
+	}
+}
+
+// TestSessionReplayUnresolvableServedStackWarnsAndKeepsUpper pins the
+// conservative failure path: a served stack whose leaf no longer
+// resolves cannot prove a lower change, so the replay warns, keeps
+// the upper unpruned, and still mounts the desired stack — pruning is
+// an optimization and never fails a recovery.
+func TestSessionReplayUnresolvableServedStackWarnsAndKeepsUpper(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	// The served pin has no table entry, the shape of a hold leaf
+	// that vanished behind the record's back.
+	fakeStackResolver(t, image.FormatSquashfs, map[stackPin][]string{
+		{"full-a", "tip-b"}: {"full-a", "tip-b"},
+	})
+	writePruneRecord(t, home, work, "full-a", "tip-b", "gone-full", "gone-full")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want an unresolvable served stack to skip the prune")
+	}
+	if !strings.Contains(stderr, "warning:") ||
+		!strings.Contains(stderr, "the served stack gone-full tip gone-full no longer resolves") {
+		t.Fatalf("stderr = %q, want a prune warning quoting the full served pin", stderr)
+	}
+}
+
+// TestSessionReplayUnresolvableTiplessServedStackWarnsCleanly pins the
+// warning rendering of the tip-less served spelling: a pin recorded
+// as (full id, "") quotes the id alone, with no dangling "tip" word
+// and no empty half in the message.
+func TestSessionReplayUnresolvableTiplessServedStackWarnsCleanly(t *testing.T) {
+	home, work := withWorkspace(t)
+	_, lib := libFlags(home)
+	f := withMountSeams(t, nil)
+	pinPortableHealth(t, f)
+	// The served pin uses the tip-less recorded spelling and has no
+	// table entry, the shape of a vanished full-id-only hold.
+	fakeStackResolver(t, image.FormatSquashfs, map[stackPin][]string{
+		{"full-a", "tip-b"}: {"full-a", "tip-b"},
+	})
+	writePruneRecord(t, home, work, "full-a", "tip-b", "gone-full", "")
+
+	req, stderr := openPruneSession(t, lib, f)
+	if req.PruneUpper {
+		t.Fatal("PruneUpper = true, want an unresolvable served stack to skip the prune")
+	}
+	if !strings.Contains(stderr, "the served stack gone-full no longer resolves") ||
+		strings.Contains(stderr, "gone-full tip") {
+		t.Fatalf("stderr = %q, want the warning to quote the tip-less pin without a"+
+			" dangling tip segment", stderr)
+	}
+}

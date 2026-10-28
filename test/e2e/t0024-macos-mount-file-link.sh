@@ -90,8 +90,8 @@ test_expect_success TILER,MACOS 'mount --file registers symlink meta and mounts 
 	test_path_is_symlink "$payload" &&
 	test "$(readlink "$payload")" = "$dmg" &&
 	test_path_is_file "$meta_file" &&
-	test_grep -E "^id: \"?[0-9a-f]+\"?$" "$meta_file" &&
-	base_id=$(sed -n "s/^id: //p" "$meta_file" | tr -d "\"") &&
+	test_grep -E "^head: \"?[0-9a-f]+\"?$" "$meta_file" &&
+	base_id=$(sed -n "s/^head: //p" "$meta_file" | tr -d "\"") &&
 	test -n "$base_id" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	echo linked >"$work_dir/LINK.txt" &&

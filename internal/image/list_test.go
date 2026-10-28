@@ -67,18 +67,15 @@ func TestInspectReportsActiveArchivesAndHolds(t *testing.T) {
 	if !state.HasActive {
 		t.Fatal("active image not reported")
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(state.Active) != rootID(loaded) {
+		t.Fatalf("active = %+v, want id %s", state.Active, rootID(loaded))
 	}
-	if state.Active.ID != loaded.ID {
-		t.Fatalf("active = %+v, want id %s", state.Active, loaded.ID)
+	if len(state.Archives) != 1 || state.Archives[0] != rootID(archive) {
+		t.Fatalf("archives = %v, want [%s]", state.Archives, rootID(archive))
 	}
-	if len(state.Archives) != 1 || state.Archives[0] != archive.ID {
-		t.Fatalf("archives = %v, want [%s]", state.Archives, archive.ID)
-	}
-	if len(state.Holds) != 1 || state.Holds[0] != old.ID {
-		t.Fatalf("holds = %v, want [%s]", state.Holds, old.ID)
+	if len(state.Holds) != 1 || state.Holds[0] != rootID(old) {
+		t.Fatalf("holds = %v, want [%s]", state.Holds, rootID(old))
 	}
 }
 

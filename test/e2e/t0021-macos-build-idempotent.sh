@@ -64,7 +64,7 @@ test_expect_success TILER,MACOS 'plain directory dmg create publishes alice/app'
 	test -n "$id1" &&
 	test_path_is_file "$alice_img" &&
 	test_path_is_missing "${alice_img%.dmg}.sqsh" &&
-	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
+	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
 	cp "$alice_meta" full1.meta
 '
 
@@ -98,7 +98,7 @@ test_expect_success TILER,MACOS 'shadow bake publishes a new full from the live 
 	test_grep -E "^full alice/app [0-9a-f]+" bake1.out &&
 	bake_id=$(cut -d" " -f3 bake1.out) &&
 	test -n "$bake_id" &&
-	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
+	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$alice_meta" &&
 	cp "$alice_meta" bake1.meta
 '
 
@@ -127,7 +127,7 @@ test_expect_success TILER,MACOS 'subdir of a mount packs a different dmg without
 	test -n "$bob_id" &&
 	test_path_is_file "$bob_img" &&
 	test_path_is_missing "${bob_img%.dmg}.sqsh" &&
-	test_grep -E "^content_sha256: [0-9a-f]{64}$" "$bob_meta" &&
+	test_grep -E "^[[:space:]]+content_sha256: [0-9a-f]{64}$" "$bob_meta" &&
 	cp "$bob_meta" div1.meta
 '
 

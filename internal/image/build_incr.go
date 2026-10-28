@@ -39,6 +39,13 @@ type IncrRequest struct {
 	// Subdir is an optional image-relative prefix. The upper is
 	// moved under it before packing and moved back afterwards.
 	Subdir string
+	// BaseTip names the manifest graph node the new layer is built
+	// on: the served tip of the view whose upper is packed. Empty
+	// builds on the active head, preserving the historical append
+	// behavior. A base tip that trails the head forms a branch, and
+	// a successful build still moves the head to the new layer. An
+	// unknown base tip is refused before packing.
+	BaseTip string
 	// Refs is accepted for symmetry with full builds; appending a
 	// layer retires no chain, so nothing consults it yet.
 	Refs Refs
@@ -55,7 +62,12 @@ type IncrRequest struct {
 	MountSmoke func(image string) error
 }
 
-// IncrResult reports one successful incremental build.
+// IncrResult reports one successful incremental build. When the
+// packed digest was already in the graph, the result reports that
+// existing node: it may be parented on another tip than the request's
+// BaseTip, and the head does not move. Callers must not infer the
+// node's parent or a head advance from the result alone; read the
+// manifest when those facts matter.
 type IncrResult struct {
 	// ID is the lowercase hex sha256 of the layer payload.
 	ID string
@@ -66,20 +78,25 @@ type IncrResult struct {
 	SHA256 string
 }
 
-// BuildIncr packs the upper directory of a merged view and appends
-// it to the active chain.
+// BuildIncr packs the upper directory of a merged view and publishes
+// it as a new layer parented on the request's base tip in the active
+// manifest graph.
 //
-// An active full image is required, and one full plus the current
-// chain must stay below the stack depth limit. A subdir prefix moves
-// the upper under the image layout with rename, never copy, so
-// device nodes keep their inode type; the upper is moved back even
-// when packing fails. The container packer keeps whiteout and
-// opaque markers. An unsplit layer is renamed into _incr/
-// first. A split layer is packed outside _incr/ and published as
-// _blocks/<id>/, so the blocks layout never gains an _incr/ directory.
+// An active full image is required, and the root-to-base-tip path
+// plus the new layer must stay within the stack depth limit. A
+// subdir prefix moves the upper under the image layout with rename,
+// never copy, so device nodes keep their inode type; the upper is
+// moved back even when packing fails. The container packer keeps
+// whiteout and opaque markers. An unsplit layer is renamed into
+// _incr/ first. A split layer is packed outside _incr/ and published
+// as _blocks/<id>/, so the blocks layout never gains an _incr/
+// directory. On success the head moves to the new layer, even when
+// the base tip trailed the head and the layer forms a branch.
 // Metadata is replaced atomically afterwards; a failed metadata
 // replace deletes the fresh layer and keeps the old metadata. A
-// digest already in the chain is an idempotent success.
+// digest already in the graph is an idempotent success: it reports
+// the existing node even when that node is parented on another tip
+// than the base tip, and leaves the metadata and the head untouched.
 func BuildIncr(req IncrRequest) (IncrResult, error) {
 	return buildIncr(req, hooks{})
 }
@@ -128,43 +145,71 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 	return finishIncr(repo, req, active, tmp, now, seam)
 }
 
-func validateIncr(req IncrRequest) (Repo, Meta, error) {
+func validateIncr(req IncrRequest) (Repo, Manifest, error) {
 	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
 	if err != nil {
-		return Repo{}, Meta{}, err
+		return Repo{}, Manifest{}, err
 	}
 	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {
-		return Repo{}, Meta{}, err
+		return Repo{}, Manifest{}, err
 	}
 	info, err := os.Stat(req.Upper)
 	if err != nil {
-		return Repo{}, Meta{}, fmt.Errorf("build: upper: %w", err)
+		return Repo{}, Manifest{}, fmt.Errorf("build: upper: %w", err)
 	}
 	if !info.IsDir() {
-		return Repo{}, Meta{}, fmt.Errorf("build: upper %s is not a directory", req.Upper)
+		return Repo{}, Manifest{}, fmt.Errorf("build: upper %s is not a directory", req.Upper)
 	}
-	active, exists, err := loadActive(repo)
+	active, exists, err := loadActiveManifest(repo)
 	if err != nil {
-		return Repo{}, Meta{}, fmt.Errorf("build: %w", err)
+		return Repo{}, Manifest{}, fmt.Errorf("build: %w", err)
 	}
 	if !exists {
-		return Repo{}, Meta{}, errors.New("build: no active full image")
+		return Repo{}, Manifest{}, errors.New("build: no active full image")
 	}
-	if 1+len(active.Chain) >= maxStackDepth {
-		return Repo{}, Meta{}, fmt.Errorf(
-			"build: chain already holds %d layers; build a new full image instead",
-			len(active.Chain))
+	if err := checkIncrBase(active, req.BaseTip); err != nil {
+		return Repo{}, Manifest{}, err
 	}
-	if err := checkIncrForm(active, req.Config.SplitSize); err != nil {
-		return Repo{}, Meta{}, err
+	if err := checkIncrForm(active.PayloadKind(), req.Config.SplitSize); err != nil {
+		return Repo{}, Manifest{}, err
 	}
 	if err := formatConflict(active.Format, req.Format, req.Compression); err != nil {
-		return Repo{}, Meta{}, err
+		return Repo{}, Manifest{}, err
 	}
 	if err := acceptStoredContainer(active.Format); err != nil {
-		return Repo{}, Meta{}, err
+		return Repo{}, Manifest{}, err
 	}
 	return repo, active, nil
+}
+
+// checkIncrBase validates the build base point: it must name a node
+// of the manifest graph, and the root-to-base path plus the new
+// layer must stay within the stack limit. An empty base builds on
+// the head, so the limit is measured along the head stack, which
+// preserves the historical whole-chain check. A base that trails the
+// head is measured along its own branch instead.
+func checkIncrBase(active Manifest, baseTip string) error {
+	stack, err := active.Stack(incrParent(active, baseTip))
+	if err != nil {
+		return fmt.Errorf("build: base tip: %w", err)
+	}
+	if len(stack)+1 > maxStackDepth {
+		// The count includes the full root, so it is reported as
+		// images to match the documented stack limit.
+		return fmt.Errorf(
+			"build: stack to the base tip already holds %d images; build a new full image instead",
+			len(stack))
+	}
+	return nil
+}
+
+// incrParent is the effective parent of a new layer: the requested
+// base tip, or the manifest head when the request names none.
+func incrParent(active Manifest, baseTip string) string {
+	if baseTip != "" {
+		return baseTip
+	}
+	return active.Head
 }
 
 // ErrFormatConflict means an incremental build named a container type
@@ -199,8 +244,7 @@ func formatConflict(active Format, typ, compression string) error {
 // effective split size. Blocks layers only append onto blocks; a
 // single-file active only accepts an unsplit build. A mismatch
 // points at a full rebuild so the library stays consistent.
-func checkIncrForm(active Meta, splitSize int64) error {
-	kind := PayloadKind(active)
+func checkIncrForm(kind string, splitSize int64) error {
 	switch {
 	case splitSize > 0 && kind != PayloadBlocks:
 		return fmt.Errorf(
@@ -327,14 +371,14 @@ func packIncrImage(run ToolRunner, src, dst, typ, compression string) error {
 	return packContainer(run, src, dst, typ, compression, true)
 }
 
-// finishIncr hashes the packed layer, appends the chain entry, and
+// finishIncr hashes the packed layer, appends the graph node, and
 // publishes layer and metadata. A positive SplitSize splits the
 // packed bytes into _blocks/<id>/; otherwise the layer lands as
 // _incr/<id>.sqsh.
 func finishIncr(
 	repo Repo,
 	req IncrRequest,
-	active Meta,
+	active Manifest,
 	tmp string,
 	now func() time.Time,
 	seam hooks,
@@ -345,7 +389,7 @@ func finishIncr(
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
 	id := ID(sum)
-	if chainHasID(active.Chain, id) {
+	if active.Has(id) {
 		if req.Config.SplitSize > 0 {
 			return reuseChainLayerBlocks(repo, active, id, sum, tmp, seam)
 		}
@@ -362,20 +406,19 @@ func finishIncr(
 func finishIncrSingle(
 	repo Repo,
 	req IncrRequest,
-	active Meta,
+	active Manifest,
 	id string,
 	sum [32]byte,
 	tmp string,
 	now func() time.Time,
 	seam hooks,
 ) (IncrResult, error) {
-	entry, err := chainEntry(active, id, sum, tmp, now, nil)
+	node, err := incrNode(active, req.BaseTip, id, sum, tmp, now, nil)
 	if err != nil {
 		removeFile(tmp)
 		return IncrResult{}, err
 	}
-	next := active
-	next.Chain = append(slices.Clone(active.Chain), entry)
+	next := withNode(active, node)
 	if err := next.Validate(); err != nil {
 		removeFile(tmp)
 		return IncrResult{}, fmt.Errorf("build: %w", err)
@@ -389,7 +432,7 @@ func finishIncrSingle(
 		removeFile(tmp)
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
-	if err := verifyFileSHA256(final, entry.SHA256); err != nil {
+	if err := verifyFileSHA256(final, node.SHA256); err != nil {
 		removeFile(final)
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
@@ -397,20 +440,20 @@ func finishIncrSingle(
 		removeFile(final)
 		return IncrResult{}, err
 	}
-	if err := runIncrSmoke(req, final, entry, active.Format); err != nil {
+	if err := runIncrSmoke(req, final, node, active.Format); err != nil {
 		return IncrResult{}, err
 	}
-	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
+	return IncrResult{ID: id, Path: final, SHA256: node.SHA256}, nil
 }
 
 // finishIncrBlocks splits the packed layer into _blocks/<id>/ and
-// records the block manifest on the new chain entry. Digest and size
+// records the block manifest on the new graph node. Digest and size
 // stay those of the whole logical squashfs; no _incr/<id>.sqsh is
 // written.
 func finishIncrBlocks(
 	repo Repo,
 	req IncrRequest,
-	active Meta,
+	active Manifest,
 	id string,
 	sum [32]byte,
 	tmp string,
@@ -436,17 +479,17 @@ func finishIncrBlocks(
 	if hexDigest(split.whole) != hexDigest(sum) {
 		return IncrResult{}, errors.New("build: split digest does not match packed layer")
 	}
-	entry := ChainEntry{
+	node := ImageMeta{
 		ID:        id,
-		Parent:    lastChainID(active),
+		Kind:      KindIncremental,
+		Parent:    incrParent(active, req.BaseTip),
 		Size:      split.size,
 		SHA256:    hexDigest(split.whole),
 		MtimeUnix: info.ModTime().Unix(),
 		CreatedAt: now().UTC(),
 		Blocks:    split.blocks,
 	}
-	next := active
-	next.Chain = append(slices.Clone(active.Chain), entry)
+	next := withNode(active, node)
 	if err := next.Validate(); err != nil {
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
@@ -460,7 +503,7 @@ func finishIncrBlocks(
 	if err := seam.do(payloadTmp, final); err != nil {
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
-	ok, err := dirMatchesBlocks(final, entry.Blocks)
+	ok, err := dirMatchesBlocks(final, node.Blocks)
 	if err != nil || !ok {
 		_ = os.RemoveAll(final)
 		if err != nil {
@@ -472,10 +515,10 @@ func finishIncrBlocks(
 		_ = os.RemoveAll(final)
 		return IncrResult{}, err
 	}
-	if err := runIncrSmoke(req, final, entry, active.Format); err != nil {
+	if err := runIncrSmoke(req, final, node, active.Format); err != nil {
 		return IncrResult{}, err
 	}
-	return IncrResult{ID: id, Path: final, SHA256: entry.SHA256}, nil
+	return IncrResult{ID: id, Path: final, SHA256: node.SHA256}, nil
 }
 
 // ErrSmokeSkipped marks a quality gate that could not run because
@@ -561,9 +604,9 @@ func smokeMount(f container.Format, imagePath string) error {
 }
 
 // runIncrSmoke runs the quality gate on a single-file layer path, or
-// on a reassembled blocks layer when the entry carries a Blocks
+// on a reassembled blocks layer when the node carries a Blocks
 // manifest. A nil MountSmoke mounts through the active format.
-func runIncrSmoke(req IncrRequest, path string, entry ChainEntry, format Format) error {
+func runIncrSmoke(req IncrRequest, path string, node ImageMeta, format Format) error {
 	smoke := req.MountSmoke
 	if smoke == nil {
 		smoke = func(image string) error {
@@ -571,8 +614,8 @@ func runIncrSmoke(req IncrRequest, path string, entry ChainEntry, format Format)
 		}
 	}
 	target := path
-	if len(entry.Blocks) > 0 {
-		assembled, err := assembleIncrBlocks(req.Config.CacheDir, path, entry)
+	if len(node.Blocks) > 0 {
+		assembled, err := assembleIncrBlocks(req.Config.CacheDir, path, node)
 		if err != nil {
 			return fmt.Errorf("build: quality gate: %w", err)
 		}
@@ -586,9 +629,9 @@ func runIncrSmoke(req IncrRequest, path string, entry ChainEntry, format Format)
 
 // assembleIncrBlocks materializes _blocks/<id>/ into the content-
 // addressed cache so the smoke gate can mount one image file.
-func assembleIncrBlocks(cacheDir, blocksDir string, entry ChainEntry) (string, error) {
-	files := make([]BlockFile, 0, len(entry.Blocks))
-	for _, block := range entry.Blocks {
+func assembleIncrBlocks(cacheDir, blocksDir string, node ImageMeta) (string, error) {
+	files := make([]BlockFile, 0, len(node.Blocks))
+	for _, block := range node.Blocks {
 		files = append(files, BlockFile{
 			Path:      filepath.Join(blocksDir, block.Name),
 			Name:      block.Name,
@@ -597,11 +640,11 @@ func assembleIncrBlocks(cacheDir, blocksDir string, entry ChainEntry) (string, e
 			SHA256:    block.SHA256,
 		})
 	}
-	return AssembleBlocks(cacheDir, files, entry.SHA256, entry.Size)
+	return AssembleBlocks(cacheDir, files, node.SHA256, node.Size)
 }
 
 // reuseChainLayer is the idempotent rebuild of a single-file layer
-// the chain already lists. A missing file is put back from the
+// the graph already lists. A missing file is put back from the
 // fresh bytes.
 func reuseChainLayer(repo Repo, id string, sum [32]byte, tmp string, seam hooks) (IncrResult, error) {
 	path, err := repo.IncrPath(id)
@@ -627,21 +670,21 @@ func reuseChainLayer(repo Repo, id string, sum [32]byte, tmp string, seam hooks)
 }
 
 // reuseChainLayerBlocks is the idempotent rebuild of a blocks layer
-// the chain already lists. A missing directory is rebuilt from the
+// the graph already lists. A missing directory is rebuilt from the
 // fresh packed bytes; an existing directory is re-checked against
 // the recorded manifest.
 func reuseChainLayerBlocks(
 	repo Repo,
-	active Meta,
+	active Manifest,
 	id string,
 	sum [32]byte,
 	tmp string,
 	seam hooks,
 ) (IncrResult, error) {
-	entry, ok := chainEntryByID(active.Chain, id)
+	node, ok := active.Node(id)
 	if !ok {
 		removeFile(tmp)
-		return IncrResult{}, fmt.Errorf("build: chain entry %s is missing", id)
+		return IncrResult{}, fmt.Errorf("build: image node %s is missing", id)
 	}
 	path, err := repo.BlocksDirPath(id)
 	if err != nil {
@@ -655,7 +698,7 @@ func reuseChainLayerBlocks(
 	}
 	if there {
 		removeFile(tmp)
-		match, err := dirMatchesBlocks(path, entry.Blocks)
+		match, err := dirMatchesBlocks(path, node.Blocks)
 		if err != nil {
 			return IncrResult{}, fmt.Errorf("build: %w", err)
 		}
@@ -670,7 +713,7 @@ func reuseChainLayerBlocks(
 		return IncrResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(payloadTmp) }()
-	split, err := splitStagedImage(tmp, payloadTmp, entryBlockSize(entry))
+	split, err := splitStagedImage(tmp, payloadTmp, nodeBlockSize(node))
 	removeFile(tmp)
 	if err != nil {
 		return IncrResult{}, err
@@ -684,7 +727,7 @@ func reuseChainLayerBlocks(
 	if err := seam.do(payloadTmp, path); err != nil {
 		return IncrResult{}, fmt.Errorf("build: %w", err)
 	}
-	match, err := dirMatchesBlocks(path, entry.Blocks)
+	match, err := dirMatchesBlocks(path, node.Blocks)
 	if err != nil || !match {
 		_ = os.RemoveAll(path)
 		if err != nil {
@@ -695,33 +738,36 @@ func reuseChainLayerBlocks(
 	return IncrResult{ID: id, Path: path, SHA256: hexDigest(sum)}, nil
 }
 
-// entryBlockSize recovers the block size used when the layer was
+// nodeBlockSize recovers the block size used when the layer was
 // first published: every full block shares that size, and a single
 // short block uses its recorded size.
-func entryBlockSize(entry ChainEntry) int64 {
-	if len(entry.Blocks) == 0 {
-		return entry.Size
+func nodeBlockSize(node ImageMeta) int64 {
+	if len(node.Blocks) == 0 {
+		return node.Size
 	}
-	return entry.Blocks[0].Size
+	return node.Blocks[0].Size
 }
 
-// chainEntry assembles the new chain member. Its parent is the last
-// chain member, or the full image id when the chain is empty.
-func chainEntry(
-	active Meta,
+// incrNode assembles the new graph member. Its parent is the
+// requested base tip, or the manifest head when the request names
+// none.
+func incrNode(
+	active Manifest,
+	baseTip string,
 	id string,
 	sum [32]byte,
 	tmp string,
 	now func() time.Time,
 	blocks []BlockEntry,
-) (ChainEntry, error) {
+) (ImageMeta, error) {
 	info, err := os.Stat(tmp)
 	if err != nil {
-		return ChainEntry{}, fmt.Errorf("build: %w", err)
+		return ImageMeta{}, fmt.Errorf("build: %w", err)
 	}
-	return ChainEntry{
+	return ImageMeta{
 		ID:        id,
-		Parent:    lastChainID(active),
+		Kind:      KindIncremental,
+		Parent:    incrParent(active, baseTip),
 		Size:      info.Size(),
 		SHA256:    hexDigest(sum),
 		MtimeUnix: info.ModTime().Unix(),
@@ -730,11 +776,22 @@ func chainEntry(
 	}, nil
 }
 
-// replaceMeta atomically swaps meta.yaml. When the swap fails after
-// the rename landed, the previous metadata is written back so the
-// chain and the incr files stay consistent.
-func replaceMeta(repo Repo, old, next Meta, seam hooks) error {
-	body, err := Encode(next)
+// withNode returns the manifest with node appended to the graph and
+// the head moved onto it, even when the node branches off the
+// previous head.
+func withNode(active Manifest, node ImageMeta) Manifest {
+	next := active
+	next.Version = ManifestVersion
+	next.Images = append(slices.Clone(active.Images), node)
+	next.Head = node.ID
+	return next
+}
+
+// replaceMeta atomically swaps meta.yaml to the next manifest. When
+// the swap fails after the rename landed, the previous manifest is
+// written back so the graph and the incr files stay consistent.
+func replaceMeta(repo Repo, old, next Manifest, seam hooks) error {
+	body, err := EncodeManifest(next)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -746,31 +803,9 @@ func replaceMeta(repo Repo, old, next Meta, seam hooks) error {
 		undoLanded(metaTmp, repo.MetaPath())
 		removeFile(metaTmp)
 		if _, statErr := os.Stat(repo.MetaPath()); errors.Is(statErr, os.ErrNotExist) {
-			_ = Store(repo.MetaPath(), old)
+			_ = StoreManifest(repo.MetaPath(), old)
 		}
 		return fmt.Errorf("build: %w", err)
 	}
 	return nil
-}
-
-func lastChainID(active Meta) string {
-	if len(active.Chain) == 0 {
-		return active.ID
-	}
-	return active.Chain[len(active.Chain)-1].ID
-}
-
-func chainHasID(chain []ChainEntry, id string) bool {
-	return slices.ContainsFunc(chain, func(entry ChainEntry) bool {
-		return entry.ID == id
-	})
-}
-
-func chainEntryByID(chain []ChainEntry, id string) (ChainEntry, bool) {
-	for _, entry := range chain {
-		if entry.ID == id {
-			return entry, true
-		}
-	}
-	return ChainEntry{}, false
 }

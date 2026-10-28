@@ -88,8 +88,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a base full image' '
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
-	test_grep ! "^chain:" "$meta_file"
+	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1
 '
 
 # build --incremental packs the live view upper as-is and leaves it in place, so
@@ -117,8 +117,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the chain cascades in ls and met
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
 	test_grep -E "^  chain +2$" ls.out &&
 	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 2 &&
-	test_grep -E "^id: \"?$id1\"?$" "$meta_file"
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 3 &&
+	test_grep -E "^head: \"?$layerB\"?$" "$meta_file"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the full plus both increments' '
@@ -144,8 +144,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --full merges the view int
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
-	test_grep -E "^id: \"?$id2\"?$" "$meta_file" &&
-	test_grep ! "^chain:" "$meta_file" &&
+	test_grep -E "^head: \"?$id2\"?$" "$meta_file" &&
+	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
 	"$tiler_bin" images show alice/app >ls2.out 2>ls2.err &&
 	test_grep -E "^  chain +0$" ls2.out
 '

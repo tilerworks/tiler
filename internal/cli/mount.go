@@ -58,6 +58,11 @@ type mountFlags struct {
 	session  string
 	rm       bool
 	file     string
+	// pruneUpper asks the engine to prune a reused upper against
+	// the lower stack before merging. Only session replay sets it,
+	// when the recorded served stack resolves differently from the
+	// desired stack; the mount command leaves it false.
+	pruneUpper bool
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -339,6 +344,10 @@ func mountAction(ref string, target image.Target, dir string, flags mountFlags) 
 			return session.Action{}, fmt.Errorf("mount: %w", err)
 		}
 		action.Name, action.FullID = strings.Join(segs, "/"), target.ID
+		// The resolved stack tip pins the desired stack, so a later
+		// replay remounts the same layers even after the library
+		// head moves past them.
+		action.TipID = target.Tip
 	}
 	return action, nil
 }
@@ -507,6 +516,7 @@ func blocksRequest(
 		Layers:          mounted[1:],
 		Format:          format,
 		ReadOnly:        flags.readOnly,
+		PruneUpper:      flags.pruneUpper,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,
@@ -632,12 +642,12 @@ func verifyTarget(target image.Target, verify bool) error {
 // default, the full sha256 re-hash with --verify.
 func verifyMembers(target image.Target, verify bool) error {
 	for _, m := range target.Members {
-		meta := image.Meta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
+		node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
 		var err error
 		if verify {
-			err = image.VerifySHA256(meta, m.Path)
+			err = image.VerifySHA256(node, m.Path)
 		} else {
-			err = image.QuickCheck(meta, m.Path)
+			err = image.QuickCheck(node, m.Path)
 		}
 		if err != nil {
 			return fmt.Errorf("mount: %w", err)
@@ -691,6 +701,7 @@ func mountRequest(
 		Layers:          mounted[1:],
 		Format:          format,
 		ReadOnly:        flags.readOnly,
+		PruneUpper:      flags.pruneUpper,
 		Subdir:          flags.subdir,
 		Table:           toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions,

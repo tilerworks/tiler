@@ -10,7 +10,17 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 )
 
-func TestActivePayloadPathFollowsFormat(t *testing.T) {
+// singleFormatManifest trims validManifest to its full root alone and
+// records format on the manifest.
+func singleFormatManifest(format Format) Manifest {
+	manifest := validManifest()
+	manifest.Images = manifest.Images[:1]
+	manifest.Head = manifest.Images[0].ID
+	manifest.Format = format
+	return manifest
+}
+
+func TestManifestPayloadPathFollowsFormat(t *testing.T) {
 	repo, err := OpenRepo("/var/lib/images", "alice/app")
 	if err != nil {
 		t.Fatal(err)
@@ -28,9 +38,12 @@ func TestActivePayloadPathFollowsFormat(t *testing.T) {
 		{typ: FormatErofs, want: filepath.Join(root, "image.sqsh")},
 	}
 	for _, tc := range cases {
-		meta := validMeta()
-		meta.Format.Type = tc.typ
-		got, err := activePayloadPath(repo, meta)
+		manifest := singleFormatManifest(
+			Format{Type: tc.typ, Compression: validManifest().Format.Compression})
+		if tc.typ == FormatDMG {
+			manifest.Format.Compression = "ulfo"
+		}
+		got, err := manifestPayloadPath(repo, manifest)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.typ, err)
 		}
@@ -46,9 +59,8 @@ func TestActivePayloadPathFollowsFormat(t *testing.T) {
 func TestResolveMountDMGUsesImageDMG(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := validMeta()
-	meta.Format = Format{Type: FormatDMG, Compression: "ulfo"}
-	if len(meta.Chain) != 0 {
+	manifest := singleFormatManifest(Format{Type: FormatDMG, Compression: "ulfo"})
+	if len(manifest.Images) != 1 {
 		t.Fatal("fixture chain is not empty")
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
@@ -58,7 +70,7 @@ func TestResolveMountDMGUsesImageDMG(t *testing.T) {
 	if err := os.WriteFile(payload, []byte("dmg"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ResolveMount(cfg, "alice/app")
@@ -73,14 +85,14 @@ func TestResolveMountDMGUsesImageDMG(t *testing.T) {
 func TestResolveMountSquashfsKeepsImageSqsh(t *testing.T) {
 	cfg := buildConfig(t)
 	repo := mustRepo(t, cfg)
-	meta := seedChain(t, repo, 0)
+	manifest := seedChain(t, repo, 0)
 	got, err := ResolveMount(cfg, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(repo.Dir, "image.sqsh")
-	if meta.Format.Type != FormatSquashfs || len(got.Members) != 1 || got.Members[0].Path != want {
-		t.Fatalf("path = %s format = %s", got.Members[0].Path, meta.Format.Type)
+	if manifest.Format.Type != FormatSquashfs || len(got.Members) != 1 || got.Members[0].Path != want {
+		t.Fatalf("path = %s format = %s", got.Members[0].Path, manifest.Format.Type)
 	}
 	if _, err := os.Stat(repo.ImagePath()); err != nil {
 		t.Fatal(err)
@@ -91,18 +103,18 @@ func TestValidateAcceptsDMGCompressionWithoutRegistry(t *testing.T) {
 	for _, compression := range []string{"ulfo", "ulmo", "udro"} {
 		meta := validMeta()
 		meta.Format = Format{Type: FormatDMG, Compression: compression}
-		if err := meta.Validate(); err != nil {
+		if err := meta.validate(); err != nil {
 			t.Errorf("dmg/%s: %v", compression, err)
 		}
 	}
 	meta := validMeta()
 	meta.Format = Format{Type: FormatDMG, Compression: "zstd"}
-	err := meta.Validate()
+	err := meta.validate()
 	if err == nil || !strings.Contains(err.Error(), `format.compression: dmg does not allow "zstd"`) {
 		t.Fatalf("zstd: %v", err)
 	}
 	meta.Format.Compression = ""
-	err = meta.Validate()
+	err = meta.validate()
 	if err == nil || !strings.Contains(err.Error(), `format.compression: dmg does not allow ""`) {
 		t.Fatalf("empty: %v", err)
 	}
@@ -111,33 +123,41 @@ func TestValidateAcceptsDMGCompressionWithoutRegistry(t *testing.T) {
 func TestEmptyChainDMGSurvivesPreparePublish(t *testing.T) {
 	repo := testRepo(t)
 	body := []byte("dmg-bytes")
-	meta := seedDMGActive(t, repo, body)
+	manifest := seedDMGActive(t, repo, body)
 
 	got, exists, err := preparePublish(repo, nil, hooks{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists || got.ID != meta.ID || got.Format.Type != FormatDMG {
+	root, err := got.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || root.ID != rootID(manifest) || got.Format.Type != FormatDMG {
 		t.Fatalf("preparePublish = %+v exists=%v", got, exists)
 	}
 	if err := repairTornActive(repo, hooks{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	assertDMGStillActive(t, repo, body, meta)
+	assertDMGStillActive(t, repo, body, manifest)
 
-	if payloadRoot(repo.Dir, meta) != filepath.Join(repo.Dir, ImageDMG) {
-		t.Fatalf("root = %s", payloadRoot(repo.Dir, meta))
+	if payloadRoot(repo.Dir, manifest) != filepath.Join(repo.Dir, ImageDMG) {
+		t.Fatalf("root = %s", payloadRoot(repo.Dir, manifest))
 	}
-	holdPath := holdPayloadPath("hold", meta)
+	holdPath, err := holdPayloadPath("hold", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if holdPath != filepath.Join("hold", ImageDMG) {
 		t.Fatalf("hold = %s", holdPath)
 	}
-	ok, err := payloadMatchesMeta(repo, meta)
+	ok, err := payloadMatchesMeta(repo, manifest)
 	if err != nil || !ok {
 		t.Fatalf("dmg match = %v %v", ok, err)
 	}
-	squash := meta
+	squash := manifest
 	squash.Format.Type = FormatSquashfs
+	squash.Format.Compression = CompressionZstd
 	ok, err = payloadMatchesMeta(repo, squash)
 	if err != nil || ok {
 		t.Fatalf("squashfs matched image.dmg: %v %v", ok, err)
@@ -147,25 +167,28 @@ func TestEmptyChainDMGSurvivesPreparePublish(t *testing.T) {
 func TestRepairRestoresEmptyChainDMGFromHold(t *testing.T) {
 	repo := testRepo(t)
 	body := []byte("held-dmg")
-	meta := metaFor(body)
-	meta.Format = Format{Type: FormatDMG, Compression: "ulfo"}
-	if len(meta.Chain) != 0 {
+	manifest := manifestFor(body)
+	manifest.Format = Format{Type: FormatDMG, Compression: "ulfo"}
+	if len(manifest.Images) != 1 {
 		t.Fatal("fixture chain is not empty")
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := repo.HoldPath(meta.ID)
+	hold, err := repo.HoldPath(rootID(manifest))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(hold, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	payload := holdPayloadPath(hold, meta)
+	payload, err := holdPayloadPath(hold, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if filepath.Base(payload) != ImageDMG {
 		t.Fatalf("held payload = %s", payload)
 	}
@@ -175,16 +198,16 @@ func TestRepairRestoresEmptyChainDMGFromHold(t *testing.T) {
 	if err := repairTornActive(repo, hooks{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	assertDMGStillActive(t, repo, body, meta)
+	assertDMGStillActive(t, repo, body, manifest)
 	assertGone(t, hold)
 }
 
 func TestPreparePublishKeepsSquashfsOnImageSqsh(t *testing.T) {
 	repo := testRepo(t)
 	body := []byte("sqsh-bytes")
-	meta := seedActive(t, repo, body, false)
-	if meta.Format.Type != FormatSquashfs || len(meta.Chain) != 0 {
-		t.Fatalf("fixture = %+v", meta.Format)
+	manifest := seedActive(t, repo, body, false)
+	if manifest.Format.Type != FormatSquashfs || len(manifest.Images) != 1 {
+		t.Fatalf("fixture = %+v", manifest.Format)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, ImageDMG)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("fixture included image.dmg")
@@ -193,35 +216,43 @@ func TestPreparePublishKeepsSquashfsOnImageSqsh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists || got.SHA256 != meta.SHA256 {
+	root, err := got.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || root.SHA256 != rootOf(manifest).SHA256 {
 		t.Fatalf("preparePublish = %+v exists=%v", got, exists)
 	}
 	assertBytes(t, repo.ImagePath(), body)
 	if _, err := os.Stat(filepath.Join(repo.Dir, ImageDMG)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("repair created image.dmg")
 	}
-	if payloadRoot(repo.Dir, meta) != repo.ImagePath() {
-		t.Fatalf("root = %s", payloadRoot(repo.Dir, meta))
+	if payloadRoot(repo.Dir, manifest) != repo.ImagePath() {
+		t.Fatalf("root = %s", payloadRoot(repo.Dir, manifest))
 	}
-	if holdPayloadPath("hold", meta) != filepath.Join("hold", ImageFile) {
-		t.Fatalf("hold = %s", holdPayloadPath("hold", meta))
+	holdPath, err := holdPayloadPath("hold", manifest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	erofs := meta
+	if holdPath != filepath.Join("hold", ImageFile) {
+		t.Fatalf("hold = %s", holdPath)
+	}
+	erofs := manifest
 	erofs.Format.Type = FormatErofs
 	if payloadRoot(repo.Dir, erofs) != filepath.Join(repo.Dir, ImageFile) {
 		t.Fatalf("erofs root = %s", payloadRoot(repo.Dir, erofs))
 	}
-	ok, err := payloadMatchesMeta(repo, meta)
+	ok, err := payloadMatchesMeta(repo, manifest)
 	if err != nil || !ok {
 		t.Fatalf("squashfs match = %v %v", ok, err)
 	}
 }
 
-func seedDMGActive(t *testing.T, repo Repo, body []byte) Meta {
+func seedDMGActive(t *testing.T, repo Repo, body []byte) Manifest {
 	t.Helper()
-	meta := metaFor(body)
-	meta.Format = Format{Type: FormatDMG, Compression: "ulfo"}
-	if len(meta.Chain) != 0 {
+	manifest := manifestFor(body)
+	manifest.Format = Format{Type: FormatDMG, Compression: "ulfo"}
+	if len(manifest.Images) != 1 {
 		t.Fatal("fixture chain is not empty")
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
@@ -230,16 +261,16 @@ func seedDMGActive(t *testing.T, repo Repo, body []byte) Meta {
 	if err := os.WriteFile(filepath.Join(repo.Dir, ImageDMG), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(repo.ImagePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("fixture must not include image.sqsh")
 	}
-	return meta
+	return manifest
 }
 
-func assertDMGStillActive(t *testing.T, repo Repo, body []byte, meta Meta) {
+func assertDMGStillActive(t *testing.T, repo Repo, body []byte, manifest Manifest) {
 	t.Helper()
 	assertBytes(t, filepath.Join(repo.Dir, ImageDMG), body)
 	if _, err := os.Stat(repo.ImagePath()); !errors.Is(err, os.ErrNotExist) {
@@ -252,7 +283,8 @@ func assertDMGStillActive(t *testing.T, repo Repo, body []byte, meta Meta) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.HasActive || state.Active.ID != meta.ID || state.Active.Format.Type != FormatDMG {
+	if !state.HasActive || rootID(state.Active) != rootID(manifest) ||
+		state.Active.Format.Type != FormatDMG {
 		t.Fatalf("show state = %+v", state)
 	}
 }

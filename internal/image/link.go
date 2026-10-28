@@ -170,25 +170,26 @@ func digestRegularFile(path string) ([32]byte, int64, int64, error) {
 	return sum, info.Size(), info.ModTime().Unix(), nil
 }
 
-func linkMeta(repo Repo, typ, comp string, sum [32]byte, size, mtime int64, builder string) Meta {
+func linkMeta(repo Repo, typ, comp string, sum [32]byte, size, mtime int64, builder string) Manifest {
 	digest := hex.EncodeToString(sum[:])
 	now := linkNow().UTC()
-	return Meta{
+	return fullManifest(repo.Name(), Format{Type: typ, Compression: comp}, ImageMeta{
 		ID:        digest,
-		Name:      repo.Name(),
-		Version:   MetaVersion,
 		Kind:      KindFull,
-		Format:    Format{Type: typ, Compression: comp},
 		Size:      size,
 		SHA256:    digest,
 		MtimeUnix: mtime,
 		CreatedAt: now,
 		Builder:   builder,
-	}
+	})
 }
 
-func checkLinkIdle(repo Repo, absSrc string, next Meta) (bool, error) {
+func checkLinkIdle(repo Repo, absSrc string, next Manifest) (bool, error) {
 	if err := next.Validate(); err != nil {
+		return false, fmt.Errorf("link: %w", err)
+	}
+	nextRoot, err := next.Full()
+	if err != nil {
 		return false, fmt.Errorf("link: %w", err)
 	}
 	existing, exists, err := linkExisting(repo)
@@ -201,37 +202,41 @@ func checkLinkIdle(repo Repo, absSrc string, next Meta) (bool, error) {
 		}
 		return false, nil
 	}
-	if existing.SHA256 == next.SHA256 && existing.Size == next.Size {
+	existingRoot, err := existing.Full()
+	if err != nil {
+		return false, fmt.Errorf("link: %w", err)
+	}
+	if existingRoot.SHA256 == nextRoot.SHA256 && existingRoot.Size == nextRoot.Size {
 		target, ok, err := readLinkTarget(repo, next.Format.Type)
 		if err != nil {
 			return false, err
 		}
 		// Re-registering the same external file is a no-op even when
 		// incremental layers sit on top: the idle path keeps meta,
-		// chain, and leaf untouched, so only a payload *replacing*
-		// link has to clear the chain guard below.
+		// DAG, and leaf untouched, so only a payload *replacing*
+		// link has to clear the branch guard below.
 		if ok && target == absSrc {
 			return true, nil
 		}
 	}
-	if len(existing.Chain) > 0 {
+	if len(existing.Images) > 1 {
 		return false, fmt.Errorf("link: active image has incremental chain")
 	}
 	return false, linkConflict(repo, absSrc, existing, next)
 }
 
-func linkExisting(repo Repo) (Meta, bool, error) {
-	meta, err := Load(repo.MetaPath())
+func linkExisting(repo Repo) (Manifest, bool, error) {
+	manifest, err := LoadManifest(repo.MetaPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return Meta{}, false, nil
+		return Manifest{}, false, nil
 	}
 	if err != nil {
-		return Meta{}, false, err
+		return Manifest{}, false, err
 	}
-	return meta, true, nil
+	return manifest, true, nil
 }
 
-func checkStrayPayload(dir, absSrc string, next Meta) error {
+func checkStrayPayload(dir, absSrc string, next Manifest) error {
 	payloadPath := filepath.Join(dir, activeImageName(next.Format.Type))
 	target, ok, err := readExternalLinkTarget(payloadPath)
 	if err != nil {
@@ -260,7 +265,7 @@ func readLinkTarget(repo Repo, typ string) (string, bool, error) {
 	return target, ok, nil
 }
 
-func linkConflict(repo Repo, absSrc string, existing, next Meta) error {
+func linkConflict(repo Repo, absSrc string, existing, next Manifest) error {
 	target, ok, err := readLinkTarget(repo, existing.Format.Type)
 	if err != nil {
 		return err
@@ -271,7 +276,15 @@ func linkConflict(repo Repo, absSrc string, existing, next Meta) error {
 	if !ok {
 		return fmt.Errorf("link: active payload is not an external link")
 	}
-	if existing.SHA256 != next.SHA256 || existing.Size != next.Size {
+	existingRoot, err := existing.Full()
+	if err != nil {
+		return fmt.Errorf("link: %w", err)
+	}
+	nextRoot, err := next.Full()
+	if err != nil {
+		return fmt.Errorf("link: %w", err)
+	}
+	if existingRoot.SHA256 != nextRoot.SHA256 || existingRoot.Size != nextRoot.Size {
 		return fmt.Errorf("link: active meta does not match external file")
 	}
 	return fmt.Errorf("link: active image conflicts with external link")
@@ -305,8 +318,8 @@ func writeLinkExternal(absSrc, payloadPath string) error {
 	return nil
 }
 
-func writeLinkMeta(repo Repo, meta Meta, seam hooks) error {
-	body, err := Encode(meta)
+func writeLinkMeta(repo Repo, manifest Manifest, seam hooks) error {
+	body, err := EncodeManifest(manifest)
 	if err != nil {
 		return fmt.Errorf("link: %w", err)
 	}

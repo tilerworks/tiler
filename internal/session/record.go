@@ -71,6 +71,25 @@ type Action struct {
 	// FullID is the resolved full image id, empty for a file-path
 	// image.
 	FullID string `json:"full_id,omitempty"`
+	// TipID is the tip of the desired stack: the topmost layer id
+	// the mount resolved, equal to FullID when the stack holds only
+	// the full image and empty for a file-path image or a record
+	// written before the field existed. Replay reads an empty tip
+	// with the full-id-only semantics of those older records. The
+	// JSON key is additive and omitempty, so an older record
+	// round-trips unchanged.
+	TipID string `json:"tip_id,omitempty"`
+	// ServedID is the full image id a live mount actually serves
+	// when the desired stack moved past it, empty while the live
+	// view serves the desired stack. A real remount on replay
+	// clears it again. Only overlay views of library images carry
+	// it; a file-path or dmg action leaves it empty. The JSON key
+	// is additive and omitempty, so an older record round-trips
+	// unchanged.
+	ServedID string `json:"served_id,omitempty"`
+	// ServedTip is the stack tip id a live mount actually serves,
+	// paired with ServedID under the same rules.
+	ServedTip string `json:"served_tip,omitempty"`
 	// Mountpoint is the directory serving the view.
 	Mountpoint string `json:"mountpoint"`
 	// Mode is ro or rw for a mount; other action types leave it

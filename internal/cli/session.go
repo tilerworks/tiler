@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"time"
 
@@ -98,15 +99,19 @@ func newSessionOpenCmd() *cobra.Command {
 		Long: "Open replays the session record in mount order: a healthy\n" +
 			"view is skipped, a dead or missing one is cleaned and\n" +
 			"remounted, so the command is idempotent and is the recovery\n" +
-			"entry point after a crash. A closed session resumes the same\n" +
-			"way: its views remount and the record becomes active again.",
+			"entry point after a crash. A view whose image was rebuilt\n" +
+			"while it stayed live remounts onto the new stack, and the\n" +
+			"reused upper is pruned of what the new lower stack already\n" +
+			"carries. A closed session resumes the same way: its views\n" +
+			"remount and the record becomes active again.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, engine, err := sessionCommandEngine(cmd, "session open", args[0])
 			if err != nil {
 				return err
 			}
-			if err := engine.Open(args[0], sessionMount(cfg, args[0])); err != nil {
+			mount := sessionMount(cfg, args[0], cmd.ErrOrStderr())
+			if err := engine.Open(args[0], mount); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "opened %s\n", args[0])
@@ -270,19 +275,37 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 	return engine
 }
 
+// resolveStackTip expands one recorded pin (name, full id, tip id)
+// into its resolved stack target. Replay resolves the desired pin of
+// a mount action and the served pin a rebase froze through it. It is
+// a variable so command tests can inject fake stack resolutions;
+// production keeps the real resolver.
+var resolveStackTip = image.ResolveStackTip
+
 // sessionMount resolves one recorded action back into an engine
-// request: a pin (name + FullID) uses ResolvePinned so a hold leaf
-// stays paired with the recorded upper; empty FullID keeps today's
-// name-only ResolveMount. The execution shares the mount command's
-// engine half and reuses sessions/<name>/runtime/m<seq>.
-func sessionMount(cfg config.Config, name string) session.MountFunc {
+// request: a pin (name + FullID + TipID) is the desired stack the
+// record froze at mount or rebase time. ResolveStackTip expands it
+// through the active leaf while that still roots at FullID and holds
+// TipID, and through the hold leaf otherwise, so a rebased record
+// mounts the new image and a stack an external build replaced stays
+// paired with the recorded upper. Replay never chases a later head
+// move; the DAG keeps branch tips resolvable. An empty TipID keeps
+// the full-id-only semantics of older records, and an empty FullID
+// keeps today's name-only ResolveMount. A rebased record also names
+// the served stack its live view froze at; when that stack resolves
+// to other lower layers than the desired stack, the request asks the
+// engine to prune the reused upper of what the new lowers already
+// serve. The execution shares the mount command's engine half and
+// reuses sessions/<name>/runtime/m<seq>. Warnings that do not fail
+// the replay print to warn.
+func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		var (
 			target image.Target
 			err    error
 		)
 		if action.Name != "" && action.FullID != "" {
-			target, err = image.ResolvePinned(cfg, action.Name, action.FullID)
+			target, err = resolveStackTip(cfg, action.Name, action.FullID, action.TipID)
 		} else {
 			target, err = image.ResolveMount(cfg, action.Image)
 		}
@@ -290,10 +313,73 @@ func sessionMount(cfg config.Config, name string) session.MountFunc {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}
 		return runMountEngine(cfg, target, action.Mountpoint, mountFlags{
-			readOnly: action.Mode == session.ModeRO,
-			subdir:   action.Subdir,
+			readOnly:   action.Mode == session.ModeRO,
+			subdir:     action.Subdir,
+			pruneUpper: replayPruneUpper(cfg, action, target, warn),
 		}, sessionRuntimeDir(cfg, name, action), nil)
 	}
+}
+
+// replayPruneUpper reports whether replaying one recorded action
+// must prune the reused upper before the merge. Only a rebased
+// record carries served ids: the stack the live view actually
+// served when a build moved the desired stack past it. The served
+// pin resolves through the same seam as the desired pin, and two
+// different ordered member id lists mean the lower layers changed,
+// so the reused upper may hold entries the new lowers already
+// serve. Pruning is an optimization: a record without served ids
+// never prunes — older records predate the fields, a dmg view is
+// never rebased, and a file-path image records no pin — and a
+// served stack that no longer resolves warns and skips the prune
+// instead of failing the replay.
+func replayPruneUpper(
+	cfg config.Config,
+	action session.Action,
+	desired image.Target,
+	warn io.Writer,
+) bool {
+	if action.ServedID == "" && action.ServedTip == "" {
+		return false
+	}
+	if action.Name == "" || action.FullID == "" {
+		return false
+	}
+	served, err := resolveStackTip(cfg, action.Name, action.ServedID, action.ServedTip)
+	if err != nil {
+		_, _ = fmt.Fprintf(warn,
+			"warning: session: replay %s: the served stack %s no longer"+
+				" resolves; the reused upper stays unpruned: %v\n",
+			action.Image, describeServedPin(action), err)
+		return false
+	}
+	return !slices.Equal(stackIDs(served), stackIDs(desired))
+}
+
+// describeServedPin renders the served pin of one recorded action for
+// the prune-skip warning. A pin recorded without a tip — the
+// full-id-only spelling a rebase may freeze — quotes the id alone,
+// and a hand-edited record carrying only a tip quotes the tip alone;
+// neither leaves a dangling "tip" word or an empty half in the
+// message. Callers reach it only when one half is set.
+func describeServedPin(action session.Action) string {
+	switch {
+	case action.ServedID == "":
+		return "tip " + action.ServedTip
+	case action.ServedTip == "":
+		return action.ServedID
+	default:
+		return action.ServedID + " tip " + action.ServedTip
+	}
+}
+
+// stackIDs lists the member ids of one resolved target in mount
+// order, the full image root first.
+func stackIDs(target image.Target) []string {
+	ids := make([]string, len(target.Members))
+	for i, member := range target.Members {
+		ids[i] = member.ID
+	}
+	return ids
 }
 
 // sessionUmount tears one recorded point down through the same

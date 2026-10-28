@@ -334,6 +334,165 @@ func TestOpenRemountsTornDownViewsAndIgnoresUmountActions(t *testing.T) {
 	}
 }
 
+// The stack ids of the served-stack fixtures: a desired tip and the
+// served pair a rebuild left behind while the live view still serves
+// the replaced stack.
+const (
+	fixtureTip       = "fedcba9876543210"
+	fixtureServedID  = "abcdef0123456789"
+	fixtureServedTip = "9999888877776666"
+)
+
+// seedServedMounted records one mounted action carrying a desired
+// tip and served stack ids, through the real write-ahead path.
+func seedServedMounted(t *testing.T, e *Engine, name, point string) {
+	t.Helper()
+	action := mountAction(point)
+	action.TipID = fixtureTip
+	action.ServedID = fixtureServedID
+	action.ServedTip = fixtureServedTip
+	stored, err := e.Append(name, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Writeback(name, stored.Seq, StatusMounted, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenReplayClearsServedAfterRealRemount(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view1 := filepath.Join(dir, "view1")
+	view2 := filepath.Join(dir, "view2")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view1)
+	seedServedMounted(t, e, "dev", view2)
+	// view1 is stale and remounts for real; view2 stays healthy and
+	// is skipped, so its live view still serves the replaced stack.
+	e.Health = func(point string) bool { return point == view2 }
+	e.Clean = func(string) error { return nil }
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remounted := rec.Actions[0]
+	if remounted.Status != StatusMounted {
+		t.Fatalf("remounted action = %+v, want mounted", remounted)
+	}
+	if remounted.ServedID != "" || remounted.ServedTip != "" {
+		t.Errorf("a real remount kept the served stack: %+v", remounted)
+	}
+	if remounted.FullID != "0123456789abcdef" || remounted.TipID != fixtureTip {
+		t.Errorf("a real remount changed the desired stack: %+v", remounted)
+	}
+	skipped := rec.Actions[1]
+	if skipped.ServedID != fixtureServedID || skipped.ServedTip != fixtureServedTip {
+		t.Errorf("a healthy skipped view lost its served stack: %+v", skipped)
+	}
+}
+
+func TestOpenReplayKeepsServedOnReusedView(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view)
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error { return nil }
+	// The engine adopted an already-healthy view: nothing remounted
+	// for real, so the record must keep describing the stack the
+	// live view actually serves.
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint, Reused: true}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := rec.Actions[0]
+	if action.Status != StatusMounted {
+		t.Fatalf("action = %+v, want mounted", action)
+	}
+	if action.ServedID != fixtureServedID || action.ServedTip != fixtureServedTip {
+		t.Errorf("an adopted view lost its served stack: %+v", action)
+	}
+}
+
+// TestOpenReconcileOfProvenMountClearsServed pins the heal of the
+// mount-succeeded-but-not-yet-written window: a crash after a real
+// remount left the action pending or failed while its served ids
+// still name the replaced stack. Reality proves the execution ran,
+// so the reconcile to mounted empties the served pair in the same
+// writeback instead of stranding it beside status=mounted forever.
+func TestOpenReconcileOfProvenMountClearsServed(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			e := newEngine(dir)
+			view := filepath.Join(dir, "view")
+			if err := e.New("dev"); err != nil {
+				t.Fatal(err)
+			}
+			action := mountAction(view)
+			action.TipID = fixtureTip
+			action.ServedID = fixtureServedID
+			action.ServedTip = fixtureServedTip
+			if _, err := e.Append("dev", action); err != nil {
+				t.Fatal(err)
+			}
+			if status == StatusFailed {
+				if err := e.Writeback("dev", 1, StatusFailed, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var log callLog
+			e.Health = func(string) bool { return true }
+			e.Clean = func(point string) error {
+				log.add("clean %s", filepath.Base(point))
+				return nil
+			}
+			mount := func(a Action) (Result, error) {
+				log.add("mount %d", a.Seq)
+				return Result{Mountpoint: a.Mountpoint}, nil
+			}
+			if err := e.Open("dev", mount); err != nil {
+				t.Fatal(err)
+			}
+			if len(log.calls) != 0 {
+				t.Fatalf("a proven mount was cleaned or remounted: %v", log.calls)
+			}
+			rec, err := e.Load("dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := rec.Actions[0]
+			if got.Status != StatusMounted {
+				t.Fatalf("action = %+v, want the reconciled mounted status", got)
+			}
+			if got.ServedID != "" || got.ServedTip != "" {
+				t.Errorf("the reconcile kept the replaced served stack: %+v", got)
+			}
+			if got.TipID != fixtureTip {
+				t.Errorf("the reconcile changed the desired stack: %+v", got)
+			}
+		})
+	}
+}
+
 func TestOpenReconcilesHealthyPendingActionWithoutRemount(t *testing.T) {
 	dir := t.TempDir()
 	e := newEngine(dir)
@@ -784,6 +943,324 @@ func TestReleaseMountMarksActionUnmountedWithoutClosing(t *testing.T) {
 	if rec.Actions[0].Status != StatusUnmounted {
 		t.Fatalf("action = %+v, want unmounted", rec.Actions[0])
 	}
+}
+
+// rebaseFull and rebaseTip are the new stack ids a rebase moves the
+// desired side to in the engine fixtures.
+const (
+	rebaseFull = "1111111111111111"
+	rebaseTip  = "2222222222222222"
+)
+
+func TestRebaseMountedStackMovesDesiredAndRecordsServed(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	seedMounted(t, e, "dev", view)
+	if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := rec.Actions[0]
+	if action.FullID != rebaseFull || action.TipID != rebaseTip {
+		t.Fatalf("desired stack not rebased: %+v", action)
+	}
+	// The live view still serves the replaced stack: a legacy record
+	// with no tip names the full id on both served sides.
+	if action.ServedID != "0123456789abcdef" || action.ServedTip != "0123456789abcdef" {
+		t.Errorf("served stack = (%q, %q), want the replaced full on both sides",
+			action.ServedID, action.ServedTip)
+	}
+	if action.Status != StatusMounted {
+		t.Errorf("status = %q, want untouched mounted", action.Status)
+	}
+	// Rebasing onto the very same stack again is a pure no-op: the
+	// served pair keeps naming the replaced stack, not the desired.
+	if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+		t.Fatal(err)
+	}
+	rec, err = e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action = rec.Actions[0]
+	if action.ServedID != "0123456789abcdef" || action.ServedTip != "0123456789abcdef" {
+		t.Errorf("an identical rebase rewrote the served stack: %+v", action)
+	}
+}
+
+func TestRebaseMountedStackHitsSymlinkedMountpoint(t *testing.T) {
+	// The mountpoint compares through SameMountPoint, so the build
+	// and the record may spell the same view differently: the /tmp
+	// versus /private/tmp shape, in either direction.
+	link, resolved := symlinkDir(t, "view")
+	for _, tc := range []struct {
+		what     string
+		recorded string
+		query    string
+	}{
+		{"recorded concrete, queried through the symlink", resolved, link},
+		{"recorded symlink, queried resolved", link, resolved},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			dir := t.TempDir()
+			e := newEngine(dir)
+			seedMounted(t, e, "dev", tc.recorded)
+			if err := e.RebaseMountedStack(tc.query, "alice/app",
+				rebaseFull, rebaseTip); err != nil {
+				t.Fatal(err)
+			}
+			rec, err := e.Load("dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			action := rec.Actions[0]
+			if action.FullID != rebaseFull || action.TipID != rebaseTip {
+				t.Fatalf("the symlinked spelling did not hit: %+v", action)
+			}
+			if action.ServedID != "0123456789abcdef" || action.ServedTip != "0123456789abcdef" {
+				t.Errorf("served stack = (%q, %q), want the replaced full on both sides",
+					action.ServedID, action.ServedTip)
+			}
+		})
+	}
+}
+
+func TestRebaseMountedStackChainedKeepsOriginalServed(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view)
+	// Two builds in a row from the same view: the live mount never
+	// moved, so the served pair must keep naming the original stack.
+	const secondFull = "3333333333333333"
+	const secondTip = "4444444444444444"
+	if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RebaseMountedStack(view, "alice/app", secondFull, secondTip); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := rec.Actions[0]
+	if action.FullID != secondFull || action.TipID != secondTip {
+		t.Errorf("desired stack = (%q, %q), want the second build", action.FullID, action.TipID)
+	}
+	if action.ServedID != fixtureServedID || action.ServedTip != fixtureServedTip {
+		t.Errorf("served stack = (%q, %q), want the original (%q, %q)",
+			action.ServedID, action.ServedTip, fixtureServedID, fixtureServedTip)
+	}
+}
+
+func TestRebaseMountedStackMissesLeaveRecordUntouched(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	other := filepath.Join(dir, "other")
+	seedMounted(t, e, "dev", view, other)
+	// Tear the second action down: an unmounted action is no live
+	// view and never rebases.
+	if err := e.Writeback("dev", 2, StatusUnmounted, ""); err != nil {
+		t.Fatal(err)
+	}
+	// A third action mounts a file-path image: it records no
+	// library name, so not even an empty-name query may hit it.
+	bare := filepath.Join(dir, "bare")
+	mount := func(a Action) (Result, error) { return Result{Mountpoint: a.Mountpoint}, nil }
+	if _, err := e.RunMount("dev", Action{
+		Type:       TypeMount,
+		Image:      filepath.Join(dir, "bare.sqsh"),
+		Mountpoint: bare,
+		Mode:       ModeRO,
+	}, mount); err != nil {
+		t.Fatal(err)
+	}
+	before, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, miss := range []struct {
+		what       string
+		mountpoint string
+		name       string
+	}{
+		{"an unmounted point", other, "alice/app"},
+		{"a point no record covers", filepath.Join(dir, "absent"), "alice/app"},
+		{"another image name", view, "bob/app"},
+		{"the empty library name", view, ""},
+		{"the empty mountpoint", "", "alice/app"},
+		{"the empty name on a file-path action", bare, ""},
+	} {
+		t.Run(miss.what, func(t *testing.T) {
+			if err := e.RebaseMountedStack(miss.mountpoint, miss.name,
+				rebaseFull, rebaseTip); err != nil {
+				t.Fatal(err)
+			}
+			after, err := e.Load("dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range before.Actions {
+				if after.Actions[i] != before.Actions[i] {
+					t.Fatalf("action %d changed: %+v", i, after.Actions[i])
+				}
+			}
+		})
+	}
+	// A positive control: the live first action at its own point
+	// still rebases after all the misses, while its unmounted and
+	// file-path siblings in the same record stay out of the hit.
+	if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Actions[0].FullID != rebaseFull || rec.Actions[0].TipID != rebaseTip {
+		t.Errorf("the live action was not rebased: %+v", rec.Actions[0])
+	}
+	if rec.Actions[1].FullID != "0123456789abcdef" || rec.Actions[1].ServedID != "" {
+		t.Errorf("the unmounted action was rebased: %+v", rec.Actions[1])
+	}
+	if rec.Actions[2].FullID != "" || rec.Actions[2].ServedID != "" {
+		t.Errorf("the file-path action was rebased: %+v", rec.Actions[2])
+	}
+}
+
+func TestRebaseMountedStackSkipsClosedRecords(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	seedMounted(t, e, "dev", view)
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateClosed {
+		t.Fatalf("state = %s, want closed", rec.State)
+	}
+	for _, action := range rec.Actions {
+		if action.FullID == rebaseFull || action.ServedID != "" {
+			t.Fatalf("a closed record was rebased: %+v", action)
+		}
+	}
+}
+
+func TestRebaseMountedStackReportsBusyLock(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	seedMounted(t, e, "dev", view)
+	// A concurrent lifecycle operation holds the exclusive lock: the
+	// rewrite reports the busy lock instead of racing the holder.
+	e.Lock = func(string, time.Duration) (func(), error) {
+		return nil, ErrLockHeld
+	}
+	err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip)
+	if !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("RebaseMountedStack error = %v, want ErrLockHeld", err)
+	}
+	e.Lock = func(string, time.Duration) (func(), error) {
+		return func() {}, nil
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Actions[0].FullID != "0123456789abcdef" || rec.Actions[0].ServedID != "" {
+		t.Fatalf("a refused rebase rewrote the record: %+v", rec.Actions[0])
+	}
+}
+
+func TestRebaseMountedStackRechecksRecordUnderLock(t *testing.T) {
+	t.Run("closed between the scan and the lock", func(t *testing.T) {
+		dir := t.TempDir()
+		e := newEngine(dir)
+		view := filepath.Join(dir, "view")
+		seedMounted(t, e, "dev", view)
+		// A concurrent close flips the record after the scan already
+		// picked the candidate: the mutating lock re-checks the
+		// state and backs off without rewriting.
+		calls := 0
+		e.Lock = func(string, time.Duration) (func(), error) {
+			calls++
+			if calls == 1 {
+				raw := Store{Dir: dir}
+				rec, err := raw.Load("dev")
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec.State = StateClosed
+				rec.ClosedAt = testNow
+				if err := raw.Save(rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return func() {}, nil
+		}
+		if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Errorf("lock acquisitions = %d, want the one scanned candidate", calls)
+		}
+		rec, err := e.Load("dev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.State != StateClosed {
+			t.Fatalf("state = %s, want closed", rec.State)
+		}
+		for _, action := range rec.Actions {
+			if action.FullID != "0123456789abcdef" || action.ServedID != "" {
+				t.Errorf("a record closed under the lock was rebased: %+v", action)
+			}
+		}
+	})
+	t.Run("removed between the scan and the lock", func(t *testing.T) {
+		dir := t.TempDir()
+		e := newEngine(dir)
+		view := filepath.Join(dir, "view")
+		seedMounted(t, e, "dev", view)
+		// A concurrent remove deletes the record after the scan
+		// picked the candidate: the under-lock Load reports
+		// ErrNotFound and the rebase stays a silent no-op.
+		calls := 0
+		e.Lock = func(string, time.Duration) (func(), error) {
+			calls++
+			if calls == 1 {
+				if err := (Store{Dir: dir}).deleteRecordFiles("dev"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return func() {}, nil
+		}
+		if err := e.RebaseMountedStack(view, "alice/app", rebaseFull, rebaseTip); err != nil {
+			t.Fatalf("RebaseMountedStack = %v, want a silent no-op", err)
+		}
+		if calls != 1 {
+			t.Errorf("lock acquisitions = %d, want the one scanned candidate", calls)
+		}
+		if _, err := e.Load("dev"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Load after the remove = %v, want ErrNotFound", err)
+		}
+	})
 }
 
 func TestCloseRemovableForDeletesIdleRemovable(t *testing.T) {

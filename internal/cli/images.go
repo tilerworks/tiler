@@ -36,14 +36,16 @@ func newImagesListCmd() *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List active images",
-		Long: "Print one aligned row per active image: name, id, creation\n" +
-			"date, size, chain length, payload form, and the archive and\n" +
-			"hold counts. The id column is a 10-hex prefix of the payload\n" +
-			"sha256; that prefix locates the image when it is unique in\n" +
-			"the library leaf. --archives adds those parked chain ids,\n" +
-			"shortened the same way, under each row. --json keeps the\n" +
-			"full sha256 in a machine-readable document. Use 'images\n" +
-			"show' for one repository in detail.",
+		Long: "Print one aligned row per active image: name, id, head,\n" +
+			"creation date, size, chain length, branch count, payload\n" +
+			"form, and the archive and hold counts. The id column is a\n" +
+			"10-hex prefix of the full image payload sha256; that prefix\n" +
+			"locates the image when it is unique in the library leaf. The\n" +
+			"head column is the shortened active stack tip, and branch\n" +
+			"counts the DAG layers off the head stack. --archives adds\n" +
+			"those parked chain ids, shortened the same way, under each\n" +
+			"row. --json keeps the full sha256 in a machine-readable\n" +
+			"document. Use 'images show' for one repository in detail.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -66,9 +68,10 @@ func newImagesShowCmd() *cobra.Command {
 		Long: "Show prints a multi-line record for one active image.\n" +
 			"<name|id> is a 1-to-5 segment library name, or a full\n" +
 			"payload sha256 / unique hex prefix from images list. The\n" +
-			"record covers identity, the container format, each chain\n" +
-			"layer, the split payload, and the parked archive and hold\n" +
-			"ids. --json renders the same repository as one\n" +
+			"record covers identity, the active head tip, the container\n" +
+			"format, each chain layer, the count of branch layers off\n" +
+			"the head stack, the split payload, and the parked archive\n" +
+			"and hold ids. --json renders the same repository as one\n" +
 			"machine-readable object.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -196,7 +199,9 @@ const detailKeyWidth = 10
 
 // imageTableHeader names the short-list columns. Widths grow to fit
 // the values printed under them.
-var imageTableHeader = []string{"NAME", "ID", "CREATED", "SIZE", "CHAIN", "FORM", "ARCH", "HOLD"}
+var imageTableHeader = []string{
+	"NAME", "ID", "HEAD", "CREATED", "SIZE", "CHAIN", "BRANCH", "FORM", "ARCH", "HOLD",
+}
 
 // writeImageTable prints the short list: a header and one space-aligned
 // row per active image. A deprecated image and a recorded ref or
@@ -244,19 +249,24 @@ type imageTableRow struct {
 }
 
 func newImageTableRow(named namedState) imageTableRow {
-	meta := named.state.Active
+	manifest := named.state.Active
+	// Full only fails on a hand-built state without a root; the
+	// zero node then renders empty columns.
+	root, _ := manifest.Full()
 	var suffix []string
-	if meta.Deprecated {
+	if root.Deprecated {
 		suffix = append(suffix, "deprecated")
 	}
 	return imageTableRow{
 		cols: []string{
 			named.name,
-			listID(meta.ID),
-			meta.CreatedAt.UTC().Format("2006-01-02"),
-			formatSize(meta.Size),
-			strconv.Itoa(shownChainLength(meta)),
-			image.PayloadKind(meta),
+			listID(root.ID),
+			listID(manifest.Head),
+			root.CreatedAt.UTC().Format("2006-01-02"),
+			formatSize(root.Size),
+			strconv.Itoa(shownChainLength(manifest)),
+			strconv.Itoa(manifest.Branches()),
+			manifest.PayloadKind(),
 			strconv.Itoa(len(named.state.Archives)),
 			strconv.Itoa(len(named.state.Holds)),
 		},
@@ -301,41 +311,51 @@ func writePadded(w io.Writer, cols []string, widths []int, suffix string, padLas
 // writeImageDetail prints the multi-line record of one image. Parked
 // chain ids are always included.
 func writeImageDetail(w io.Writer, name string, state image.State) error {
-	meta := state.Active
+	manifest := state.Active
+	root, err := manifest.Full()
+	if err != nil {
+		return fmt.Errorf("images show: %w", err)
+	}
 	if _, err := fmt.Fprintln(w, name); err != nil {
 		return err
 	}
 	fields := [][2]string{
-		{"id", meta.ID},
-		{"created", meta.CreatedAt.UTC().Format(time.RFC3339)},
-		{"size", fmt.Sprintf("%d (%s)", meta.Size, formatSize(meta.Size))},
-		{"sha256", meta.SHA256},
-		{"form", image.PayloadKind(meta)},
+		{"id", root.ID},
+		{"head", manifest.Head},
+		{"created", root.CreatedAt.UTC().Format(time.RFC3339)},
+		{"size", fmt.Sprintf("%d (%s)", root.Size, formatSize(root.Size))},
+		{"sha256", root.SHA256},
+		{"form", manifest.PayloadKind()},
 	}
-	if line := formatDetail(meta.Format); line != "" {
+	if line := formatDetail(manifest.Format); line != "" {
 		fields = append(fields, [2]string{"format", line})
 	}
-	if meta.Builder != "" {
-		fields = append(fields, [2]string{"builder", meta.Builder})
+	if root.Builder != "" {
+		fields = append(fields, [2]string{"builder", root.Builder})
 	}
-	if meta.Deprecated {
+	if root.Deprecated {
 		fields = append(fields, [2]string{"deprecated", "true"})
 	}
-	fields = append(fields, [2]string{"chain", strconv.Itoa(shownChainLength(meta))})
+	fields = append(fields, [2]string{"chain", strconv.Itoa(shownChainLength(manifest))})
+	fields = append(fields, [2]string{"branches", strconv.Itoa(manifest.Branches())})
 	for _, field := range fields {
 		if err := writeDetailField(w, field[0], field[1]); err != nil {
 			return err
 		}
 	}
-	for _, entry := range meta.Chain {
+	stack, err := manifest.HeadStack()
+	if err != nil {
+		return fmt.Errorf("images show: %w", err)
+	}
+	for _, node := range stack[1:] {
 		if _, err := fmt.Fprintf(w, "    %s  parent=%s  %s  %s\n",
-			entry.ID, entry.Parent, formatSize(entry.Size),
-			entry.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+			node.ID, node.Parent, formatSize(node.Size),
+			node.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
-	if image.PayloadKind(meta) == image.PayloadBlocks {
-		if err := writeDetailField(w, "blocks", strconv.Itoa(len(meta.Blocks))); err != nil {
+	if manifest.PayloadKind() == image.PayloadBlocks {
+		if err := writeDetailField(w, "blocks", strconv.Itoa(len(root.Blocks))); err != nil {
 			return err
 		}
 	}
@@ -363,13 +383,18 @@ func writeDetailField(w io.Writer, key, value string) error {
 	return err
 }
 
-// shownChainLength is the chain length images list and show print.
-// A dmg records an empty chain and still counts as one payload, so
-// the length is the base image plus any entries. Other formats keep
-// the incremental-entry count.
-func shownChainLength(meta image.Meta) int {
-	n := len(meta.Chain)
-	if meta.Format.Type == image.FormatDMG {
+// shownChainLength is the chain length images list and show print:
+// the incremental nodes of the head stack. A dmg records an empty
+// chain and still counts as one payload, so the length is the base
+// image plus any entries. Other formats keep the incremental-node
+// count. Branch layers off the head stack count in the branches
+// column instead.
+func shownChainLength(manifest image.Manifest) int {
+	n := 0
+	if stack, err := manifest.HeadStack(); err == nil {
+		n = len(stack) - 1
+	}
+	if manifest.Format.Type == image.FormatDMG {
 		return 1 + n
 	}
 	return n
@@ -449,12 +474,15 @@ type imageJSON struct {
 	Holds    []string `json:"holds"`
 }
 
-// metaJSON is the active image of one repository. image.Meta stays
-// yaml-only; this view is the JSON contract. Times are RFC3339. The
-// form field is additive: it names a blocks active and stays absent
-// for the single-file default.
+// metaJSON is the active image of one repository. image.Manifest
+// stays yaml-only; this view is the JSON contract. Times are
+// RFC3339. The form field is additive: it names a blocks active and
+// stays absent for the single-file default. Head is the active
+// stack tip, branches counts the DAG nodes off the head stack, and
+// chain lists the head stack's incremental nodes in mount order.
 type metaJSON struct {
 	ID         string      `json:"id"`
+	Head       string      `json:"head"`
 	Version    string      `json:"version"`
 	Kind       string      `json:"kind"`
 	Form       string      `json:"form,omitempty"`
@@ -463,10 +491,11 @@ type metaJSON struct {
 	SHA256     string      `json:"sha256"`
 	CreatedAt  string      `json:"created_at"`
 	Deprecated bool        `json:"deprecated"`
+	Branches   int         `json:"branches"`
 	Chain      []chainJSON `json:"chain"`
 }
 
-// chainJSON is one incremental layer of the active image.
+// chainJSON is one incremental layer of the head stack.
 type chainJSON struct {
 	ID        string `json:"id"`
 	Parent    string `json:"parent"`
@@ -503,28 +532,38 @@ func newImageJSON(name string, state image.State, archives bool) imageJSON {
 	return view
 }
 
-func newMetaJSON(meta image.Meta) metaJSON {
+func newMetaJSON(manifest image.Manifest) metaJSON {
+	// Full and HeadStack only fail on a hand-built manifest without
+	// a valid graph; the zero values then render the broken state.
+	root, _ := manifest.Full()
 	view := metaJSON{
-		ID:         meta.ID,
-		Version:    meta.Version,
-		Kind:       meta.Kind,
-		Size:       meta.Size,
-		SHA256:     meta.SHA256,
-		CreatedAt:  meta.CreatedAt.Format(time.RFC3339),
-		Deprecated: meta.Deprecated,
-		Chain:      make([]chainJSON, 0, len(meta.Chain)),
+		ID:         root.ID,
+		Head:       manifest.Head,
+		Version:    manifest.Version,
+		Kind:       root.Kind,
+		Size:       root.Size,
+		SHA256:     root.SHA256,
+		CreatedAt:  root.CreatedAt.Format(time.RFC3339),
+		Deprecated: root.Deprecated,
+		Branches:   manifest.Branches(),
+		Chain:      []chainJSON{},
 	}
-	if kind := image.PayloadKind(meta); kind != image.PayloadSingle {
+	if kind := manifest.PayloadKind(); kind != image.PayloadSingle {
 		view.Form = kind
 	}
-	view.Format = formatDetail(meta.Format)
-	for _, entry := range meta.Chain {
+	view.Format = formatDetail(manifest.Format)
+	stack, err := manifest.HeadStack()
+	if err != nil {
+		return view
+	}
+	view.Chain = make([]chainJSON, 0, len(stack)-1)
+	for _, node := range stack[1:] {
 		view.Chain = append(view.Chain, chainJSON{
-			ID:        entry.ID,
-			Parent:    entry.Parent,
-			Size:      entry.Size,
-			SHA256:    entry.SHA256,
-			CreatedAt: entry.CreatedAt.Format(time.RFC3339),
+			ID:        node.ID,
+			Parent:    node.Parent,
+			Size:      node.Size,
+			SHA256:    node.SHA256,
+			CreatedAt: node.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	return view
@@ -533,16 +572,19 @@ func newMetaJSON(meta image.Meta) metaJSON {
 func newImagesGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
-		Short: "Promote held chains, expire archives, and clean session records",
-		Long: "One garbage collection entry manages two kinds of expired\n" +
-			"objects: it promotes every unreferenced image hold into\n" +
-			"archives, deletes archives past the keep_versions and max_age\n" +
-			"keys in .tiler.yaml, and then cleans the session records —\n" +
-			"deleting closed records past the session_max_age key in\n" +
-			".tiler.yaml and reporting active sessions whose mounts are\n" +
-			"all stale. Active session records are never deleted\n" +
-			"automatically, except a --rm one whose views are all dead:\n" +
-			"it is torn down, its runtime purged, and its record removed.",
+		Short: "Reclaim branch layers, promote holds, expire archives, clean sessions",
+		Long: "One garbage collection entry manages three kinds of expired\n" +
+			"objects: it reclaims the branch layers of an active image\n" +
+			"that neither the head nor a pinned stack tip reaches,\n" +
+			"deleting their _incr and _blocks payloads; it promotes every\n" +
+			"unreferenced image hold into archives; it deletes archives\n" +
+			"past the keep_versions and max_age keys in .tiler.yaml; and\n" +
+			"then cleans the session records — deleting closed records\n" +
+			"past the session_max_age key in .tiler.yaml and reporting\n" +
+			"active sessions whose mounts are all stale. Active session\n" +
+			"records are never deleted automatically, except a --rm one\n" +
+			"whose views are all dead: it is torn down, its runtime\n" +
+			"purged, and its record removed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)

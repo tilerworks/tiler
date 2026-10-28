@@ -81,6 +81,15 @@ type Request struct {
 	// ReadOnly mounts without an upper: a single member goes
 	// straight onto MergedDir, and a chain merges lowerdir-only.
 	ReadOnly bool
+	// PruneUpper asks a read-write mount to prune a reused upper
+	// against the lower stack before merging: when the upper
+	// directory already exists with content, a temporary read-only
+	// merge of the lowers comes up at a runtime transit point, the
+	// upper entries that merge already serves identically are
+	// removed, and the temporary point is torn down again. Every
+	// prune failure only warns on stderr and never blocks the
+	// mount. Read-only requests ignore it.
+	PruneUpper bool
 	// Subdir is an image-relative prefix exposed as the mount
 	// root. Empty mounts whole images.
 	Subdir string
@@ -137,6 +146,11 @@ type Workspace struct {
 	// Reused reports that this call found an existing mount with
 	// the same identity and created nothing new.
 	Reused bool
+	// Prune reports the upper prune this mount ran before merging.
+	// It is nil when no prune was attempted: a read-only or reused
+	// mount, PruneUpper unset, a fresh or empty upper, or a prune
+	// window whose temporary merge never came up.
+	Prune *PruneReport
 
 	runtimeDir string
 	mounts     []string
@@ -159,6 +173,10 @@ type hooks struct {
 	serving func(point string) bool
 	// sleep pauses between liveness polls.
 	sleep func(d time.Duration)
+	// prune compares one upper directory with a read-only lower
+	// view and removes the redundant entries. Nil runs the real
+	// PruneUpper.
+	prune func(upperDir, lowerView string) (PruneReport, error)
 }
 
 // member is one layer of the stack: the bytes to mount, the identity
@@ -188,6 +206,14 @@ type member struct {
 // concatenated file from it — the zero-reassembly route for a
 // byte-block payload. The transit point is the first recorded mount,
 // so every teardown reaches it last.
+//
+// With PruneUpper set on a read-write request whose upper directory
+// already exists with content, the mounted lowers are merged
+// read-only at a temporary transit point first, the upper entries
+// that merge serves identically are pruned, and the temporary point
+// is torn down before the merged view is built — the only window
+// where the upper belongs to no live view. Prune problems only warn
+// on stderr; they never block the mount.
 //
 // Both FUSE tools daemonize, so every exec is followed by a poll
 // that confirms the point is a live mount. A failing or vanished
@@ -480,11 +506,22 @@ func (w *Workspace) plan(
 	if !req.ReadOnly {
 		w.UpperDir = filepath.Join(w.runtimeDir, "upper")
 	}
+	// A prune window an earlier interrupted mount left behind would
+	// mask the point the next window mounts on. The lowercheck
+	// overlay is a dependent of the lowers: while it is live it
+	// holds every lowerdir busy, so it is torn down first and the
+	// lowers unmount cleanly instead of escalating to a lazy
+	// detach. The concat transit backs the base layer's image
+	// file, the opposite dependency direction, and is cleaned
+	// after the lowers instead.
+	if err := cleanTransit(lowerCheckPoint(w.runtimeDir), req, run, seam); err != nil {
+		return w.fail(err)
+	}
 	if err := w.cleanLowers(req, len(members), run, seam); err != nil {
 		return w.fail(err)
 	}
 	if req.Concat != nil {
-		if err := w.cleanConcat(req, run, seam); err != nil {
+		if err := cleanTransit(concatTransit(w.runtimeDir), req, run, seam); err != nil {
 			return w.fail(err)
 		}
 	}
@@ -497,12 +534,18 @@ func concatTransit(runtime string) string {
 	return filepath.Join(runtime, "concat")
 }
 
-// cleanConcat tears down a stale concat transit point an earlier
-// mount of the same target left behind, so a replay starts from one
-// consistent combination. A point that already reads as a plain
-// directory cleans up as a no-op.
-func (w *Workspace) cleanConcat(req Request, run runFunc, seam hooks) error {
-	point := concatTransit(w.runtimeDir)
+// lowerCheckPoint is the transit point under one runtime directory
+// where the prune window mounts the read-only merge of the lower
+// stack.
+func lowerCheckPoint(runtime string) string {
+	return filepath.Join(runtime, "lowercheck")
+}
+
+// cleanTransit tears down a stale transit point an earlier mount
+// under the same runtime directory left behind, so a replay starts
+// from one consistent combination. A point that already reads as a
+// plain directory cleans up as a no-op.
+func cleanTransit(point string, req Request, run runFunc, seam hooks) error {
 	if _, listed := findEntry(req.Table, point); !listed && !liveOf(seam, point) {
 		return nil
 	}
@@ -843,11 +886,17 @@ func mountDirect(req Request, m member, w *Workspace, seam hooks) (*Workspace, e
 // mountOverlay mounts every member under the runtime directory and
 // merges them onto the target with fuse-overlayfs. A read-write view
 // keeps an upper and a work directory; a read-only chain merges
-// lowerdir-only.
+// lowerdir-only. A read-write request that asks for an upper prune
+// over a reused non-empty upper runs the prune window between the
+// lowers and the merge.
 func mountOverlay(req Request, members []member, w *Workspace, seam hooks) (*Workspace, error) {
 	if err := w.mkdirNew(req.RuntimeDir); err != nil {
 		return nil, w.fail(err)
 	}
+	// The prune decision reads the upper before prepareRuntime may
+	// create it: only a reused upper that already carries content
+	// can hold entries the lower stack has baked in.
+	wantPrune := !req.ReadOnly && req.PruneUpper && dirHasContent(w.UpperDir)
 	if err := w.prepareRuntime(req.ReadOnly); err != nil {
 		return nil, w.fail(err)
 	}
@@ -860,10 +909,98 @@ func mountOverlay(req Request, members []member, w *Workspace, seam hooks) (*Wor
 			return nil, err
 		}
 	}
+	if wantPrune {
+		w.pruneWindow(req, points, seam)
+	}
 	if err := w.mountMerged(req, points, seam); err != nil {
 		return nil, err
 	}
 	return w, nil
+}
+
+// dirHasContent reports whether dir exists and holds at least one
+// entry. A missing or unreadable directory reads as empty.
+func dirHasContent(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	entries, err := f.ReadDir(1)
+	return err == nil && len(entries) > 0
+}
+
+// pruneWindow runs the upper prune in the only safe slot of the
+// mount flow: every lower is mounted and the merged view is not up
+// yet, so the upper belongs to no live view. Every failure degrades
+// to a stderr warning: mounting with an unpruned upper is always
+// safe, so the window never blocks the mount. The temporary point
+// never joins the w.mounts terminal accounting; a residue is torn
+// down by the next mount's plan phase.
+func (w *Workspace) pruneWindow(req Request, lowers []string, seam hooks) {
+	report, err := w.runPruneWindow(req, lowers, seam)
+	if report != nil {
+		w.Prune = report
+	}
+	if err != nil {
+		// Every window failure already carries its own context and
+		// the "workspace: " package tag; warnf only adds the
+		// warning prefix, so nothing is prefixed twice.
+		warnf("%v", err)
+	}
+}
+
+// runPruneWindow mounts the read-only lowerdir-only merge at the
+// lowercheck point, prunes the upper against it, and tears the
+// point down with fusermount3 -u plus a wait until it is gone. It
+// reports the prune report and the joined window failures. The
+// deferred removal leaves no residue whenever the point ends as a
+// plain directory, on the success path and on every failure path.
+// A teardown failure counts as an error: a live residue would only
+// be cleaned by the next mount's plan phase.
+func (w *Workspace) runPruneWindow(
+	req Request,
+	lowers []string,
+	seam hooks,
+) (*PruneReport, error) {
+	point := lowerCheckPoint(w.runtimeDir)
+	if err := w.mkdirNew(point); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if pointGone(point, seam) {
+			_ = os.Remove(point)
+		}
+	}()
+	argv := overlayArgv(lowers, "", "", req.FuseOptions, point)
+	if err := w.run(argv[0], argv[1:]...); err != nil {
+		// The runner error names the tool but not the phase, so the
+		// prune warning tags it the way PruneUpper tags its own
+		// root errors.
+		return nil, fmt.Errorf("workspace: upper prune: %w", err)
+	}
+	if err := waitLive(point, seam); err != nil {
+		// The daemon may still come up; never leave the point behind.
+		return nil, errors.Join(err, cleanPoint(point, w.run, seam))
+	}
+	report, pruneErr := pruneOf(seam)(w.UpperDir, point)
+	return &report, errors.Join(pruneErr, cleanPoint(point, w.run, seam))
+}
+
+// pruneOf returns the prune seam, defaulting to the real PruneUpper.
+func pruneOf(seam hooks) func(upperDir, lowerView string) (PruneReport, error) {
+	if seam.prune != nil {
+		return seam.prune
+	}
+	return PruneUpper
+}
+
+// warnf reports one non-fatal problem on stderr with the same bare
+// "warning: " prefix the cli layer uses: the errors callers pass in
+// already carry the "workspace: " package tag and their own context.
+// It is a variable so tests can capture the warnings.
+var warnf = func(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 }
 
 // prepareRuntime creates the runtime directory of this mount, plus

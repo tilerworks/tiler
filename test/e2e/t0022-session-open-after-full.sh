@@ -86,7 +86,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: build --full holds the pi
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
 	test_path_is_file "$img_dir/_hold/$old_id/image.sqsh" &&
-	test_grep -E "^id: \"?$new_id\"?$" "$img_dir/meta.yaml"
+	test_grep -E "^head: \"?$new_id\"?$" "$img_dir/meta.yaml"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: umount keeps the session and upper' '
@@ -146,7 +146,7 @@ test_expect_success TILER,MACOS 'macos: build --full holds the pin and changes a
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
 	test_path_is_file "$img_dir/_hold/$old_id/image.dmg" &&
-	test_grep -E "^id: \"?$new_id\"?$" "$img_dir/meta.yaml"
+	test_grep -E "^head: \"?$new_id\"?$" "$img_dir/meta.yaml"
 '
 
 test_expect_success TILER,MACOS 'macos: umount keeps the session and shadow' '

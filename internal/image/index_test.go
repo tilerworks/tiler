@@ -353,14 +353,16 @@ func indexLeaf(t *testing.T) Repo {
 
 func storeIndexMeta(t *testing.T, dir, sum, content string) {
 	t.Helper()
-	meta := validMeta()
-	meta.ID = sum
-	meta.SHA256 = sum
-	meta.ContentSHA256 = content
+	manifest := validManifest()
+	manifest.Images = manifest.Images[:1]
+	manifest.Images[0].ID = sum
+	manifest.Images[0].SHA256 = sum
+	manifest.Images[0].ContentSHA256 = content
+	manifest.Head = sum
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(filepath.Join(dir, fileMeta), meta); err != nil {
+	if err := StoreManifest(filepath.Join(dir, fileMeta), manifest); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -31,6 +31,13 @@ var (
 	hdiutilTool image.ToolRunner
 	// incrSmoke is the incremental mount gate. Nil keeps the default.
 	incrSmoke func(string) error
+	// rebaseMountedStack rewrites the desired stack of every live
+	// mount action serving one library image, after a build from the
+	// mounted view itself published a new stack. Tests replace it to
+	// record the call or to fail the rewrite.
+	rebaseMountedStack = func(cfg config.Config, point, name, fullID, tipID string) error {
+		return sessionEngine(cfg).RebaseMountedStack(point, name, fullID, tipID)
+	}
 )
 
 func newBuildCmd() *cobra.Command {
@@ -62,6 +69,17 @@ func newBuildCmd() *cobra.Command {
 			"A writable dmg view has no incremental layer. The build bakes\n" +
 			"the shadow into a new full image for the default, --incremental,\n" +
 			"and --full when --image matches the mounted image.\n" +
+			"A successful build inside a Linux merged view moves the session\n" +
+			"record to the new image; the new image takes effect at the next\n" +
+			"mount of that session, which prunes the reused upper of what the\n" +
+			"new image already carries. The prune compares metadata only,\n" +
+			"never content: an upper file rewritten within the same second\n" +
+			"as its baked copy, with an unchanged size, mode, and owner,\n" +
+			"can be pruned by mistake. A dmg build from inside a mounted\n" +
+			"view is never rebased: a bake's shadow is bound to the attached\n" +
+			"base and a create's view keeps serving the base it was mounted\n" +
+			"from, so the record keeps the old id, the build only warns, and\n" +
+			"the new image is used only by a fresh mount.\n" +
 			"\n" +
 			"--format and --compression select the container. An omitted\n" +
 			"format uses the image_format key in .tiler.yaml, then the host\n" +
@@ -325,7 +343,11 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
-	meta, err := image.Load(repo.MetaPath())
+	manifest, err := image.LoadManifest(repo.MetaPath())
+	if err != nil {
+		return false, fmt.Errorf("build: %w", err)
+	}
+	root, err := manifest.Full()
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
@@ -333,13 +355,13 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if err != nil {
 		return false, fmt.Errorf("build: upper: %w", err)
 	}
-	layers := chainBytes(meta)
-	if !exceedsHalfBase(meta.Size, layers, upper) {
+	layers := chainBytes(manifest)
+	if !exceedsHalfBase(root.Size, layers, upper) {
 		return false, nil
 	}
 	_, err = fmt.Fprintf(stderr,
 		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
-		layers+upper, meta.Size)
+		layers+upper, root.Size)
 	return err == nil, err
 }
 
@@ -356,10 +378,16 @@ func exceedsHalfBase(base, layers, upper int64) bool {
 	return sum > base/2
 }
 
-func chainBytes(meta image.Meta) int64 {
+// chainBytes sums the recorded layer sizes of the head stack: the
+// incremental nodes a default build appends to.
+func chainBytes(manifest image.Manifest) int64 {
+	stack, err := manifest.HeadStack()
+	if err != nil {
+		return 0
+	}
 	var n int64
-	for _, entry := range meta.Chain {
-		n += entry.Size
+	for _, node := range stack[1:] {
+		n += node.Size
 	}
 	return n
 }
@@ -396,6 +424,7 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	rebaseView(cmd.ErrOrStderr(), cfg, decision, res.ID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err
 }
@@ -412,12 +441,37 @@ func mapBuildPathError(err error) error {
 	return err
 }
 
+// rebaseView moves the session record of the mounted view a build ran
+// from onto the freshly published stack (fullID, tipID). Only builds
+// inside a writable overlay view carry a mount point; external builds
+// and --image diversions keep their recorded pins, and the dmg paths
+// never call this. The image is already published when this runs, so
+// a failed rewrite is a stderr warning only and the build still
+// succeeds. The build never umounts or mounts: the live view keeps
+// serving the replaced stack until the next mount picks up the new
+// one.
+func rebaseView(stderr io.Writer, cfg config.Config, decision mountinfo.Decision, fullID, tipID string) {
+	if decision.MountPoint == "" || fullID == "" || tipID == "" {
+		return
+	}
+	err := rebaseMountedStack(cfg, decision.MountPoint, decision.Name.String(), fullID, tipID)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr,
+			"warning: the session record for %s was not moved to the new image %s: %v\n",
+			decision.MountPoint, tipID, err)
+	}
+}
+
 func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, format, compression string) error {
 	typ, comp, err := explicitContainer(cmd, format, compression)
 	if err != nil {
 		return err
 	}
-	if active, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
+	// The active full root id names the base of the rebased stack;
+	// an incremental build never moves it.
+	var fullID string
+	if active, root, readErr := readActiveFormat(cfg, decision.Name.String()); readErr == nil {
+		fullID = root
 		if err := image.FormatConflict(active, typ, comp); err != nil {
 			return usageError{err}
 		}
@@ -441,25 +495,48 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	rebaseView(cmd.ErrOrStderr(), cfg, decision, fullID, res.ID)
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "incr %s %s\n", decision.Name, res.ID)
 	return err
 }
 
-// readActiveFormat loads the container recorded on the active image.
-// A missing image is left for BuildIncr to report.
-func readActiveFormat(cfg config.Config, name string) (image.Format, error) {
+// readActiveFormat loads the container format and the full root id
+// recorded on the active image. A missing image is left for BuildIncr
+// to report.
+func readActiveFormat(cfg config.Config, name string) (image.Format, string, error) {
 	repo, err := image.OpenRepo(cfg.ImagesDir, name)
 	if err != nil {
-		return image.Format{}, err
+		return image.Format{}, "", err
 	}
-	meta, err := image.Load(repo.MetaPath())
+	manifest, err := image.LoadManifest(repo.MetaPath())
 	if err != nil {
-		return image.Format{}, err
+		return image.Format{}, "", err
 	}
-	return meta.Format, nil
+	root, err := manifest.Full()
+	if err != nil {
+		return image.Format{}, "", err
+	}
+	return manifest.Format, root.ID, nil
 }
 
+// runDMGCreate packs a directory into a new dmg image. A build from
+// inside a mounted view never rebases the session record: the view
+// keeps serving the base it was mounted from, so success only warns
+// with the id the record pins for that view. An idle create — the
+// source directory already matches the active image — publishes
+// nothing and stays silent. Plain directory builds and --image
+// diversions carry no mount point and stay silent.
 func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, compression string) error {
+	// The pre-publish active root detects the idle no-op: BuildDMG
+	// answers with the image that was already active when the
+	// content fingerprint matches, and then nothing was published.
+	// A missing or unreadable image only disables the check.
+	activeRoot := ""
+	if decision.MountPoint != "" {
+		if _, root, err := readActiveFormat(cfg, decision.Name.String()); err == nil {
+			activeRoot = root
+		}
+	}
 	res, err := image.BuildDMG(image.DMGRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
@@ -472,6 +549,15 @@ func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	// The warning quotes the id the session record pins for this
+	// view — the base it serves and a replay attaches again — not
+	// the active root, which a later publish may have moved. An
+	// idle result is the active image itself: no publish happened,
+	// so the warning stays silent.
+	if decision.MountPoint != "" && res.ID != activeRoot {
+		warnDMGCreateKeepsOldBase(cmd.ErrOrStderr(), decision.Name.String(), res.ID,
+			recordedFullID(cfg.SessionsDir, decision.MountPoint, decision.Name.String()))
+	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err
 }
@@ -480,6 +566,12 @@ func runDMGCreate(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 // --full both take this path and warn that dmg has no incremental
 // layer. The live attach is left on the old base: this does not
 // detach or attach, and it does not rewrite the session record.
+// The shadow is a block-level delta strictly bound to the attached
+// base image, so a successful bake only warns on stderr that the
+// record keeps the old id and the new image takes effect at the
+// next fresh mount; replaying this session attaches the old base
+// again. An idle bake — the shadow unchanged since the last
+// convert — publishes nothing and keeps that warning silent.
 func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decision, shadow, format, compression string) error {
 	if err := refuseBakeFormat(cmd, format); err != nil {
 		return err
@@ -501,6 +593,14 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 		"warning: dmg has no incremental layer; baking a full image"); err != nil {
 		return err
 	}
+	// The pre-publish active root detects the idle no-op: a shadow
+	// unchanged since the last convert makes BuildDMG answer with
+	// the image that was already active, and then nothing was
+	// published. An unreadable image only disables the check.
+	activeRoot := ""
+	if _, root, err := readActiveFormat(cfg, decision.Name.String()); err == nil {
+		activeRoot = root
+	}
 	res, err := image.BuildDMG(image.DMGRequest{
 		Config:      cfg,
 		Name:        decision.Name.String(),
@@ -514,8 +614,91 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 	if err != nil {
 		return mapBuildPathError(err)
 	}
+	if res.ID != activeRoot {
+		warnDMGBakeKeepsOldBase(cmd.ErrOrStderr(), decision.Name.String(), res.ID, mounted)
+	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "full %s %s\n", decision.Name, res.ID)
 	return err
+}
+
+// warnDMGBakeKeepsOldBase is the stderr warning a successful bake
+// from inside a mounted dmg view prints instead of a rebase. The
+// shadow is a block-level delta strictly bound to the attached base
+// image, so the session record keeps oldID: the live view keeps
+// serving base and shadow, and replaying this session attaches the
+// base again. The new image takes effect only at the next fresh
+// mount. An empty oldID — no record pins one — drops the id
+// clauses. A warning never fails the build.
+func warnDMGBakeKeepsOldBase(stderr io.Writer, name, newID, oldID string) {
+	if oldID == "" {
+		warnDMGKeepsBase(stderr, name, newID)
+		return
+	}
+	_, _ = fmt.Fprintf(stderr,
+		"warning: published new image %s for %s; the mounted view is still served by the old base %s and its shadow, and the shadow is bound to that base, so the session record keeps %s; the new image takes effect only at the next fresh mount, and replaying this session still attaches %s\n",
+		newID, name, oldID, oldID, oldID)
+}
+
+// warnDMGCreateKeepsOldBase is the stderr warning a successful dmg
+// create from inside a mounted view prints instead of a rebase. No
+// view that reaches the create path carries a shadow — a writable
+// dmg view bakes and a read-only dmg view is refused — so the
+// warning names the mount itself: the view keeps serving the base
+// it was mounted from, the session record keeps oldID, and
+// replaying this session attaches it again. The new image takes
+// effect only at the next fresh mount. An empty oldID — no record
+// pins one — drops the id clauses. A warning never fails the build.
+func warnDMGCreateKeepsOldBase(stderr io.Writer, name, newID, oldID string) {
+	if oldID == "" {
+		warnDMGKeepsBase(stderr, name, newID)
+		return
+	}
+	_, _ = fmt.Fprintf(stderr,
+		"warning: published new image %s for %s; the mounted view keeps serving the base %s it was mounted from, so the session record keeps %s; the new image takes effect only at the next fresh mount, and replaying this session still attaches %s\n",
+		newID, name, oldID, oldID, oldID)
+}
+
+// warnDMGKeepsBase is the id-less variant both dmg paths share when
+// no session record pins the base the mounted view serves.
+func warnDMGKeepsBase(stderr io.Writer, name, newID string) {
+	_, _ = fmt.Fprintf(stderr,
+		"warning: published new image %s for %s; the mounted view is not rebased and keeps serving the base it was mounted from; the new image takes effect only at the next fresh mount\n",
+		newID, name)
+}
+
+// recordedFullID is the full image id the session records pin for a
+// live mount of name at mountpoint: the base the mounted view is
+// served by and a replay attaches again. It mirrors the
+// RebaseMountedStack hit scan — active records only, live mount
+// actions of that library name, mount points compared through
+// SameMountPoint so a symlinked spelling still hits. No record, a
+// closed or unmounted one, a record that pins no id, or a store
+// that fails to list all answer empty, which drops the warning to
+// its id-less variant.
+func recordedFullID(sessionsDir, mountpoint, name string) string {
+	if mountpoint == "" || name == "" {
+		return ""
+	}
+	records, err := (session.Store{Dir: sessionsDir}).List()
+	if err != nil {
+		return ""
+	}
+	for _, rec := range records {
+		if rec.State != session.StateActive {
+			continue
+		}
+		for _, action := range rec.Actions {
+			if action.Type != session.TypeMount ||
+				action.Status == session.StatusUnmounted ||
+				action.FullID == "" || action.Name != name {
+				continue
+			}
+			if session.SameMountPoint(action.Mountpoint, mountpoint) {
+				return action.FullID
+			}
+		}
+	}
+	return ""
 }
 
 // mountedFullID is the full image id of the live mount that owns

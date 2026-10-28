@@ -7,16 +7,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestPublishFreshMatchesDigest(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("full-image-bytes")
-	meta := metaFor(data)
+	manifest := manifestFor(data)
 	var activated bool
-	err := publish(repo, data, meta, nil, hooks{
+	err := publish(repo, data, manifest, nil, hooks{
 		before: func(oldpath, newpath string) error {
 			if filepath.Base(newpath) != fileImage || filepath.Dir(newpath) != repo.Dir {
 				return nil
@@ -41,13 +43,11 @@ func TestPublishFreshMatchesDigest(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("active bytes = %q", got)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadManifest(t, repo.MetaPath())
 	sum := sha256.Sum256(got)
-	if loaded.SHA256 != hex.EncodeToString(sum[:]) || loaded.ID != ID(sum) {
-		t.Fatalf("meta digest = %s %s", loaded.ID, loaded.SHA256)
+	root := rootOf(loaded)
+	if root.SHA256 != hex.EncodeToString(sum[:]) || root.ID != ID(sum) {
+		t.Fatalf("meta digest = %s %s", root.ID, root.SHA256)
 	}
 	assertNoTemps(t, repo.Dir)
 }
@@ -55,7 +55,7 @@ func TestPublishFreshMatchesDigest(t *testing.T) {
 func TestPublishAbortsBeforeRename(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("never-active")
-	err := publish(repo, data, metaFor(data), nil, hooks{
+	err := publish(repo, data, manifestFor(data), nil, hooks{
 		before: func(string, string) error {
 			return errors.New("cancelled before rename")
 		},
@@ -77,14 +77,14 @@ func TestPublishReplaceArchivesWhenUnreferenced(t *testing.T) {
 	oldData := []byte("previous-full")
 	old := seedActive(t, repo, oldData, true)
 	nextData := []byte("replacement-full")
-	next := metaFor(nextData)
+	next := manifestFor(nextData)
 	var heldBeforeActive bool
 	err := publish(repo, nextData, next, nil, hooks{
 		before: func(_, newpath string) error {
 			if filepath.Base(newpath) != fileImage || filepath.Dir(newpath) != repo.Dir {
 				return nil
 			}
-			hold, holdErr := repo.HoldPath(old.ID)
+			hold, holdErr := repo.HoldPath(rootID(old))
 			if holdErr != nil {
 				t.Fatal(holdErr)
 			}
@@ -101,27 +101,24 @@ func TestPublishReplaceArchivesWhenUnreferenced(t *testing.T) {
 		t.Fatal("new active image appeared before hold")
 	}
 	assertBytes(t, repo.ImagePath(), nextData)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	incr, err := chainIncr(arch, old.Chain[0].ID)
+	incr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, incr, []byte("layer"))
-	loaded, err := Load(filepath.Join(arch, fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != old.ID || len(loaded.Chain) != 1 {
+	loaded := mustLoadManifest(t, filepath.Join(arch, fileMeta))
+	if rootID(loaded) != rootID(old) || len(loaded.Images) != 2 {
 		t.Fatalf("archived meta = %+v", loaded)
 	}
-	if _, err := repo.HoldPath(old.ID); err != nil {
+	if _, err := repo.HoldPath(rootID(old)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("hold still present: %v", err)
 	}
 	assertNoTemps(t, repo.Dir)
@@ -132,22 +129,22 @@ func TestPublishReplaceLeavesHoldWhenReferenced(t *testing.T) {
 	oldData := []byte("held-full")
 	old := seedActive(t, repo, oldData, true)
 	nextData := []byte("new-full")
-	refs := holdSet{ids: map[string]bool{old.ID: true}}
-	if err := repo.Publish(nextData, metaFor(nextData), refs); err != nil {
+	refs := holdSet{ids: map[string]bool{rootID(old): true}}
+	if err := repo.Publish(nextData, manifestFor(nextData), refs); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), nextData)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(hold, fileImage), oldData)
-	incr, err := chainIncr(hold, old.Chain[0].ID)
+	incr, err := chainIncr(hold, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, incr, []byte("layer"))
-	if _, err := os.Stat(filepath.Join(repo.Dir, dirArchives, old.ID)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirArchives, rootID(old))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("archive created while referenced: %v", err)
 	}
 	assertNoTemps(t, repo.Dir)
@@ -158,7 +155,7 @@ func TestPublishEXDEVKeepsActive(t *testing.T) {
 	oldData := []byte("stable-full")
 	old := seedActive(t, repo, oldData, true)
 	var n int
-	err := publish(repo, []byte("cross-device"), metaFor([]byte("cross-device")), nil, hooks{
+	err := publish(repo, []byte("cross-device"), manifestFor([]byte("cross-device")), nil, hooks{
 		rename: func(oldpath, newpath string) error {
 			n++
 			if n == 2 {
@@ -171,14 +168,11 @@ func TestPublishEXDEVKeepsActive(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	assertBytes(t, repo.ImagePath(), oldData)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != old.ID || len(loaded.Chain) != 1 {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(loaded) != rootID(old) || len(loaded.Images) != 2 {
 		t.Fatalf("active meta = %+v", loaded)
 	}
-	incr, err := repo.IncrPath(old.Chain[0].ID)
+	incr, err := repo.IncrPath(old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +189,7 @@ func TestPublishEXDEVKeepsActive(t *testing.T) {
 func TestPublishMetaRenameDropsPartialActive(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("partial-full")
-	err := publish(repo, data, metaFor(data), nil, hooks{
+	err := publish(repo, data, manifestFor(data), nil, hooks{
 		rename: func(oldpath, newpath string) error {
 			if filepath.Base(newpath) == fileMeta && filepath.Dir(newpath) == repo.Dir {
 				return errors.New("meta rename failed")
@@ -218,11 +212,11 @@ func TestPublishMetaRenameDropsPartialActive(t *testing.T) {
 func TestPublishSameBytesWithEmptyChainIsIdle(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("same-bytes")
-	meta := metaFor(data)
-	if err := repo.Publish(data, meta, nil); err != nil {
+	manifest := manifestFor(data)
+	if err := repo.Publish(data, manifest, nil); err != nil {
 		t.Fatal(err)
 	}
-	err := publish(repo, data, meta, nil, hooks{
+	err := publish(repo, data, manifest, nil, hooks{
 		before: func(string, string) error {
 			t.Fatal("idle publish renamed a file")
 			return nil
@@ -240,7 +234,7 @@ func TestPublishMetaRenameRestoresPreviousActive(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("kept-full")
 	old := seedActive(t, repo, oldData, true)
-	err := publish(repo, []byte("incoming"), metaFor([]byte("incoming")), nil, hooks{
+	err := publish(repo, []byte("incoming"), manifestFor([]byte("incoming")), nil, hooks{
 		rename: func(oldpath, newpath string) error {
 			if filepath.Base(newpath) == fileMeta && filepath.Dir(newpath) == repo.Dir {
 				return errors.New("meta rename failed")
@@ -252,31 +246,28 @@ func TestPublishMetaRenameRestoresPreviousActive(t *testing.T) {
 		t.Fatal("expected meta rename failure")
 	}
 	assertBytes(t, repo.ImagePath(), oldData)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != old.ID || len(loaded.Chain) != 1 {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(loaded) != rootID(old) || len(loaded.Images) != 2 {
 		t.Fatalf("active meta = %+v", loaded)
 	}
-	incr, err := repo.IncrPath(old.Chain[0].ID)
+	incr, err := repo.IncrPath(old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, incr, []byte("layer"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold still present: %v", statErr)
 	}
 	next := []byte("incoming")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("retry left hold behind: %v", statErr)
 	}
 	assertBytes(t, repo.ImagePath(), next)
@@ -286,7 +277,7 @@ func TestPublishRepairsImageLeftInHold(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("torn-full")
 	old := seedActive(t, repo, oldData, true)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,16 +288,16 @@ func TestPublishRepairsImageLeftInHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("after-repair")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	archivedIncr, err := chainIncr(arch, old.Chain[0].ID)
+	archivedIncr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +311,7 @@ func TestPublishArchivesOrphanHold(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("orphaned-full")
 	old := seedActive(t, repo, oldData, true)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,16 +324,16 @@ func TestPublishArchivesOrphanHold(t *testing.T) {
 		}
 	}
 	next := []byte("published-after-orphan")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	archivedIncr, err := chainIncr(arch, old.Chain[0].ID)
+	archivedIncr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +347,7 @@ func TestPublishReplacesOccupiedArchive(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("previous-full")
 	old := seedActive(t, repo, oldData, true)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,12 +358,12 @@ func TestPublishReplacesOccupiedArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("replacement-full")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold still present: %v", statErr)
 	}
 }
@@ -381,7 +372,7 @@ func TestPublishIdleFinishesUnreferencedHold(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("left-in-hold")
 	old := seedActive(t, repo, oldData, false)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,14 +386,14 @@ func TestPublishIdleFinishesUnreferencedHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("active-now")
-	nextMeta := metaFor(next)
+	nextManifest := manifestFor(next)
 	if err := os.WriteFile(repo.ImagePath(), next, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), nextMeta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), nextManifest); err != nil {
 		t.Fatal(err)
 	}
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +403,7 @@ func TestPublishIdleFinishesUnreferencedHold(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(arch, fileImage), []byte("stale-archive"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Publish(next, nextMeta, nil); err != nil {
+	if err := repo.Publish(next, nextManifest, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
@@ -427,24 +418,24 @@ func TestPublishClearsHoldWhenIDBecomesActive(t *testing.T) {
 	first := []byte("image-a")
 	second := []byte("image-b")
 	third := []byte("image-c")
-	metaA := metaFor(first)
-	if err := repo.Publish(first, metaA, nil); err != nil {
+	manifestA := manifestFor(first)
+	if err := repo.Publish(first, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
-	refs := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(second, metaFor(second), refs); err != nil {
+	refs := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(second, manifestFor(second), refs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(repo.Dir, dirHold, metaA.ID)); err != nil {
+	if _, err := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(manifestA))); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Publish(first, metaA, nil); err != nil {
+	if err := repo.Publish(first, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, metaA.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(manifestA))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold remained after id became active: %v", statErr)
 	}
-	if err := repo.Publish(third, metaFor(third), nil); err != nil {
+	if err := repo.Publish(third, manifestFor(third), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), third)
@@ -453,20 +444,17 @@ func TestPublishClearsHoldWhenIDBecomesActive(t *testing.T) {
 func TestPublishIdleKeepsIncomingChain(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("same-bytes")
-	meta := metaFor(data)
-	if err := repo.Publish(data, meta, nil); err != nil {
+	manifest := manifestFor(data)
+	if err := repo.Publish(data, manifest, nil); err != nil {
 		t.Fatal(err)
 	}
 	layer := testID("fedcba9876543210")
-	meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
-	if err := repo.Publish(data, meta, nil); err != nil {
+	incoming := withNode(manifest, validNode(manifest.Head, layer))
+	if err := repo.Publish(data, incoming, nil); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 || loaded.Chain[0].ID != layer {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 2 || loaded.Images[1].ID != layer {
 		t.Fatalf("active meta = %+v", loaded)
 	}
 }
@@ -475,7 +463,7 @@ func TestPublishSyncsDirectoryAroundRename(t *testing.T) {
 	repo := testRepo(t)
 	var syncedBefore, syncedAfter, renamed bool
 	data := []byte("synced-full")
-	err := publish(repo, data, metaFor(data), nil, hooks{
+	err := publish(repo, data, manifestFor(data), nil, hooks{
 		before: func(_, newpath string) error {
 			if filepath.Base(newpath) == fileImage && filepath.Dir(newpath) == repo.Dir {
 				if !syncedBefore {
@@ -510,19 +498,16 @@ func TestPublishSameBytesWithChainStillArchives(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("same-bytes")
 	old := seedActive(t, repo, data, true)
-	if err := repo.Publish(data, metaFor(data), nil); err != nil {
+	if err := repo.Publish(data, manifestFor(data), nil); err != nil {
 		t.Fatal(err)
 	}
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), data)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 0 || loaded.ID != old.ID {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 1 || rootID(loaded) != rootID(old) {
 		t.Fatalf("active meta = %+v", loaded)
 	}
 }
@@ -531,7 +516,7 @@ func TestPublishRestoresMetaLeftInHold(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("meta-left-in-hold")
 	old := seedActive(t, repo, oldData, true)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,23 +530,20 @@ func TestPublishRestoresMetaLeftInHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("after-meta-restore")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	loaded, err := Load(filepath.Join(arch, fileMeta))
-	if err != nil {
-		t.Fatal(err)
+	loaded := mustLoadManifest(t, filepath.Join(arch, fileMeta))
+	if rootID(loaded) != rootID(old) {
+		t.Fatalf("archived meta id = %s", rootID(loaded))
 	}
-	if loaded.ID != old.ID {
-		t.Fatalf("archived meta id = %s", loaded.ID)
-	}
-	archivedIncr, err := chainIncr(arch, old.Chain[0].ID)
+	archivedIncr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +554,7 @@ func TestPublishReplacesMetaThatDoesNotMatchImage(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("image-restored-first")
 	old := seedActive(t, repo, oldData, true)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,24 +564,21 @@ func TestPublishReplacesMetaThatDoesNotMatchImage(t *testing.T) {
 	if err := os.Rename(repo.MetaPath(), filepath.Join(hold, fileMeta)); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), metaFor([]byte("new-meta-still-active"))); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifestFor([]byte("new-meta-still-active"))); err != nil {
 		t.Fatal(err)
 	}
 	next := []byte("after-meta-mismatch")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	loaded, err := Load(filepath.Join(arch, fileMeta))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != old.ID || len(loaded.Chain) != 1 {
+	loaded := mustLoadManifest(t, filepath.Join(arch, fileMeta))
+	if rootID(loaded) != rootID(old) || len(loaded.Images) != 2 {
 		t.Fatalf("archived meta = %+v", loaded)
 	}
 }
@@ -608,7 +587,7 @@ func TestPublishArchiveRenameKeepsPreviousAndRetries(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("chain-waiting-in-hold")
 	old := seedActive(t, repo, oldData, true)
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +598,7 @@ func TestPublishArchiveRenameKeepsPreviousAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("active-while-archive-rename-fails")
-	err = publish(repo, next, metaFor(next), nil, hooks{
+	err = publish(repo, next, manifestFor(next), nil, hooks{
 		rename: func(oldpath, newpath string) error {
 			if newpath == arch {
 				return errors.New("archive rename failed")
@@ -632,7 +611,7 @@ func TestPublishArchiveRenameKeepsPreviousAndRetries(t *testing.T) {
 	}
 	assertBytes(t, repo.ImagePath(), next)
 	assertBytes(t, filepath.Join(arch, fileImage), []byte("older-archive"))
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,12 +620,12 @@ func TestPublishArchiveRenameKeepsPreviousAndRetries(t *testing.T) {
 		t.Fatalf("parked archive err = %v", statErr)
 	}
 	third := []byte("publishes-the-stranded-hold")
-	if err := repo.Publish(third, metaFor(third), nil); err != nil {
+	if err := repo.Publish(third, manifestFor(third), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), third)
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	archivedIncr, err := chainIncr(arch, old.Chain[0].ID)
+	archivedIncr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,11 +638,11 @@ func TestPublishArchiveRenameKeepsPreviousAndRetries(t *testing.T) {
 func TestPublishRestoresParkedArchive(t *testing.T) {
 	repo := testRepo(t)
 	active := []byte("active-beside-parked-archive")
-	if err := repo.Publish(active, metaFor(active), nil); err != nil {
+	if err := repo.Publish(active, manifestFor(active), nil); err != nil {
 		t.Fatal(err)
 	}
-	retired := metaFor([]byte("retired-chain"))
-	arch, err := repo.ArchivePath(retired.ID)
+	retired := manifestFor([]byte("retired-chain"))
+	arch, err := repo.ArchivePath(rootID(retired))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +656,7 @@ func TestPublishRestoresParkedArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := []byte("after-parked-archive")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), []byte("park-me"))
@@ -690,7 +669,7 @@ func TestPublishRestoresParkedArchive(t *testing.T) {
 func TestPublishSyncAfterImageRenameClearsFreshSlot(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("sync-fails-after-image")
-	err := publish(repo, data, metaFor(data), nil, failSyncAfter(repo.Dir, fileImage))
+	err := publish(repo, data, manifestFor(data), nil, failSyncAfter(repo.Dir, fileImage))
 	if err == nil {
 		t.Fatal("expected directory sync failure")
 	}
@@ -701,7 +680,7 @@ func TestPublishSyncAfterImageRenameClearsFreshSlot(t *testing.T) {
 		t.Fatalf("active meta err = %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
-	if err := repo.Publish(data, metaFor(data), nil); err != nil {
+	if err := repo.Publish(data, manifestFor(data), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), data)
@@ -710,7 +689,7 @@ func TestPublishSyncAfterImageRenameClearsFreshSlot(t *testing.T) {
 func TestPublishSyncAfterMetaRenameClearsFreshSlot(t *testing.T) {
 	repo := testRepo(t)
 	data := []byte("sync-fails-after-meta")
-	err := publish(repo, data, metaFor(data), nil, failSyncAfter(repo.Dir, fileMeta))
+	err := publish(repo, data, manifestFor(data), nil, failSyncAfter(repo.Dir, fileMeta))
 	if err == nil {
 		t.Fatal("expected directory sync failure")
 	}
@@ -721,7 +700,7 @@ func TestPublishSyncAfterMetaRenameClearsFreshSlot(t *testing.T) {
 		t.Fatalf("active meta err = %v", statErr)
 	}
 	assertNoTemps(t, repo.Dir)
-	if err := repo.Publish(data, metaFor(data), nil); err != nil {
+	if err := repo.Publish(data, manifestFor(data), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), data)
@@ -731,24 +710,21 @@ func TestPublishSyncAfterMetaRenameRestoresPrevious(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("kept-across-meta-sync")
 	old := seedActive(t, repo, oldData, true)
-	err := publish(repo, []byte("incoming"), metaFor([]byte("incoming")), nil, failSyncAfter(repo.Dir, fileMeta))
+	err := publish(repo, []byte("incoming"), manifestFor([]byte("incoming")), nil, failSyncAfter(repo.Dir, fileMeta))
 	if err == nil {
 		t.Fatal("expected directory sync failure")
 	}
 	assertBytes(t, repo.ImagePath(), oldData)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != old.ID || len(loaded.Chain) != 1 {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(loaded) != rootID(old) || len(loaded.Images) != 2 {
 		t.Fatalf("active meta = %+v", loaded)
 	}
-	incr, err := repo.IncrPath(old.Chain[0].ID)
+	incr, err := repo.IncrPath(old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, incr, []byte("layer"))
-	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, old.ID)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirHold, rootID(old))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold still present: %v", statErr)
 	}
 }
@@ -757,7 +733,7 @@ func TestPublishRepairsOrphanMetaWithPreviousHold(t *testing.T) {
 	repo := testRepo(t)
 	oldData := []byte("previous-chain-in-hold")
 	old := seedActive(t, repo, oldData, true)
-	hold, err := repo.HoldPath(old.ID)
+	hold, err := repo.HoldPath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,28 +745,25 @@ func TestPublishRepairsOrphanMetaWithPreviousHold(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	orphan := metaFor([]byte("meta-without-image"))
-	if err := Store(repo.MetaPath(), orphan); err != nil {
+	orphan := manifestFor([]byte("meta-without-image"))
+	if err := StoreManifest(repo.MetaPath(), orphan); err != nil {
 		t.Fatal(err)
 	}
 	next := []byte("retry-after-orphan-meta")
-	if err := repo.Publish(next, metaFor(next), nil); err != nil {
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), next)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID == orphan.ID {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if rootID(loaded) == rootID(orphan) {
 		t.Fatal("orphan meta stayed active")
 	}
-	arch, err := repo.ArchivePath(old.ID)
+	arch, err := repo.ArchivePath(rootID(old))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(arch, fileImage), oldData)
-	archivedIncr, err := chainIncr(arch, old.Chain[0].ID)
+	archivedIncr, err := chainIncr(arch, old.Images[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,9 +775,8 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 	layerA := testID("aaaaaaaaaaaaaaaa")
 	layerB := testID("bbbbbbbbbbbbbbbb")
 	dataA := []byte("image-a")
-	metaA := metaFor(dataA)
-	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layerA)}
-	if err := repo.Publish(dataA, metaA, nil); err != nil {
+	manifestA := chainManifestFor(dataA, layerA)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
 	incrA, err := repo.IncrPath(layerA)
@@ -818,10 +790,9 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataB := []byte("image-b")
-	metaB := metaFor(dataB)
-	metaB.Chain = []ChainEntry{validEntry(metaB.ID, layerB)}
-	refs := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(dataB, metaB, refs); err != nil {
+	manifestB := chainManifestFor(dataB, layerB)
+	refs := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestB, refs); err != nil {
 		t.Fatal(err)
 	}
 	incrB, err := repo.IncrPath(layerB)
@@ -834,7 +805,7 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 	if err := os.WriteFile(incrB, []byte("layer-b"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	holdB, err := repo.HoldPath(metaB.ID)
+	holdB, err := repo.HoldPath(rootID(manifestB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,11 +819,11 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataC := []byte("image-c")
-	metaC := metaFor(dataC)
-	if err := repo.Publish(dataC, metaC, nil); err != nil {
+	manifestC := manifestFor(dataC)
+	if err := repo.Publish(dataC, manifestC, nil); err != nil {
 		t.Fatal(err)
 	}
-	archB, err := repo.ArchivePath(metaB.ID)
+	archB, err := repo.ArchivePath(rootID(manifestB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +835,7 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 	if _, statErr := os.Stat(incrB); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("active incr err = %v", statErr)
 	}
-	archA, err := repo.ArchivePath(metaA.ID)
+	archA, err := repo.ArchivePath(rootID(manifestA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,10 +845,10 @@ func TestPublishArchivesTornIncrBesideAnotherHold(t *testing.T) {
 	}
 	assertBytes(t, archivedA, []byte("layer-a"))
 	dataD := []byte("image-d")
-	if err := repo.Publish(dataD, metaFor(dataD), nil); err != nil {
+	if err := repo.Publish(dataD, manifestFor(dataD), nil); err != nil {
 		t.Fatal(err)
 	}
-	archC, err := repo.ArchivePath(metaC.ID)
+	archC, err := repo.ArchivePath(rootID(manifestC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -891,41 +862,39 @@ func TestPublishSweepKeepsForeignLayersOutOfArchives(t *testing.T) {
 	layerB := testID("bbbbbbbbbbbbbbbb")
 	layerC := testID("cccccccccccccccc")
 	dataA := []byte("image-a")
-	metaA := metaFor(dataA)
-	if err := repo.Publish(dataA, metaA, nil); err != nil {
+	manifestA := manifestFor(dataA)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
 	dataB := []byte("image-b")
-	metaB := metaFor(dataB)
-	metaB.Chain = []ChainEntry{validEntry(metaB.ID, layerB)}
-	refsA := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(dataB, metaB, refsA); err != nil {
+	manifestB := chainManifestFor(dataB, layerB)
+	refsA := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestB, refsA); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layerB, []byte("layer-b"))
 	dataC := []byte("image-c")
-	metaC := metaFor(dataC)
-	metaC.Chain = []ChainEntry{validEntry(metaC.ID, layerC)}
-	refsAB := holdSet{ids: map[string]bool{metaA.ID: true, metaB.ID: true}}
-	if err := repo.Publish(dataC, metaC, refsAB); err != nil {
+	manifestC := chainManifestFor(dataC, layerC)
+	refsAB := holdSet{ids: map[string]bool{rootID(manifestA): true, rootID(manifestB): true}}
+	if err := repo.Publish(dataC, manifestC, refsAB); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layerC, []byte("layer-c"))
-	holdC := tearActive(t, repo, metaC.ID)
-	refsC := holdSet{ids: map[string]bool{metaC.ID: true}}
+	holdC := tearActive(t, repo, rootID(manifestC))
+	refsC := holdSet{ids: map[string]bool{rootID(manifestC): true}}
 	dataD := []byte("image-d")
-	if err := repo.Publish(dataD, metaFor(dataD), refsC); err != nil {
+	if err := repo.Publish(dataD, manifestFor(dataD), refsC); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), dataD)
-	archA, err := repo.ArchivePath(metaA.ID)
+	archA, err := repo.ArchivePath(rootID(manifestA))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, statErr := os.Stat(filepath.Join(archA, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("plain archive A adopted foreign layers: %v", statErr)
 	}
-	archB, err := repo.ArchivePath(metaB.ID)
+	archB, err := repo.ArchivePath(rootID(manifestB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,17 +912,16 @@ func TestPublishSweepsTornIncrIntoReferencedHold(t *testing.T) {
 	repo := testRepo(t)
 	layerC := testID("cccccccccccccccc")
 	dataC := []byte("image-c")
-	metaC := metaFor(dataC)
-	metaC.Chain = []ChainEntry{validEntry(metaC.ID, layerC)}
-	if err := repo.Publish(dataC, metaC, nil); err != nil {
+	manifestC := chainManifestFor(dataC, layerC)
+	if err := repo.Publish(dataC, manifestC, nil); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layerC, []byte("layer-c"))
-	holdC := tearActive(t, repo, metaC.ID)
-	refs := holdSet{ids: map[string]bool{metaC.ID: true}}
+	holdC := tearActive(t, repo, rootID(manifestC))
+	refs := holdSet{ids: map[string]bool{rootID(manifestC): true}}
 	dataD := []byte("image-d")
-	metaD := metaFor(dataD)
-	if err := repo.Publish(dataD, metaD, refs); err != nil {
+	manifestD := manifestFor(dataD)
+	if err := repo.Publish(dataD, manifestD, refs); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), dataD)
@@ -962,10 +930,10 @@ func TestPublishSweepsTornIncrIntoReferencedHold(t *testing.T) {
 		t.Fatalf("active incr err = %v", statErr)
 	}
 	dataE := []byte("image-e")
-	if err := repo.Publish(dataE, metaFor(dataE), refs); err != nil {
+	if err := repo.Publish(dataE, manifestFor(dataE), refs); err != nil {
 		t.Fatal(err)
 	}
-	archD, err := repo.ArchivePath(metaD.ID)
+	archD, err := repo.ArchivePath(rootID(manifestD))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -979,35 +947,34 @@ func TestPublishSweepResolvesAmbiguousHoldsByChain(t *testing.T) {
 	repo := testRepo(t)
 	layerC := testID("cccccccccccccccc")
 	dataA := []byte("image-a")
-	metaA := metaFor(dataA)
-	if err := repo.Publish(dataA, metaA, nil); err != nil {
+	manifestA := manifestFor(dataA)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
 	dataB := []byte("image-b")
-	metaB := metaFor(dataB)
-	refsA := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(dataB, metaB, refsA); err != nil {
+	manifestB := manifestFor(dataB)
+	refsA := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestB, refsA); err != nil {
 		t.Fatal(err)
 	}
 	dataC := []byte("image-c")
-	metaC := metaFor(dataC)
-	metaC.Chain = []ChainEntry{validEntry(metaC.ID, layerC)}
-	refsAB := holdSet{ids: map[string]bool{metaA.ID: true, metaB.ID: true}}
-	if err := repo.Publish(dataC, metaC, refsAB); err != nil {
+	manifestC := chainManifestFor(dataC, layerC)
+	refsAB := holdSet{ids: map[string]bool{rootID(manifestA): true, rootID(manifestB): true}}
+	if err := repo.Publish(dataC, manifestC, refsAB); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layerC, []byte("layer-c"))
-	tearActive(t, repo, metaC.ID)
+	tearActive(t, repo, rootID(manifestC))
 	dataD := []byte("image-d")
-	if err := repo.Publish(dataD, metaFor(dataD), nil); err != nil {
+	if err := repo.Publish(dataD, manifestFor(dataD), nil); err != nil {
 		t.Fatal(err)
 	}
-	archC, err := repo.ArchivePath(metaC.ID)
+	archC, err := repo.ArchivePath(rootID(manifestC))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(archC, dirIncr, layerC+squashExt), []byte("layer-c"))
-	for _, id := range []string{metaA.ID, metaB.ID} {
+	for _, id := range []string{rootID(manifestA), rootID(manifestB)} {
 		arch, err := repo.ArchivePath(id)
 		if err != nil {
 			t.Fatal(err)
@@ -1017,10 +984,10 @@ func TestPublishSweepResolvesAmbiguousHoldsByChain(t *testing.T) {
 		}
 	}
 	dataE := []byte("image-e")
-	if err := repo.Publish(dataE, metaFor(dataE), nil); err != nil {
+	if err := repo.Publish(dataE, manifestFor(dataE), nil); err != nil {
 		t.Fatal(err)
 	}
-	archD, err := repo.ArchivePath(metaFor(dataD).ID)
+	archD, err := repo.ArchivePath(rootID(manifestFor(dataD)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1033,31 +1000,27 @@ func TestPublishRepublishReturnsLayersFromReferencedHold(t *testing.T) {
 	repo := testRepo(t)
 	layer := testID("aaaaaaaaaaaaaaaa")
 	dataA := []byte("image-a")
-	metaA := metaFor(dataA)
-	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layer)}
-	if err := repo.Publish(dataA, metaA, nil); err != nil {
+	manifestA := chainManifestFor(dataA, layer)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layer, []byte("layer-a"))
 	dataB := []byte("image-b")
-	refs := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(dataB, metaFor(dataB), refs); err != nil {
+	refs := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestFor(dataB), refs); err != nil {
 		t.Fatal(err)
 	}
-	holdA, err := repo.HoldPath(metaA.ID)
+	holdA, err := repo.HoldPath(rootID(manifestA))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, filepath.Join(holdA, dirIncr, layer+squashExt), []byte("layer-a"))
-	if err := repo.Publish(dataA, metaA, refs); err != nil {
+	if err := repo.Publish(dataA, manifestA, refs); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), dataA)
-	loaded, err := Load(repo.MetaPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Chain) != 1 || loaded.Chain[0].ID != layer {
+	loaded := mustLoadManifest(t, repo.MetaPath())
+	if len(loaded.Images) != 2 || loaded.Images[1].ID != layer {
 		t.Fatalf("active meta = %+v", loaded)
 	}
 	incr, err := repo.IncrPath(layer)
@@ -1072,13 +1035,13 @@ func TestPublishRepublishReturnsLayersFromReferencedHold(t *testing.T) {
 		t.Fatalf("hold kept a duplicate layer: %v", statErr)
 	}
 	dataC := []byte("image-c")
-	if err := repo.Publish(dataC, metaFor(dataC), nil); err != nil {
+	if err := repo.Publish(dataC, manifestFor(dataC), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, statErr := os.Stat(holdA); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hold survived the dropped reference: %v", statErr)
 	}
-	archA, err := repo.ArchivePath(metaA.ID)
+	archA, err := repo.ArchivePath(rootID(manifestA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1090,15 +1053,14 @@ func TestPublishReplaceKeepsReferencedHoldLayers(t *testing.T) {
 	repo := testRepo(t)
 	layer := testID("aaaaaaaaaaaaaaaa")
 	dataA := []byte("image-a")
-	metaA := metaFor(dataA)
-	metaA.Chain = []ChainEntry{validEntry(metaA.ID, layer)}
-	if err := repo.Publish(dataA, metaA, nil); err != nil {
+	manifestA := chainManifestFor(dataA, layer)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
 		t.Fatal(err)
 	}
 	writeLayer(t, repo, layer, []byte("layer-a"))
 	dataB := []byte("image-b")
-	refs := holdSet{ids: map[string]bool{metaA.ID: true}}
-	if err := repo.Publish(dataB, metaFor(dataB), refs); err != nil {
+	refs := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestFor(dataB), refs); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a crash after A became active again but before the
@@ -1108,15 +1070,15 @@ func TestPublishReplaceKeepsReferencedHoldLayers(t *testing.T) {
 	if err := os.WriteFile(repo.ImagePath(), dataA, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), metaA); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifestA); err != nil {
 		t.Fatal(err)
 	}
 	dataC := []byte("image-c")
-	if err := repo.Publish(dataC, metaFor(dataC), refs); err != nil {
+	if err := repo.Publish(dataC, manifestFor(dataC), refs); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, repo.ImagePath(), dataC)
-	holdA, err := repo.HoldPath(metaA.ID)
+	holdA, err := repo.HoldPath(rootID(manifestA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1125,6 +1087,323 @@ func TestPublishReplaceKeepsReferencedHoldLayers(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("active incr err = %v", statErr)
 	}
+}
+
+// TestPublishFullMovesBranchingDAGIntoHold covers a full rebuild
+// over a branching DAG: the whole old DAG, including the layer file
+// of a branch node off the head stack, travels into the hold beside
+// _incr/ and meta.yaml, and the held manifest keeps every node.
+func TestPublishFullMovesBranchingDAGIntoHold(t *testing.T) {
+	repo := testRepo(t)
+	oldData := []byte("branching-full")
+	manifest, layer, branch := seedBranchingActive(t, repo, oldData)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := holdSet{ids: map[string]bool{root.ID: true}}
+	next := []byte("replacement-full")
+	if err := repo.Publish(next, manifestFor(next), refs); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	hold, err := repo.HoldPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, fileImage), oldData)
+	assertBytes(t, filepath.Join(hold, dirIncr, layer+squashExt), []byte("layer"))
+	assertBytes(t, filepath.Join(hold, dirIncr, branch+squashExt), []byte("branch"))
+	held, err := LoadManifest(filepath.Join(hold, fileMeta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Head != manifest.Head || len(held.Images) != 3 ||
+		!held.Has(layer) || !held.Has(branch) {
+		t.Fatalf("held manifest = %+v", held)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("active incr err = %v", statErr)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestPublishSweepReturnsBranchLayersByReachability covers the crash
+// repair after image and meta of a branching DAG reached the hold
+// but _incr/ stayed active: the sweep must return every layer file
+// the hold manifest lists, including the branch node the head stack
+// does not reach.
+func TestPublishSweepReturnsBranchLayersByReachability(t *testing.T) {
+	repo := testRepo(t)
+	oldData := []byte("branching-full")
+	manifest, layer, branch := seedBranchingActive(t, repo, oldData)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A torn replace: image and meta already rest in the hold while
+	// both layer files stayed in the active _incr directory.
+	tearActive(t, repo, root.ID)
+	next := []byte("after-tear")
+	if err := repo.Publish(next, manifestFor(next), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), next)
+	arch, err := repo.ArchivePath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(arch, dirIncr, layer+squashExt), []byte("layer"))
+	assertBytes(t, filepath.Join(arch, dirIncr, branch+squashExt), []byte("branch"))
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("active incr err = %v", statErr)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestPublishRepublishReturnsBranchLayersFromHold covers the stale
+// hold of an id that becomes active again: republishing the
+// branching manifest returns every layer file the manifest lists,
+// including the branch node, and the pinned hold survives without
+// the returned duplicates.
+func TestPublishRepublishReturnsBranchLayersFromHold(t *testing.T) {
+	repo := testRepo(t)
+	oldData := []byte("branching-full")
+	manifest, layer, branch := seedBranchingActive(t, repo, oldData)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := holdSet{ids: map[string]bool{root.ID: true}}
+	other := []byte("other-full")
+	if err := repo.Publish(other, manifestFor(other), refs); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirIncr, branch+squashExt), []byte("branch"))
+	if err := repo.Publish(oldData, manifest, refs); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), oldData)
+	active, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Head != manifest.Head || len(active.Images) != 3 {
+		t.Fatalf("active manifest = %+v", active)
+	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+	assertBytes(t, mustIncrPath(t, repo, branch), []byte("branch"))
+	if _, statErr := os.Stat(hold); statErr != nil {
+		t.Fatalf("referenced hold deleted: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(hold, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("hold kept duplicate layers: %v", statErr)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+func mustIncrPath(t *testing.T, repo Repo, id string) string {
+	t.Helper()
+	path, err := repo.IncrPath(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestPublishSweepKeepsIntactActiveBranchLayer covers the state
+// retireStaleHold leaves when refs still pin the id whose layers
+// returned: an intact active branching manifest lists a branch node
+// whose file rests in the active slot, while the pinned hold lists
+// the same id without holding the file. The sweep of a later
+// preparePublish must not relocate that file -- the active slot owns
+// the layer files of its whole DAG -- and the branch stack must
+// still resolve. A staged payload that mismatches its manifest runs
+// the sweep and then returns before the active DAG moves aside, so
+// the assertions observe the sweep alone.
+func TestPublishSweepKeepsIntactActiveBranchLayer(t *testing.T) {
+	repo := testRepo(t)
+	oldData := []byte("branching-full")
+	manifest, layer, branch := seedBranchingActive(t, repo, oldData)
+	root, err := manifest.Full()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := holdSet{ids: map[string]bool{root.ID: true}}
+	other := []byte("other-full")
+	if err := repo.Publish(other, manifestFor(other), refs); err != nil {
+		t.Fatal(err)
+	}
+	// Republishing the branching DAG makes it active again:
+	// retireStaleHold returns both layer files into the active slot,
+	// and the pinned hold survives listing them without the files.
+	if err := repo.Publish(oldData, manifest, refs); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGone(t, filepath.Join(hold, dirIncr, layer+squashExt))
+	next := []byte("mismatched-full")
+	imgTmp, err := writeTemp(repo.Dir, fileImage, []byte("torn-write"), hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaTmp := stageManifest(t, repo, manifestFor(next))
+	err = publishStaged(repo, manifestFor(next), refs, imgTmp, metaTmp, hooks{})
+	if err == nil || !strings.Contains(err.Error(), "payload does not match meta") {
+		t.Fatalf("err = %v", err)
+	}
+	assertBytes(t, mustIncrPath(t, repo, layer), []byte("layer"))
+	assertBytes(t, mustIncrPath(t, repo, branch), []byte("branch"))
+	assertGone(t, filepath.Join(hold, dirIncr, layer+squashExt))
+	active, err := LoadManifest(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Head != manifest.Head || len(active.Images) != 3 {
+		t.Fatalf("active manifest = %+v", active)
+	}
+	target, err := resolveStackAt(repo.Dir, repo.Name(), active, layer)
+	if err != nil {
+		t.Fatalf("branch stack does not resolve: %v", err)
+	}
+	if target.Tip != layer || len(target.Members) != 2 {
+		t.Fatalf("branch target = %+v", target)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestPublishRepublishReclaimsHoldLayersWithoutManifest covers the
+// reclaim fallback through a full republish: the hold of an id that
+// becomes active again still owns the only copy of a layer file, but
+// its manifest is gone. The hold then claims every file resting in
+// its _incr directory, so the layer is reclaimed into the active slot
+// and travels into the fresh hold instead of being deleted with the
+// stale one.
+func TestPublishRepublishReclaimsHoldLayersWithoutManifest(t *testing.T) {
+	repo := testRepo(t)
+	layer := testID("aaaaaaaaaaaaaaaa")
+	dataA := []byte("image-a")
+	manifestA := chainManifestFor(dataA, layer)
+	if err := repo.Publish(dataA, manifestA, nil); err != nil {
+		t.Fatal(err)
+	}
+	writeLayer(t, repo, layer, []byte("layer-a"))
+	dataB := []byte("image-b")
+	refs := holdSet{ids: map[string]bool{rootID(manifestA): true}}
+	if err := repo.Publish(dataB, manifestFor(dataB), refs); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(rootID(manifestA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash that restored A as active without retiring
+	// the stale hold, then tear the hold manifest away: the only
+	// copy of the layer file rests in a hold that cannot be listed
+	// through its manifest.
+	if err := os.WriteFile(repo.ImagePath(), dataA, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreManifest(repo.MetaPath(), manifestA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(hold, fileMeta)); err != nil {
+		t.Fatal(err)
+	}
+	dataC := []byte("image-c")
+	if err := repo.Publish(dataC, manifestFor(dataC), refs); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, repo.ImagePath(), dataC)
+	assertBytes(t, filepath.Join(hold, fileImage), dataA)
+	assertBytes(t, filepath.Join(hold, dirIncr, layer+squashExt), []byte("layer-a"))
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("active incr err = %v", statErr)
+	}
+	assertNoTemps(t, repo.Dir)
+}
+
+// TestMoveActiveToHoldReclaimsFromCorruptHoldManifest covers the
+// unreadable half of the reclaim fallback: a hold whose meta.yaml is
+// corrupt and unparsable still claims every layer file resting in its
+// _incr directory, so the reclaim saves them from the removal of the
+// stale hold. The republish flow cannot carry this case because the
+// torn-slot repair refuses a corrupt hold manifest earlier, so the
+// test drives moveActiveToHold directly, the way commit invokes it.
+func TestMoveActiveToHoldReclaimsFromCorruptHoldManifest(t *testing.T) {
+	repo := testRepo(t)
+	dataA := []byte("image-a")
+	manifest := seedActive(t, repo, dataA, true)
+	layer := manifest.Images[1].ID
+	if err := moveActiveToHold(repo, manifest, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := repo.HoldPath(rootID(manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, dirIncr, layer+squashExt), []byte("layer"))
+	if err := os.WriteFile(filepath.Join(hold, fileMeta), []byte("meta: [torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash that restored A as active without the layer
+	// file: the hold owns the only copy behind a corrupt manifest.
+	if err := os.WriteFile(repo.ImagePath(), dataA, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveActiveToHold(repo, manifest, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertBytes(t, filepath.Join(hold, fileImage), dataA)
+	assertBytes(t, filepath.Join(hold, dirIncr, layer+squashExt), []byte("layer"))
+	held, err := LoadManifest(filepath.Join(hold, fileMeta))
+	if err != nil {
+		t.Fatalf("corrupt manifest was not replaced: %v", err)
+	}
+	if !held.Has(layer) {
+		t.Fatalf("held manifest = %+v", held)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo.Dir, dirIncr)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("active incr err = %v", statErr)
+	}
+}
+
+// TestMoveActiveToHoldFailsOnUnreadableHoldIncr covers the IO error
+// half of the fallback: a hold whose _incr is a regular file fails
+// the reclaim, and the failure reaches the caller before the stale
+// hold is dropped, so nothing is deleted.
+func TestMoveActiveToHoldFailsOnUnreadableHoldIncr(t *testing.T) {
+	repo := testRepo(t)
+	dataA := []byte("image-a")
+	manifestA := seedActive(t, repo, dataA, false)
+	hold, err := repo.HoldPath(rootID(manifestA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hold, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hold, dirIncr), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveActiveToHold(repo, manifestA, hooks{}); err == nil {
+		t.Fatal("expected a reclaim failure")
+	}
+	if _, statErr := os.Stat(hold); statErr != nil {
+		t.Fatalf("stale hold deleted despite the failure: %v", statErr)
+	}
+	assertBytes(t, repo.ImagePath(), dataA)
+	assertNoTemps(t, repo.Dir)
 }
 
 func failSyncAfter(dir, base string) hooks {
@@ -1170,23 +1449,74 @@ func testRepo(t *testing.T) Repo {
 	return repo
 }
 
-func metaFor(data []byte) Meta {
+// manifestFor derives the single-node manifest that publishes data:
+// the full root is the whole DAG and the head.
+func manifestFor(data []byte) Manifest {
 	sum := sha256.Sum256(data)
-	meta := validMeta()
-	meta.ID = ID(sum)
-	meta.SHA256 = hex.EncodeToString(sum[:])
-	meta.Size = int64(len(data))
-	meta.Chain = nil
-	return meta
+	digest := hex.EncodeToString(sum[:])
+	return fullManifest("alice/app",
+		Format{Type: FormatSquashfs, Compression: CompressionZstd},
+		ImageMeta{
+			ID:        digest,
+			Kind:      KindFull,
+			Size:      int64(len(data)),
+			SHA256:    digest,
+			MtimeUnix: 1710000000,
+			CreatedAt: time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC),
+			Builder:   "dev",
+		})
 }
 
-func seedActive(t *testing.T, repo Repo, data []byte, withChain bool) Meta {
+// chainManifestFor derives the manifest that publishes data with one
+// incremental layer node parented on the root. layer is a legacy
+// 16-hex token or a full id.
+func chainManifestFor(data []byte, layer string) Manifest {
+	manifest := manifestFor(data)
+	return withNode(manifest, validNode(manifest.Head, layer))
+}
+
+// rootOf is the full root node of a manifest fixture. Test fixtures
+// always hold a valid root, so the graph error cannot occur.
+func rootOf(m Manifest) ImageMeta {
+	root, _ := m.Full()
+	return root
+}
+
+// rootID is the full root id of a manifest fixture.
+func rootID(m Manifest) string {
+	return rootOf(m).ID
+}
+
+// mustLoadManifest loads a manifest and fails the test on error.
+func mustLoadManifest(t *testing.T, path string) Manifest {
 	t.Helper()
-	meta := metaFor(data)
-	meta.Name = repo.Name()
+	manifest, err := LoadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// validNode is the incremental node counterpart of validEntry.
+func validNode(parent, id string) ImageMeta {
+	sum := testID(id)
+	return ImageMeta{
+		ID:        sum,
+		Kind:      KindIncremental,
+		Parent:    testID(parent),
+		Size:      4096,
+		SHA256:    sum,
+		MtimeUnix: 1710000001,
+		CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	}
+}
+
+func seedActive(t *testing.T, repo Repo, data []byte, withChain bool) Manifest {
+	t.Helper()
+	manifest := manifestFor(data)
+	manifest.Name = repo.Name()
 	if withChain {
-		layer := testID("fedcba9876543210")
-		meta.Chain = []ChainEntry{validEntry(meta.ID, layer)}
+		manifest = withNode(manifest, validNode(manifest.Head, "fedcba9876543210"))
 	}
 	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1194,22 +1524,43 @@ func seedActive(t *testing.T, repo Repo, data []byte, withChain bool) Meta {
 	if err := os.WriteFile(repo.ImagePath(), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Store(repo.MetaPath(), meta); err != nil {
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
 		t.Fatal(err)
 	}
 	if withChain {
-		incr, err := repo.IncrPath(meta.Chain[0].ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(incr), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(incr, []byte("layer"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeLayer(t, repo, manifest.Images[1].ID, []byte("layer"))
 	}
-	return meta
+	return manifest
+}
+
+// seedBranchingActive lays out an active slot whose DAG branches:
+// the full root plus two incremental nodes parented on the root,
+// with the head on one branch so the other layer is reachable only
+// through the manifest, not the head stack. Both layer files rest in
+// _incr/. It returns the manifest and the two layer ids.
+func seedBranchingActive(t *testing.T, repo Repo, data []byte) (Manifest, string, string) {
+	t.Helper()
+	const layer = "fedcba9876543210"
+	const branch = "0011223344556677"
+	manifest := manifestFor(data)
+	rootID := manifest.Head
+	manifest = withNode(manifest, validNode(rootID, layer))
+	manifest = withNode(manifest, validNode(rootID, branch))
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.ImagePath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreManifest(repo.MetaPath(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	writeLayer(t, repo, testID(layer), []byte("layer"))
+	writeLayer(t, repo, testID(branch), []byte("branch"))
+	return manifest, testID(layer), testID(branch)
 }
 
 func chainIncr(chainDir, id string) (string, error) {

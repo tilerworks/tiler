@@ -128,6 +128,12 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	if action.Name != "alice/app" || action.FullID != fullID {
 		t.Errorf("identity = %+v, want full id %s", action, fullID)
 	}
+	// The recorded desired tip is the active stack head: the full
+	// id itself for a fresh full build.
+	if action.TipID != listed.Active.Head {
+		t.Errorf("tip = %q, want the active head %q",
+			action.TipID, listed.Active.Head)
+	}
 	if action.Mountpoint != view || action.Mode != session.ModeRW {
 		t.Errorf("action = %+v", action)
 	}
@@ -147,6 +153,51 @@ func TestMountRecordsActionInFlagSession(t *testing.T) {
 	action = rec.Actions[0]
 	if action.Mode != session.ModeRO || action.Subdir != "src" {
 		t.Errorf("action = %+v", action)
+	}
+}
+
+// TestMountRecordsStackTipAfterIncrementalBuild asserts the action
+// pins the resolved stack tip: after an incremental build the
+// desired stack is the full image plus the new layer, and TipID
+// names the layer while FullID keeps naming the stack root.
+func TestMountRecordsStackTipAfterIncrementalBuild(t *testing.T) {
+	home, work := withWorkspace(t)
+	imagesDir, lib := libFlags(home)
+	merged := filepath.Join(work, "merged")
+	upper := filepath.Join(home, "lib", "runtime", "up-1-2", "upper")
+	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	src := filepath.Join(work, "src")
+	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
+	fullID := buildImage(t, lib, "alice/app", src)
+	writeTestFile(t, filepath.Join(upper, "new.txt"), "change")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(merged)
+	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
+	if err != nil {
+		t.Fatalf("incr build: %v\n%s", err, stderr)
+	}
+	tipID := buildOutput(t, stdout)
+	if tipID == fullID {
+		t.Fatalf("incremental id = full id %s", fullID)
+	}
+
+	withMountSeams(t, nil)
+	mustSessionNew(t, lib, "dev")
+	view := filepath.Join(work, "view")
+	mountOK(t, lib, "mounted "+view+"\n",
+		"mount", "--session", "dev", "alice/app", view)
+	action := loadSessionRecord(t, sessionsDir(home), "dev").Actions[0]
+	if action.FullID != fullID {
+		t.Errorf("full id = %q, want %q", action.FullID, fullID)
+	}
+	if action.TipID != tipID {
+		t.Errorf("tip = %q, want the incremental head %q", action.TipID, tipID)
+	}
+	// A fresh mount serves its desired stack: no served ids.
+	if action.ServedID != "" || action.ServedTip != "" {
+		t.Errorf("a fresh mount recorded a served stack: %+v", action)
 	}
 }
 
@@ -315,7 +366,7 @@ func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
 	if action.Image != img {
 		t.Errorf("image = %q, want the reference as given", action.Image)
 	}
-	if action.Name != "" || action.FullID != "" {
+	if action.Name != "" || action.FullID != "" || action.TipID != "" {
 		t.Errorf("file-path identity = %+v, want empty", action)
 	}
 }

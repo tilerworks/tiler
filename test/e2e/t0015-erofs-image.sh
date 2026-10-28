@@ -112,7 +112,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs pack
 	test -n "$id1" &&
 	test_path_is_file "$img_dir/image.sqsh" &&
 	test_path_is_missing "$img_dir/_blocks" &&
-	test_grep -E "^id: \"?$id1\"?$" "$meta_file" &&
+	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
 	test_grep "^    type: erofs$" "$meta_file" &&
 	test_grep "^    compression: $erofs_comp$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show.out 2>show.err &&

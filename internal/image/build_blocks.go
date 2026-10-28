@@ -55,26 +55,30 @@ func buildBlocks(req FullRequest) (FullResult, error) {
 	return publishBlocks(repo, req, staged, payloadTmp, split)
 }
 
-// publishBlocks assembles the metadata, publishes the staged payload
-// directory, and re-hashes every published block against the
-// manifest.
+// publishBlocks assembles the single-node manifest, publishes the
+// staged payload directory, and re-hashes every published block
+// against the manifest.
 func publishBlocks(
 	repo Repo,
 	req FullRequest,
 	staged, payloadTmp string,
 	split blockSplit,
 ) (FullResult, error) {
-	meta, err := blocksMeta(repo, req, staged, split, buildNow(req))
+	manifest, err := blocksManifest(repo, req, staged, split, buildNow(req))
 	if err != nil {
 		return FullResult{}, err
 	}
-	body, err := Encode(meta)
+	body, err := EncodeManifest(manifest)
+	if err != nil {
+		return FullResult{}, fmt.Errorf("build: %w", err)
+	}
+	root, err := manifest.Full()
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
 	// Resolve the final payload place before the meta temp exists, so
 	// no early return can leave a staged temp behind.
-	finalDir, err := repo.BlocksDirPath(meta.ID)
+	finalDir, err := repo.BlocksDirPath(root.ID)
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
@@ -82,14 +86,14 @@ func publishBlocks(
 	if err != nil {
 		return FullResult{}, fmt.Errorf("build: %w", err)
 	}
-	if err := publishStagedPayload(repo, meta, req.Refs,
+	if err := publishStagedPayload(repo, manifest, req.Refs,
 		payloadTmp, finalDir, metaTmp, hooks{}); err != nil {
 		return FullResult{}, err
 	}
-	if err := verifyPublishedBlocks(repo, meta); err != nil {
+	if err := verifyPublishedBlocks(repo, root); err != nil {
 		return FullResult{}, err
 	}
-	return FullResult{ID: meta.ID, Path: finalDir, SHA256: meta.SHA256}, nil
+	return FullResult{ID: root.ID, Path: finalDir, SHA256: root.SHA256}, nil
 }
 
 // ensureBlocksSpace requires room for the staging file and for the
@@ -278,41 +282,50 @@ func writeConcatView(tmpDir string, names []string) error {
 	return nil
 }
 
-// blocksMeta assembles the full metadata of a blocks payload. The
-// whole digest and size come from the streaming pass, and the
-// logical image mtime is the staged pack time.
-func blocksMeta(
+// blocksManifest assembles the single-node manifest of a blocks
+// payload. The whole digest and size come from the streaming pass,
+// and the logical image mtime is the staged pack time.
+func blocksManifest(
 	repo Repo,
 	req FullRequest,
 	staged string,
 	split blockSplit,
 	now func() time.Time,
-) (Meta, error) {
+) (Manifest, error) {
 	info, err := os.Stat(staged)
 	if err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+		return Manifest{}, fmt.Errorf("build: %w", err)
 	}
-	meta := newFullMeta(repo, req, now)
-	meta.ID = ID(split.whole)
-	meta.Size = split.size
-	meta.SHA256 = hexDigest(split.whole)
-	meta.MtimeUnix = info.ModTime().Unix()
-	meta.Blocks = split.blocks
-	if err := meta.Validate(); err != nil {
-		return Meta{}, fmt.Errorf("build: %w", err)
+	node := ImageMeta{
+		ID:        ID(split.whole),
+		Kind:      KindFull,
+		Size:      split.size,
+		SHA256:    hexDigest(split.whole),
+		MtimeUnix: info.ModTime().Unix(),
+		CreatedAt: now().UTC(),
+		Builder:   req.Builder,
+		Blocks:    split.blocks,
 	}
-	return meta, nil
+	manifest := fullManifest(
+		repo.Name(),
+		Format{Type: req.Format, Compression: req.Compression},
+		node,
+	)
+	if err := manifest.Validate(); err != nil {
+		return Manifest{}, fmt.Errorf("build: %w", err)
+	}
+	return manifest, nil
 }
 
 // verifyPublishedBlocks re-hashes every published block against the
 // manifest, extending the discipline of hashing the image again
 // after the publish rename.
-func verifyPublishedBlocks(repo Repo, meta Meta) error {
-	dir, err := repo.BlocksDirPath(meta.ID)
+func verifyPublishedBlocks(repo Repo, node ImageMeta) error {
+	dir, err := repo.BlocksDirPath(node.ID)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
-	ok, err := dirMatchesBlocks(dir, meta.Blocks)
+	ok, err := dirMatchesBlocks(dir, node.Blocks)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}

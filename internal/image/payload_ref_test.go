@@ -74,14 +74,11 @@ func TestResolvePayloadBytesPathRefQuickCheck(t *testing.T) {
 	if info.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("expected path-ref regular file")
 	}
-	meta, err := Load(repo.MetaPath())
-	if err != nil {
+	manifest := mustLoadManifest(t, repo.MetaPath())
+	if err := QuickCheck(rootOf(manifest), repo.ImagePath()); err != nil {
 		t.Fatal(err)
 	}
-	if err := QuickCheck(meta, repo.ImagePath()); err != nil {
-		t.Fatal(err)
-	}
-	if err := VerifySHA256(meta, repo.ImagePath()); err != nil {
+	if err := VerifySHA256(rootOf(manifest), repo.ImagePath()); err != nil {
 		t.Fatal(err)
 	}
 }
