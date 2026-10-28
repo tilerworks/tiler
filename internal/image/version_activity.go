@@ -3,6 +3,7 @@ package image
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -54,6 +55,25 @@ func EnsureVersionActivityLocked(repo Repo, sourceID string, clock activity.Cloc
 	return versionActivityBatch{repo: repo, clock: clock}.ensure(sourceID)
 }
 
+// recordVersionReuse records that a publication used an identical
+// version that is already published. A repeated publication must not
+// claim a second creation, so it reports this use instead. The caller
+// must hold the library lock.
+func recordVersionReuse(repo Repo, old ImageMeta) error {
+	return AppendVersionActivityLocked(repo, old.ID, activity.Event{
+		Event: activity.EventImageReuse,
+		Phase: activity.PhaseSucceeded,
+	}, nil)
+}
+
+// versionCreationEvent names the creation of one published version.
+func versionCreationEvent(node ImageMeta) string {
+	if node.Kind == KindIncremental {
+		return activity.EventImageCreateIncremental
+	}
+	return activity.EventImageCreateFull
+}
+
 // versionActivityBatch writes one logical event along a parent chain.
 // Tests replace open to inject a failure in the middle of a batch.
 type versionActivityBatch struct {
@@ -70,6 +90,9 @@ func (b versionActivityBatch) append(sourceID string, ev activity.Event) error {
 	if err != nil {
 		return fmt.Errorf("image %s: activity %s: %w", b.repo.Name(), ev.Event, err)
 	}
+	if err := b.prepare(chain); err != nil {
+		return fmt.Errorf("image %s: activity %s: %w", b.repo.Name(), ev.Event, err)
+	}
 	at, err := b.batchTime(chain)
 	if err != nil {
 		return err
@@ -81,6 +104,10 @@ func (b versionActivityBatch) append(sourceID string, ev activity.Event) error {
 func (b versionActivityBatch) ensure(sourceID string) ([]string, error) {
 	chain, err := b.chain(sourceID)
 	if err != nil {
+		return nil, fmt.Errorf("image %s: activity %s: %w",
+			b.repo.Name(), activity.EventInitialize, err)
+	}
+	if err := b.prepare(chain); err != nil {
 		return nil, fmt.Errorf("image %s: activity %s: %w",
 			b.repo.Name(), activity.EventInitialize, err)
 	}
@@ -123,6 +150,23 @@ func (b versionActivityBatch) initialize(id string, at time.Time, ev activity.Ev
 			b.repo.Name(), ev.Event, ev.Phase, id, err)
 	}
 	return wrote, nil
+}
+
+// prepare creates the object directory of every chain member. The log
+// lives inside that directory, and a version committed before this
+// release carries no activity files yet, so the first record of a
+// batch may be the one that needs the directory.
+func (b versionActivityBatch) prepare(chain []ImageMeta) error {
+	for _, node := range chain {
+		dir, err := b.repo.ObjectDirPath(node.ID)
+		if err == nil {
+			err = os.MkdirAll(dir, 0o755)
+		}
+		if err != nil {
+			return fmt.Errorf("activity directory of version %s: %w", node.ID, err)
+		}
+	}
+	return nil
 }
 
 // uninitialized reports a source log that is missing or empty. An

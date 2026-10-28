@@ -25,8 +25,11 @@ const (
 	EventUnmount                = "unmount"
 	EventImageCreateFull        = "image.create.full"
 	EventImageCreateIncremental = "image.create.incremental"
-	EventImageDependency        = "image.dependency.activity"
-	EventInitialize             = "activity.initialize"
+	// EventImageReuse records a publication that found the identical
+	// version already published and used it instead of creating one.
+	EventImageReuse      = "image.reuse"
+	EventImageDependency = "image.dependency.activity"
+	EventInitialize      = "activity.initialize"
 )
 
 // Event is one lifecycle record. Event and Phase are required; the

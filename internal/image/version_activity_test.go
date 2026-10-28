@@ -29,14 +29,26 @@ func incrementalNode(parent ImageMeta, text string) ImageMeta {
 	return node
 }
 
-// seedVersions publishes metadata-only versions and creates the object
-// directory each payload and activity log lives in.
+// seedVersions commits metadata-only versions without the publication
+// activity a real publish records, which is what a library upgraded
+// from an older release looks like, and creates the object directory
+// each payload and activity log lives in.
 func seedVersions(t *testing.T, repo Repo, nodes ...ImageMeta) {
 	t.Helper()
-	for _, node := range nodes {
-		if _, err := appendVersion(repo, node, false, hooks{}); err != nil {
-			t.Fatalf("append %s: %v", node.Description, err)
-		}
+	manifest, previous, err := loadVersionMeta(repo)
+	if err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	manifest.Images = append(manifest.Images, nodes...)
+	body, err := EncodeVersionManifest(manifest)
+	if err != nil {
+		t.Fatalf("encode seeded manifest: %v", err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatalf("create repository directory: %v", err)
+	}
+	if err := replaceVersionMeta(repo, previous, body, hooks{}); err != nil {
+		t.Fatalf("write seeded manifest: %v", err)
 	}
 	for _, node := range nodes {
 		dir, err := repo.ObjectDirPath(node.ID)
@@ -404,6 +416,37 @@ func TestEnsureVersionActivityScanOrderDoesNotChangeTheOutcome(t *testing.T) {
 	}
 }
 
+// TestEnsureVersionActivityCreatesAMissingObjectDirectory initializes a
+// legacy version whose object directory no longer exists.
+func TestEnsureVersionActivityCreatesAMissingObjectDirectory(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	tip := incrementalNode(base, "tip")
+	seedVersions(t, repo, base, tip)
+	for _, node := range []ImageMeta{base, tip} {
+		dir, err := repo.ObjectDirPath(node.ID)
+		if err != nil {
+			t.Fatalf("object dir of %s: %v", node.Description, err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatalf("remove object dir of %s: %v", node.Description, err)
+		}
+	}
+	written, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if strings.Join(written, ",") != base.ID+","+tip.ID {
+		t.Fatalf("written = %v, want the whole chain", written)
+	}
+	for _, node := range []ImageMeta{base, tip} {
+		lines := readVersionActivity(t, repo, node.ID)
+		if len(lines) != 1 || lines[0].Phase != activity.PhaseInitialized {
+			t.Fatalf("version %s lines = %+v, want one initialization", node.Description, lines)
+		}
+	}
+}
+
 // TestVersionActivityPropagatesAlongTheParentChain records one event
 // on the source and one attributed dependency record on every
 // ancestor, leaving sibling branches alone.
@@ -648,4 +691,234 @@ func TestVersionActivityBatchesSerializeUnderTheLibraryLock(t *testing.T) {
 			t.Fatalf("version %s lines = %d, want %d", node.Description, len(lines), writers)
 		}
 	}
+}
+
+// requireCreated asserts the only record of a freshly published version.
+func requireCreated(t *testing.T, repo Repo, id, event string) {
+	t.Helper()
+	lines := readVersionActivity(t, repo, id)
+	if len(lines) != 1 || lines[0].Event != event || lines[0].Phase != activity.PhaseSucceeded {
+		t.Fatalf("version %s lines = %+v, want one successful %s", id, lines, event)
+	}
+	if lines[0].Version != id || lines[0].Image != repo.Name() || lines[0].SourceVersion != "" {
+		t.Fatalf("version %s attribution = %+v", id, lines[0])
+	}
+}
+
+// publishNode publishes text as a new version under its pinned parent.
+func publishNode(t *testing.T, repo Repo, node ImageMeta, parent *ImageMeta) ImageMeta {
+	t.Helper()
+	stage := writeSource(t, t.TempDir(), []byte(node.Description))
+	root := linkImagesRoot(repo)
+	got, err := PublishFullVersion(root, repo.Name(), stage, node, false)
+	if parent != nil {
+		got, err = PublishIncrementalVersion(root, repo.Name(), stage, node, *parent, false)
+	}
+	if err != nil {
+		t.Fatalf("publish %s: %v", node.Description, err)
+	}
+	return got
+}
+
+// TestPublishActivityRecordsAFullCreation records the creation of a
+// published full version in the version's own log.
+func TestPublishActivityRecordsAFullCreation(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	publishNode(t, repo, base, nil)
+	requireCreated(t, repo, base.ID, activity.EventImageCreateFull)
+}
+
+// TestPublishActivityPropagatesIncrementalCreation attributes the phase
+// that reads a parent chain to the parent, the creation to the new
+// version, and appends one record per ancestor and phase.
+func TestPublishActivityPropagatesIncrementalCreation(t *testing.T) {
+	repo := testRepo(t)
+	base := publishNode(t, repo, versionNode("base"), nil)
+	mid := incrementalNode(base, "mid")
+	publishNode(t, repo, mid, &base)
+	tip := incrementalNode(mid, "tip")
+	publishNode(t, repo, tip, &mid)
+	source := readVersionActivity(t, repo, tip.ID)
+	if len(source) != 1 || source[0].Event != activity.EventImageCreateIncremental ||
+		source[0].Phase != activity.PhaseSucceeded || source[0].SourceVersion != "" {
+		t.Fatalf("tip lines = %+v, want its own creation", source)
+	}
+	want := []struct{ event, phase, source string }{
+		{activity.EventImageCreateIncremental, activity.PhaseSucceeded, ""},
+		{activity.EventImageCreateIncremental, activity.PhaseStarted, ""},
+		{activity.EventImageDependency, activity.PhaseSucceeded, tip.ID},
+	}
+	parent := readVersionActivity(t, repo, mid.ID)
+	if len(parent) != len(want) {
+		t.Fatalf("mid lines = %+v, want one record per phase", parent)
+	}
+	for i, expected := range want {
+		line := parent[i]
+		if line.Event != expected.event || line.Phase != expected.phase || line.SourceVersion != expected.source {
+			t.Fatalf("mid line %d = %+v, want %+v", i, line, expected)
+		}
+	}
+	root := readVersionActivity(t, repo, base.ID)
+	if len(root) != 5 {
+		t.Fatalf("root lines = %+v, want one record per phase of each publication", root)
+	}
+	if root[0].Event != activity.EventImageCreateFull {
+		t.Fatalf("root creation = %+v", root[0])
+	}
+	if root[3].Event != activity.EventImageDependency || root[3].Phase != activity.PhaseStarted ||
+		root[3].SourceVersion != mid.ID || root[3].SourceEvent != activity.EventImageCreateIncremental {
+		t.Fatalf("root parent-chain read = %+v, want the mid publication", root[3])
+	}
+	if root[4].Event != activity.EventImageDependency || root[4].Phase != activity.PhaseSucceeded ||
+		root[4].SourceVersion != tip.ID || root[4].SourceEvent != activity.EventImageCreateIncremental {
+		t.Fatalf("root creation dependency = %+v, want the tip publication", root[4])
+	}
+}
+
+// TestPublishActivityRecordsAReuseInsteadOfACreation keeps one creation
+// record and adds a use record for the repeated publication.
+func TestPublishActivityRecordsAReuseInsteadOfACreation(t *testing.T) {
+	repo := testRepo(t)
+	base := publishNode(t, repo, versionNode("base"), nil)
+	publishNode(t, repo, base, nil)
+	tip := incrementalNode(base, "tip")
+	publishNode(t, repo, tip, &base)
+	publishNode(t, repo, tip, &base)
+	source := readVersionActivity(t, repo, tip.ID)
+	if len(source) != 2 || source[0].Event != activity.EventImageCreateIncremental ||
+		source[1].Event != activity.EventImageReuse || source[1].Phase != activity.PhaseSucceeded {
+		t.Fatalf("tip lines = %+v, want the creation and the reuse", source)
+	}
+	root := readVersionActivity(t, repo, base.ID)
+	if len(root) != 5 {
+		t.Fatalf("root lines = %+v, want one record per phase", root)
+	}
+	if root[1].Event != activity.EventImageReuse || root[1].Phase != activity.PhaseSucceeded {
+		t.Fatalf("root reuse = %+v", root[1])
+	}
+	last := root[len(root)-1]
+	if last.Event != activity.EventImageDependency || last.SourceVersion != tip.ID ||
+		last.SourceEvent != activity.EventImageReuse {
+		t.Fatalf("root reuse dependency = %+v, want the tip reuse", last)
+	}
+}
+
+// TestPublishActivityAbortsOnADamagedParentTail keeps the manifest
+// unchanged when the parent chain cannot be read.
+func TestPublishActivityAbortsOnADamagedParentTail(t *testing.T) {
+	repo := testRepo(t)
+	base := publishNode(t, repo, versionNode("base"), nil)
+	if err := os.WriteFile(activityLogPath(t, repo, base.ID), []byte(`{"time":"broken`), 0o600); err != nil {
+		t.Fatalf("damage the parent tail: %v", err)
+	}
+	tip := incrementalNode(base, "tip")
+	stage := writeSource(t, t.TempDir(), []byte("tip"))
+	root := linkImagesRoot(repo)
+	if _, err := PublishIncrementalVersion(root, repo.Name(), stage, tip, base, false); !errors.Is(err, activity.ErrDamagedLog) {
+		t.Fatalf("publish err = %v, want ErrDamagedLog", err)
+	}
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 1 {
+		t.Fatalf("damaged activity published %d versions: %v", len(manifest.Images), err)
+	}
+	requireNoActivityLog(t, repo, tip.ID)
+}
+
+// TestPublishActivityReportsAFailedCreationWrite keeps the published
+// version and reports the missing record: the manifest is authoritative.
+func TestPublishActivityReportsAFailedCreationWrite(t *testing.T) {
+	repo := testRepo(t)
+	base := versionNode("base")
+	logPath := activityLogPath(t, repo, base.ID)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("create object dir: %v", err)
+	}
+	damaged := []byte(`{"time":"broken`)
+	if err := os.WriteFile(logPath, damaged, 0o600); err != nil {
+		t.Fatalf("damage the creation log: %v", err)
+	}
+	stage := writeSource(t, t.TempDir(), []byte("base"))
+	got, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, base, false)
+	if !errors.Is(err, activity.ErrDamagedLog) {
+		t.Fatalf("publish err = %v, want ErrDamagedLog", err)
+	}
+	if got.ID != base.ID {
+		t.Fatalf("published version = %#v, want the committed version", got)
+	}
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 1 || manifest.Images[0].ID != base.ID {
+		t.Fatalf("manifest = %#v, %v, want the published version", manifest, err)
+	}
+	body, err := os.ReadFile(logPath)
+	if err != nil || string(body) != string(damaged) {
+		t.Fatalf("log = %q, %v, want the damaged tail untouched", body, err)
+	}
+}
+
+// TestPublishActivityCoversEveryPublicationPath records a creation from
+// the split, imported external, and caller-locked entry points.
+func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
+	t.Run("split", func(t *testing.T) {
+		repo := testRepo(t)
+		stage, node := stagedSplitVersion(t, "payload", 3)
+		if _, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false); err != nil {
+			t.Fatalf("publish split version: %v", err)
+		}
+		requireCreated(t, repo, node.ID, activity.EventImageCreateFull)
+	})
+	t.Run("external link", func(t *testing.T) {
+		withLinuxLinkPolicy(t)
+		images, nas := t.TempDir(), t.TempDir()
+		src := writeFakeSquashfs(t, nas, []byte("vendor-payload"))
+		if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+			t.Fatalf("link external: %v", err)
+		}
+		repo, err := OpenRepo(images, "alice/app")
+		if err != nil {
+			t.Fatalf("open repo: %v", err)
+		}
+		manifest, err := LoadVersionManifest(repo)
+		if err != nil || len(manifest.Images) != 1 {
+			t.Fatalf("manifest = %#v, %v", manifest, err)
+		}
+		id := manifest.Images[0].ID
+		requireCreated(t, repo, id, activity.EventImageCreateFull)
+		if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+			t.Fatalf("repeat link: %v", err)
+		}
+		lines := readVersionActivity(t, repo, id)
+		if len(lines) != 2 || lines[1].Event != activity.EventImageReuse {
+			t.Fatalf("linked version lines = %+v, want the creation and the reuse", lines)
+		}
+	})
+	t.Run("caller locked", func(t *testing.T) {
+		repo := testRepo(t)
+		root := linkImagesRoot(repo)
+		base := versionNode("base")
+		release, err := LockLibrary(root, 0)
+		if err != nil {
+			t.Fatalf("lock library: %v", err)
+		}
+		defer release()
+		stage := writeSource(t, t.TempDir(), []byte("base"))
+		if _, err := PublishFullVersionLocked(root, repo.Name(), stage, base, false); err != nil {
+			t.Fatalf("publish under the caller lock: %v", err)
+		}
+		requireCreated(t, repo, base.ID, activity.EventImageCreateFull)
+		tip := incrementalNode(base, "tip")
+		stage = writeSource(t, t.TempDir(), []byte("tip"))
+		if _, err := PublishIncrementalVersionLocked(root, repo.Name(), stage, tip, base, false); err != nil {
+			t.Fatalf("publish incremental under the caller lock: %v", err)
+		}
+		requireCreated(t, repo, tip.ID, activity.EventImageCreateIncremental)
+		parent := readVersionActivity(t, repo, base.ID)
+		if len(parent) != 3 {
+			t.Fatalf("parent lines = %+v, want the creation, its parent-chain read, and the dependency", parent)
+		}
+		if last := parent[2]; last.Event != activity.EventImageDependency ||
+			last.SourceVersion != tip.ID || last.Phase != activity.PhaseSucceeded {
+			t.Fatalf("parent dependency = %+v, want the published tip", last)
+		}
+	})
 }

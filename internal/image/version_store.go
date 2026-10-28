@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/jiangxin/tiler/internal/activity"
 )
 
 // appendFullVersion commits metadata after its caller has placed the payload.
@@ -17,6 +19,17 @@ func appendFullVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hook
 	return appendVersion(repo, node, descriptionSet, seam)
 }
 
+// appendVersion commits one immutable version at the shared publication
+// boundary every payload path reaches: plain file, split, external
+// link, DMG bake, and the caller-locked entry points. The caller must
+// hold the library lock; published versions are never rewritten.
+//
+// Each publication phase is recorded through the parent-chain activity
+// API. An incremental version cannot name itself before it exists, so
+// the phase that reads its parent chain is sourced at the parent; the
+// creation itself is recorded from the published version afterwards.
+// A reuse of an identical version records the use instead, because no
+// creation happened.
 func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (ImageMeta, error) {
 	var err error
 	if node.Description, err = NormalizeDescription(node.Description); err != nil {
@@ -39,7 +52,22 @@ func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (
 		if descriptionSet && old.Description != node.Description {
 			return ImageMeta{}, fmt.Errorf("version publish: use images describe %s:%s to change description", repo.Name(), node.ID)
 		}
+		if err := recordVersionReuse(repo, old); err != nil {
+			return ImageMeta{}, err
+		}
 		return old, nil
+	}
+	if node.Kind == KindIncremental {
+		// The new version has no identity in the manifest yet, so the
+		// consumed parent is the source of the phase that reads its
+		// chain. Recording it first keeps the ancestry active even if
+		// the publication stops after this point.
+		if err := AppendVersionActivityLocked(repo, node.Parent, activity.Event{
+			Event: activity.EventImageCreateIncremental,
+			Phase: activity.PhaseStarted,
+		}, nil); err != nil {
+			return ImageMeta{}, err
+		}
 	}
 	manifest.Images = append(manifest.Images, node)
 	body, err := EncodeVersionManifest(manifest)
@@ -51,6 +79,16 @@ func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (
 	}
 	if err := replaceVersionMeta(repo, previous, body, seam); err != nil {
 		return ImageMeta{}, err
+	}
+	// The version is published at this point. A creation record that
+	// cannot be written is reported with the published version: the
+	// manifest stays authoritative, and a retried publication reuses the
+	// version and records that use.
+	if err := AppendVersionActivityLocked(repo, node.ID, activity.Event{
+		Event: versionCreationEvent(node),
+		Phase: activity.PhaseSucceeded,
+	}, nil); err != nil {
+		return node, err
 	}
 	return node, nil
 }
