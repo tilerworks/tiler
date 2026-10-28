@@ -15,11 +15,14 @@ func BuildDMGVersion(req DMGRequest) (ImageMeta, error) {
 	if err != nil {
 		return ImageMeta{}, err
 	}
-	if req.SrcDir == "" || req.Shadow != "" || req.MountedID != "" {
-		return ImageMeta{}, errors.New("version build: directory source required")
-	}
 	if req.Description, err = NormalizeDescription(req.Description); err != nil {
 		return ImageMeta{}, err
+	}
+	if req.SrcDir == "" && req.Shadow != "" {
+		return bakeDMGVersion(repo, req)
+	}
+	if req.SrcDir == "" || req.Shadow != "" || req.MountedID != "" {
+		return ImageMeta{}, errors.New("version build: directory source required")
 	}
 	if err := checkSourceDir(req.SrcDir, req.Config); err != nil {
 		return ImageMeta{}, err
@@ -74,6 +77,11 @@ func commitDMGVersion(repo Repo, req DMGRequest, staged, content string) (ImageM
 	m, _, err := loadVersionMeta(repo)
 	if err != nil {
 		return ImageMeta{}, err
+	}
+	if req.MountedID != "" {
+		if _, _, err := mountedDMGVersion(repo, m, req.MountedID); err != nil {
+			return ImageMeta{}, err
+		}
 	}
 	var matches []ImageMeta
 	for _, node := range m.Images {
