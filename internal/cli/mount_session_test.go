@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -353,7 +354,7 @@ func TestMountWriteAheadOrdering(t *testing.T) {
 	}
 }
 
-func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
+func TestMountFilePathImageRecordsContentIdentity(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
@@ -367,8 +368,13 @@ func TestMountFilePathImageRecordsEmptyIdentity(t *testing.T) {
 	if action.Image != img {
 		t.Errorf("image = %q, want the reference as given", action.Image)
 	}
-	if action.Name != "" || action.FullID != "" || action.TipID != "" {
-		t.Errorf("file-path identity = %+v, want empty", action)
+	body, err := os.ReadFile(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTip := fmt.Sprintf("%x", sha256.Sum256(body))
+	if action.Name != "" || action.FullID != "" || action.TipID != wantTip {
+		t.Errorf("file-path identity = %+v, want tip %s", action, wantTip)
 	}
 }
 

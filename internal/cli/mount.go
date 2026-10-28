@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -332,7 +335,7 @@ func discardGeneratedSession(engine *session.Engine, name string, reused bool) {
 
 // mountAction builds the record action for one mount. The identity
 // fields come from the resolved library target; a file-path image
-// records the reference as given and leaves the identity empty.
+// records its complete content digest as the stable tip identity.
 func mountAction(ref string, target image.Target, dir string, flags mountFlags) (session.Action, error) {
 	mode := session.ModeRW
 	if flags.readOnly {
@@ -355,6 +358,24 @@ func mountAction(ref string, target image.Target, dir string, flags mountFlags) 
 		// replay remounts the same layers even after the library
 		// head moves past them.
 		action.TipID = target.Tip
+	} else {
+		file, err := os.Open(ref)
+		if err != nil {
+			return session.Action{}, fmt.Errorf("mount: hash image: %w", err)
+		}
+		digest := sha256.New()
+		if _, err := io.Copy(digest, file); err != nil {
+			_ = file.Close()
+			return session.Action{}, fmt.Errorf("mount: hash image: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return session.Action{}, fmt.Errorf("mount: hash image: %w", err)
+		}
+		action.Image, err = filepath.Abs(ref)
+		if err != nil {
+			return session.Action{}, fmt.Errorf("mount: image path: %w", err)
+		}
+		action.TipID = hex.EncodeToString(digest.Sum(nil))
 	}
 	return action, nil
 }

@@ -40,14 +40,29 @@ func writeSessionRecordMarked(t *testing.T, dir, name string, removable bool, ac
 		}
 	}
 	store := session.Store{Dir: dir}
-	rec := session.Record{
-		Name:          name,
-		State:         session.StateActive,
-		Actions:       actions,
-		CreatedAt:     now,
-		RemoveOnClose: removable,
+	versioned := true
+	for _, action := range actions {
+		if len(action.TipID) != 64 || (action.Name != "" && len(action.FullID) != 64) ||
+			(action.ServedID != "" && (len(action.ServedID) != 64 || len(action.ServedTip) != 64)) {
+			versioned = false
+		}
 	}
-	if err := store.Save(rec); err != nil {
+	rec := session.Record{Name: name, State: session.StateActive,
+		Actions: actions, CreatedAt: now, RemoveOnClose: removable}
+	var err error
+	if versioned {
+		for i := range actions {
+			actions[i].RuntimeID = fmt.Sprintf("m%d", i+1)
+		}
+		rec, err = session.NewVersionRecord(name, now)
+		if err == nil {
+			rec.Actions, rec.RemoveOnClose = actions, removable
+			err = store.SaveVersion(rec)
+		}
+	} else {
+		err = store.Save(rec)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -126,6 +141,26 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	}
 	if stdout, _, _, err = runCmd(t, append(lib, "session", "list")...); err != nil || stdout != "" {
 		t.Fatalf("list after remove = %q (%v)", stdout, err)
+	}
+}
+
+func TestSessionReadCommandsRejectLegacyRecords(t *testing.T) {
+	home, _ := withWorkspace(t)
+	_, lib := libFlags(home)
+	store := session.Store{Dir: sessionsDir(home)}
+	if err := store.Save(session.Record{
+		Name: "legacy", State: session.StateActive, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{{"session", "list"}, {"session", "show", "legacy"}} {
+		stdout, _, _, err := runCmd(t, append(lib, args...)...)
+		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "session: parse") ||
+			!strings.Contains(err.Error(), `unsupported record version ""`) ||
+			!strings.Contains(err.Error(), "rebuild sessions") {
+			t.Errorf("%v: stdout = %q, error = %v", args, stdout, err)
+		}
 	}
 }
 

@@ -96,3 +96,18 @@ func (s Store) LoadVersion(name string) (Record, error) {
 	}
 	return rec, err
 }
+
+// ListVersion returns only strict records and fails closed on a legacy entry.
+func (s Store) ListVersion() ([]Record, error) {
+	records, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	for i := range records {
+		if err := records[i].ValidateVersion(); err != nil {
+			path := filepath.Join(s.Dir, records[i].Name, recordFileName)
+			return nil, fmt.Errorf("session: parse %s: %w", path, err)
+		}
+	}
+	return records, nil
+}

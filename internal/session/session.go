@@ -881,11 +881,17 @@ func (e *Engine) now() time.Time {
 // List returns every record for command rendering, ordered by file
 // name. A corrupt record is reported, never silently dropped.
 func (e *Engine) List() ([]Record, error) {
+	if e.Versioned {
+		return e.ListVersion()
+	}
 	return e.Store.List()
 }
 
 // Show returns one record for command rendering.
 func (e *Engine) Show(name string) (Record, error) {
+	if e.Versioned {
+		return e.LoadVersion(name)
+	}
 	return e.Load(name)
 }
 

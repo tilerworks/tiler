@@ -151,6 +151,9 @@ func withSessionSeams(t *testing.T, tune func(*session.Engine)) {
 	t.Cleanup(func() { sessionEngine = original })
 	sessionEngine = func(cfg config.Config) *session.Engine {
 		engine := original(cfg)
+		// Most pre-v3 command fixtures intentionally exercise the legacy
+		// mount resolver. Activation coverage uses the production engine.
+		engine.Versioned = false
 		engine.Lock = func(string, time.Duration) (func(), error) {
 			return func() {}, nil
 		}
