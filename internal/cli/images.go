@@ -24,9 +24,62 @@ func newImagesCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newImagesListCmd())
 	cmd.AddCommand(newImagesShowCmd())
+	cmd.AddCommand(newImagesDescribeCmd())
 	cmd.AddCommand(newImagesGCCmd())
 	cmd.AddCommand(newImagesRemoveCmd())
 	return cmd
+}
+
+func newImagesDescribeCmd() *cobra.Command {
+	var messages, files []string
+	cmd := &cobra.Command{
+		Use:     "describe <name>:<hash>",
+		Aliases: []string{"desc"},
+		Short:   "Update one image version description",
+		Args:    exactOneArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !strings.Contains(args[0], ":") {
+				return usageError{errors.New("description editing requires <name>:<hash>")}
+			}
+			cfg, ok := loadedConfig(cmd)
+			if !ok {
+				return errors.New("images describe: configuration is not loaded")
+			}
+			description, err := readDescribeDescription(cmd, messages, files)
+			if err != nil {
+				return err
+			}
+			view, err := collectVersionShow(cfg.ImagesDir, args[0])
+			if err != nil {
+				return fmt.Errorf("images describe: %w", err)
+			}
+			changed, err := image.UpdateVersionDescription(cfg.ImagesDir, view.Name,
+				view.Selected.ID, view.Selected.Description, description)
+			if err != nil {
+				return fmt.Errorf("images describe: %w", err)
+			}
+			outcome := "Updated description"
+			if !changed {
+				outcome = "Description unchanged"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s for %s:%s.\n",
+				outcome, view.Name, listID(view.Selected.ID))
+			return err
+		},
+	}
+	cmd.Flags().StringArrayVarP(&messages, "message", "m", nil,
+		"image description paragraph (repeatable)")
+	cmd.Flags().StringArrayVarP(&files, "file", "F", nil,
+		"read image description from file (use - for stdin)")
+	return cmd
+}
+
+func readDescribeDescription(cmd *cobra.Command, messages, files []string) (string, error) {
+	if !cmd.Flags().Changed("message") && !cmd.Flags().Changed("file") {
+		return "", usageError{errors.New("images describe: use --message or --file")}
+	}
+	description, err := readDescriptionInput(cmd, messages, files, "images describe")
+	return description.text, err
 }
 
 func newImagesListCmd() *cobra.Command {

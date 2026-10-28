@@ -236,17 +236,24 @@ func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, spl
 }
 
 func readBuildDescription(cmd *cobra.Command, messages, files []string) (buildDescription, error) {
+	return readDescriptionInput(cmd, messages, files, "build")
+}
+
+func readDescriptionInput(cmd *cobra.Command, messages, files []string, prefix string) (buildDescription, error) {
 	messageSet := cmd.Flags().Changed("message")
 	fileSet := cmd.Flags().Changed("file")
 	if messageSet && fileSet {
-		return buildDescription{}, usageError{errors.New("build: --message and --file are mutually exclusive")}
+		return buildDescription{}, usageError{fmt.Errorf("%s: --message and --file are mutually exclusive", prefix)}
 	}
 	if len(files) > 1 {
-		return buildDescription{}, usageError{errors.New("build: --file may be specified only once")}
+		return buildDescription{}, usageError{fmt.Errorf("%s: --file may be specified only once", prefix)}
 	}
 	if messageSet {
 		text, err := image.DescriptionFromMessages(messages)
-		return buildDescription{text: text, set: true}, mapDescriptionError(err)
+		if err != nil {
+			return buildDescription{}, usageError{fmt.Errorf("%s: description: %w", prefix, err)}
+		}
+		return buildDescription{text: text, set: true}, nil
 	}
 	if !fileSet {
 		return buildDescription{}, nil
@@ -259,17 +266,13 @@ func readBuildDescription(cmd *cobra.Command, messages, files []string) (buildDe
 		body, err = os.ReadFile(files[0])
 	}
 	if err != nil {
-		return buildDescription{}, usageError{fmt.Errorf("build: description file: %w", err)}
+		return buildDescription{}, usageError{fmt.Errorf("%s: description file: %w", prefix, err)}
 	}
 	text, err := image.NormalizeDescription(string(body))
-	return buildDescription{text: text, set: true}, mapDescriptionError(err)
-}
-
-func mapDescriptionError(err error) error {
-	if err == nil {
-		return nil
+	if err != nil {
+		return buildDescription{}, usageError{fmt.Errorf("%s: description: %w", prefix, err)}
 	}
-	return usageError{fmt.Errorf("build: description: %w", err)}
+	return buildDescription{text: text, set: true}, nil
 }
 
 // chooseFormat applies the flag, then image_format, then the host

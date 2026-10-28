@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +44,7 @@ func writeVersionForest(t *testing.T, imagesDir, name string, nodes ...image.Ima
 	}
 }
 
-func writeVersionSession(t *testing.T, dir, name, imageName, root, tip string) {
+func writeVersionSession(t *testing.T, dir, name, imageName, root, tip string) session.Record {
 	t.Helper()
 	rec, err := session.NewVersionRecord(name, time.Now())
 	if err != nil {
@@ -55,6 +57,7 @@ func writeVersionSession(t *testing.T, dir, name, imageName, root, tip string) {
 	if err := (session.Store{Dir: dir}).SaveVersion(rec); err != nil {
 		t.Fatal(err)
 	}
+	return rec
 }
 
 func TestCollectVersionImagesPreservesForestMetadata(t *testing.T) {
@@ -79,6 +82,57 @@ func TestCollectVersionImagesPreservesForestMetadata(t *testing.T) {
 	}
 	if view.Latest == nil || view.Latest.ID != newRoot.ID {
 		t.Fatalf("latest = %#v", view.Latest)
+	}
+}
+
+func TestImagesDescribePinsVersionAndClearsDescription(t *testing.T) {
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, "sessions")
+	node := versionNode("a", image.KindFull, "", time.Now().UTC())
+	writeVersionForest(t, dir, "alice/app", node)
+	rec := writeVersionSession(t, sessions, "dev", "alice/app", node.ID, node.ID)
+	store := session.Store{Dir: sessions}
+	wantOwners := []session.ReferenceOwner{{Session: rec.Name, InstanceID: rec.InstanceID,
+		ActionID: rec.Actions[0].Seq, Role: "desired"}}
+	if err := store.SaveReferenceBucket(session.ReferenceBucket{
+		Name: "alice/app", Tip: node.ID, Owners: wantOwners,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newImagesDescribeCmd()
+	cmd.SetContext(context.Background())
+	remember(cmd, config.Config{ImagesDir: dir, SessionsDir: sessions})
+	cmd.SetArgs([]string{"alice/app:" + node.ID[:4], "-F", "-"})
+	cmd.SetIn(strings.NewReader(""))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	view, err := collectVersionShow(dir, "alice/app:"+node.ID)
+	if err != nil || view.Selected.Description != "" {
+		t.Fatalf("description = %q, %v", view.Selected.Description, err)
+	}
+	if out.String() != "Updated description for alice/app:aaaaaaaaaa.\n" {
+		t.Fatalf("output = %q", out.String())
+	}
+	bucket, err := store.LoadReferenceBucket("alice/app", node.ID)
+	if err != nil || !reflect.DeepEqual(bucket.Owners, wantOwners) {
+		t.Fatalf("reference owners = %#v, %v", bucket.Owners, err)
+	}
+
+	out.Reset()
+	cmd = newImagesDescribeCmd()
+	cmd.SetContext(context.Background())
+	remember(cmd, config.Config{ImagesDir: dir, SessionsDir: sessions})
+	cmd.SetArgs([]string{"alice/app:" + node.ID[:4], "-F", "-"})
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "Description unchanged for alice/app:aaaaaaaaaa.\n" {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 
