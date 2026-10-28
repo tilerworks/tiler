@@ -25,8 +25,8 @@ func checkSplit(t *testing.T, value string, want []string, wantErr bool) {
 }
 
 func TestDescriptionEditorCommandOutcomes(t *testing.T) {
-	oldTerminal, oldRun := descriptionTerminal, runDescriptionEditor
-	t.Cleanup(func() { descriptionTerminal, runDescriptionEditor = oldTerminal, oldRun })
+	oldTerminal, oldRun := inputTerminal, runDescriptionEditor
+	t.Cleanup(func() { inputTerminal, runDescriptionEditor = oldTerminal, oldRun })
 	for _, tc := range []struct{ name, edit, wantErr string }{
 		{name: "editor exit", wantErr: "invalid argument"}, {name: "unchanged"},
 		{name: "clear", edit: "\n"}, {name: "noninteractive", wantErr: "non-interactive"},
@@ -35,7 +35,7 @@ func TestDescriptionEditorCommandOutcomes(t *testing.T) {
 		dir := t.TempDir()
 		node := versionNode("a", "full", "", time.Now().UTC())
 		writeVersionForest(t, dir, "alice/app", node)
-		descriptionTerminal = func(io.Reader) bool { return tc.name != "noninteractive" }
+		inputTerminal = func(io.Reader) bool { return tc.name != "noninteractive" }
 		t.Setenv("EDITOR", `"/tmp/editor with spaces" --wait`)
 		runDescriptionEditor = func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
 			info, err := os.Stat(args[1])

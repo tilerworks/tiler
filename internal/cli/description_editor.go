@@ -14,14 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var descriptionTerminal = func(r io.Reader) bool {
-	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
 var runDescriptionEditor = func(ctx context.Context, name string, args []string,
 	in io.Reader, out, stderr io.Writer) error {
 	command := exec.CommandContext(ctx, name, args...)
@@ -30,7 +22,7 @@ var runDescriptionEditor = func(ctx context.Context, name string, args []string,
 }
 
 func editDescription(cmd *cobra.Command, current string) (string, error) {
-	if !descriptionTerminal(cmd.InOrStdin()) {
+	if !inputTerminal(cmd.InOrStdin()) {
 		return "", usageError{errors.New("images describe: no message input on non-interactive terminal; use --message or --file")}
 	}
 	editor := os.Getenv("EDITOR")
