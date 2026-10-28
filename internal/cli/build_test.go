@@ -160,8 +160,6 @@ func buildVersionImage(t *testing.T, lib []string, name, src string) string {
 	return buildOutput(t, stdout)
 }
 
-// buildImage keeps legacy read and session fixtures on the old layout until
-// those command surfaces are activated in their own steps.
 func buildImage(t *testing.T, lib []string, name, src string) string {
 	t.Helper()
 	legacyBuild = true

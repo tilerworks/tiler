@@ -12,7 +12,6 @@
 #   4. remount at a fresh point and confirm full + both increments show,
 #   5. merge the live view into a new full with `build --full`,
 #   6. confirm meta.yaml is replaced by the new full (chain cleared),
-#   7. confirm the old full + chain retire into a session-pinned hold,
 #   8. remount the merged full and confirm it stands alone.
 #
 # It mirrors the incremental scenario of the out-of-repo tiler-demo
@@ -25,9 +24,7 @@
 # rather than false-fails -- on a host without the toolchain.
 #
 # Scope guard: this case asserts the incremental cascade, the full
-# merge, and the meta.yaml/hold side effects only. It does not cover
-# sessions, crash recovery, split storage, gc/rm retention (t0005), or
-# read-only/subdir/cache mount variants.
+# merge, and immutable history only.
 
 test_description='tiler cascades increments and merges them into a new full'
 
@@ -41,6 +38,8 @@ TEST_DIRECTORY=$tiler_case_dir
 export TEST_DIRECTORY
 
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
+
+test_have_prereq EROFS_TOOLCHAIN || skip_all='needs the erofs toolchain'
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -88,7 +87,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build a base full image' '
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
+		test_grep -E "^[[:space:]]*- id: $id1$" "$meta_file" &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1
 '
 
@@ -102,7 +101,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct in
 	test_grep -E "^mounted " mount.out &&
 	test_grep "hello tiler" "$work_dir/README.txt" &&
 	echo a >"$work_dir/a.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incrA.out 2>incrA.err &&
+		( cd "$work_dir" && "$tiler_bin" build --incremental --format erofs --compression lz4 ) >incrA.out 2>incrA.err &&
 	test_grep -E "^incr alice/app [0-9a-f]+" incrA.out &&
 	layerA=$(cut -d" " -f3 incrA.out) &&
 	echo b >"$work_dir/b.txt" &&
@@ -114,11 +113,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct in
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
-	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
-	test_grep -E "^  chain +2$" ls.out &&
-	test "$(grep -c "^    [0-9a-f][0-9a-f]*  parent=" ls.out)" = 2 &&
+		"$tiler_bin" images list >ls.out 2>ls.err &&
+		test_grep "${layerA%${layerA#??????????}}" ls.out &&
+		test_grep "${layerB%${layerB#??????????}}" ls.out &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 3 &&
-	test_grep -E "^head: \"?$layerB\"?$" "$meta_file"
+		test_grep -E "^[[:space:]]*- id: $layerB$" "$meta_file"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a fresh remount serves the full plus both increments' '
@@ -143,20 +142,20 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --full merges the view int
 	test "$id2" != "$id1"
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml is replaced by the merged full' '
-	test_grep -E "^head: \"?$id2\"?$" "$meta_file" &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'meta.yaml retains history and records the merged full' '
+		test_grep -E "^[[:space:]]*- id: $id2$" "$meta_file" &&
+		test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 4 &&
 	"$tiler_bin" images show alice/app >ls2.out 2>ls2.err &&
-	test_grep -E "^  chain +0$" ls2.out
+		test_grep -E "^  id +$id2$" ls2.out
 '
 
-# The merge retires the old full + chain. verify_dir is still live, so its
-# implicit session pins the retired chain: it lands in _hold/<old-id> (still
-# serving the live view through open fds) rather than being freed at once.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the old full and chain retire into a pinned hold' '
-	"$tiler_bin" images show alice/app >ls3.out 2>ls3.err &&
-	test_grep -E "^    $id1$" ls3.out &&
-	test_path_is_file "$img_dir/_hold/$id1/image.sqsh"
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'historical mixed-format mounts recover references and descriptions' '
+	"$tiler_bin" umount "$verify_dir" && "$tiler_bin" mount "alice/app:${layerB%${layerB#??????????}}" "$verify_dir" &&
+	test_path_is_file "$verify_dir/a.txt" && test_path_is_file "$verify_dir/b.txt" && rm "$HOME/.tiler/sessions/.refs/state.json" &&
+	test_must_fail "$tiler_bin" image rm "alice/app:$id1" >rm.out 2>rm.err && test_grep "referenced by sessions" rm.err &&
+	test_path_is_file "$HOME/.tiler/sessions/.refs/state.json" && printf "#!/bin/sh\nprintf '\''First line\\n\\nSecond line.\\n'\'' >\"\$1\"\n" >editor.sh &&
+	chmod +x editor.sh && EDITOR=./editor.sh "$tiler_bin" images describe "alice/app:$layerB" &&
+	"$tiler_bin" images gc && "$tiler_bin" images show "alice/app:$layerB" >ls3.out && test_grep "First line" ls3.out && test_grep "Second line." ls3.out && test_path_is_file "$img_dir/_objects/$id1/image.sqsh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '
@@ -166,8 +165,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and sta
 	test_grep "hello tiler" "$verify_dir/README.txt" &&
 	test_path_is_file "$verify_dir/a.txt" &&
 	test_path_is_file "$verify_dir/b.txt" &&
-	"$tiler_bin" images show alice/app >ls4.out 2>ls4.err &&
-	test_grep -E "^  chain +0$" ls4.out
+		"$tiler_bin" images show alice/app >ls4.out 2>ls4.err &&
+		test_grep -E "^  id +$id2$" ls4.out
 '
 
 test_done

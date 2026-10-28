@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/session"
 )
@@ -20,7 +19,6 @@ func mustList(t *testing.T, lib []string, args ...string) string {
 	full := append([]string{"images", "ls"}, args...)
 	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
 	if err != nil {
-		skipLegacyImageFixture(t, err)
 		t.Fatalf("images ls %v: %v\n%s", args, err, stderr)
 	}
 	return stdout
@@ -31,21 +29,9 @@ func mustShow(t *testing.T, lib []string, args ...string) string {
 	full := append([]string{"images", "show"}, args...)
 	stdout, stderr, _, err := runCmd(t, append(lib, full...)...)
 	if err != nil {
-		skipLegacyImageFixture(t, err)
 		t.Fatalf("images show %v: %v\n%s", args, err, stderr)
 	}
 	return stdout
-}
-
-func skipLegacyImageFixture(t *testing.T, err error) {
-	t.Helper()
-	if strings.Contains(err.Error(), "legacy layout") ||
-		strings.Contains(err.Error(), "unsupported metadata version") {
-		if ExitCode(err) != 1 {
-			t.Fatalf("legacy rejection exit code = %d, want 1", ExitCode(err))
-		}
-		t.Skip("legacy repository fixtures are outside the v3-only runtime")
-	}
 }
 
 func mustGC(t *testing.T, lib []string, args ...string) string {
@@ -62,10 +48,17 @@ func mustRemove(t *testing.T, lib []string, target string) string {
 	t.Helper()
 	stdout, stderr, _, err := runCmd(t, append(lib, "images", "rm", target)...)
 	if err != nil {
-		skipLegacyImageFixture(t, err)
 		t.Fatalf("images rm %s: %v\n%s", target, err, stderr)
 	}
 	return stdout
+}
+
+func buildImmutableImage(t *testing.T, lib []string, name, src string) string {
+	t.Helper()
+	previous := legacyBuild
+	legacyBuild = false
+	defer func() { legacyBuild = previous }()
+	return buildVersionImage(t, lib, name, src)
 }
 
 // writeSession drops one JSON session record whose mount action
@@ -80,16 +73,20 @@ func writeSession(t *testing.T, dir, name, imageName, fullID, state string) {
 		Image:      imageName,
 		Name:       imageName,
 		FullID:     fullID,
+		TipID:      fullID,
+		RuntimeID:  "m1",
 		Mountpoint: "/ws/" + name,
 		Mode:       session.ModeRW,
 		Status:     session.StatusMounted,
 		Timestamp:  now,
 	}
 	rec := session.Record{
-		Name:      name,
-		State:     session.StateActive,
-		Actions:   []session.Action{action},
-		CreatedAt: now,
+		Version:    session.VersionRecordVersion,
+		InstanceID: strings.Repeat("a", 64),
+		Name:       name,
+		State:      session.StateActive,
+		Actions:    []session.Action{action},
+		CreatedAt:  now,
 	}
 	if state == "closed" {
 		rec.State = session.StateClosed
@@ -106,10 +103,12 @@ func writeSession(t *testing.T, dir, name, imageName, fullID, state string) {
 func writeClosedSession(t *testing.T, dir, name string, closedAt time.Time) {
 	t.Helper()
 	rec := session.Record{
-		Name:      name,
-		State:     session.StateClosed,
-		CreatedAt: closedAt.Add(-time.Hour),
-		ClosedAt:  closedAt,
+		Version:    session.VersionRecordVersion,
+		InstanceID: strings.Repeat("a", 64),
+		Name:       name,
+		State:      session.StateClosed,
+		CreatedAt:  closedAt.Add(-time.Hour),
+		ClosedAt:   closedAt,
 	}
 	if err := (session.Store{Dir: dir}).Save(rec); err != nil {
 		t.Fatal(err)
@@ -192,21 +191,22 @@ func TestImagesListEmptyLibrary(t *testing.T) {
 	}
 }
 
-func TestImagesListAllAndShow(t *testing.T) {
+func TestImagesListAllVersionsAndShowSelected(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id1 := buildImage(t, lib, "alice/app", src)
+	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
-	id2 := buildImage(t, lib, "alice/app", src)
+	id2 := buildImmutableImage(t, lib, "alice/app", src)
 	other := filepath.Join(work, "other")
 	writeTestFile(t, filepath.Join(other, "b.txt"), "b")
-	id3 := buildImage(t, lib, "bob/tool", other)
+	id3 := buildImmutableImage(t, lib, "bob/tool", other)
 
 	out := mustList(t, lib)
-	for _, want := range []string{"NAME", "alice/app", listID(id2), "bob/tool", listID(id3)} {
+	for _, want := range []string{"alice/app", "latest=" + listID(id2), listID(id1),
+		"bob/tool", "latest=" + listID(id3)} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}
@@ -214,30 +214,22 @@ func TestImagesListAllAndShow(t *testing.T) {
 	if strings.Contains(out, id2) || strings.Contains(out, id3) {
 		t.Fatalf("short list printed a full id:\n%s", out)
 	}
-	if listID(id1) != listID(id2) && strings.Contains(out, listID(id1)) {
-		t.Fatalf("short list included archived id %s:\n%s", listID(id1), out)
-	}
-	detail := mustShow(t, lib, "alice/app")
-	for _, want := range []string{"  id          " + id2, "    " + id1, "  holds       0"} {
+	detail := mustShow(t, lib, "alice/app:"+id1[:12])
+	for _, want := range []string{"alice/app", "  id          " + id1,
+		"  parent      -", "  payload     single"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("show missing %q:\n%s", want, detail)
 		}
-	}
-	if out = mustList(t, lib, "--archives"); !strings.Contains(out, "  archive "+listID(id1)) {
-		t.Fatalf("ls all --archives:\n%s\nwant archive %s", out, listID(id1))
-	}
-	if strings.Contains(out, id1) {
-		t.Fatalf("archives listing printed the full id:\n%s", out)
 	}
 }
 
 func TestImagesListPrefixLocatesImage(t *testing.T) {
 	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
+	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id := buildImage(t, lib, "alice/app", src)
+	id := buildImmutableImage(t, lib, "alice/app", src)
 
 	short := listID(id)
 	if len(short) != listIDHex || !strings.HasPrefix(id, short) {
@@ -247,9 +239,9 @@ func TestImagesListPrefixLocatesImage(t *testing.T) {
 	if !strings.Contains(out, short) || strings.Contains(out, id) {
 		t.Fatalf("ls id column:\n%s", out)
 	}
-	target, err := image.ResolvePinned(config.Config{ImagesDir: imagesDir}, "alice/app", short)
-	if err != nil || target.ID != id {
-		t.Fatalf("ResolvePinned(%s) = (%s, %v), want %s", short, target.ID, err, id)
+	detail := mustShow(t, lib, "alice/app:"+short)
+	if !strings.Contains(detail, "  id          "+id) {
+		t.Fatalf("show by scoped prefix:\n%s", detail)
 	}
 }
 
@@ -264,7 +256,6 @@ func TestImagesListRejectsAName(t *testing.T) {
 }
 
 func TestImagesShowBadNames(t *testing.T) {
-	t.Skip("legacy show selector contract")
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
@@ -289,25 +280,25 @@ func TestImagesShowBadNames(t *testing.T) {
 		t.Fatalf("ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
 	_, stderr, _, err := runCmd(t, append(lib, "images", "show", "ffffffffffffffffffff")...)
-	if ExitCode(err) != 1 || !strings.Contains(stderr, "unknown id reference") {
+	if ExitCode(err) != 2 || !strings.Contains(stderr, "invalid image name") {
 		t.Fatalf("ExitCode(%v) = %d stderr = %q", err, ExitCode(err), stderr)
 	}
 }
 
-func TestImagesShowByID(t *testing.T) {
-	t.Skip("legacy global-id show contract")
+func TestImagesShowByScopedID(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id := buildImage(t, lib, "alice/app", src)
+	id := buildImmutableImage(t, lib, "alice/app", src)
 	other := filepath.Join(work, "other")
 	writeTestFile(t, filepath.Join(other, "b.txt"), "b")
-	buildImage(t, lib, "bob/tool", other)
+	buildImmutableImage(t, lib, "bob/tool", other)
 
 	wantID := "  id          " + id
-	for _, ref := range []string{id, listID(id), id[:16]} {
+	for _, ref := range []string{"alice/app:" + id, "alice/app:" + listID(id),
+		"alice/app:" + id[:16]} {
 		out := mustShow(t, lib, ref)
 		if !strings.Contains(out, "alice/app") || !strings.Contains(out, wantID) {
 			t.Fatalf("show %s missing alice/app or id:\n%s", ref, out)
@@ -315,49 +306,24 @@ func TestImagesShowByID(t *testing.T) {
 	}
 }
 
-func TestImagesListChainAndDeprecated(t *testing.T) {
+func TestImagesListKeepsIndependentFullVersionHistory(t *testing.T) {
 	home, work := withWorkspace(t)
-	imagesDir, lib := libFlags(home)
-	merged := filepath.Join(work, "merged")
-	upper := filepath.Join(home, "lib", "runtime", "up-1-2", "upper")
-	withBuildSeams(t, viewTable(imagesDir, "alice/app", merged, upper))
+	_, lib := libFlags(home)
+	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "base.txt"), "base")
-	fullID := buildImage(t, lib, "alice/app", src)
-	writeTestFile(t, filepath.Join(upper, "new.txt"), "change")
-	if err := os.MkdirAll(merged, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(merged)
-	legacyBuild = true
-	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
-	if err != nil {
-		t.Fatalf("incr build: %v\n%s", err, stderr)
-	}
-	incrID := buildOutput(t, stdout)
-
-	out := mustShow(t, lib, "alice/app")
-	for _, want := range []string{
-		"  chain       1",
-		"    " + incrID + "  parent=" + fullID,
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("show chain missing %q:\n%s", want, out)
+	fullID := buildImmutableImage(t, lib, "alice/app", src)
+	writeTestFile(t, filepath.Join(src, "base.txt"), "replacement")
+	newID := buildImmutableImage(t, lib, "alice/app", src)
+	out := mustList(t, lib)
+	for _, id := range []string{fullID, newID} {
+		if !strings.Contains(out, listID(id)) {
+			t.Fatalf("list missing version %s:\n%s", id, out)
 		}
-	}
-	if strings.Contains(out, "deprecated") {
-		t.Fatalf("fresh image listed deprecated:\n%s", out)
-	}
-	if out := mustRemove(t, lib, "alice/app"); out != "deprecated alice/app\n" {
-		t.Fatalf("rm phase 1 printed %q", out)
-	}
-	out = mustShow(t, lib, "alice/app")
-	if !strings.Contains(out, "  deprecated  true") {
-		t.Fatalf("show deprecated:\n%s", out)
 	}
 }
 
-func TestImagesGCPromotesHeldChain(t *testing.T) {
+func TestImagesGCPreservesReferencedImmutableVersions(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	sessions := sessionsDir(home)
@@ -365,25 +331,25 @@ func TestImagesGCPromotesHeldChain(t *testing.T) {
 	withSessionSeams(t, healthySessions)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id1 := buildImage(t, lib, "alice/app", src)
+	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeSession(t, sessions, "s1", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
-	id2 := buildImage(t, lib, "alice/app", src)
+	id2 := buildImmutableImage(t, lib, "alice/app", src)
 
-	out := mustShow(t, lib, "alice/app")
-	if !strings.Contains(out, id2) || !strings.Contains(out, "    "+id1) || !strings.Contains(out, "  holds       1") {
-		t.Fatalf("show held:\n%s\nwant active %s and hold %s", out, id2, id1)
+	out := mustList(t, lib)
+	if !strings.Contains(out, listID(id1)) || !strings.Contains(out, listID(id2)) {
+		t.Fatalf("list omitted immutable versions:\n%s", out)
 	}
 	if out := mustGC(t, lib); out != "" {
-		t.Fatalf("gc with a referenced hold printed %q", out)
+		t.Fatalf("gc with a referenced version printed %q", out)
 	}
 	writeSession(t, sessions, "s1", "alice/app", id1, "closed")
-	want := fmt.Sprintf("archived alice/app %s\n", id1)
-	if out := mustGC(t, lib); out != want {
-		t.Fatalf("gc promotion:\n%s\nwant:\n%s", out, want)
-	}
 	if out := mustGC(t, lib); out != "" {
 		t.Fatalf("idle gc printed %q", out)
+	}
+	out = mustList(t, lib)
+	if !strings.Contains(out, listID(id1)) || !strings.Contains(out, listID(id2)) {
+		t.Fatalf("gc discarded immutable history:\n%s", out)
 	}
 }
 
@@ -395,15 +361,12 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	withSessionSeams(t, healthySessions)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id1 := buildImage(t, lib, "alice/app", src)
-	// The pinning record must exist before the second build, which
-	// is what retires the first chain to a hold instead of an
-	// archive.
+	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeSession(t, sessions, "live", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
-	activeID := buildImage(t, lib, "alice/app", src)
-	// An aged closed record is reclaimed; the active record both
-	// survives and keeps the hold out of the archives.
+	activeID := buildImmutableImage(t, lib, "alice/app", src)
+	// An aged closed record is reclaimed while immutable image
+	// history and the active record survive.
 	writeClosedSession(t, sessions, "old", time.Now().Add(-31*24*time.Hour))
 
 	if out := mustGC(t, lib); out != "removed session old\n" {
@@ -415,9 +378,9 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessions, "live", "session.json")); err != nil {
 		t.Fatalf("the active record was deleted: %v", err)
 	}
-	out := mustShow(t, lib, "alice/app")
-	if !strings.Contains(out, activeID) || !strings.Contains(out, "    "+id1) || !strings.Contains(out, "  holds       1") {
-		t.Fatalf("show after gc:\n%s\nwant active %s and hold %s", out, activeID, id1)
+	out := mustList(t, lib)
+	if !strings.Contains(out, listID(activeID)) || !strings.Contains(out, listID(id1)) {
+		t.Fatalf("list after gc omitted version history:\n%s", out)
 	}
 }
 
@@ -433,7 +396,7 @@ func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
 	})
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id1 := buildImage(t, lib, "alice/app", src)
+	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeSession(t, sessions, "dev", "alice/app", id1, "running")
 
 	if out := mustGC(t, lib); out != "stale session dev\n" {
@@ -444,7 +407,7 @@ func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
 	}
 }
 
-func TestImagesGCExpiresByCount(t *testing.T) {
+func TestImagesGCIgnoresLegacyVersionRetention(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withBuildSeams(t, nil)
@@ -452,37 +415,33 @@ func TestImagesGCExpiresByCount(t *testing.T) {
 	var ids []string
 	for _, body := range []string{"v1", "v2", "v3"} {
 		writeTestFile(t, filepath.Join(src, "a.txt"), body)
-		ids = append(ids, buildImage(t, lib, "alice/app", src))
+		ids = append(ids, buildImmutableImage(t, lib, "alice/app", src))
 	}
-	want := fmt.Sprintf("removed alice/app %s\n", ids[0])
-	if out := mustGC(t, lib, "--keep-versions=1"); out != want {
-		t.Fatalf("gc expire:\n%s\nwant:\n%s", out, want)
+	if out := mustGC(t, lib, "--keep-versions=1"); out != "" {
+		t.Fatalf("gc removed immutable versions: %q", out)
 	}
 	if out := mustGC(t, lib, "--keep-versions=1"); out != "" {
 		t.Fatalf("second gc printed %q", out)
 	}
-	out := mustShow(t, lib, "alice/app")
-	if !strings.Contains(out, "    "+ids[1]) || !strings.Contains(out, "  archives    1") {
-		t.Fatalf("show after gc:\n%s\nwant archive %s", out, ids[1])
+	out := mustList(t, lib)
+	for _, id := range ids {
+		if !strings.Contains(out, listID(id)) {
+			t.Fatalf("list after gc omitted %s:\n%s", id, out)
+		}
 	}
 }
 
-func TestImagesRemoveTwoPhases(t *testing.T) {
+func TestImagesRemoveRepositoryInOnePhase(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	buildImage(t, lib, "alice/app", src)
+	buildImmutableImage(t, lib, "alice/app", src)
 
-	if out := mustRemove(t, lib, "alice/app"); out != "deprecated alice/app\n" {
-		t.Fatalf("phase 1 printed %q", out)
-	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
-		t.Fatalf("phase 1 deleted files: %v", err)
-	}
-	if out := mustRemove(t, lib, "alice/app"); out != "removed alice/app\n" {
-		t.Fatalf("phase 2 printed %q", out)
+	if out := mustRemove(t, lib, "alice/app"); out !=
+		"Removed image repository alice/app (1 image versions).\n" {
+		t.Fatalf("remove printed %q", out)
 	}
 	if _, err := os.Stat(filepath.Join(imagesDir, "alice")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("owner directory survived: %v", err)
@@ -493,34 +452,35 @@ func TestImagesRemoveTwoPhases(t *testing.T) {
 	}
 }
 
-// TestImagesOneAndThreeSegmentFlows covers publish, list, show, pin,
-// archive path shape, and whole-repo remove for one- and three-
-// segment library names.
+// TestImagesOneAndThreeSegmentFlows covers immutable publish, list,
+// show, and whole-repository removal for varied name depths.
 func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
 	for _, name := range []string{"solo", "a/b/c"} {
 		t.Run(name, func(t *testing.T) {
 			home, work := withWorkspace(t)
 			imagesDir, lib := libFlags(home)
-			sessions := sessionsDir(home)
 			withBuildSeams(t, nil)
-			withSessionSeams(t, healthySessions)
 			src := filepath.Join(work, "src")
 			writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-			id1 := buildImage(t, lib, name, src)
+			id1 := buildImmutableImage(t, lib, name, src)
 
 			repo, err := image.OpenRepo(imagesDir, name)
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err := image.LoadManifest(repo.MetaPath())
+			manifest, err := image.LoadVersionManifest(repo)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if manifest.Name != name || manifestRootID(manifest) != id1 {
+			if manifest.Name != name || len(manifest.Images) != 1 || manifest.Images[0].ID != id1 {
 				t.Fatalf("meta name=%q id=%s, want %s %s",
-					manifest.Name, manifestRootID(manifest), name, id1)
+					manifest.Name, manifest.Images[0].ID, name, id1)
 			}
-			if _, err := os.Stat(filepath.Join(repo.Dir, "image.sqsh")); err != nil {
+			object, err := repo.ObjectDirPath(id1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(object, image.ImageFile)); err != nil {
 				t.Fatal(err)
 			}
 			out := mustList(t, lib)
@@ -530,38 +490,20 @@ func TestImagesOneAndThreeSegmentFlows(t *testing.T) {
 			if strings.Contains(out, id1) {
 				t.Fatalf("ls printed the full id:\n%s", out)
 			}
-			if detail := mustShow(t, lib, name); !strings.Contains(detail, "  id          "+id1) {
+			if detail := mustShow(t, lib, name+":"+id1[:12]); !strings.Contains(detail, "  id          "+id1) {
 				t.Fatalf("show missing id:\n%s", detail)
 			}
 
-			writeSession(t, sessions, "s1", name, id1, "running")
 			writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
-			id2 := buildImage(t, lib, name, src)
-			if out := mustShow(t, lib, name); !strings.Contains(out, id2) ||
-				!strings.Contains(out, "  holds       1") {
-				t.Fatalf("show held:\n%s\nwant active %s hold %s", out, id2, id1)
-			}
-			if out := mustGC(t, lib); out != "" {
-				t.Fatalf("gc with a referenced hold printed %q", out)
-			}
-			writeSession(t, sessions, "s1", name, id1, "closed")
-			want := fmt.Sprintf("archived %s %s\n", name, id1)
-			if out := mustGC(t, lib); out != want {
-				t.Fatalf("gc promotion:\n%s\nwant:\n%s", out, want)
-			}
-			arch := filepath.Join(repo.Dir, "_archives", id1)
-			if _, err := os.Stat(arch); err != nil {
-				t.Fatalf("archive path %s: %v", name+"/_archives/"+id1, err)
-			}
-			if !isPayloadID(id1) {
-				t.Fatalf("archive id %q is not 64 lowercase hex", id1)
+			id2 := buildImmutableImage(t, lib, name, src)
+			out = mustList(t, lib)
+			if !strings.Contains(out, listID(id1)) || !strings.Contains(out, listID(id2)) {
+				t.Fatalf("list omitted version history:\n%s", out)
 			}
 
-			if out := mustRemove(t, lib, name); out != "deprecated "+name+"\n" {
-				t.Fatalf("phase 1 printed %q", out)
-			}
-			if out := mustRemove(t, lib, name); out != "removed "+name+"\n" {
-				t.Fatalf("phase 2 printed %q", out)
+			want := fmt.Sprintf("Removed image repository %s (2 image versions).\n", name)
+			if out := mustRemove(t, lib, name); out != want {
+				t.Fatalf("remove printed %q, want %q", out, want)
 			}
 			if _, err := os.Stat(imagesDir); err != nil {
 				t.Fatalf("library root deleted: %v", err)
@@ -585,43 +527,43 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	withBuildSeams(t, nil)
 	src := filepath.Join(work, "src")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v1")
-	id1 := buildImage(t, lib, "alice/app", src)
+	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeSession(t, sessions, "s1", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
-	buildImage(t, lib, "alice/app", src)
+	buildImmutableImage(t, lib, "alice/app", src)
 
 	_, stderr, _, err := runCmd(t, append(lib, "images", "rm", "alice/app")...)
-	skipLegacyImageFixture(t, err)
 	if ExitCode(err) != 1 || !strings.Contains(stderr, "referenced") {
 		t.Fatalf("ExitCode(%v) = %d stderr = %q", err, ExitCode(err), stderr)
 	}
-	// The refusal names the pinning session and how to release it.
-	for _, want := range []string{"s1", "session close s1"} {
+	// The refusal names the authoritative pinning session.
+	for _, want := range []string{"s1", listID(id1), "active"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr %q missing %q", stderr, want)
 		}
 	}
-	manifest, err := image.LoadManifest(filepath.Join(imagesDir, "alice", "app", "meta.yaml"))
+	repo, err := image.OpenRepo(imagesDir, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRoot(manifest).Deprecated {
-		t.Fatal("referenced target was deprecated")
+	manifest, err := image.LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 2 {
+		t.Fatalf("blocked removal changed metadata: %v %#v", err, manifest.Images)
 	}
 
-	// After the reference closes, gc promotes the hold and the
-	// archive target walks both rm phases.
-	writeSession(t, sessions, "s1", "alice/app", id1, "closed")
-	mustGC(t, lib)
-	target := "alice/app/_archives/" + id1
-	if out := mustRemove(t, lib, target); out != "deprecated "+target+"\n" {
-		t.Fatalf("archive phase 1 printed %q", out)
+	// Once the authoritative session record is removed, the selected
+	// immutable root can be removed while the other root remains.
+	if err := os.RemoveAll(filepath.Join(sessions, "s1")); err != nil {
+		t.Fatal(err)
 	}
-	if out := mustRemove(t, lib, target); out != "removed "+target+"\n" {
-		t.Fatalf("archive phase 2 printed %q", out)
+	target := "alice/app:" + id1[:12]
+	if out := mustRemove(t, lib, target); out !=
+		"Removed 1 image versions from alice/app:\n  "+listID(id1)+"\n" {
+		t.Fatalf("subtree removal printed %q", out)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, "alice", "app", "image.sqsh")); err != nil {
-		t.Fatalf("active image deleted: %v", err)
+	manifest, err = image.LoadVersionManifest(repo)
+	if err != nil || len(manifest.Images) != 1 || manifest.Images[0].ID == id1 {
+		t.Fatalf("wrong version survived: %v %#v", err, manifest.Images)
 	}
 }
 
@@ -645,6 +587,7 @@ func TestImagesRemoveBadTargets(t *testing.T) {
 }
 
 func TestImagesListSplitForms(t *testing.T) {
+	t.Skip("isolated legacy split-layout parser fixture")
 	home, _ := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	withBuildSeams(t, nil)

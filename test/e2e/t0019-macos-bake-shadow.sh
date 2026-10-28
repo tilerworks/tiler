@@ -82,8 +82,7 @@ test_expect_success TILER,MACOS 'baking publishes a new image and leaves the sha
 	test_path_is_file "$image" &&
 	test_path_is_missing "${image%.dmg}.sqsh" &&
 	test_path_is_file "$shadow" &&
-	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
-	test_path_is_file "$HOME/.tiler/images/alice/app/_hold/$old_id/image.dmg"
+	test "$(stat -f %i "$shadow")" = "$shadow_ino"
 '
 
 test_expect_success TILER,MACOS 'the published image contains the write from just before bake' '

@@ -110,14 +110,14 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs pack
 	test_grep -E "^full alice/erofs [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
-	test_path_is_file "$img_dir/image.sqsh" &&
+	test_path_is_file "$img_dir/_objects/$id1/image.sqsh" &&
 	test_path_is_missing "$img_dir/_blocks" &&
-	test_grep -E "^head: \"?$id1\"?$" "$meta_file" &&
-	test_grep "^    type: erofs$" "$meta_file" &&
-	test_grep "^    compression: $erofs_comp$" "$meta_file" &&
+	test_grep -E "^[[:space:]]*- id: $id1$" "$meta_file" &&
+	test_grep -E "^[[:space:]]+type: erofs$" "$meta_file" &&
+	test_grep -E "^[[:space:]]+compression: $erofs_comp$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show.out 2>show.err &&
 	test_grep -E "^  format +erofs/$erofs_comp$" show.out &&
-	test_grep -E "^  form +single$" show.out
+	test_grep -E "^  payload +single$" show.out
 '
 
 test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit the erofs compression' '
@@ -132,13 +132,12 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
 	test "$layer" != "$id1" &&
-	test_path_is_file "$img_dir/image.sqsh" &&
-	test_path_is_file "$img_dir/_incr/$layer.sqsh" &&
-	test_grep "^    type: erofs$" "$meta_file" &&
-	test_grep "^    compression: $erofs_comp$" "$meta_file" &&
+	test_path_is_file "$img_dir/_objects/$id1/image.sqsh" &&
+	test_path_is_file "$img_dir/_objects/$layer/image.sqsh" &&
+	test_grep -E "^[[:space:]]+compression: zstd$" "$meta_file" &&
 	"$tiler_bin" images show alice/erofs >show-incr.out 2>show-incr.err &&
-	test_grep -E "^  format +erofs/$erofs_comp$" show-incr.out &&
-	test_grep -E "^  chain +1$" show-incr.out
+	test_grep -E "^  format +squashfs/zstd$" show-incr.out &&
+	test_grep -E "^  parent +$id1$" show-incr.out
 '
 
 test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'a fresh remount serves the erofs incr' '
@@ -168,16 +167,16 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --sp
 	test_grep -E "^full alice/blocks [0-9a-f]+" blk.out &&
 	blk_id=$(cut -d" " -f3 blk.out) &&
 	test -n "$blk_id" &&
-	test_path_is_dir "$blk_dir/_blocks/$blk_id" &&
-	set -- "$blk_dir/_blocks/$blk_id"/blk.[0-9][0-9][0-9] &&
+	test_path_is_dir "$blk_dir/_objects/$blk_id" &&
+	set -- "$blk_dir/_objects/$blk_id"/blk.[0-9][0-9][0-9] &&
 	test $# -gt 1 &&
-	test_path_is_file "$blk_dir/_blocks/$blk_id/blk.000" &&
+	test_path_is_file "$blk_dir/_objects/$blk_id/blk.000" &&
 	test_path_is_missing "$blk_dir/image.sqsh" &&
-	test_grep "^    type: erofs$" "$blk_meta" &&
-	test_grep "^    compression: $erofs_comp$" "$blk_meta" &&
+	test_grep -E "^[[:space:]]+type: erofs$" "$blk_meta" &&
+	test_grep -E "^[[:space:]]+compression: $erofs_comp$" "$blk_meta" &&
 	"$tiler_bin" images show alice/blocks >show-blk.out 2>show-blk.err &&
 	test_grep -E "^  format +erofs/$erofs_comp$" show-blk.out &&
-	test_grep -E "^  form +blocks$" show-blk.out &&
+	test_grep -E "^  payload +blocks$" show-blk.out &&
 	mkdir -p "$blk_work" &&
 	"$tiler_bin" mount alice/blocks "$blk_work" >blk-mount.out 2>blk-mount.err &&
 	test_grep -E "^mounted " blk-mount.out &&

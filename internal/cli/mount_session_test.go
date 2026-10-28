@@ -32,7 +32,7 @@ func listSessionNames(t *testing.T, dir string) []string {
 	}
 	var names []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && entry.Name() != ".refs" {
 			names = append(names, entry.Name())
 		}
 	}

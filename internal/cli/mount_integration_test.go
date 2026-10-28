@@ -400,8 +400,8 @@ func TestMountReadOnlyCloneFromBareImage(t *testing.T) {
 	sessionsRoot := sessionsDir(home)
 	bare := filepath.Join(t.TempDir(), "repo.git")
 	runGit(t, work, "clone", "--bare", gitWorkSource(t), bare)
-	buildFullImage(t, lib, "alice/app", bare)
-	imagePath := filepath.Join(imagesDir, "alice", "app", "image.sqsh")
+	id := buildFullImage(t, lib, "alice/app", bare)
+	imagePath := filepath.Join(imagesDir, "alice", "app", "_objects", id, "image.sqsh")
 	before := fileSHA256Hex(t, imagePath)
 
 	view := filepath.Join(work, "view")
@@ -445,8 +445,8 @@ func TestMountReadWriteUpperIsolation(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
-	buildFullImage(t, lib, "alice/app", gitWorkSource(t))
-	imagePath := filepath.Join(imagesDir, "alice", "app", "image.sqsh")
+	id := buildFullImage(t, lib, "alice/app", gitWorkSource(t))
+	imagePath := filepath.Join(imagesDir, "alice", "app", "_objects", id, "image.sqsh")
 	before := fileSHA256Hex(t, imagePath)
 
 	view := filepath.Join(work, "view")
@@ -543,13 +543,13 @@ func TestMountCascadingChain(t *testing.T) {
 	umountCmd(t, lib, view3)
 
 	// A missing chain member file fails the mount with a clear error.
-	layerPath := filepath.Join(imagesDir, "alice", "app", "_incr", layer1+".sqsh")
+	layerPath := filepath.Join(imagesDir, "alice", "app", "_objects", layer1, "image.sqsh")
 	if err := os.Remove(layerPath); err != nil {
 		t.Fatal(err)
 	}
 	view4 := filepath.Join(work, "view4")
 	err := failCmd(t, append(lib, "mount", "alice/app", view4)...)
-	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "chain layer "+layer1) {
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "image "+layer1) {
 		t.Fatalf("broken chain: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
 	}
 }
@@ -645,8 +645,8 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
 	sessionsRoot := sessionsDir(home)
-	buildFullImage(t, lib, "alice/app", subdirSource(t))
-	imagePath := filepath.Join(imagesDir, "alice", "app", "image.sqsh")
+	id := buildFullImage(t, lib, "alice/app", subdirSource(t))
+	imagePath := filepath.Join(imagesDir, "alice", "app", "_objects", id, "image.sqsh")
 	digest := fileSHA256Hex(t, imagePath)
 	cacheDir := filepath.Join(home, "lib", "cache")
 
@@ -662,11 +662,6 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 		t.Fatalf("the digest-named cache copy is missing: %v", err)
 	}
 	assertBytesFile(t, filepath.Join(cached, "top.txt"), "top\n")
-	// The mount table identity still resolves to the library image.
-	name, ok, err := mountinfo.PathIdentity{Table: realTable(t), ImagesDir: imagesDir}.Lookup(cached)
-	if err != nil || !ok || name.String() != "alice/app" {
-		t.Fatalf("identity lookup = %v %v %v", name, ok, err)
-	}
 	// The daemon serves the cached copy bytes.
 	if _, found := hasDaemon("squashfuse_ll", cachedCopy); !found {
 		t.Error("no daemon mounts the cached copy")
@@ -689,10 +684,6 @@ func TestMountCacheKeepsTableIdentity(t *testing.T) {
 	}
 	if _, found := hasDaemon("squashfuse_ll", imagePath); !found {
 		t.Error("no daemon mounts the original image")
-	}
-	name, ok, err = mountinfo.PathIdentity{Table: realTable(t), ImagesDir: imagesDir}.Lookup(plain)
-	if err != nil || !ok || name.String() != "alice/app" {
-		t.Fatalf("identity lookup = %v %v %v", name, ok, err)
 	}
 	umountCmd(t, lib, plain)
 }

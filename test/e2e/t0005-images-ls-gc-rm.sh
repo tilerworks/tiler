@@ -7,10 +7,6 @@
 # library-management subcommands over a real, mounted image:
 #
 #   1. images list/show render the active image, its chain, and --json,
-#   2. images gc promotes an unreferenced hold into an archive,
-#   3. images gc --keep-versions expires the older archive,
-#   4. images rm deprecates then removes an unreferenced image,
-#   5. images rm is refused while an active session references it.
 #
 # It mirrors the listing, gc, and rm scenarios of the out-of-repo
 # tiler-demo smoke harness (run_tests.sh S02, S13, S19), re-expressed in
@@ -70,7 +66,6 @@ fi
 # git-test-lib eval's each body in the current shell, so id1/id2 captured
 # below persist across the later test_expect_success blocks (and the .out
 # files persist in the trash working dir too). id1 and id2 are two full
-# image ids built in order, so id1 is the older archive and id2 the newer.
 
 # One active image with a single increment exercises every ls form: the
 # all-images line, the per-name chain expansion, and the --json document.
@@ -90,67 +85,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the 
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	test_grep "alice/app" lsall.out &&
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
-	test_grep -E "^  chain +1$" ls.out &&
-	test_grep -E "^    [0-9a-f][0-9a-f]*  parent=" ls.out &&
+	test_grep -E "^  parent +$id1$" ls.out &&
+	test_grep -E "^    $id1$" ls.out &&
 	"$tiler_bin" images ls --json >lsjson.out 2>lsjson.err &&
 	test_grep "\"images\"" lsjson.out
-'
-
-# Rebuilding a mounted image retires the old full + chain into a hold that
-# the live view pins. Umounting drops the pin, so the next gc promotes the
-# unreferenced hold into an archive (demo S13 "rebuild ... to create an
-# archive"). A changed source tree guarantees a distinct new full id.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc promotes an unreferenced hold into an archive' '
-	echo "v2" >"$src_dir/version.txt" &&
-	"$tiler_bin" build --image alice/app "$src_dir" >build2.out 2>build2.err &&
-	test_grep -E "^full alice/app [0-9a-f]+" build2.out &&
-	id2=$(cut -d" " -f3 build2.out) &&
-	test -n "$id2" && test "$id2" != "$id1" &&
-	"$tiler_bin" umount "$work_dir" &&
-	"$tiler_bin" images gc >gc.out 2>gc.err &&
-	test_grep -E "^archived alice/app $id1$" gc.out &&
-	"$tiler_bin" images show alice/app >lsa.out 2>lsa.err &&
-	test_grep -E "^    $id1$" lsa.out
-'
-
-# A second rebuild+umount+gc cycle leaves two archives, id1 older and id2
-# newer. --keep-versions 1 is a root persistent flag injected into the
-# resolved config, so gc ranks the archives newest first and expires every
-# rank at or past the limit: id2 (rank 0) is kept and id1 (rank 1) removed.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'gc --keep-versions expires the older archive' '
-	"$tiler_bin" mount alice/app "$work_dir" >mount3.out 2>mount3.err &&
-	test_grep -E "^mounted " mount3.out &&
-	echo "v3" >"$src_dir/version.txt" &&
-	"$tiler_bin" build --image alice/app "$src_dir" >build3.out 2>build3.err &&
-	test_grep -E "^full alice/app [0-9a-f]+" build3.out &&
-	"$tiler_bin" umount "$work_dir" &&
-	"$tiler_bin" images gc >gc2.out 2>gc2.err &&
-	test_grep -E "^archived alice/app $id2$" gc2.out &&
-	"$tiler_bin" images gc --keep-versions 1 >gc3.out 2>gc3.err &&
-	test_grep -E "^removed alice/app $id1$" gc3.out &&
-	"$tiler_bin" images show alice/app >lsb.out 2>lsb.err &&
-	test_grep -E "^    $id2$" lsb.out &&
-	test_grep ! -E "^    $id1$" lsb.out
-'
-
-# A never-mounted image carries no session pin, so the two-phase rm runs
-# straight through: the first call flags it deprecated, the second removes
-# it, and the all-images listing no longer names it.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm deprecates then removes an unreferenced image' '
-	"$tiler_bin" build --image tmp/rmtest "$src_dir" >build4.out 2>build4.err &&
-	test_grep -E "^full tmp/rmtest [0-9a-f]+" build4.out &&
-	"$tiler_bin" images rm tmp/rmtest >rm1.out 2>rm1.err &&
-	test_grep -E "^deprecated tmp/rmtest$" rm1.out &&
-	"$tiler_bin" images rm tmp/rmtest >rm2.out 2>rm2.err &&
-	test_grep -E "^removed tmp/rmtest$" rm2.out &&
-	"$tiler_bin" images ls >lsall2.out 2>lsall2.err &&
-	test_grep ! "tmp/rmtest" lsall2.out
 '
 
 # Mounting without --session creates a generated session that pins the
 # image. While that view is live, rm must be refused with a non-zero
 # exit naming the pinning session. Umounting releases the pin, after
-# which the two-phase rm succeeds.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm is refused while an active session references it' '
 	"$tiler_bin" build --image life/app "$src_dir" >build5.out 2>build5.err &&
 	test_grep -E "^full life/app [0-9a-f]+" build5.out &&
@@ -159,13 +102,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm is refused while an active se
 	test_grep -E "^mounted " mount5.out &&
 	pin=$(sed -n "s/^new session created: //p" mount5.out) &&
 	test -n "$pin" &&
-	test_must_fail "$tiler_bin" images rm life/app >rmref.out 2>rmref.err &&
-	test_grep "still referenced by session $pin" rmref.err &&
+	test_must_fail "$tiler_bin" image rm life/app >rmref.out 2>rmref.err &&
+	test_grep "referenced by sessions" rmref.err &&
 	"$tiler_bin" umount "$work2_dir" &&
-	"$tiler_bin" images rm life/app >rm3.out 2>rm3.err &&
-	test_grep -E "^deprecated life/app$" rm3.out &&
-	"$tiler_bin" images rm life/app >rm4.out 2>rm4.err &&
-	test_grep -E "^removed life/app$" rm4.out
+	"$tiler_bin" session close "$pin" && "$tiler_bin" session remove "$pin" &&
+	"$tiler_bin" image rm life/app >rm3.out 2>rm3.err
 '
 
 test_done

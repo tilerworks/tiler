@@ -197,27 +197,17 @@ Available now:
   one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [--archives] [--json]` lists every active image
-  as one aligned row: name, id, creation date, size, chain length,
-  payload form (`single` or `blocks`), and the archive and hold
-  counts. The human id column is a 10-hex prefix of the payload
-  sha256. That prefix locates the image when it is unique in the
-  library leaf. A deprecated image, and a recorded ref or short
-  commit, trail that row. `--archives` adds those parked chain ids,
-  shortened the same way, under each row. `--json` keeps the full
-  sha256 in one machine-readable document, with the additive `form`
-  field for blocks actives.
-- `tiler images show <name|id> [--json]` prints a multi-line record
-  for one active image. `<name|id>` is a 1-to-5 segment library name,
-  or a full payload sha256 / unique hex prefix (including the
-  10-hex id from `images list`). The record covers identity, a
-  `format` line such as `squashfs/zstd`, each chain layer, the
-  blocks payload count when present, and the parked archive and hold
-  ids. `--json` renders the same repository as one object, including
-  `format`.
-- `tiler images gc` promotes held chains that nothing references
-  into archives, then deletes archives beyond `--keep-versions` or
-  `--max-age`. Zero means that rule is unlimited. The same pass
+- `tiler images list [--json]` prints each name's latest version and
+  complete parent-first tree, using 10-hex IDs and creation times.
+  `images show <name[:hash]>` accepts a scoped 4-to-64-hex prefix.
+- `tiler mount <name[:hash]> <dir>` mounts that immutable tip and its
+  ancestors; a bare name selects the newest node on any branch.
+- Builds accept `-m/--message` and `-F/--file` (`-F -` reads stdin);
+  `images describe|desc <name>:<hash>` also opens `$EDITOR` by default.
+- `tiler image rm <name>:<hash>` removes that node and its descendants;
+  `tiler image rm <name>` removes the repository. Session references
+  block either operation. `images gc` recovers cleanup and orphans but
+  preserves every version retained by metadata. The same pass
   cleans the session records: a closed record past
   `--session-max-age` is removed, an active record is never
   auto-deleted but one whose mounts are all dead is reported
@@ -226,11 +216,7 @@ Available now:
   eligible for a later removal. The one exception is a `--rm`
   active record whose views are all dead: it is torn down, its
   runtime purged, and its record removed whatever its age.
-- `tiler images remove <name | name/_archives/<id>>` deprecates the
-  target on the first call and removes it on the second. `<name>` is
-  a 1-to-5 segment library name; an archive target uses
-  `/_archives/` and a full sha256 or a unique prefix. Both calls
-  refuse while a reference pins the target.
+- Session records remain authoritative when the reverse-index cache is stale.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
   under the session's `runtime/m<seq>/` tree, and `fuse-overlayfs`
@@ -360,16 +346,8 @@ exit 2):
 
 NAS lifecycle for a linked image:
 
-- `tiler images remove` and `tiler images gc` drop library metadata,
-  external-link leaves (symlink or path-ref), and local increment
-  layers only — they never delete the external file on NAS or
-  elsewhere.
-- `tiler build --full` (or a dmg bake on macOS) materializes a new
-  active payload under the library; the previous active, including an
-  external link, moves to hold or archive.
-- Incremental layers from a writable view land under the library
-  leaf (`_incr/` on Linux); the active payload may stay an external
-  link.
+- Published links and increments use immutable `_objects/<id>/` versions;
+  GC preserves them, and removal deletes local data, never the target.
 - With `--cache`, member bytes copy into `cache_dir` for mounting,
   but the mount table and session still name the library path
   (`images_dir/.../image.*`), not the cache file.
@@ -528,8 +506,7 @@ minutes or hours.
 The first stored image takes one command: a scene script prepares a
 directory, `tiler build --image alice/app dir` packs it into the
 library under `~/.tiler/images/`, and the next full build of the same
-name archives the previous image instead of breaking readers.
-`tiler images gc` later trims the archives by count and age.
+name publishes an immutable version without moving earlier payloads.
 
 The read-only base stays immutable. The upper layer can be discarded
 and mounted again.

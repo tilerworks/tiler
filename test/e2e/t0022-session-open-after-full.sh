@@ -5,9 +5,7 @@
 # Companion to t0004-image-incr-cascade.sh (full merge while mounted,
 # remount of the new active) and t0007-session-recovery.sh (open after
 # crash without replacing the library image). Neither covers this case:
-# after build --full moves the pinned id into _hold/, umount leaves the
-# session active with its upper (or shadow), and session open must
-# reattach that held lower — not the new active — so the overlay still
+# session open must reuse the immutable pin rather than the latest version, so it
 # merges old base content with the pre-rebuild upper write.
 #
 # Linux (TILER,LINUX,FUSE_TOOLCHAIN): single-file squashfs + overlay.
@@ -18,7 +16,7 @@
 # would not run there either). A Linux host without FUSE skips only
 # the Linux blocks; macOS blocks are skipped via the MACOS prereq.
 
-test_description='session open remounts a held pin after build --full'
+test_description='session open remounts an immutable pin after build --full'
 
 tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
 TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
@@ -85,8 +83,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: build --full holds the pi
 	new_id=$(cut -d" " -f3 full.out) &&
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
-	test_path_is_file "$img_dir/_hold/$old_id/image.sqsh" &&
-	test_grep -E "^head: \"?$new_id\"?$" "$img_dir/meta.yaml"
+	test_grep -E "^[[:space:]]*- id: $new_id$" "$img_dir/meta.yaml"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: umount keeps the session and upper' '
@@ -101,7 +98,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: umount keeps the session 
 	test_grep -F "\"full_id\": \"$old_id\"" after-umount.json
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: session open merges held lower with upper' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'linux: session open merges pinned lower with upper' '
 	old_id=$(cut -d" " -f3 build.out) &&
 	new_id=$(cut -d" " -f3 full.out) &&
 	"$tiler_bin" session open pin >open.out 2>open.err &&
@@ -145,8 +142,7 @@ test_expect_success TILER,MACOS 'macos: build --full holds the pin and changes a
 	new_id=$(cut -d" " -f3 full.out) &&
 	test -n "$new_id" &&
 	test "$new_id" != "$old_id" &&
-	test_path_is_file "$img_dir/_hold/$old_id/image.dmg" &&
-	test_grep -E "^head: \"?$new_id\"?$" "$img_dir/meta.yaml"
+	test_grep -E "^[[:space:]]*- id: $new_id$" "$img_dir/meta.yaml"
 '
 
 test_expect_success TILER,MACOS 'macos: umount keeps the session and shadow' '
@@ -161,7 +157,7 @@ test_expect_success TILER,MACOS 'macos: umount keeps the session and shadow' '
 	test_grep -F "\"full_id\": \"$old_id\"" after-umount.json
 '
 
-test_expect_success TILER,MACOS 'macos: session open attaches held dmg with the shadow' '
+test_expect_success TILER,MACOS 'macos: session open attaches pinned dmg with the shadow' '
 	old_id=$(cut -d" " -f3 build.out) &&
 	new_id=$(cut -d" " -f3 full.out) &&
 	"$tiler_bin" session open pin >open.out 2>open.err &&

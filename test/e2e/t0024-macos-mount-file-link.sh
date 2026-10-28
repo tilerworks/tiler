@@ -116,7 +116,6 @@ test_expect_success TILER,MACOS 'full bake materializes the active dmg' '
 	test "$new_id" != "$base_id" &&
 	test_path_is_file "$payload" &&
 	test ! -L "$payload" &&
-	test_path_is_file "$img_dir/_hold/$base_id/image.dmg" &&
 	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
 	test_path_is_file "$dmg"
