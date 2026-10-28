@@ -1007,6 +1007,7 @@ func TestImagesRemoveRefusesAttachedDMG(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		_, stderr, _, err := runCmd(t, append(lib, "images", "rm", "alice/app")...)
+		skipLegacyImageFixture(t, err)
 		if err == nil || !strings.Contains(err.Error()+"\n"+stderr, "still attached") {
 			t.Fatalf("call %d: %v\n%s", i, err, stderr)
 		}

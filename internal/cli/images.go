@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -664,35 +665,100 @@ func newImagesGCCmd() *cobra.Command {
 
 func newImagesRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "remove <name | name/_archives/<id>>",
+		Use:     "remove <name | name:hash>",
 		Aliases: []string{"rm"},
-		Short:   "Deprecate and then remove an image target",
-		Long: "The first call flags the target deprecated; the second call\n" +
-			"physically removes it. <name> is a 1-to-5 segment library\n" +
-			"name; an archive target is <name>/_archives/<id>, where\n" +
-			"<id> is a full sha256 or a unique prefix.\n" +
-			"Both calls refuse while a session still references the\n" +
-			"target, and while hdiutil info shows a dmg target is\n" +
-			"attached. Only image files and archives are deleted.",
+		Short:   "Remove an image repository or version subtree",
+		Long: "A bare name removes the repository and all its versions.\n" +
+			"A name:hash selector removes that version and its descendants.\n" +
+			"Removal fails while any selected version is referenced by a session.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("images remove: configuration is not loaded")
 			}
-			target := args[0]
-			outcome, err := image.RemoveChecked(cfg, target,
-				session.Refs{Dir: cfg.SessionsDir}, attachedDMG)
+			name, prefix, err := image.ParseVersionSelector(args[0])
 			if err != nil {
-				if isTargetUsage(err) {
-					return usageError{err}
-				}
-				return err
+				return usageError{err}
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", outcome, target)
-			return err
+			coordinator := session.ReferenceCoordinator{
+				Store: session.Store{Dir: cfg.SessionsDir}, ImagesDir: cfg.ImagesDir,
+			}
+			var removed []image.ImageMeta
+			if prefix == "" {
+				removed, err = coordinator.RemoveVersionRepository(name)
+			} else {
+				view, resolveErr := collectVersionShow(cfg.ImagesDir, args[0])
+				if resolveErr != nil {
+					return resolveErr
+				}
+				removed, err = coordinator.RemoveVersionSubtree(name, view.Selected.ID)
+			}
+			if err != nil {
+				return versionRemovalError(cfg.SessionsDir, err)
+			}
+			return writeVersionRemoval(cmd.OutOrStdout(), name, prefix == "", removed)
 		},
 	}
+}
+
+func writeVersionRemoval(w io.Writer, name string, repository bool, removed []image.ImageMeta) error {
+	if repository {
+		_, err := fmt.Fprintf(w, "Removed image repository %s (%d image versions).\n", name, len(removed))
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Removed %d image versions from %s:\n", len(removed), name); err != nil {
+		return err
+	}
+	for _, node := range removed {
+		if _, err := fmt.Fprintf(w, "  %s\n", listID(node.ID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func versionRemovalError(sessionsDir string, err error) error {
+	var blocked *session.VersionRemovalBlocked
+	if !errors.As(err, &blocked) {
+		return err
+	}
+	type row struct{ session, tip, state string }
+	rows, seen := []row{}, map[string]bool{}
+	shortIDs := map[string]int{}
+	store := session.Store{Dir: sessionsDir}
+	for _, bucket := range blocked.Blockers {
+		for _, owner := range bucket.Owners {
+			key := owner.Session + "\x00" + bucket.Tip
+			if seen[key] {
+				continue
+			}
+			record, loadErr := store.LoadVersion(owner.Session)
+			if loadErr != nil {
+				return loadErr
+			}
+			seen[key] = true
+			rows = append(rows, row{owner.Session, bucket.Tip, record.State})
+			shortIDs[listID(bucket.Tip)]++
+		}
+	}
+	slices.SortFunc(rows, func(a, b row) int {
+		if n := strings.Compare(a.session, b.session); n != 0 {
+			return n
+		}
+		return strings.Compare(a.tip, b.tip)
+	})
+	var text strings.Builder
+	fmt.Fprintf(&text, "%s\n", blocked)
+	for _, row := range rows {
+		id := listID(row.tip)
+		if shortIDs[id] > 1 {
+			id = row.tip
+		}
+		fmt.Fprintf(&text, "  %s   %s  (%s)\n", row.session, id, row.state)
+	}
+	text.WriteString("No image versions were removed.")
+	return errors.New(text.String())
 }
 
 // isTargetUsage reports whether err rejects the target shape itself,

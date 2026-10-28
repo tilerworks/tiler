@@ -14,6 +14,17 @@ type VersionRemovalPlan struct {
 	Blockers []ReferenceBucket
 }
 
+// VersionRemovalBlocked reports the trusted reference buckets that prevented
+// an otherwise valid removal. Callers may render the owners for diagnostics.
+type VersionRemovalBlocked struct {
+	Name     string
+	Blockers []ReferenceBucket
+}
+
+func (e *VersionRemovalBlocked) Error() string {
+	return fmt.Sprintf("cannot remove image versions from %s: referenced by sessions", e.Name)
+}
+
 // PlanVersionRemoval verifies the reference inventory while holding the
 // library lock. The returned snapshot cannot authorize a later deletion;
 // deletion callers must use PlanVersionRemovalLocked inside their mutation.
@@ -93,7 +104,7 @@ func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.I
 			return err
 		}
 		if len(plan.Blockers) != 0 {
-			return fmt.Errorf("image %s: versions are referenced by sessions", name)
+			return &VersionRemovalBlocked{Name: name, Blockers: plan.Blockers}
 		}
 		removed, err = image.RemoveVersionSubtreeLocked(c.ImagesDir, name, root)
 		return err
@@ -119,7 +130,7 @@ func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.Imag
 			return err
 		}
 		if len(plan.Blockers) != 0 {
-			return fmt.Errorf("image %s: versions are referenced by sessions", name)
+			return &VersionRemovalBlocked{Name: name, Blockers: plan.Blockers}
 		}
 		removed, err = image.RemoveVersionRepositoryLocked(c.ImagesDir, name)
 		return err

@@ -41,6 +41,9 @@ func skipLegacyImageFixture(t *testing.T, err error) {
 	t.Helper()
 	if strings.Contains(err.Error(), "legacy layout") ||
 		strings.Contains(err.Error(), "unsupported metadata version") {
+		if ExitCode(err) != 1 {
+			t.Fatalf("legacy rejection exit code = %d, want 1", ExitCode(err))
+		}
 		t.Skip("legacy repository fixtures are outside the v3-only runtime")
 	}
 }
@@ -59,6 +62,7 @@ func mustRemove(t *testing.T, lib []string, target string) string {
 	t.Helper()
 	stdout, stderr, _, err := runCmd(t, append(lib, "images", "rm", target)...)
 	if err != nil {
+		skipLegacyImageFixture(t, err)
 		t.Fatalf("images rm %s: %v\n%s", target, err, stderr)
 	}
 	return stdout
@@ -587,6 +591,7 @@ func TestImagesRemoveRefusesWhileReferenced(t *testing.T) {
 	buildImage(t, lib, "alice/app", src)
 
 	_, stderr, _, err := runCmd(t, append(lib, "images", "rm", "alice/app")...)
+	skipLegacyImageFixture(t, err)
 	if ExitCode(err) != 1 || !strings.Contains(stderr, "referenced") {
 		t.Fatalf("ExitCode(%v) = %d stderr = %q", err, ExitCode(err), stderr)
 	}

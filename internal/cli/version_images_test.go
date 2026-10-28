@@ -199,6 +199,84 @@ func TestCollectVersionShowPinsSelectedAncestorStack(t *testing.T) {
 	}
 }
 
+func TestImagesRemoveVersionSubtreeAndRepository(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Now().UTC()
+	root := versionNode("a", image.KindFull, "", base)
+	child := versionNode("b", image.KindIncremental, root.ID, base.Add(time.Minute))
+	branch := versionNode("c", image.KindFull, "", base.Add(2*time.Minute))
+	writeVersionForest(t, dir, "alice/app", branch, child, root)
+	cmd := newImagesRemoveCmd()
+	cmd.SetContext(context.Background())
+	remember(cmd, config.Config{ImagesDir: dir, SessionsDir: filepath.Join(dir, "sessions")})
+	cmd.SetArgs([]string{"alice/app:" + root.ID[:4]})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Removed 2 image versions from alice/app:\n  bbbbbbbbbb\n  aaaaaaaaaa\n"; out.String() != want {
+		t.Fatalf("version removal = %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	cmd = newImagesRemoveCmd()
+	cmd.SetContext(context.Background())
+	remember(cmd, config.Config{ImagesDir: dir, SessionsDir: filepath.Join(dir, "sessions")})
+	cmd.SetArgs([]string{"alice/app"})
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Removed image repository alice/app (1 image versions).\n"; out.String() != want {
+		t.Fatalf("repository removal = %q, want %q", out.String(), want)
+	}
+}
+
+func TestImagesRemoveReportsBlockingSessionsWithoutDeleting(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	root := versionNode("a", image.KindFull, "", time.Now().UTC())
+	child := versionNode("b", image.KindIncremental, root.ID, time.Now().UTC())
+	writeVersionForest(t, dir, "alice/app", root, child)
+	rec, err := session.NewVersionRecord("dev", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.State = session.StateClosed
+	rec.Actions = []session.Action{{Seq: 1, Type: session.TypeMount, Name: "alice/app",
+		Image: "alice/app", FullID: root.ID, TipID: child.ID, RuntimeID: "m1",
+		Mountpoint: "/workspace", Mode: session.ModeRW, Status: session.StatusMounted}}
+	coordinator := session.ReferenceCoordinator{
+		Store: session.Store{Dir: sessionsDir}, ImagesDir: dir,
+	}
+	if err := coordinator.Apply(nil, &rec); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newImagesRemoveCmd()
+	cmd.SetContext(context.Background())
+	remember(cmd, config.Config{ImagesDir: dir, SessionsDir: sessionsDir})
+	cmd.SetArgs([]string{"alice/app:" + root.ID[:4]})
+	err = cmd.Execute()
+	want := "cannot remove image versions from alice/app: referenced by sessions\n" +
+		"  dev   bbbbbbbbbb  (closed)\nNo image versions were removed."
+	if err == nil || err.Error() != want {
+		t.Fatalf("blocking error = %q, want %q", err, want)
+	}
+	view, loadErr := collectVersionShow(dir, "alice/app:"+child.ID)
+	if loadErr != nil || view.Selected.ID != child.ID {
+		t.Fatalf("blocked removal changed repository: %#v, %v", view, loadErr)
+	}
+}
+
+func TestImagesListRejectsLegacyArchivesFlag(t *testing.T) {
+	cmd := newImagesListCmd()
+	cmd.SetArgs([]string{"--archives"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag: --archives") {
+		t.Fatalf("archives error = %v", err)
+	}
+}
+
 func TestCollectVersionImagesRejectsLegacyMetadata(t *testing.T) {
 	dir := t.TempDir()
 	repo, err := image.OpenRepo(dir, "alice/app")
