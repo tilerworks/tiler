@@ -21,7 +21,7 @@ const (
 var errMalformedIndex = errors.New("malformed index")
 
 // indexRow is one sorted index line: a 64-hex key and a leaf-relative
-// meta root.
+// metadata or immutable payload root.
 type indexRow struct {
 	key string
 	rel string
@@ -438,6 +438,9 @@ func validIndexRel(rel string) bool {
 	kind, id, ok := strings.Cut(rel, "/")
 	if !ok || strings.Contains(id, "/") {
 		return false
+	}
+	if kind == dirObjects {
+		return isLowerHex(id, sumHexLen)
 	}
 	if kind != dirHold && kind != dirArchives {
 		return false

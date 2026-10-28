@@ -86,7 +86,7 @@ func isLeafDir(dir string) bool {
 	for _, entry := range entries {
 		name := entry.Name()
 		switch name {
-		case fileMeta, ImageFile, ImageDMG, dirIncr, dirArchives, dirHold, dirBlocks:
+		case fileMeta, ImageFile, ImageDMG, dirIncr, dirArchives, dirHold, dirBlocks, dirObjects:
 			return true
 		}
 		if strings.HasPrefix(name, ".") {
