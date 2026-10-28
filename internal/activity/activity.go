@@ -40,6 +40,12 @@ var (
 	ErrLineTooLong = errors.New("activity line too long")
 	// ErrInvalidEvent is a missing event name or an unknown phase.
 	ErrInvalidEvent = errors.New("invalid activity event")
+	// ErrNoActivity is a log that does not exist or is empty, so the
+	// object needs one initialize event instead of an expiry decision.
+	ErrNoActivity = errors.New("no activity recorded")
+	// ErrDamagedLog is a non-empty log whose newest record cannot be
+	// trusted; such an object is never a removal candidate.
+	ErrDamagedLog = errors.New("damaged activity log")
 )
 
 // Clock returns the current time. Tests inject a fixed clock so log
@@ -107,9 +113,14 @@ func (w *Writer) LogPath() string { return w.logPath }
 
 // Append appends one event and returns the recorded UTC time. The
 // managed path is revalidated and the log lock is held for the whole
-// write, so the timestamp is taken under the lock; a missing
-// directory, a busy lock, or an unsafe file fails the append, and no
-// unlocked write is ever attempted.
+// write, so the timestamp is taken under the lock. The time never
+// moves back: it is the later of the clock and the newest existing
+// record, so a backward clock cannot make the log regress, and
+// activity after a future timestamp keeps that future time.
+//
+// A missing directory, a busy lock, an unsafe file, or a damaged
+// newest record fails the append, and no unlocked write is ever
+// attempted.
 func (w *Writer) Append(ev Event) (time.Time, error) {
 	if err := ev.check(); err != nil {
 		return time.Time{}, err
@@ -119,7 +130,16 @@ func (w *Writer) Append(ev Event) (time.Time, error) {
 		return time.Time{}, err
 	}
 	defer release()
-	at := w.clock().UTC()
+	now := w.clock().UTC()
+	at := now
+	last, err := w.readLastLocked()
+	switch {
+	case errors.Is(err, ErrNoActivity):
+	case err != nil:
+		return time.Time{}, err
+	case last.After(now):
+		at = last
+	}
 	line, err := encodeLine(ev, at)
 	if err != nil {
 		return at, err
