@@ -403,3 +403,385 @@ func fileDigest(t *testing.T, path string) string {
 	}
 	return hexDigest(sum)
 }
+
+func TestPublishCopiedImportRekeysSameSourceZeroFile(t *testing.T) {
+	withLinuxLinkPolicy(t)
+	images := t.TempDir()
+	nas := t.TempDir()
+	src := writeFakeSquashfs(t, nas, []byte("unknown-payload"))
+	when := time.Unix(50, 0)
+	if err := os.Chtimes(src, when, when); err != nil {
+		t.Fatal(err)
+	}
+	before := importStamp(t, nas)
+	req := ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: src}
+	linked := mustPublishLink(t, req)
+	if linked.Items[0].Action != MergeAdd || linked.Items[0].Node.ID != UnknownSHA256 {
+		t.Fatalf("link = %+v", linked.Items)
+	}
+	repo, manifest := mustRepoManifest(t, images, "vendor/app")
+	zero := closureNodeByID(manifest.Images, UnknownSHA256)
+	childID := strings.Repeat("ab", 32)
+	manifest.Images = append(manifest.Images, ImageMeta{
+		ID: childID, SHA256: childID, Kind: KindIncremental, Parent: UnknownSHA256,
+		Format: Format{Type: FormatSquashfs, Compression: CompressionZstd}, Size: 4,
+		MtimeUnix: 1, CreatedAt: time.Unix(5, 0).UTC(), Description: "descendant",
+	})
+	body, err := EncodeVersionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(repo.Dir, dirObjects, childID, "marker")
+	if err = os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pinPath, pin := pinImportSession(t, UnknownSHA256, childID)
+	req.Mode = ImportCopy
+	copied := mustPublishCopy(t, req)
+	actual := fileDigest(t, src)
+	if copied.Items[0].Action != MergeAdd || copied.Items[0].Node.ID != actual || IsUnknownSHA256(copied.Items[0].Node.ID) {
+		t.Fatalf("copy = %+v", copied.Items)
+	}
+	repo, manifest = mustRepoManifest(t, images, "vendor/app")
+	kept := closureNodeByID(manifest.Images, UnknownSHA256)
+	if kept.ID != UnknownSHA256 || !kept.CreatedAt.Equal(zero.CreatedAt) || kept.Builder != zero.Builder || kept.Parent != "" {
+		t.Fatalf("zero node = %+v", kept)
+	}
+	if closureNodeByID(manifest.Images, childID).Parent != UnknownSHA256 {
+		t.Fatal("copy rewrote the descendant parent")
+	}
+	requirePosition(t, repo, kept, src)
+	if string(mustRead(t, marker)) != "keep" || !bytes.Equal(mustRead(t, pinPath), pin) {
+		t.Fatal("copy deleted a descendant or rewrote the session")
+	}
+	meta := mustRead(t, repo.MetaPath())
+	info, err := os.Stat(repo.MetaPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := mustPublishCopy(t, req)
+	againInfo, err := os.Stat(repo.MetaPath())
+	if err != nil || again.Items[0].Action != MergeNoop || again.Items[0].Node.ID != actual ||
+		!bytes.Equal(mustRead(t, repo.MetaPath()), meta) || !againInfo.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("repeat = %+v", again.Items)
+	}
+	other := writeFakeSquashfs(t, t.TempDir(), []byte("different-source"))
+	if err = os.Chtimes(other, when, when); err != nil {
+		t.Fatal(err)
+	}
+	second := mustPublishCopy(t, ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: other})
+	secondSum := fileDigest(t, other)
+	if second.Items[0].Action != MergeAdd || second.Items[0].Node.ID != secondSum || secondSum == actual {
+		t.Fatalf("other = %+v", second.Items)
+	}
+	repo, manifest = mustRepoManifest(t, images, "vendor/app")
+	if closureNodeByID(manifest.Images, UnknownSHA256).ID != UnknownSHA256 ||
+		closureNodeByID(manifest.Images, actual).ID != actual ||
+		closureNodeByID(manifest.Images, secondSum).ID != secondSum ||
+		closureNodeByID(manifest.Images, childID).Parent != UnknownSHA256 {
+		t.Fatal("different zero sources were merged or a reference was dropped")
+	}
+	requirePosition(t, repo, closureNodeByID(manifest.Images, UnknownSHA256), src)
+	if importStamp(t, nas) != before || !bytes.Equal(mustRead(t, pinPath), pin) || string(mustRead(t, marker)) != "keep" {
+		t.Fatal("copy changed the source, session, or descendant")
+	}
+}
+
+func TestPublishCopiedImportRekeysDirectoryZeroRoot(t *testing.T) {
+	withLinuxLinkPolicy(t)
+	src := writeUnknownClosure(t)
+	before := importStamp(t, src.dir) + importStamp(t, src.nas)
+	modes := []struct {
+		name, hash string
+		ids        []string
+	}{
+		{name: "latest", ids: []string{src.actual, src.child.ID}},
+		{name: "root prefix", hash: UnknownSHA256[:4], ids: []string{src.actual}},
+		{name: "child prefix", hash: src.child.ID[:8], ids: []string{src.actual, src.child.ID}},
+		{name: "other prefix", hash: src.other.ID[:8], ids: []string{src.other.ID}},
+		{name: "all", hash: importHashAll, ids: []string{src.actual, src.child.ID, src.other.ID}},
+	}
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			images := t.TempDir()
+			got := mustPublishCopy(t, src.req(images, mode.hash, ImportCopy))
+			requirePublishIDs(t, got.Items, mode.ids...)
+			requireRekeyedFacts(t, got, src)
+			if closureNodeByID(loadRepoManifest(t, images, "vendor/app").Images, UnknownSHA256).ID != "" {
+				t.Fatal("fresh copy published the unknown id")
+			}
+			if mode.hash != importHashAll {
+				return
+			}
+			repo, err := OpenRepo(images, "vendor/app")
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := mustRead(t, repo.MetaPath())
+			info, err := os.Stat(repo.MetaPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			again := mustPublishCopy(t, src.req(images, importHashAll, ImportCopy))
+			againInfo, err := os.Stat(repo.MetaPath())
+			if err != nil || !bytes.Equal(mustRead(t, repo.MetaPath()), meta) || !againInfo.ModTime().Equal(info.ModTime()) {
+				t.Fatal("repeated copy rewrote metadata")
+			}
+			for _, item := range again.Items {
+				if item.Action != MergeNoop {
+					t.Fatalf("repeat action = %s", item.Action)
+				}
+			}
+		})
+	}
+	t.Run("link keeps zero", func(t *testing.T) {
+		got := mustPublishLink(t, src.req(t.TempDir(), importHashAll, ImportLink))
+		requirePublishIDs(t, got.Items, UnknownSHA256, src.child.ID, src.other.ID)
+		if got.Items[1].Node.Parent != UnknownSHA256 {
+			t.Fatalf("link parent = %s", got.Items[1].Node.Parent)
+		}
+	})
+	t.Run("existing child parent conflicts", func(t *testing.T) {
+		images := t.TempDir()
+		linked := mustPublishLink(t, src.req(images, importHashAll, ImportLink))
+		if linked.Items[0].Node.ID != UnknownSHA256 || linked.Items[1].Node.Parent != UnknownSHA256 {
+			t.Fatalf("link = %+v", linked.Items)
+		}
+		repo, err := OpenRepo(images, "vendor/app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta := mustRead(t, repo.MetaPath())
+		pinPath, pin := pinImportSession(t, UnknownSHA256, src.child.ID)
+		_, err = PublishCopiedImport(src.req(images, importHashAll, ImportCopy))
+		if err == nil || !strings.Contains(err.Error(), "identity conflict") {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(mustRead(t, repo.MetaPath()), meta) || !bytes.Equal(mustRead(t, pinPath), pin) {
+			t.Fatal("conflict rewrote metadata or the session")
+		}
+		if _, statErr := os.Stat(filepath.Join(repo.Dir, dirObjects, src.actual)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatal(statErr)
+		}
+		manifest := loadRepoManifest(t, images, "vendor/app")
+		if closureNodeByID(manifest.Images, src.child.ID).Parent != UnknownSHA256 {
+			t.Fatal("conflict rewrote the existing child")
+		}
+		requirePosition(t, repo, closureNodeByID(manifest.Images, UnknownSHA256), src.external)
+	})
+	t.Run("root copy keeps descendants and session", func(t *testing.T) {
+		images := t.TempDir()
+		if got := mustPublishLink(t, src.req(images, importHashAll, ImportLink)); got.Items[0].Node.ID != UnknownSHA256 {
+			t.Fatal(got.Items[0].Node.ID)
+		}
+		pinPath, pin := pinImportSession(t, UnknownSHA256, src.child.ID)
+		got := mustPublishCopy(t, src.req(images, UnknownSHA256[:4], ImportCopy))
+		requirePublishIDs(t, got.Items, src.actual)
+		if got.Items[0].Action != MergeAdd || got.Items[0].Node.Description != "unknown link" {
+			t.Fatalf("root = %+v", got.Items[0].Node)
+		}
+		repo, manifest := mustRepoManifest(t, images, "vendor/app")
+		child := closureNodeByID(manifest.Images, src.child.ID)
+		if child.Parent != UnknownSHA256 || closureNodeByID(manifest.Images, UnknownSHA256).ID != UnknownSHA256 ||
+			closureNodeByID(manifest.Images, src.other.ID).ID != src.other.ID {
+			t.Fatal("root copy deleted or reparented a committed node")
+		}
+		stack, err := manifest.SelectVersion(manifest.Name + ":" + src.child.ID)
+		if err != nil || len(stack) != 2 || stack[0].ID != UnknownSHA256 || stack[1].ID != src.child.ID {
+			t.Fatalf("session stack = %+v %v", stack, err)
+		}
+		requirePosition(t, repo, closureNodeByID(manifest.Images, UnknownSHA256), src.external)
+		if !bytes.Equal(mustRead(t, pinPath), pin) {
+			t.Fatal("root copy rewrote the session")
+		}
+		index := string(mustRead(t, filepath.Join(repo.Dir, fileSHA256Index)))
+		if strings.Contains(index, UnknownSHA256) || !strings.Contains(index, src.actual) {
+			t.Fatalf("index = %s", index)
+		}
+		meta := mustRead(t, repo.MetaPath())
+		again := mustPublishCopy(t, src.req(images, UnknownSHA256[:4], ImportCopy))
+		if again.Items[0].Action != MergeNoop || !bytes.Equal(mustRead(t, repo.MetaPath()), meta) || !bytes.Equal(mustRead(t, pinPath), pin) {
+			t.Fatal("repeated root copy changed committed references")
+		}
+	})
+	if importStamp(t, src.dir)+importStamp(t, src.nas) != before {
+		t.Fatal("directory copy changed the source")
+	}
+}
+
+type unknownClosure struct {
+	dir, nas, external, actual string
+	zero, child, other         ImageMeta
+}
+
+func (u unknownClosure) req(images, hash string, mode ImportMode) ImportRequest {
+	return ImportRequest{Mode: mode, ImagesDir: images, Name: "vendor/app", Source: u.dir, Hash: hash}
+}
+
+func writeUnknownClosure(t *testing.T) unknownClosure {
+	t.Helper()
+	nas := t.TempDir()
+	external := writeFakeSquashfs(t, nas, []byte("unknown-root"))
+	when := time.Unix(50, 0)
+	if err := os.Chtimes(external, when, when); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := fullNode(UnknownSHA256, info.Size(), info.ModTime().Unix())
+	zero.Description = "unknown link"
+	zero.Builder = "vendor"
+	zero.CreatedAt = time.Unix(10, 0).UTC()
+	dir := filepath.Join(t.TempDir(), "lib")
+	writeClosureLink(t, dir, zero.ID, external)
+	child := writeDigestedNode(t, dir, []byte("child-payload"), time.Unix(60, 0), 30)
+	child.Kind = KindIncremental
+	child.Parent = UnknownSHA256
+	child.Builder = ""
+	child.Description = "child"
+	other := writeDigestedNode(t, dir, []byte("other-root"), time.Unix(70, 0), 20)
+	other.Description = "other"
+	if strings.HasPrefix(child.ID, "0000") || strings.HasPrefix(other.ID, "0000") || child.ID[:8] == other.ID[:8] {
+		t.Fatalf("fixture prefixes collide: %s %s", child.ID, other.ID)
+	}
+	encoded, err := EncodeVersionManifest(VersionManifest{
+		Version: VersionManifestVersion, Name: "other/lib", Images: []ImageMeta{zero, child, other},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, fileMeta), encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return unknownClosure{
+		dir: dir, nas: nas, external: external, actual: fileDigest(t, external),
+		zero: zero, child: child, other: other,
+	}
+}
+
+func writeClosureLink(t *testing.T, dir, id, src string) {
+	t.Helper()
+	path := filepath.Join(dir, dirObjects, id, ImageFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePathRef(src, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeDigestedNode(t *testing.T, dir string, payload []byte, when time.Time, created int64) ImageMeta {
+	t.Helper()
+	body := append([]byte("hsqs"), payload...)
+	sum := sha256.Sum256(body)
+	id := hex.EncodeToString(sum[:])
+	path := filepath.Join(dir, dirObjects, id, ImageFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := fullNode(id, info.Size(), info.ModTime().Unix())
+	node.CreatedAt = time.Unix(created, 0).UTC()
+	node.Builder = "vendor"
+	return node
+}
+
+func requirePublishIDs(t *testing.T, items []ImportMergeItem, ids ...string) {
+	t.Helper()
+	if len(items) != len(ids) {
+		t.Fatalf("ids = %d, want %d", len(items), len(ids))
+	}
+	for i, id := range ids {
+		if items[i].Node.ID != id {
+			t.Fatalf("item %d = %s, want %s", i, items[i].Node.ID, id)
+		}
+	}
+}
+
+func requireRekeyedFacts(t *testing.T, got CopyPublish, src unknownClosure) {
+	t.Helper()
+	for _, item := range got.Items {
+		if item.Action != MergeAdd {
+			t.Fatalf("action = %s", item.Action)
+		}
+		switch item.Node.ID {
+		case src.actual:
+			kept := item.Node.Parent == "" && item.Node.Description == "unknown link" && item.Node.Builder == "vendor" &&
+				item.Node.CreatedAt.Equal(src.zero.CreatedAt) && !IsUnknownSHA256(item.Node.SHA256)
+			if !kept {
+				t.Fatalf("root = %+v", item.Node)
+			}
+		case src.child.ID:
+			if item.Node.Parent != src.actual || item.Node.Description != "child" {
+				t.Fatalf("child = %+v", item.Node)
+			}
+		case src.other.ID:
+			if item.Node.Parent != "" || item.Node.Description != "other" {
+				t.Fatalf("other = %+v", item.Node)
+			}
+		default:
+			t.Fatalf("unexpected %s", item.Node.ID)
+		}
+	}
+}
+
+func pinImportSession(t *testing.T, fullID, tipID string) (string, []byte) {
+	t.Helper()
+	body := []byte(`{"full_id":"` + fullID + `","tip_id":"` + tipID + `"}` + "\n")
+	path := filepath.Join(t.TempDir(), "sessions", "work", "record.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path, body
+}
+
+func mustRepoManifest(t *testing.T, images, name string) (Repo, VersionManifest) {
+	t.Helper()
+	repo, err := OpenRepo(images, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, loadRepoManifest(t, images, name)
+}
+
+func loadRepoManifest(t *testing.T, images, name string) VersionManifest {
+	t.Helper()
+	repo, err := OpenRepo(images, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := LoadVersionManifest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+func requirePosition(t *testing.T, repo Repo, node ImageMeta, loc string) {
+	t.Helper()
+	want, err := canonicalPath(loc)
+	got := strings.TrimSpace(payloadText(t, repo, node))
+	if err != nil || got != want {
+		t.Fatalf("position %q want %s, %v", got, want, err)
+	}
+}

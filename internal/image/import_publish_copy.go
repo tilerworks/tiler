@@ -34,6 +34,8 @@ type stagedNode struct {
 	files    []string
 	extra    []string
 	drop     string
+	// prior is the unknown id this copy replaced with the real digest.
+	prior string
 }
 
 type stagedBatch struct {
@@ -44,7 +46,9 @@ type stagedBatch struct {
 // PublishCopiedImport copies one verified batch into the target library.
 // A same-source known link becomes a local payload with its id, recorded
 // mtime, and metadata kept. An existing local copy is left untouched.
-// Unknown roots are not rekeyed here.
+// An unknown full root is published under the digest of the copied bytes.
+// Parents in this batch that pointed at that root follow the new id.
+// Committed zero nodes, their descendants, and session records stay.
 func PublishCopiedImport(req ImportRequest) (CopyPublish, error) {
 	return publishCopied(req, copyPublishSeam{})
 }
@@ -162,6 +166,7 @@ func stageCopyBatch(req ImportRequest, read importRead) (*stagedBatch, error) {
 		}
 		batch.nodes = append(batch.nodes, one)
 	}
+	rekeyCopiedParents(batch.nodes)
 	if err = metaUnchanged(read); err != nil {
 		batch.release()
 		return nil, importFail(req, err)
@@ -184,14 +189,22 @@ func stageCopiedFile(req ImportRequest, plan SourcePlan) (stagedNode, error) {
 }
 
 func stageCopiedNode(req ImportRequest, read importRead, node ImageMeta) (stagedNode, error) {
-	if IsUnknownSHA256(node.ID) || IsUnknownSHA256(node.SHA256) {
+	node.Blocks = slices.Clone(node.Blocks)
+	if unknownRootRejected(node) {
 		return stagedNode{}, errors.New("reserved unknown digest")
 	}
-	node.Blocks = slices.Clone(node.Blocks)
 	if len(node.Blocks) == 0 {
 		return stageDirectoryFile(req, read, node)
 	}
 	return stageDirectoryBlocks(req, read, node)
+}
+
+func unknownRootRejected(node ImageMeta) bool {
+	unknown := IsUnknownSHA256(node.ID) || IsUnknownSHA256(node.SHA256)
+	if !unknown {
+		return false
+	}
+	return node.Kind != KindFull || len(node.Blocks) != 0 || node.Parent != "" || node.ID != node.SHA256
 }
 
 func stageDirectoryFile(req ImportRequest, read importRead, node ImageMeta) (stagedNode, error) {
@@ -206,12 +219,47 @@ func stageDirectoryFile(req ImportRequest, read importRead, node ImageMeta) (sta
 	if err != nil {
 		return stagedNode{}, err
 	}
-	if staged.SHA256 != node.SHA256 || staged.Size != node.Size || staged.Format != node.Format || staged.MtimeUnix != node.MtimeUnix {
+	if !directoryCopyMatches(node, staged) {
 		staged.Remove()
 		return stagedNode{}, errors.New("content conflict")
 	}
+	prior := ""
+	if IsUnknownSHA256(node.ID) {
+		prior = node.ID
+		node.ID = staged.SHA256
+		node.SHA256 = staged.SHA256
+	}
 	payload := ImportPayload{Source: loc, ContentOK: true}
-	return stagedNode{node: node, payloads: []ImportPayload{payload}, files: []string{staged.Path}}, nil
+	return stagedNode{
+		node: node, prior: prior, payloads: []ImportPayload{payload}, files: []string{staged.Path},
+	}, nil
+}
+
+func directoryCopyMatches(node ImageMeta, staged StagedCopy) bool {
+	facts := staged.Size == node.Size && staged.Format == node.Format && staged.MtimeUnix == node.MtimeUnix
+	if IsUnknownSHA256(node.ID) {
+		return facts
+	}
+	return facts && staged.SHA256 == node.SHA256
+}
+
+func rekeyCopiedParents(nodes []stagedNode) {
+	var prior, next string
+	for i := range nodes {
+		if nodes[i].prior == "" {
+			continue
+		}
+		prior, next = nodes[i].prior, nodes[i].node.ID
+		break
+	}
+	if next == "" {
+		return
+	}
+	for i := range nodes {
+		if nodes[i].node.Parent == prior {
+			nodes[i].node.Parent = next
+		}
+	}
 }
 
 func stageDirectoryBlocks(req ImportRequest, read importRead, node ImageMeta) (stagedNode, error) {
