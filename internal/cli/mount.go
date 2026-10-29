@@ -743,7 +743,7 @@ func verifyMemberBlocks(blocks []image.BlockFile, verify bool) error {
 			err = image.QuickCheck(node, block.Path)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("block %s: %w", block.Name, err)
 		}
 	}
 	return nil
@@ -852,22 +852,26 @@ func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) 
 			if format == "" {
 				format = target.Format
 			}
+			if len(member.Blocks) != 0 {
+				// Assembly still checks every known block digest before
+				// write-ahead. Format magic is read from the resolved
+				// block windows, not from position-file text.
+				if _, err := materializeBlockLayers(cfg, image.Target{
+					Library: true, Format: format, Form: image.PayloadBlocks,
+					Members: []image.Member{member},
+				}); err != nil {
+					return nil, err
+				}
+				if err := matchResolvedBlockFormat(member, format); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			one := image.Target{Library: true, Format: format,
 				Members: []image.Member{member}}
-			paths := []string{member.Path}
-			if len(member.Blocks) != 0 {
-				one.Form = image.PayloadBlocks
-				path, err := materializeBlockLayers(cfg, one)
-				if err != nil {
-					return nil, err
-				}
-				paths = path
-			} else {
-				var err error
-				paths, err = payloadBytesPaths(paths)
-				if err != nil {
-					return nil, err
-				}
+			paths, err := payloadBytesPaths([]string{member.Path})
+			if err != nil {
+				return nil, err
 			}
 			if _, err := matchLibraryFormat(one, paths); err != nil {
 				return nil, err
@@ -985,6 +989,28 @@ func matchLibraryFormat(target image.Target, paths []string) (string, error) {
 		}
 	}
 	return want.Type(), nil
+}
+
+// matchResolvedBlockFormat compares metadata with the container magic
+// of the resolved block payloads. It does not read position-file text.
+// A missing or unreadable block stays a block-location error. Only a
+// detected type, or ErrNotDetected, is a format mismatch.
+func matchResolvedBlockFormat(member image.Member, format string) error {
+	got, err := image.ProbeLogicalFormat(member.Blocks)
+	what := member.ID
+	if what == "" && len(member.Blocks) > 0 {
+		what = member.Blocks[0].Name
+	}
+	if errors.Is(err, container.ErrNotDetected) {
+		return fmt.Errorf("mount: %s does not match meta format %s: %w", what, format, err)
+	}
+	if err != nil {
+		return err
+	}
+	if got != format {
+		return fmt.Errorf("mount: %s is %s but meta records %s", what, got, format)
+	}
+	return nil
 }
 
 // matchOneFormat reports when path is not the container want names.

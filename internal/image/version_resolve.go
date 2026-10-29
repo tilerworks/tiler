@@ -74,7 +74,7 @@ func resolveVersionMember(repo Repo, node ImageMeta) (Member, error) {
 		if err != nil {
 			return Member{}, err
 		}
-		if _, err := os.Stat(path); err != nil {
+		if _, err := statBlockPayload(BlockFile{Path: path, Name: block.Name}); err != nil {
 			return Member{}, err
 		}
 		member.Blocks = append(member.Blocks, BlockFile{Path: path, Name: block.Name, Size: block.Size,

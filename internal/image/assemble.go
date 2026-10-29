@@ -97,7 +97,11 @@ func streamBlocks(out *os.File, blocks []BlockFile, wantSHA string, wantSize int
 // block digest and the shared whole-image digest. The recorded size
 // and digest pin the block down; a bad block is named in the error.
 func appendBlock(out *os.File, block BlockFile, whole io.Writer) (int64, error) {
-	in, err := os.Open(block.Path)
+	path, err := resolveBlockBytes(block)
+	if err != nil {
+		return 0, fmt.Errorf("cache: %w", err)
+	}
+	in, err := os.Open(path)
 	if err != nil {
 		return 0, fmt.Errorf("cache: block %s: %w", block.Name, err)
 	}

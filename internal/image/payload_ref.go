@@ -53,6 +53,31 @@ func ResolvePayloadBytesPath(leaf string) (string, error) {
 	return leaf, nil
 }
 
+// resolveBlockBytes returns the file whose bytes are block. A symlink
+// or position file resolves to the external payload. A broken location
+// names the block so callers do not hash or mount the position text.
+func resolveBlockBytes(block BlockFile) (string, error) {
+	path, err := ResolvePayloadBytesPath(block.Path)
+	if err != nil {
+		return "", fmt.Errorf("block %s: %w", block.Name, err)
+	}
+	return path, nil
+}
+
+// statBlockPayload stats the resolved block payload. The position file
+// itself is not the recorded size or mtime.
+func statBlockPayload(block BlockFile) (os.FileInfo, error) {
+	path, err := resolveBlockBytes(block)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("block %s: %w", block.Name, err)
+	}
+	return info, nil
+}
+
 // isContainerPayload reports whether leaf looks like a registered
 // container. Symlinks are not passed here; the caller already branched.
 func isContainerPayload(leaf string) bool {
