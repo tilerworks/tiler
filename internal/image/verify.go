@@ -9,9 +9,26 @@ import (
 
 // VerifySHA256 re-hashes a published file and compares the digest
 // with the recorded node facts. Builds call it when the build ends
-// so a torn rename cannot pass as a good image.
+// so a torn rename cannot pass as a good image. Block checks use
+// this path too: a reserved unknown marker is not a block identity
+// and still fails the comparison.
 func VerifySHA256(node ImageMeta, path string) error {
 	return verifyFileSHA256(path, node.SHA256)
+}
+
+// VerifyMountDigest checks one single-file payload before mount.
+// verify asks for a full SHA-256 re-hash. The reserved unknown
+// marker always uses QuickCheck, reports skipped, and does not read
+// the payload. Known digests keep the requested probe. A missing or
+// changed source fails in either mode.
+func VerifyMountDigest(node ImageMeta, path string, verify bool) (skipped bool, err error) {
+	if verify && !IsUnknownSHA256(node.SHA256) {
+		return false, VerifySHA256(node, path)
+	}
+	if err := QuickCheck(node, path); err != nil {
+		return false, err
+	}
+	return verify && IsUnknownSHA256(node.SHA256), nil
 }
 
 func verifyFileSHA256(path, want string) error {

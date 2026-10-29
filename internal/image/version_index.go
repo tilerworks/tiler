@@ -22,9 +22,15 @@ type indexRow struct {
 	rel string
 }
 
+// appendIndexRow records digest keys for one object. The reserved
+// unknown marker is not a content address, so it is left out of both
+// derived indexes and cannot join two image names. An empty content
+// digest stays omitted.
 func appendIndexRow(sha, content, rel string, shaRows, contentRows *[]indexRow) {
-	*shaRows = append(*shaRows, indexRow{key: sha, rel: rel})
-	if content != "" {
+	if sha != "" && !IsUnknownSHA256(sha) {
+		*shaRows = append(*shaRows, indexRow{key: sha, rel: rel})
+	}
+	if content != "" && !IsUnknownSHA256(content) {
 		*contentRows = append(*contentRows, indexRow{key: content, rel: rel})
 	}
 }

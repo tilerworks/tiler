@@ -17,9 +17,11 @@ const pathRefMaxSize = 4096
 
 // ResolvePayloadBytesPath maps a library leaf path to the file whose
 // bytes are the container. A symlink or path-ref leaf resolves to the
-// external absolute path. A real payload (DetectFile succeeds on the
-// leaf, following a symlink when present) returns the leaf itself so
-// callers keep opening the library path when the OS follows links.
+// external absolute path. A path-ref whose target is missing returns
+// that stat error instead of the location file. A real payload
+// (DetectFile succeeds on the leaf, following a symlink when present)
+// returns the leaf itself so callers keep opening the library path
+// when the OS follows links.
 func ResolvePayloadBytesPath(leaf string) (string, error) {
 	info, err := os.Lstat(leaf)
 	if err != nil {
@@ -88,11 +90,19 @@ func readExternalLinkTarget(leaf string) (string, bool, error) {
 	if isContainerPayload(leaf) {
 		return "", false, nil
 	}
-	return readPathRefContent(leaf, info.Size())
+	target, ok, err := readPathRefContent(leaf, info.Size())
+	// Registration treats a missing target as "not a link".
+	// Resolution returns the stat error so the location file is
+	// not used as the payload.
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	return target, ok, err
 }
 
 // readPathRefContent parses a small regular file as a single-line
-// absolute path to an existing regular file.
+// absolute path. A grammar match whose target is missing returns
+// that error. Any other body is not a path-ref.
 func readPathRefContent(leaf string, size int64) (string, bool, error) {
 	if size <= 0 || size > pathRefMaxSize {
 		return "", false, nil
@@ -113,10 +123,10 @@ func readPathRefContent(leaf string, size int64) (string, bool, error) {
 	}
 	target := filepath.Clean(line)
 	info, err := os.Stat(target)
-	if err != nil {
-		return "", false, nil
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, err
 	}
-	if !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() {
 		return "", false, nil
 	}
 	return target, true, nil

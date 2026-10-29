@@ -23,6 +23,9 @@ import (
 // and only a complete verified file is renamed into place, so no
 // partial cache entry survives a failure.
 func AssembleBlocks(cacheDir string, blocks []BlockFile, wantSHA string, wantSize int64) (string, error) {
+	if IsUnknownSHA256(wantSHA) {
+		return "", fmt.Errorf("cache: unknown digest is not a content address")
+	}
 	if !isLowerHex(wantSHA, sumHexLen) {
 		// The digest names the cache file, so refuse anything that
 		// could escape the cache directory.

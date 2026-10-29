@@ -32,6 +32,9 @@ var (
 	mountRun func(name string, args ...string) error
 	// ensureCache copies one image into the cache directory.
 	ensureCache = image.EnsureCached
+	// mountNotice receives short diagnostics that do not fail the
+	// mount, such as a skipped unknown digest.
+	mountNotice io.Writer = os.Stderr
 	// assembleBlocks materializes a blocks payload into the cache.
 	assembleBlocks = image.AssembleBlocks
 	// mountEngine builds the workspace mount.
@@ -684,8 +687,9 @@ func isResolveUsage(err error) bool {
 // verifyTarget runs the pre-mount integrity check of the resolved
 // target: the cheap size and mtime probe by default, the full sha256
 // re-hash with --verify. A blocks payload checks every manifest
-// block; the single-file cascade checks its stack members. A
-// file-path target records no facts and skips verification.
+// block; the single-file cascade checks its stack members. An
+// unknown single-file digest keeps the quick probe under --verify.
+// A file-path target records no facts and skips verification.
 func verifyTarget(target image.Target, verify bool) error {
 	if !target.Library {
 		return nil
@@ -701,37 +705,55 @@ func verifyTarget(target image.Target, verify bool) error {
 
 // verifyMembers checks every stack member of a single-file cascade
 // against its recorded facts: the cheap size and mtime probe by
-// default, the full sha256 re-hash with --verify.
+// default, the full sha256 re-hash with --verify. An unknown member
+// digest keeps the quick probe even under --verify. Known members
+// and every block digest stay on the requested probe.
 func verifyMembers(target image.Target, verify bool) error {
 	for _, m := range target.Members {
-		if len(m.Blocks) != 0 {
-			for _, block := range m.Blocks {
-				node := image.ImageMeta{Size: block.Size, MtimeUnix: block.MtimeUnix,
-					SHA256: block.SHA256}
-				var err error
-				if verify {
-					err = image.VerifySHA256(node, block.Path)
-				} else {
-					err = image.QuickCheck(node, block.Path)
-				}
-				if err != nil {
-					return fmt.Errorf("mount: %w", err)
-				}
-			}
-			continue
-		}
-		node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
-		var err error
-		if verify {
-			err = image.VerifySHA256(node, m.Path)
-		} else {
-			err = image.QuickCheck(node, m.Path)
-		}
-		if err != nil {
+		if err := verifyMember(m, verify); err != nil {
 			return fmt.Errorf("mount: %w", err)
 		}
 	}
 	return nil
+}
+
+func verifyMember(m image.Member, verify bool) error {
+	if len(m.Blocks) != 0 {
+		return verifyMemberBlocks(m.Blocks, verify)
+	}
+	node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
+	skipped, err := image.VerifyMountDigest(node, m.Path, verify)
+	if err != nil {
+		return err
+	}
+	if skipped {
+		noteUnknownDigest(m.ID)
+	}
+	return nil
+}
+
+func verifyMemberBlocks(blocks []image.BlockFile, verify bool) error {
+	for _, block := range blocks {
+		node := image.ImageMeta{Size: block.Size, MtimeUnix: block.MtimeUnix,
+			SHA256: block.SHA256}
+		var err error
+		if verify {
+			err = image.VerifySHA256(node, block.Path)
+		} else {
+			err = image.QuickCheck(node, block.Path)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func noteUnknownDigest(id string) {
+	if id == "" {
+		id = "image"
+	}
+	_, _ = fmt.Fprintf(mountNotice, "mount: %s: digest unknown, skipped sha256 verification\n", listID(id))
 }
 
 // mountRequest assembles the engine request. With the cache enabled
