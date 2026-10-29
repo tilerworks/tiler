@@ -15,13 +15,18 @@ func (e *Engine) needsVersionScope() bool {
 // withVersionSession copies the engine so concurrent operations never replace
 // its shared Store or Lock. The inner lock is redundant only in this scope.
 func (e *Engine) withVersionSession(name string, run func(*Engine) error) error {
-	return e.withVersionSessionTimeout(name, e.lockTimeout(), run)
+	return e.withVersionSessionImages(name, nil, e.lockTimeout(), run)
+}
+
+func (e *Engine) withVersionSessionImages(name string, images []string, timeout time.Duration, run func(*Engine) error) error {
+	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: timeout}
+	return c.withSessionScope(name, images, e.versionSessionCallback(name, run), false)
 }
 
 // tryVersionSession skips contention before entering the cleanup algorithm.
 func (e *Engine) tryVersionSession(name string, run func(*Engine) error) error {
 	entered := false
-	err := e.withVersionSessionTimeout(name, -1, func(local *Engine) error {
+	err := e.withVersionSessionImages(name, nil, -1, func(local *Engine) error {
 		entered = true
 		return run(local)
 	})
@@ -33,8 +38,7 @@ func (e *Engine) tryVersionSession(name string, run func(*Engine) error) error {
 }
 
 func (e *Engine) withVersionSessionTimeout(name string, timeout time.Duration, run func(*Engine) error) error {
-	c := ReferenceCoordinator{Store: e.Store, ImagesDir: e.ImagesDir, Timeout: timeout}
-	return c.WithSession(name, e.versionSessionCallback(name, run))
+	return e.withVersionSessionImages(name, nil, timeout, run)
 }
 
 // WithVersionSessionLocked runs lifecycle operations under a caller-owned library
@@ -69,7 +73,7 @@ func (e *Engine) Append(name string, action Action) (Action, error) {
 		return e.Store.Append(name, action)
 	}
 	var stored Action
-	err := e.withVersionSession(name, func(local *Engine) (err error) {
+	err := e.withVersionSessionImages(name, []string{action.Name}, e.lockTimeout(), func(local *Engine) (err error) {
 		stored, err = local.Store.Append(name, action)
 		return err
 	})

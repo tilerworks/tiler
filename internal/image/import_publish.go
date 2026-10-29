@@ -51,16 +51,16 @@ func publishLinked(req ImportRequest, seam linkPublishSeam) (LinkPublish, error)
 	if err != nil {
 		return LinkPublish{}, importFail(req, err)
 	}
-	release, err := LockLibrary(req.ImagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(req.ImagesDir, req.Name, DefaultLibraryLockTimeout)
 	if err != nil {
 		return LinkPublish{}, importFail(req, err)
 	}
-	defer release()
+	defer hold.Release()
 	return publishLinkedLocked(req, read, cands, seam)
 }
 
 func publishLinkedLocked(req ImportRequest, read importRead, cands []ImportCandidate, seam linkPublishSeam) (LinkPublish, error) {
-	if err := PrepareTargetLocked(req.ImagesDir); err != nil {
+	if err := PrepareImageLocked(req.ImagesDir, req.Name); err != nil {
 		return LinkPublish{}, err
 	}
 	if err := checkNamePlacement(req.ImagesDir, read.plan.Repo.Segments); err != nil {
@@ -152,7 +152,7 @@ func commitLinkBatch(req ImportRequest, read importRead, manifest VersionManifes
 		return LinkPublish{}, err
 	}
 	published := LinkPublish{Name: repo.Name(), Items: merge.Items}
-	if err := RecoverImportTxn(req.ImagesDir); err != nil {
+	if err := RecoverImportTxn(req.ImagesDir, req.Name); err != nil {
 		return published, err
 	}
 	return published, nil
@@ -172,7 +172,7 @@ func finishLinkIndexes(repo Repo, seam linkPublishSeam) error {
 }
 
 func abortLinked(req ImportRequest, cause error) (LinkPublish, error) {
-	if err := RecoverImportTxn(req.ImagesDir); err != nil {
+	if err := RecoverImportTxn(req.ImagesDir, req.Name); err != nil {
 		return LinkPublish{}, errors.Join(cause, err)
 	}
 	return LinkPublish{}, importFail(req, cause)

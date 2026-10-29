@@ -8,19 +8,22 @@ import (
 	"path/filepath"
 )
 
-// RecoverImportTxn finishes or rolls back the durable import journal.
-// A missing journal is success. A pending version-removal journal is
-// left untouched so the two recoveries do not interleave. The caller
-// holds the library lock. External sources are never opened.
-func RecoverImportTxn(imagesDir string) error {
-	return recoverImportTxn(imagesDir, hooks{})
-}
-
-func recoverImportTxn(imagesDir string, seam hooks) error {
-	if err := importRemovalPending(imagesDir); err != nil {
+// RecoverImportTxn finishes or rolls back one image's import journal.
+// A missing journal is success. A pending version-removal journal for
+// that image is left untouched so the two recoveries do not interleave.
+// The caller holds the image lock. External sources are never opened.
+func RecoverImportTxn(imagesDir, name string) error {
+	if err := claimLegacyJournals(imagesDir, name); err != nil {
 		return err
 	}
-	txn, ok, err := loadImportTxn(imagesDir)
+	return recoverImportTxn(imagesDir, name, hooks{})
+}
+
+func recoverImportTxn(imagesDir, name string, seam hooks) error {
+	if err := importRemovalPending(imagesDir, name); err != nil {
+		return err
+	}
+	txn, ok, err := loadImportTxn(imagesDir, name)
 	if err != nil || !ok {
 		return err
 	}
@@ -84,7 +87,7 @@ func finishImportWork(imagesDir string, repo Repo, seam hooks) error {
 	if err := syncExisting(repo.Dir); err != nil {
 		return pendingImport(err)
 	}
-	return finishImportTxn(imagesDir, seam)
+	return finishImportTxn(imagesDir, repo.Name(), seam)
 }
 
 // removeEmptyImportDir drops a transaction directory after its files are
@@ -248,15 +251,32 @@ func refreshImportIndexes(repo Repo, seam hooks) error {
 	return err
 }
 
-func finishImportTxn(imagesDir string, seam hooks) error {
-	journal := filepath.Join(imagesDir, importTxnJournal)
+func finishImportTxn(imagesDir, name string, seam hooks) error {
+	journal, err := controlFile(imagesDir, name, importTxnJournal)
+	if err != nil {
+		return pendingImport(err)
+	}
 	if err := seam.guard(journal, "journal"); err != nil {
 		return pendingImport(err)
 	}
-	if err := os.Remove(journal); err != nil {
+	if err := os.Remove(journal); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return pendingImport(err)
 	}
-	return pendingImport(syncDir(imagesDir, hooks{}))
+	removedLegacy := false
+	legacy := filepath.Join(imagesDir, importTxnJournal)
+	if journalName(legacy) == name {
+		if err := os.Remove(legacy); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return pendingImport(err)
+		}
+		removedLegacy = true
+	}
+	if err := syncExisting(filepath.Dir(journal)); err != nil {
+		return pendingImport(err)
+	}
+	if removedLegacy {
+		return pendingImport(syncDir(imagesDir, hooks{}))
+	}
+	return nil
 }
 
 func syncExisting(dir string) error {

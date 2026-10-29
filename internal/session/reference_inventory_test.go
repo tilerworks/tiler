@@ -144,7 +144,8 @@ func TestReferenceInventoryRejectsDamagedSourcesBeforeIndexWrites(t *testing.T) 
 				journalPath, _ := c.referencePath("journal.json")
 				err = os.WriteFile(journalPath, []byte("{"), 0o600)
 			case "library":
-				release, err = image.LockLibrary(c.ImagesDir, 0)
+				hold, lockErr := image.LockImage(c.ImagesDir, rec.Actions[0].Name, 0)
+				release, err = hold.Release, lockErr
 			}
 			if err != nil {
 				t.Fatal(err)

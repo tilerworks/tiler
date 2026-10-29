@@ -58,11 +58,11 @@ func TestExecuteImageGCWaitsForConcurrentReferenceCommit(t *testing.T) {
 	entered, proceed := make(chan struct{}), make(chan struct{})
 	reference := make(chan error, 1)
 	go func() {
-		reference <- c.WithSession(rec.Name, func(store Store) error {
+		reference <- c.withSessionScope(rec.Name, referenceImageNames(&rec), func(store Store) error {
 			close(entered)
 			<-proceed
 			return store.SaveVersion(rec)
-		})
+		}, false)
 	}()
 	select {
 	case <-entered:

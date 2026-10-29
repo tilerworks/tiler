@@ -24,11 +24,9 @@ func TestVersionCleanupSkipsHeldLocksAndRechecksRules(t *testing.T) {
 			calls := 0
 			health := func(string) bool {
 				calls++
-				if release, err := image.LockLibrary(c.ImagesDir, 0); !errors.Is(err, filelock.ErrHeld) {
-					if release != nil {
-						release()
-					}
-					t.Fatalf("cleanup library lock = %v", err)
+				if hold, err := image.LockImage(c.ImagesDir, action.Name, 0); !errors.Is(err, filelock.ErrHeld) {
+					hold.Release()
+					t.Fatalf("cleanup image lock = %v", err)
 				}
 				if release, err := c.lockSession("dev", 0); !errors.Is(err, ErrLockHeld) {
 					if release != nil {
@@ -59,7 +57,8 @@ func TestVersionCleanupSkipsHeldLocksAndRechecksRules(t *testing.T) {
 				var release func()
 				var err error
 				if library {
-					release, err = image.LockLibrary(c.ImagesDir, 0)
+					hold, lockErr := image.LockImage(c.ImagesDir, action.Name, 0)
+					release, err = hold.Release, lockErr
 				} else {
 					release, err = c.lockSession("dev", 0)
 				}

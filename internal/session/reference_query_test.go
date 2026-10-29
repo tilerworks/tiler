@@ -40,7 +40,8 @@ func TestTrustedReferencesRetainRolesWithoutReparsingSources(t *testing.T) {
 		mustReferenceState(t, c.Store).Generation != before.Generation {
 		t.Fatal("roles, actions or unchanged-source fast path lost")
 	}
-	release, err = image.LockLibrary(c.ImagesDir, 0)
+	hold, err := image.LockImage(c.ImagesDir, a.Name, 0)
+	release = hold.Release
 	if err != nil {
 		t.Fatal(err)
 	}

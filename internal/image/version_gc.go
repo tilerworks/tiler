@@ -3,8 +3,6 @@ package image
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/activity"
@@ -32,16 +30,17 @@ type VersionGCPlan struct {
 }
 
 // CheckVersionGCReadyLocked refuses pending cleanup without replaying it.
-// The caller holds the library lock; confirmed legacy cleanup is separate.
+// The caller holds the image locks for this library; confirmed legacy
+// cleanup is separate.
 func CheckVersionGCReadyLocked(imagesDir string) error {
-	_, err := os.Lstat(filepath.Join(imagesDir, versionRemovalJournal))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	paths, err := removalJournalPaths(imagesDir)
+	if err != nil {
+		return err
 	}
-	if err == nil {
-		err = errors.New("pending image removal requires confirmed cleanup")
+	if len(paths) != 0 {
+		return errors.New("pending image removal requires confirmed cleanup")
 	}
-	return err
+	return nil
 }
 
 // PlanVersionGCLocked initializes missing activity before taking any expiry

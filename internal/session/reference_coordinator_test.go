@@ -87,7 +87,8 @@ func TestReferenceCoordinatorHonorsBothLocksAndTimeouts(t *testing.T) {
 		for _, timeout := range []time.Duration{-1, time.Millisecond} {
 			c := newReferenceCoordinator(t)
 			rec := versionRecord(t)
-			release, err := image.LockLibrary(c.ImagesDir, 0)
+			hold, err := image.LockImage(c.ImagesDir, rec.Actions[0].Name, 0)
+			release := hold.Release
 			if err != nil {
 				t.Fatal(err)
 			}

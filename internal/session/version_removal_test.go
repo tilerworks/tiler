@@ -150,11 +150,11 @@ func TestConcurrentReferenceCreationPrecedesSubtreeRemoval(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		results <- c.WithSession(rec.Name, func(store Store) error {
+		results <- c.withSessionScope(rec.Name, referenceImageNames(&rec), func(store Store) error {
 			close(entered)
 			<-save
 			return store.Save(rec)
-		})
+		}, false)
 	}()
 	select {
 	case <-entered:

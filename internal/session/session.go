@@ -189,7 +189,7 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, error) {
 	if e.needsVersionScope() {
 		var result Result
-		err := e.withVersionSession(name, func(local *Engine) (err error) {
+		err := e.withVersionSessionImages(name, []string{action.Name}, e.lockTimeout(), func(local *Engine) (err error) {
 			result, err = local.RunMount(name, action, mount)
 			return err
 		})

@@ -179,7 +179,11 @@ func TestPendingCleanupFailureCanBePreviewedAndResumed(t *testing.T) {
 	if _, err := ExecuteCleanupLocked(root, plan); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+	journal, err := controlFile(root, repo.Name(), versionRemovalJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 	manifest, err := LoadVersionManifest(repo)
@@ -193,7 +197,10 @@ func TestPendingCleanupRefusesUnsafeJournalAndNamespacePaths(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			root, repo, nodes := removalFixture(t)
 			pendingCleanup(t, root, repo, nodes, true)
-			path := filepath.Join(root, versionRemovalJournal)
+			path, err := controlFile(root, repo.Name(), versionRemovalJournal)
+			if err != nil {
+				t.Fatal(err)
+			}
 			switch mode {
 			case "bad journal":
 				if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {

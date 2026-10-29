@@ -89,12 +89,12 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 }
 
 func incrVersionParent(repo Repo, req IncrRequest) (ImageMeta, error) {
-	release, err := LockLibrary(req.Config.ImagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(req.Config.ImagesDir, repo.Name(), DefaultLibraryLockTimeout)
 	if err != nil {
 		return ImageMeta{}, err
 	}
-	defer release()
-	if err := PrepareTargetLocked(req.Config.ImagesDir); err != nil {
+	defer hold.Release()
+	if err := PrepareImageLocked(req.Config.ImagesDir, repo.Name()); err != nil {
 		return ImageMeta{}, err
 	}
 	manifest, _, err := loadVersionMeta(repo)

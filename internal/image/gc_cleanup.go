@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // CleanupItem labels existing deletion recovery or an uncommitted object.
@@ -80,9 +82,43 @@ func inspectOrphans(repo Repo, manifest VersionManifest) ([]CleanupItem, error) 
 	return items, nil
 }
 
+func removalJournalPaths(imagesDir string) ([]string, error) {
+	var paths []string
+	legacy := filepath.Join(imagesDir, versionRemovalJournal)
+	info, err := os.Lstat(legacy)
+	if err == nil && info.Mode().IsRegular() {
+		paths = append(paths, legacy)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	root := filepath.Join(imagesDir, imageLockDir)
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, os.ErrNotExist) {
+			return nil
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), versionRemovalJournal) {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(paths)
+	return paths, nil
+}
+
 func inspectPendingCleanup(imagesDir string) (CleanupPlan, error) {
 	plan := CleanupPlan{}
-	path := filepath.Join(imagesDir, versionRemovalJournal)
+	paths, err := removalJournalPaths(imagesDir)
+	if err != nil || len(paths) == 0 {
+		return plan, err
+	}
+	path := paths[0]
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return plan, nil

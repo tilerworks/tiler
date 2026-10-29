@@ -57,16 +57,14 @@ func TestCallerLockedIncrementalPublishRejectsChangedBaseline(t *testing.T) {
 	}
 	next := versionNode("new")
 	next.Kind, next.Parent = KindIncremental, base.ID
-	release, err := LockLibrary(root, 0)
+	hold, err := LockImage(root, repo.Name(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
-	if nested, err := LockLibrary(root, 0); !errors.Is(err, filelock.ErrHeld) {
-		if nested != nil {
-			nested()
-		}
-		t.Fatalf("library lock not held: %v", err)
+	defer hold.Release()
+	if nested, err := LockImage(root, repo.Name(), 0); !errors.Is(err, filelock.ErrHeld) {
+		nested.Release()
+		t.Fatalf("image lock not held: %v", err)
 	}
 	changed := base
 	changed.Format.Compression = "changed"

@@ -66,12 +66,12 @@ func BuildDMGVersion(req DMGRequest) (ImageMeta, error) {
 // commitDMGVersion checks logical reuse and commits under the same library lock.
 // An empty staged path performs only the pre-build reuse check.
 func commitDMGVersion(repo Repo, req DMGRequest, staged, content string) (ImageMeta, error) {
-	release, err := LockLibrary(req.Config.ImagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(req.Config.ImagesDir, repo.Name(), DefaultLibraryLockTimeout)
 	if err != nil {
 		return ImageMeta{}, err
 	}
-	defer release()
-	if err := PrepareTargetLocked(req.Config.ImagesDir); err != nil {
+	defer hold.Release()
+	if err := PrepareImageLocked(req.Config.ImagesDir, repo.Name()); err != nil {
 		return ImageMeta{}, err
 	}
 	if err := checkNamePlacement(req.Config.ImagesDir, repo.Segments); err != nil {

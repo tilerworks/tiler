@@ -31,7 +31,7 @@ func (e *VersionRemovalBlocked) Error() string {
 func (c ReferenceCoordinator) PlanVersionRemoval(
 	name string, images []image.ImageMeta, root string,
 ) (plan VersionRemovalPlan, err error) {
-	err = c.withLibrary(func() error {
+	err = c.withImageNames([]string{name}, func(image.Hold) error {
 		plan, err = c.PlanVersionRemovalLocked(name, images, root)
 		return err
 	})
@@ -90,8 +90,8 @@ func (c ReferenceCoordinator) planVersionNodesLocked(name string,
 // the shared library lock, excluding concurrent reference creation.
 func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.ImageMeta, error) {
 	var removed []image.ImageMeta
-	err := c.withLibrary(func() error {
-		if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
+	err := c.withImageNames([]string{name}, func(image.Hold) error {
+		if err := image.PrepareImageLocked(c.ImagesDir, name); err != nil {
 			return err
 		}
 		repo, err := image.OpenRepo(c.ImagesDir, name)
@@ -119,8 +119,8 @@ func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.I
 // named leaf while retaining the shared library lock.
 func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.ImageMeta, error) {
 	var removed []image.ImageMeta
-	err := c.withLibrary(func() error {
-		if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
+	err := c.withImageNames([]string{name}, func(hold image.Hold) error {
+		if err := image.PrepareImageLocked(c.ImagesDir, name); err != nil {
 			return err
 		}
 		repo, err := image.OpenRepo(c.ImagesDir, name)
@@ -139,7 +139,10 @@ func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.Imag
 			return &VersionRemovalBlocked{Name: name, Blockers: plan.Blockers}
 		}
 		removed, err = image.RemoveVersionRepositoryLocked(c.ImagesDir, name)
-		return err
+		if err != nil {
+			return err
+		}
+		return hold.DiscardIfRepositoryGone(c.ImagesDir, name)
 	})
 	return removed, err
 }

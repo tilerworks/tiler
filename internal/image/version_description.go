@@ -13,12 +13,12 @@ func UpdateVersionDescription(imagesDir, name, id, old, next string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	release, err := LockLibrary(imagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(imagesDir, name, DefaultLibraryLockTimeout)
 	if err != nil {
 		return false, err
 	}
-	defer release()
-	if err := PrepareTargetLocked(imagesDir); err != nil {
+	defer hold.Release()
+	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return false, err
 	}
 	repo, err := OpenRepo(imagesDir, name)

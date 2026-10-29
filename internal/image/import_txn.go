@@ -54,8 +54,8 @@ type ImportTxn struct {
 	Backups []ImportBackup  `json:"backups,omitempty"`
 }
 
-// SaveImportTxn durably replaces the library's import journal.
-// It does not publish metadata or payload files.
+// SaveImportTxn durably replaces this image's import journal.
+// It does not publish metadata or payload files. The caller holds the image lock.
 func SaveImportTxn(imagesDir string, txn ImportTxn) error {
 	repo, err := OpenRepo(imagesDir, txn.Name)
 	if err != nil {
@@ -64,34 +64,42 @@ func SaveImportTxn(imagesDir string, txn ImportTxn) error {
 	if err := validImportTxn(repo, txn); err != nil {
 		return err
 	}
-	if err := importRemovalPending(imagesDir); err != nil {
+	if err := importRemovalPending(imagesDir, txn.Name); err != nil {
 		return err
 	}
 	body, err := json.Marshal(txn)
 	if err != nil {
 		return err
 	}
-	tmp, err := writeTemp(imagesDir, importTxnJournal, body, hooks{})
+	path, err := controlFile(imagesDir, txn.Name, importTxnJournal)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := writeTemp(filepath.Dir(path), filepath.Base(path), body, hooks{})
 	if err != nil {
 		return err
 	}
 	defer removeFile(tmp)
-	return (hooks{}).do(tmp, filepath.Join(imagesDir, importTxnJournal))
+	return (hooks{}).do(tmp, path)
 }
 
-func importRemovalPending(imagesDir string) error {
-	_, err := os.Lstat(filepath.Join(imagesDir, versionRemovalJournal))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+func importRemovalPending(imagesDir, name string) error {
+	pending, err := journalExists(imagesDir, name, versionRemovalJournal)
+	if err != nil || !pending {
 		return err
 	}
 	return errors.New("import: version removal recovery is pending")
 }
 
-func loadImportTxn(imagesDir string) (ImportTxn, bool, error) {
-	body, err := os.ReadFile(filepath.Join(imagesDir, importTxnJournal))
+func loadImportTxn(imagesDir, name string) (ImportTxn, bool, error) {
+	path, err := controlFile(imagesDir, name, importTxnJournal)
+	if err != nil {
+		return ImportTxn{}, false, err
+	}
+	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return ImportTxn{}, false, nil
 	}

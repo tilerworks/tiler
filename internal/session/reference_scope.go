@@ -17,7 +17,7 @@ var ErrReferenceScopeClosed = errors.New("session: reference mutation scope is c
 // Run must not call locking coordinator APIs or share compound Store operations
 // across goroutines. Retained stores are disabled before the locks are released.
 func (c ReferenceCoordinator) WithSession(name string, run func(Store) error) error {
-	return c.withSessionScope(name, run, false)
+	return c.withSessionScope(name, nil, run, false)
 }
 
 // WithSessionLocked reuses a library lock owned by the caller. The caller must
@@ -25,10 +25,10 @@ func (c ReferenceCoordinator) WithSession(name string, run func(Store) error) er
 // locks. This method acquires and releases session locks as needed; it never
 // releases the library lock. Store lifetime and callback rules match WithSession.
 func (c ReferenceCoordinator) WithSessionLocked(name string, run func(Store) error) error {
-	return c.withSessionScope(name, run, true)
+	return c.withSessionScope(name, nil, run, true)
 }
 
-func (c ReferenceCoordinator) withSessionScope(name string, run func(Store) error, libraryHeld bool) error {
+func (c ReferenceCoordinator) withSessionScope(name string, images []string, run func(Store) error, libraryHeld bool) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
@@ -36,11 +36,6 @@ func (c ReferenceCoordinator) withSessionScope(name string, run func(Store) erro
 		return errors.New("session: invalid reference mutation callback or nested scope")
 	}
 	runLocked := func() error {
-		if c.ImagesDir != "" {
-			if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
-				return err
-			}
-		}
 		if _, err := c.ensureInventoryLocked(false, nil); err != nil {
 			return err
 		}
@@ -68,7 +63,19 @@ func (c ReferenceCoordinator) withSessionScope(name string, run func(Store) erro
 	if libraryHeld {
 		return runLocked()
 	}
-	return c.withLibrary(runLocked)
+	names, err := c.sessionImageNames(name)
+	if err != nil {
+		return err
+	}
+	names = mergeNames(names, images)
+	return c.withImageNames(names, func(image.Hold) error {
+		if c.ImagesDir != "" {
+			if err := image.PrepareImagesLocked(c.ImagesDir, names); err != nil {
+				return err
+			}
+		}
+		return runLocked()
+	})
 }
 
 type referenceSessionScope struct {

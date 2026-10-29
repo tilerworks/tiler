@@ -75,7 +75,7 @@ func (e *Engine) execCandidate(report *GCReport, candidate GCCandidate, cutoff t
 func (e *Engine) execVersioned(report *GCReport, candidate GCCandidate, cutoff time.Time) error {
 	name := candidate.Name
 	entered := false
-	err := e.withVersionSessionTimeout(name, -1, func(local *Engine) error {
+	err := e.withVersionSessionImages(name, nil, -1, func(local *Engine) error {
 		entered = true
 		return local.execLocked(report, candidate, cutoff)
 	})

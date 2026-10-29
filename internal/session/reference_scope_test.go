@@ -29,9 +29,9 @@ func testReferenceScopeReusesStoreMutationsUnderBothLocks(t *testing.T, held boo
 	var retained Store
 	err := runReferenceScope(t, c, held, rec.Name, func(s Store) error {
 		retained = s
-		if release, err := image.LockLibrary(c.ImagesDir, 0); err == nil {
-			release()
-			t.Fatal("scope did not hold library lock")
+		if hold, err := image.LockImage(c.ImagesDir, rec.Actions[0].Name, 0); err == nil {
+			hold.Release()
+			t.Fatal("scope did not hold image lock")
 		} else if !errors.Is(err, filelock.ErrHeld) {
 			t.Fatal(err)
 		}
@@ -197,23 +197,22 @@ func testReferenceScopeReturnsSwallowedFailuresWithoutNewIntent(t *testing.T, he
 func runReferenceScope(t *testing.T, c ReferenceCoordinator, held bool, name string, run func(Store) error) error {
 	t.Helper()
 	if !held {
-		return c.WithSession(name, run)
+		return c.withSessionScope(name, []string{"alice/app"}, run, false)
 	}
-	release, err := image.LockLibrary(c.ImagesDir, 0)
+	hold, err := image.LockImage(c.ImagesDir, "alice/app", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer hold.Release()
 	return c.WithSessionLocked(name, run)
 }
 
 func TestLibraryHeldScopeLeavesLibraryOwnershipWithCaller(t *testing.T) {
 	e, c, action := versionEngine(t)
-	release, err := image.LockLibrary(c.ImagesDir, 0)
+	hold, err := image.LockImage(c.ImagesDir, action.Name, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
 	var retained *Engine
 	err = e.WithVersionSessionLocked("dev", func(local *Engine) error {
 		retained = local
@@ -232,10 +231,10 @@ func TestLibraryHeldScopeLeavesLibraryOwnershipWithCaller(t *testing.T) {
 	start, results := make(chan struct{}), make(chan error, 1)
 	go func() {
 		<-start
-		results <- c.WithSession("competitor", func(Store) error {
-			t.Error("competing library mutation entered")
+		results <- c.withSessionScope("competitor", []string{action.Name}, func(Store) error {
+			t.Error("competing image mutation entered")
 			return nil
-		})
+		}, false)
 	}()
 	close(start)
 	if err := <-results; !errors.Is(err, filelock.ErrHeld) {
@@ -246,7 +245,7 @@ func TestLibraryHeldScopeLeavesLibraryOwnershipWithCaller(t *testing.T) {
 	} else {
 		unlock()
 	}
-	release()
+	hold.Release()
 	requireVersionOwners(t, c, action, 1, 1)
 	if e.scope != nil || e.Lock != nil {
 		t.Fatal("held scope mutated shared engine")

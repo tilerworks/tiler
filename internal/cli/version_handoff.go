@@ -8,20 +8,20 @@ import (
 	"github.com/jiangxin/tiler/internal/session"
 )
 
-// publishVersionAndRebase keeps publication and its reference handoff in one
-// library critical section. Commands switch to this seam with the v3 runtime.
+// publishVersionAndRebase keeps publication and its reference handoff under
+// the published image's lock, acquired before the session lock.
 func publishVersionAndRebase(cfg config.Config, mountpoint, name string,
 	publish func() (image.ImageMeta, error), fullID func(image.ImageMeta) string,
 ) (image.ImageMeta, error) {
 	if publish == nil || fullID == nil {
 		return image.ImageMeta{}, errors.New("version handoff: invalid publication callback")
 	}
-	release, err := image.LockLibrary(cfg.ImagesDir, image.DefaultLibraryLockTimeout)
+	hold, err := image.LockImage(cfg.ImagesDir, name, image.DefaultLibraryLockTimeout)
 	if err != nil {
 		return image.ImageMeta{}, err
 	}
-	defer release()
-	if err := image.PrepareTargetLocked(cfg.ImagesDir); err != nil {
+	defer hold.Release()
+	if err := image.PrepareImageLocked(cfg.ImagesDir, name); err != nil {
 		return image.ImageMeta{}, err
 	}
 	node, err := publish()
@@ -32,26 +32,34 @@ func publishVersionAndRebase(cfg config.Config, mountpoint, name string,
 	return node, err
 }
 
-// resolveVersionAndPin keeps selector resolution stable until the session has
-// durably recorded that exact tip. The callback performs only session work.
+// resolveVersionAndPin resolves a selector, then locks that image only while
+// the session records the tip. The callback performs only session work.
 func resolveVersionAndPin(cfg config.Config, sessionName, selector string,
 	pin func(*session.Engine, image.Target) error,
 ) error {
 	if pin == nil {
 		return errors.New("version handoff: invalid pin callback")
 	}
-	release, err := image.LockLibrary(cfg.ImagesDir, image.DefaultLibraryLockTimeout)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := image.PrepareTargetLocked(cfg.ImagesDir); err != nil {
-		return err
-	}
 	target, err := image.ResolveVersionMount(cfg, selector)
 	if err != nil {
 		return err
 	}
+	hold, err := image.LockImage(cfg.ImagesDir, target.Name, image.DefaultLibraryLockTimeout)
+	if err != nil {
+		return err
+	}
+	defer hold.Release()
+	if err := image.PrepareImageLocked(cfg.ImagesDir, target.Name); err != nil {
+		return err
+	}
+	current, err := image.ResolveVersionMount(cfg, selector)
+	if err != nil {
+		return err
+	}
+	if current.ID != target.ID || current.Tip != target.Tip {
+		return errors.New("version handoff: resolved version changed")
+	}
+	target = current
 	return sessionEngine(cfg).WithVersionSessionLocked(sessionName, func(local *session.Engine) error {
 		before, loadErr := local.Load(sessionName)
 		if loadErr != nil && !errors.Is(loadErr, session.ErrNotFound) {

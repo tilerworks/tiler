@@ -61,12 +61,12 @@ func LinkExternalVersion(imagesDir, name, srcPath, builder string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("link: %w", err)
 	}
-	release, err := LockLibrary(imagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(imagesDir, repo.Name(), DefaultLibraryLockTimeout)
 	if err != nil {
 		return "", fmt.Errorf("link: %w", err)
 	}
-	defer release()
-	if err := PrepareTargetLocked(imagesDir); err != nil {
+	defer hold.Release()
+	if err := PrepareImageLocked(imagesDir, repo.Name()); err != nil {
 		return "", fmt.Errorf("link: %w", err)
 	}
 	if err := checkNamePlacement(imagesDir, repo.Segments); err != nil {

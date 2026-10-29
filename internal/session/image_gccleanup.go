@@ -42,12 +42,23 @@ func (c ReferenceCoordinator) PlanImageGC(cutoff time.Time, clock activity.Clock
 // ExecuteImageGC executes only the displayed sets, each revalidated under its
 // library lock. Recovery does not add newly discovered or expired objects.
 func (c ReferenceCoordinator) ExecuteImageGC(plan ImageGCPlan, clock activity.Clock) (outcomes []image.VersionGCOutcome, err error) {
-	err = c.withLibrary(func() error {
+	err = c.withAllImages(func(hold image.Hold) error {
 		if err := c.checkCleanupReferencesLocked(plan.Cleanup); err != nil {
 			return err
 		}
 		outcomes, err = image.ExecuteCleanupLocked(c.ImagesDir, plan.Cleanup)
-		return err
+		if err != nil {
+			return err
+		}
+		for _, outcome := range outcomes {
+			if outcome.Action != image.GCActionRemoved {
+				continue
+			}
+			if discardErr := hold.DiscardIfRepositoryGone(c.ImagesDir, outcome.Name); discardErr != nil {
+				return discardErr
+			}
+		}
+		return nil
 	})
 	if err == nil && !plan.Cleanup.Pending {
 		var events []image.VersionGCOutcome

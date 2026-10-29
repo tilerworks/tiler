@@ -219,14 +219,14 @@ func TestVersionGCDeletionFailureReportsPartialResultsAndRecovers(t *testing.T) 
 			if len(removedGCIDs(events)) != want {
 				t.Fatalf("incorrect actual results: %+v", events)
 			}
-			if err := recoverVersionRemoval(libraryRoot(repo), hooks{}); err != nil {
+			if err := recoverVersionRemoval(libraryRoot(repo), repo.Name(), hooks{}); err != nil {
 				t.Fatal(err)
 			}
 			current, err := LoadVersionManifest(repo)
 			if err != nil || len(current.Images) != 1 || current.Images[0].ID != nodes[0].ID {
 				t.Fatalf("recovered metadata = %+v, %v", current, err)
 			}
-			if _, err := os.Stat(filepath.Join(libraryRoot(repo), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(mustControl(t, libraryRoot(repo), repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("recovery journal remains: %v", err)
 			}
 		})

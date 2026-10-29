@@ -68,9 +68,9 @@ func TestExecSessionsRevokesReferencesBeforeRemoving(t *testing.T) {
 func TestExecSessionsRechecksTheHostUnderTheCoordinatedLocks(t *testing.T) {
 	e, c, _, plan := execVersionFixture(t)
 	e.LoadTable = func() ([]mountinfo.Mount, error) {
-		if release, err := image.LockLibrary(c.ImagesDir, 0); err == nil {
-			release()
-			t.Error("the attachment guard read the host outside the library lock")
+		if hold, err := image.LockImage(c.ImagesDir, "alice/app", 0); err == nil {
+			hold.Release()
+			t.Error("the attachment guard read the host outside the image lock")
 		} else if !errors.Is(err, filelock.ErrHeld) {
 			t.Errorf("library lock probe = %v", err)
 		}
@@ -149,11 +149,11 @@ func TestExecSessionsSkipsABusyVersionedSession(t *testing.T) {
 // library held by a concurrent build reports contention too.
 func TestExecSessionsSkipsALockedLibrary(t *testing.T) {
 	e, c, _, plan := execVersionFixture(t)
-	release, err := image.LockLibrary(c.ImagesDir, 0)
+	hold, err := image.LockImage(c.ImagesDir, "alice/app", 0)
 	if err != nil {
-		t.Fatalf("library lock: %v", err)
+		t.Fatalf("image lock: %v", err)
 	}
-	defer release()
+	defer hold.Release()
 
 	report, err := e.ExecSessions(plan)
 	if err != nil {

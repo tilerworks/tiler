@@ -12,7 +12,7 @@ import (
 // replaying a pending image or session cleanup. Outcomes cover approved IDs
 // only; independent repositories may continue after an ordinary failure.
 func (c ReferenceCoordinator) ExecuteImages(plans []image.VersionGCPlan, clock activity.Clock) (outcomes []image.VersionGCOutcome, err error) {
-	err = c.withLibrary(func() error {
+	err = c.withAllImages(func(hold image.Hold) error {
 		if err := image.CheckVersionGCReadyLocked(c.ImagesDir); err != nil {
 			return err
 		}
@@ -33,6 +33,10 @@ func (c ReferenceCoordinator) ExecuteImages(plans []image.VersionGCPlan, clock a
 				if errors.Is(runErr, image.ErrCleanupPending) {
 					break
 				}
+				continue
+			}
+			if discardErr := hold.DiscardIfRepositoryGone(c.ImagesDir, plan.Name); discardErr != nil {
+				failures = errors.Join(failures, discardErr)
 			}
 		}
 		return failures

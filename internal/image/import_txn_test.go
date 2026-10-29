@@ -12,17 +12,17 @@ import (
 func TestImportRecoveryUsesPhaseForIdenticalManifests(t *testing.T) {
 	prepared := newImportCrash(t)
 	prepared.save(t, ImportPrepared)
-	if err := RecoverImportTxn(prepared.images); err != nil {
+	if err := RecoverImportTxn(prepared.images, prepared.repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 	prepared.expectRolledBack(t)
-	if err := RecoverImportTxn(prepared.images); err != nil {
+	if err := RecoverImportTxn(prepared.images, prepared.repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 
 	committed := newImportCrash(t)
 	committed.save(t, ImportCommitted)
-	if err := RecoverImportTxn(committed.images); err != nil {
+	if err := RecoverImportTxn(committed.images, committed.repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 	committed.expectCleaned(t)
@@ -34,7 +34,7 @@ func TestImportRecoveryUsesPhaseForIdenticalManifests(t *testing.T) {
 func TestImportRecoveryInjectionTouchesOnlyOwnedPaths(t *testing.T) {
 	fix := newImportCrash(t)
 	fix.save(t, ImportPrepared)
-	err := recoverImportTxn(fix.images, hooks{before: func(path, op string) error {
+	err := recoverImportTxn(fix.images, fix.repo.Name(), hooks{before: func(path, op string) error {
 		if !importInside(fix.images, path) {
 			t.Errorf("recovery touched %s", path)
 		}
@@ -50,7 +50,7 @@ func TestImportRecoveryInjectionTouchesOnlyOwnedPaths(t *testing.T) {
 	if payloadText(t, fix.repo, fix.node) != "promoted-local\n" {
 		t.Fatal("failed restore changed the promoted leaf")
 	}
-	if err := RecoverImportTxn(fix.images); err != nil {
+	if err := RecoverImportTxn(fix.images, fix.repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 	fix.expectRolledBack(t)
@@ -66,7 +66,7 @@ func TestImportRecoveryRollsBackMetadataAndRefusesPartialCommit(t *testing.T) {
 		Name: fix.repo.Name(), Phase: ImportPrepared, Before: fix.manifest, After: after,
 		Staged: fix.staged, Objects: []string{extra.ID}, Backups: fix.backups,
 	})
-	if err := RecoverImportTxn(fix.images); err != nil {
+	if err := RecoverImportTxn(fix.images, fix.repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := LoadVersionManifest(fix.repo)
@@ -84,7 +84,7 @@ func TestImportRecoveryRollsBackMetadataAndRefusesPartialCommit(t *testing.T) {
 		After:   versionManifest(conflict.repo, conflict.node, conflict.kept, extra),
 		Backups: conflict.backups,
 	})
-	if err := RecoverImportTxn(conflict.images); err == nil || !strings.Contains(err.Error(), "conflicts") {
+	if err := RecoverImportTxn(conflict.images, conflict.repo.Name()); err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("conflict = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(conflict.repo.Dir, filepath.FromSlash(conflict.backups[0].Saved))); err != nil {
@@ -96,14 +96,17 @@ func TestImportRecoveryRollsBackMetadataAndRefusesPartialCommit(t *testing.T) {
 func TestImportRecoveryLeavesRemovalJournalAlone(t *testing.T) {
 	fix := newImportCrash(t)
 	fix.save(t, ImportPrepared)
-	journal := filepath.Join(fix.images, versionRemovalJournal)
+	journal := mustControl(t, fix.images, fix.repo.Name(), versionRemovalJournal)
+	if err := os.MkdirAll(filepath.Dir(journal), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(journal, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecoverImportTxn(fix.images); err == nil || !strings.Contains(err.Error(), "removal") {
+	if err := RecoverImportTxn(fix.images, fix.repo.Name()); err == nil || !strings.Contains(err.Error(), "removal") {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(fix.images, importTxnJournal)); err != nil {
+	if _, err := os.Stat(mustControl(t, fix.images, fix.repo.Name(), importTxnJournal)); err != nil {
 		t.Fatal(err)
 	}
 	fix.expectUntouched(t)
@@ -124,7 +127,7 @@ func TestSaveImportTxnRejectsForeignPaths(t *testing.T) {
 	if err := SaveImportTxn(fix.images, txn); err == nil {
 		t.Fatal("existing object accepted as new")
 	}
-	if _, err := os.Stat(filepath.Join(fix.images, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, fix.images, fix.repo.Name(), importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected save wrote a journal: %v", err)
 	}
 }
@@ -234,7 +237,7 @@ func (fix importCrash) expectCommon(t *testing.T, committed bool) {
 	if !committed && err == nil {
 		t.Fatal("rollback left the backup in place")
 	}
-	if _, err := os.Stat(filepath.Join(fix.images, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, fix.images, fix.repo.Name(), importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 	fix.expectUntouched(t)

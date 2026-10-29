@@ -137,11 +137,11 @@ func TestVersionMountActivityRecordsTheResolvedStack(t *testing.T) {
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	fake := withMountSeams(t, nil)
-	release, err := image.LockLibrary(cfg.ImagesDir, image.DefaultLibraryLockTimeout)
+	hold, err := image.LockImage(cfg.ImagesDir, "alice/app", image.DefaultLibraryLockTimeout)
 	if err != nil {
-		t.Fatalf("lock library: %v", err)
+		t.Fatalf("lock image: %v", err)
 	}
-	defer release()
+	defer hold.Release()
 	if _, err := runVersionMountEngine(cfg, "dev", mountActivityAction(base.ID, tip.ID),
 		"/view", mountFlags{}, filepath.Join(root, "runtime")); err != nil {
 		t.Fatalf("mount: %v", err)
@@ -190,11 +190,11 @@ func TestSessionReplayActivityFollowsTheRecordedTip(t *testing.T) {
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	withMountSeams(t, nil)
-	release, err := image.LockLibrary(cfg.ImagesDir, image.DefaultLibraryLockTimeout)
+	hold, err := image.LockImage(cfg.ImagesDir, "alice/app", image.DefaultLibraryLockTimeout)
 	if err != nil {
-		t.Fatalf("lock library: %v", err)
+		t.Fatalf("lock image: %v", err)
 	}
-	defer release()
+	defer hold.Release()
 	action := mountActivityAction(base.ID, mid.ID)
 	if _, err := sessionMount(cfg, "dev", io.Discard)(action); err != nil {
 		t.Fatalf("replay: %v", err)

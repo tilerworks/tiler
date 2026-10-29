@@ -83,6 +83,20 @@ func (s Store) readTrustedReferenceBuckets(state ReferenceState, targets []Refer
 	return buckets, nil
 }
 
+func referenceImageNames(records ...*Record) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, target := range referenceTargets(records...) {
+		if target.Name == "" || seen[target.Name] {
+			continue
+		}
+		seen[target.Name] = true
+		names = append(names, target.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 func referenceTargets(records ...*Record) []ReferenceTarget {
 	seen := make(map[ReferenceTarget]bool)
 	for _, rec := range records {

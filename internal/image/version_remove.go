@@ -27,7 +27,7 @@ type removalJournal struct {
 // RemoveVersionSubtreeLocked commits removal of root and all descendants.
 // The caller must hold the library lock and must already have checked refs.
 func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, error) {
-	if err := PrepareTargetLocked(imagesDir); err != nil {
+	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return nil, err
 	}
 	repo, err := OpenRepo(imagesDir, name)
@@ -68,7 +68,7 @@ func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, erro
 // RemoveVersionRepositoryLocked commits removal of every version and then
 // removes the repository leaf. The journal and library lock remain outside it.
 func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) {
-	if err := PrepareTargetLocked(imagesDir); err != nil {
+	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return nil, err
 	}
 	repo, err := OpenRepo(imagesDir, name)
@@ -101,8 +101,12 @@ func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) 
 	return nodes, nil
 }
 
-func recoverVersionRemoval(imagesDir string, seam hooks) error {
-	body, err := os.ReadFile(filepath.Join(imagesDir, versionRemovalJournal))
+func recoverVersionRemoval(imagesDir, name string, seam hooks) error {
+	path, err := controlFile(imagesDir, name, versionRemovalJournal)
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -129,7 +133,7 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 				return fmt.Errorf("%w: %v", ErrCleanupPending, removeErr)
 			}
 			removeEmptyAncestors(filepath.Dir(repo.Dir), imagesDir)
-			return finishRemovalJournal(imagesDir, seam)
+			return finishRemovalJournal(imagesDir, j.Name, seam)
 		}
 	}
 	current, previous, err := loadVersionMeta(repo)
@@ -169,14 +173,32 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 	} else if _, err := EnsureVersionIndexes(repo); err != nil {
 		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 	}
-	return finishRemovalJournal(imagesDir, seam)
+	return finishRemovalJournal(imagesDir, j.Name, seam)
 }
 
-func finishRemovalJournal(imagesDir string, seam hooks) error {
-	if err := os.Remove(filepath.Join(imagesDir, versionRemovalJournal)); err != nil {
+func finishRemovalJournal(imagesDir, name string, seam hooks) error {
+	path, err := controlFile(imagesDir, name, versionRemovalJournal)
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 	}
-	return syncDir(imagesDir, seam)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
+	}
+	legacy := filepath.Join(imagesDir, versionRemovalJournal)
+	removedLegacy := false
+	if journalName(legacy) == name {
+		if err := os.Remove(legacy); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %v", ErrCleanupPending, err)
+		}
+		removedLegacy = true
+	}
+	if err := syncExisting(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
+	}
+	if removedLegacy {
+		return syncDir(imagesDir, seam)
+	}
+	return nil
 }
 
 func validRemovalJournal(j removalJournal) bool {
@@ -200,17 +222,24 @@ func validRemovalJournal(j removalJournal) bool {
 }
 
 func saveRemovalJournal(imagesDir string, j removalJournal, seam hooks) error {
-	if err := importTxnPending(imagesDir); err != nil {
+	if err := importTxnPending(imagesDir, j.Name); err != nil {
 		return err
 	}
 	body, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	tmp, err := writeTemp(imagesDir, versionRemovalJournal, body, hooks{})
+	path, err := controlFile(imagesDir, j.Name, versionRemovalJournal)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := writeTemp(filepath.Dir(path), filepath.Base(path), body, hooks{})
 	if err != nil {
 		return err
 	}
 	defer removeFile(tmp)
-	return seam.do(tmp, filepath.Join(imagesDir, versionRemovalJournal))
+	return seam.do(tmp, path)
 }

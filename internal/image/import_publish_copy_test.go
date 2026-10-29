@@ -246,7 +246,7 @@ func TestPublishCopiedImportRollsBackFailedReplacement(t *testing.T) {
 	if _, err := publishCopied(crashReq, copyPublishSeam{halt: "objects"}); !errors.Is(err, errLinkHalted) {
 		t.Fatal(err)
 	}
-	if err := RecoverImportTxn(crashed); err != nil {
+	if err := RecoverImportTxn(crashed, "vendor/app"); err != nil {
 		t.Fatal(err)
 	}
 	expectCopyLinksRestored(t, crashRepo, node, dir)
@@ -325,7 +325,7 @@ func expectCopyLinksRestored(t *testing.T, repo Repo, node ImageMeta, source str
 	for range repo.Segments {
 		images = filepath.Dir(images)
 	}
-	if _, err := os.Stat(filepath.Join(images, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, images, repo.Name(), importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, importStageDir)); !errors.Is(err, os.ErrNotExist) {

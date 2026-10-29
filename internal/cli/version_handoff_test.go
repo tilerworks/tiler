@@ -36,10 +36,8 @@ func TestPublishVersionAndRebaseExcludesReferenceMutation(t *testing.T) {
 	competing := make(chan error, 1)
 	go func() {
 		<-entered
-		release, err := image.LockLibrary(cfg.ImagesDir, 0)
-		if release != nil {
-			release()
-		}
+		hold, err := image.LockImage(cfg.ImagesDir, "alice/app", 0)
+		hold.Release()
 		competing <- err
 		close(proceed)
 	}()
@@ -72,10 +70,8 @@ func TestResolveVersionAndPinRollsBackFailedCallback(t *testing.T) {
 	competing := make(chan error, 1)
 	go func() {
 		<-entered
-		release, err := image.LockLibrary(cfg.ImagesDir, 0)
-		if release != nil {
-			release()
-		}
+		hold, err := image.LockImage(cfg.ImagesDir, "alice/app", 0)
+		hold.Release()
 		competing <- err
 		close(proceed)
 	}()

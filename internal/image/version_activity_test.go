@@ -666,12 +666,12 @@ func TestVersionActivityBatchesSerializeUnderTheLibraryLock(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			release, err := LockLibrary(libraryRoot(repo), time.Second)
+			hold, err := LockImage(libraryRoot(repo), repo.Name(), time.Second)
 			if err != nil {
 				errs[i] = err
 				return
 			}
-			defer release()
+			defer hold.Release()
 			errs[i] = AppendVersionActivityLocked(repo, tip.ID, activity.Event{
 				Event:      activity.EventMount,
 				Phase:      activity.PhaseSucceeded,
@@ -998,11 +998,11 @@ func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
 		repo := testRepo(t)
 		root := linkImagesRoot(repo)
 		base := versionNode("base")
-		release, err := LockLibrary(root, 0)
+		hold, err := LockImage(root, repo.Name(), 0)
 		if err != nil {
-			t.Fatalf("lock library: %v", err)
+			t.Fatalf("lock image: %v", err)
 		}
-		defer release()
+		defer hold.Release()
 		stage := writeSource(t, t.TempDir(), []byte("base"))
 		if _, err := PublishFullVersionLocked(root, repo.Name(), stage, base, false); err != nil {
 			t.Fatalf("publish under the caller lock: %v", err)

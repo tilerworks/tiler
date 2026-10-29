@@ -40,7 +40,7 @@ func TestVersionRemovalCommitsBeforePostorderCleanupAndRecovers(t *testing.T) {
 	if loadErr != nil || len(manifest.Images) != 1 {
 		t.Fatalf("committed manifest = %#v, %v", manifest, loadErr)
 	}
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := recoverVersionRemoval(imagesDir, repo.Name(), hooks{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, node := range nodes[1:] {
@@ -67,7 +67,7 @@ func TestPublishRecoversRemovalBeforeReusingID(t *testing.T) {
 	if _, err := PublishFullVersion(imagesDir, repo.Name(), stage, node, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestDMGCommitRecoversRemovalBeforeReadingMetadata(t *testing.T) {
 	if err != nil || len(manifest.Images) != 1 {
 		t.Fatalf("recovered manifest = %#v, %v", manifest, err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestRemoveVersionSubtreeLockedCreatesAndCompletesJournal(t *testing.T) {
 	if err != nil || len(manifest.Images) != 1 || manifest.Images[0].ID != nodes[0].ID {
 		t.Fatalf("remaining manifest = %#v, %v", manifest, err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 }
@@ -145,10 +145,10 @@ func TestRemoveEmptyVersionRepositoryAndRecoverMissingLeaf(t *testing.T) {
 	if err := os.RemoveAll(repo.Dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := recoverVersionRemoval(imagesDir, repo.Name(), hooks{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(imagesDir, versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 }

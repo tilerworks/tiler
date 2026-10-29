@@ -23,21 +23,19 @@ func TestVersionRebaseLockedExcludesCompetingReferenceMutation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	release, err := image.LockLibrary(c.ImagesDir, 0)
+	hold, err := image.LockImage(c.ImagesDir, action.Name, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer hold.Release()
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		<-start
-		lock, lockErr := image.LockLibrary(c.ImagesDir, 0)
-		if lock != nil {
-			lock()
-		}
+		competing, lockErr := image.LockImage(c.ImagesDir, action.Name, 0)
+		competing.Release()
 		if !errors.Is(lockErr, filelock.ErrHeld) {
 			t.Errorf("competing mutation lock = %v", lockErr)
 		}

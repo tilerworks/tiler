@@ -47,9 +47,9 @@ func TestVersionEngineCoreLifecycleMaintainsReferences(t *testing.T) {
 		t.Fatalf("duplicate new = %v", err)
 	}
 	_, err = e.RunMount("dev", action, func(stored Action) (Result, error) {
-		if release, err := image.LockLibrary(c.ImagesDir, 0); err == nil {
-			release()
-			t.Fatal("mount ran outside library lock")
+		if hold, err := image.LockImage(c.ImagesDir, action.Name, 0); err == nil {
+			hold.Release()
+			t.Fatal("mount ran outside image lock")
 		} else if !errors.Is(err, filelock.ErrHeld) {
 			t.Fatal(err)
 		}

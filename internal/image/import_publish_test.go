@@ -197,10 +197,10 @@ func TestPublishLinkedImportRollsBackAndRecovers(t *testing.T) {
 	if _, err := publishLinked(req(crashed), linkPublishSeam{halt: "objects"}); !errors.Is(err, errLinkHalted) {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(crashed, importTxnJournal)); err != nil {
+	if _, err := os.Stat(mustControl(t, crashed, "vendor/app", importTxnJournal)); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecoverImportTxn(crashed); err != nil {
+	if err := RecoverImportTxn(crashed, "vendor/app"); err != nil {
 		t.Fatal(err)
 	}
 	expectLinkRolledBack(t, crashed, "vendor/app")
@@ -209,7 +209,7 @@ func TestPublishLinkedImportRollsBackAndRecovers(t *testing.T) {
 	if _, err := publishLinked(req(metaCrash), linkPublishSeam{halt: "meta"}); !errors.Is(err, errLinkHalted) {
 		t.Fatal(err)
 	}
-	if err := RecoverImportTxn(metaCrash); err != nil {
+	if err := RecoverImportTxn(metaCrash, "vendor/app"); err != nil {
 		t.Fatal(err)
 	}
 	expectLinkRolledBack(t, metaCrash, "vendor/app")
@@ -218,7 +218,7 @@ func TestPublishLinkedImportRollsBackAndRecovers(t *testing.T) {
 	if _, err := publishLinked(req(indexCrash), linkPublishSeam{halt: "index"}); !errors.Is(err, errLinkHalted) {
 		t.Fatal(err)
 	}
-	if err := RecoverImportTxn(indexCrash); err != nil {
+	if err := RecoverImportTxn(indexCrash, "vendor/app"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(indexCrash, "vendor/app")
@@ -229,7 +229,7 @@ func TestPublishLinkedImportRollsBackAndRecovers(t *testing.T) {
 	if err != nil || len(manifest.Images) != 2 {
 		t.Fatalf("committed manifest = %+v, %v", manifest.Images, err)
 	}
-	if _, err := os.Stat(filepath.Join(indexCrash, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, indexCrash, "vendor/app", importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(repo.Dir, fileSHA256Index)); err != nil {
@@ -255,7 +255,7 @@ func expectLinkRolledBack(t *testing.T, images, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(images, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mustControl(t, images, name, importTxnJournal)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	manifest, err := LoadVersionManifest(repo)

@@ -20,21 +20,29 @@ type GCEvent struct {
 // GC is the legacy authorized cleanup entry point. Interactive callers must
 // inspect and confirm CleanupPlan through the reference coordinator instead.
 func GC(cfg config.Config, _ Refs, _ time.Time) ([]GCEvent, error) {
-	release, err := LockLibrary(cfg.ImagesDir, DefaultLibraryLockTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("gc: %w", err)
-	}
-	defer release()
-	plan, err := InspectCleanupLocked(cfg.ImagesDir)
-	if err != nil {
-		return nil, fmt.Errorf("gc: %w", err)
-	}
-	outcomes, err := ExecuteCleanupLocked(cfg.ImagesDir, plan)
-	events := make([]GCEvent, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		if outcome.Action == GCActionRemoved {
-			events = append(events, GCEvent{Name: outcome.Name, Action: outcome.Action, FullID: outcome.ID})
+	var events []GCEvent
+	err := WithListedImageLocks(cfg.ImagesDir, DefaultLibraryLockTimeout, func(hold Hold) error {
+		plan, err := InspectCleanupLocked(cfg.ImagesDir)
+		if err != nil {
+			return err
 		}
+		outcomes, err := ExecuteCleanupLocked(cfg.ImagesDir, plan)
+		events = make([]GCEvent, 0, len(outcomes))
+		for _, outcome := range outcomes {
+			if outcome.Action != GCActionRemoved {
+				continue
+			}
+			events = append(events, GCEvent{Name: outcome.Name, Action: outcome.Action, FullID: outcome.ID})
+			if err == nil {
+				if discardErr := hold.DiscardIfRepositoryGone(cfg.ImagesDir, outcome.Name); discardErr != nil {
+					err = discardErr
+				}
+			}
+		}
+		return err
+	})
+	if err != nil {
+		return events, fmt.Errorf("gc: %w", err)
 	}
-	return events, err
+	return events, nil
 }

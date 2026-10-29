@@ -66,16 +66,16 @@ func publishCopied(req ImportRequest, seam copyPublishSeam) (CopyPublish, error)
 		return CopyPublish{}, err
 	}
 	defer batch.release()
-	release, err := LockLibrary(req.ImagesDir, DefaultLibraryLockTimeout)
+	hold, err := LockImage(req.ImagesDir, req.Name, DefaultLibraryLockTimeout)
 	if err != nil {
 		return CopyPublish{}, importFail(req, err)
 	}
-	defer release()
+	defer hold.Release()
 	return publishCopiedLocked(req, read, batch, seam)
 }
 
 func publishCopiedLocked(req ImportRequest, read importRead, batch *stagedBatch, seam copyPublishSeam) (CopyPublish, error) {
-	if err := PrepareTargetLocked(req.ImagesDir); err != nil {
+	if err := PrepareImageLocked(req.ImagesDir, req.Name); err != nil {
 		return CopyPublish{}, err
 	}
 	if err := checkNamePlacement(req.ImagesDir, read.plan.Repo.Segments); err != nil {
@@ -361,7 +361,7 @@ func finishCopyBatch(req ImportRequest, repo Repo, txn ImportTxn, merge ImportMe
 		return CopyPublish{}, err
 	}
 	published := CopyPublish{Name: repo.Name(), Items: merge.Items}
-	if err = RecoverImportTxn(req.ImagesDir); err != nil {
+	if err = RecoverImportTxn(req.ImagesDir, req.Name); err != nil {
 		return published, err
 	}
 	return published, nil
@@ -549,7 +549,7 @@ func repoRel(repo Repo, abs string) (string, error) {
 }
 
 func abortCopied(req ImportRequest, cause error) (CopyPublish, error) {
-	if err := RecoverImportTxn(req.ImagesDir); err != nil {
+	if err := RecoverImportTxn(req.ImagesDir, req.Name); err != nil {
 		return CopyPublish{}, errors.Join(cause, err)
 	}
 	return CopyPublish{}, importFail(req, cause)
