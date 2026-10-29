@@ -57,8 +57,12 @@ func TestPlanImportClosureSelectsAncestorStacks(t *testing.T) {
 	if !IsUnknownSHA256(zero.ID) || zero.Description != "unknown link" || len(zero.Blocks) != 0 {
 		t.Fatalf("unknown root = %+v", zero)
 	}
+	loc, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if latest.Snapshot.Manifest.Name != "other/lib" || latest.Snapshot.Plan.Name != "vendor/app" ||
-		latest.Snapshot.Plan.Location != dir || !bytes.Equal(latest.Snapshot.Body, mustRead(t, filepath.Join(dir, fileMeta))) {
+		latest.Snapshot.Plan.Location != loc || !bytes.Equal(latest.Snapshot.Body, mustRead(t, filepath.Join(dir, fileMeta))) {
 		t.Fatalf("snapshot identity = %+v", latest.Snapshot.Plan)
 	}
 	latest.Nodes[2].Blocks[0].Name = "mutated"

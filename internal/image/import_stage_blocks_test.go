@@ -33,7 +33,11 @@ func TestStageImportBlocksCopiesOrderedPayloadOnce(t *testing.T) {
 		return countingFile{t, file, &reads}, nil
 	}})
 	t.Cleanup(staged.Remove)
-	leaf := filepath.Join(dir, dirObjects, node.ID, node.Blocks[0].Name)
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(root, dirObjects, node.ID, node.Blocks[0].Name)
 	if len(opens) != 2 || opens[0] != leaf || opens[1] != payload || reads != node.Size {
 		t.Fatalf("opens %v reads %d size %d", opens, reads, node.Size)
 	}

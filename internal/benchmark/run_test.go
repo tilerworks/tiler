@@ -705,6 +705,8 @@ func TestRunCreateUsesInputBytesForRate(t *testing.T) {
 	d.Size = size
 	d.FileSize = size
 
+	d.Format = FormatJSON
+
 	err := Run(d, Env{
 		Command: func(name string, _ []string, args ...string) ([]byte, error) {
 			if name != "tar" {
@@ -721,17 +723,24 @@ func TestRunCreateUsesInputBytesForRate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	line := firstTSVLine(t, out.String(), "image_create")
-	cols := strings.Split(line, "\t")
-	if len(cols) < 4 {
-		t.Fatalf("cols = %q", cols)
+	var got jsonReport
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
 	}
-	if cols[2] != "4" {
-		t.Fatalf("bytes column = %q, want output size 4", cols[2])
+	var create *jsonStep
+	for i := range got.Steps {
+		if got.Steps[i].Step == "image_create" {
+			create = &got.Steps[i]
+			break
+		}
 	}
-	// MiB/s uses input bytes (128). At tiny elapsed times this is inf.
-	if cols[3] != "inf" && cols[3] == "0.0" {
-		t.Fatalf("rate = %q, want non-zero from input bytes", cols[3])
+	if create == nil || create.Bytes == nil || *create.Bytes != 4 {
+		t.Fatalf("image_create = %+v, want output size 4", create)
+	}
+	// MiB/s uses input bytes. JSON records that numerator directly,
+	// so the check does not depend on how long packing took.
+	if create.RateBytes == nil || *create.RateBytes != size {
+		t.Fatalf("rate_bytes = %v, want input size %d", create.RateBytes, size)
 	}
 }
 
