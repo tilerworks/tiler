@@ -19,8 +19,9 @@
 # are created by real mounts, so the whole case is gated on it.
 #
 # Scope guard: this case asserts ls/gc/rm over the default single-file
-# storage only. It does not cover split storage, cache, session
-# subcommands, crash recovery, or the incremental cascade (t0004).
+# storage only. GC here is the preview contract while a session still
+# references the image: nothing is removed. It does not cover split
+# storage, cache, crash recovery, or the incremental cascade (t0004).
 
 test_description='tiler images ls, gc, and rm manage the library lifecycle'
 
@@ -104,6 +105,15 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'rm is refused while an active se
 	test -n "$pin" &&
 	test_must_fail "$tiler_bin" image rm life/app >rmref.out 2>rmref.err &&
 	test_grep "referenced by sessions" rmref.err &&
+	"$tiler_bin" images gc --expire 0 >imgprev.out 2>imgprev.err &&
+	test_grep "No image objects eligible" imgprev.out &&
+	test_grep ! removed imgprev.out &&
+	test_grep ! "Type yes" imgprev.err &&
+	"$tiler_bin" session gc --expire 0 >sesprev.out 2>sesprev.err &&
+	test_grep "No session expired" sesprev.out &&
+	test_grep "kept $pin: attached" sesprev.err &&
+	test_grep ! "Type yes" sesprev.err &&
+	test_path_is_dir "$HOME/.tiler/sessions/$pin" &&
 	"$tiler_bin" umount "$work2_dir" &&
 	"$tiler_bin" session close "$pin" && "$tiler_bin" session remove "$pin" &&
 	"$tiler_bin" image rm life/app >rm3.out 2>rm3.err

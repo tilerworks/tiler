@@ -112,6 +112,22 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct in
 	test "$layerA" != "$layerB"
 '
 
+# Both increments parent to the full root, so they are siblings. One
+# publication stamps the root with the tip's time and leaves the other
+# branch untouched. The root records that dependency once.
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental activity reaches the parent and skips the sibling' '
+	tip_log=$img_dir/_objects/$layerB/actions.log &&
+	root_log=$img_dir/_objects/$id1/actions.log &&
+	sib_log=$img_dir/_objects/$layerA/actions.log &&
+	test_path_is_file "$tip_log" &&
+	tip_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"image.create.incremental\".*\"phase\":\"succeeded\".*/\\1/p" "$tip_log" | tail -n 1) &&
+	test -n "$tip_time" &&
+	test_grep "\"time\":\"$tip_time\".*\"source_version\":\"$layerB\".*\"source_event\":\"image.create.incremental\"" "$root_log" &&
+	test "$(grep -c "\"source_version\":\"$layerB\"" "$root_log")" = 1 &&
+	test_grep ! "\"source_version\":\"$layerB\"" "$sib_log" &&
+	test_grep "\"event\":\"image.create.full\"" "$root_log"
+'
+
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
 		"$tiler_bin" images list >ls.out 2>ls.err &&
 		test_grep "${layerA%${layerA#??????????}}" ls.out &&
@@ -153,9 +169,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'historical mixed-format mounts r
 	"$tiler_bin" umount "$verify_dir" && "$tiler_bin" mount "alice/app:${layerB%${layerB#??????????}}" "$verify_dir" &&
 	test_path_is_file "$verify_dir/a.txt" && test_path_is_file "$verify_dir/b.txt" && rm "$HOME/.tiler/sessions/.refs/state.json" &&
 	test_must_fail "$tiler_bin" image rm "alice/app:$id1" >rm.out 2>rm.err && test_grep "referenced by sessions" rm.err &&
-	test_path_is_file "$HOME/.tiler/sessions/.refs/state.json" && printf "#!/bin/sh\nprintf '\''First line\\n\\nSecond line.\\n'\'' >\"\$1\"\n" >editor.sh &&
-	chmod +x editor.sh && EDITOR=./editor.sh "$tiler_bin" images describe "alice/app:$layerB" &&
-	"$tiler_bin" images gc && "$tiler_bin" images show "alice/app:$layerB" >ls3.out && test_grep "First line" ls3.out && test_grep "Second line." ls3.out && test_path_is_file "$img_dir/_objects/$id1/image.sqsh"
+	test_path_is_file "$HOME/.tiler/sessions/.refs/state.json" &&
+	printf "First line\n\nSecond line.\n" >desc.txt &&
+	"$tiler_bin" images describe --file desc.txt "alice/app:$layerB" &&
+	"$tiler_bin" images gc >gchist.out 2>gchist.err &&
+	test_grep "No image objects eligible" gchist.out &&
+	test_grep ! removed gchist.out &&
+	test_grep ! "Type yes" gchist.err &&
+	"$tiler_bin" images show "alice/app:$layerB" >ls3.out && test_grep "First line" ls3.out && test_grep "Second line." ls3.out && test_path_is_file "$img_dir/_objects/$id1/image.sqsh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and stands alone' '
@@ -167,6 +188,59 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the merged full remounts and sta
 	test_path_is_file "$verify_dir/b.txt" &&
 		"$tiler_bin" images show alice/app >ls4.out 2>ls4.err &&
 		test_grep -E "^  id +$id2$" ls4.out
+'
+
+# rewrite_activity sets every record time. GC trusts the last line, so
+# this is how a test makes one version old or still retained.
+rewrite_activity() {
+	sed "s/\"time\":\"[^\"]*\"/\"time\":\"$2\"/" "$1" >"$1.rewritten" &&
+	mv "$1.rewritten" "$1"
+}
+
+# A missing child log is initialized once and refreshes its parent, not
+# its sibling. An old parent of a retained child then stays, while the
+# old sibling and an old independent full are removed.
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC initializes a chain once and keeps ancestors of a retained version' '
+	obj=$img_dir/_objects &&
+	rm -f "$obj/$layerB/actions.log" &&
+	"$tiler_bin" images gc --expire 0 >init1.out 2>init1.err &&
+	test_grep "kept alice/app:$layerB: initialized" init1.err &&
+	test_grep "kept alice/app:$id1: initialized" init1.err &&
+	test_grep ! "kept alice/app:$layerA: initialized" init1.err &&
+	test_grep "\"event\":\"activity.initialize\"" "$obj/$layerB/actions.log" &&
+	init_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"activity.initialize\".*/\\1/p" "$obj/$layerB/actions.log") &&
+	test -n "$init_time" &&
+	test_grep "\"time\":\"$init_time\".*\"source_version\":\"$layerB\".*\"source_event\":\"activity.initialize\"" "$obj/$id1/actions.log" &&
+	test_grep ! "activity.initialize" "$obj/$layerA/actions.log" &&
+	cp "$obj/$id1/actions.log" id1.before &&
+	cp "$obj/$layerB/actions.log" layerB.before &&
+	"$tiler_bin" images gc --expire 0 >init2.out 2>init2.err &&
+	test_grep ! initialized init2.err &&
+	test_cmp id1.before "$obj/$id1/actions.log" &&
+	test_cmp layerB.before "$obj/$layerB/actions.log" &&
+	"$tiler_bin" umount "$verify_dir" &&
+	"$tiler_bin" session list >drop.list &&
+	while read -r name _
+	do
+		test "$name" = NAME && continue
+		test -n "$name" || continue
+		"$tiler_bin" session close "$name" >"close-$name.out" &&
+		"$tiler_bin" session remove "$name" >"rm-$name.out" || return 1
+	done <drop.list &&
+	test_grep ! "image.dependency.activity" "$obj/$id2/actions.log" &&
+	rewrite_activity "$obj/$id1/actions.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$obj/$layerA/actions.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$obj/$id2/actions.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$obj/$layerB/actions.log" "2099-01-01T00:00:00.000000000Z" &&
+	"$tiler_bin" images gc --expire 0 --yes >anc.out 2>anc.err &&
+	test_grep "removed alice/app:$layerA" anc.out &&
+	test_grep "removed alice/app:$id2" anc.out &&
+	test_grep ! "removed alice/app:$id1" anc.out &&
+	test_grep ! "removed alice/app:$layerB" anc.out &&
+	test_path_is_missing "$obj/$layerA" &&
+	test_path_is_missing "$obj/$id2" &&
+	test_path_is_dir "$obj/$id1" &&
+	test_path_is_dir "$obj/$layerB"
 '
 
 test_done
