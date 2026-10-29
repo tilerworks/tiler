@@ -394,7 +394,8 @@ log_level: info
 的检出内。
 
 `tiler doctor` 在 `🔧 Checks` 之前用 `📋 Config` 报告解析后的
-配置：配置文件位置与核心目录，每项一行，用空格对齐。
+配置：向上查找时实际读到的最近一层 `.tiler.yaml`（没有项目文件时
+为用户文件）与核心目录，每项一行，用空格对齐。
 
 `--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
 `images_dir`、`sessions_dir`、`cache_dir`、`log_level`）与

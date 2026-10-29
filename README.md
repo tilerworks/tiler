@@ -659,8 +659,9 @@ discovery inside a test sandbox or a checkout that must not inherit a
 parent directory's configuration.
 
 `tiler doctor` reports the resolved configuration in the `📋 Config`
-section before `🔧 Checks`: the config file location and the core
-directories, one space-aligned row each.
+section before `🔧 Checks`: the nearest `.tiler.yaml` the walk
+actually read (the user file when no project file exists) and the
+core directories, one space-aligned row each.
 
 The `--json` form carries the same data as a top-level `config`
 object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,
