@@ -50,6 +50,9 @@ func newBuildCmd() *cobra.Command {
 		compression string
 		messages    []string
 		files       []string
+		link        string
+		copySrc     string
+		hash        string
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
@@ -91,10 +94,31 @@ func newBuildCmd() *cobra.Command {
 			"image_compression key in .tiler.yaml, or that format's default.\n" +
 			"--format squashfs or erofs on macOS is a usage error.\n" +
 			"An incremental build inherits the base image; a flag that\n" +
-			"disagrees is a usage error.",
+			"disagrees is a usage error.\n" +
+			"\n" +
+			"--link <path> or --copy <path> imports an image file or a\n" +
+			"directory with meta.yaml, then an ordinary mount uses the name:\n" +
+			"\n" +
+			"  tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app\n" +
+			"  tiler mount vendor/app work\n" +
+			"\n" +
+			"Import requires --image, accepts no positional directory, and\n" +
+			"does not pack, mount, or open a session. --link and --copy are\n" +
+			"mutually exclusive. -F/--file still reads a build description\n" +
+			"and cannot combine with import. A file imports as one full\n" +
+			"image. Omit --hash to import the latest directory version and\n" +
+			"its ancestors; --hash takes one 4-to-64 hex prefix plus\n" +
+			"ancestors, or all for the whole forest. --link writes a\n" +
+			"position file and does not hash the payload. A missing sidecar\n" +
+			"records the unknown digest of 64 zeros. mount --verify skips\n" +
+			"sha256 for that version and still checks reachability, format,\n" +
+			"size, and mtime. The same id with a different final source is\n" +
+			"a source conflict. --copy of a known link keeps that id;\n" +
+			"--copy of an unknown link publishes the real digest and keeps\n" +
+			"the old zero version.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files)
+			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files, link, copySrc, hash)
 		},
 	}
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
@@ -109,6 +133,12 @@ func newBuildCmd() *cobra.Command {
 		"image description paragraph (repeatable)")
 	cmd.Flags().StringArrayVarP(&files, "file", "F", nil,
 		"read image description from file (use - for stdin)")
+	cmd.Flags().StringVar(&link, "link", "",
+		"import a file or image directory as position files, then mount the name")
+	cmd.Flags().StringVar(&copySrc, "copy", "",
+		"import a file or image directory by copying payload bytes, then mount the name")
+	cmd.Flags().StringVar(&hash, "hash", "",
+		"directory version: omit for latest, or a prefix, or all")
 	return cmd
 }
 
@@ -117,10 +147,14 @@ type buildDescription struct {
 	set  bool
 }
 
-func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split, format, compression string, messages, files []string) error {
+func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split, format, compression string, messages, files []string, link, copySrc, hash string) error {
 	cfg, ok := loadedConfig(cmd)
 	if !ok {
 		return errors.New("build: configuration is not loaded")
+	}
+	handled, err := runBuildImport(cmd, args, cfg, imageName, link, copySrc, hash)
+	if handled || err != nil {
+		return err
 	}
 	description, err := readBuildDescription(cmd, messages, files)
 	if err != nil {
@@ -394,11 +428,15 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if decision.MountPoint == "" || decision.Upper == "" {
 		return false, nil
 	}
-	repo, err := image.OpenRepo(cfg.ImagesDir, decision.Name.String())
-	if err != nil {
-		return false, fmt.Errorf("build: %w", err)
-	}
-	manifest, err := image.LoadVersionManifest(repo)
+	var manifest image.VersionManifest
+	err := image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, decision.Name.String())
+		if err != nil {
+			return err
+		}
+		manifest, err = image.LoadVersionManifest(repo)
+		return err
+	})
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
@@ -594,27 +632,33 @@ func mountedBuildTip(sessionsDir string, decision mountinfo.Decision) (string, e
 }
 
 func versionRootID(cfg config.Config, name, tip string) string {
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		return ""
-	}
-	manifest, err := image.LoadVersionManifest(repo)
-	if err != nil {
-		legacy, legacyErr := image.LoadManifest(repo.MetaPath())
-		if legacyErr != nil {
-			return ""
+	id := ""
+	_ = image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, name)
+		if err != nil {
+			return nil
 		}
-		root, legacyErr := legacy.Full()
-		if legacyErr != nil {
-			return ""
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			legacy, legacyErr := image.LoadManifest(repo.MetaPath())
+			if legacyErr != nil {
+				return nil
+			}
+			root, legacyErr := legacy.Full()
+			if legacyErr != nil {
+				return nil
+			}
+			id = root.ID
+			return nil
 		}
-		return root.ID
-	}
-	stack, err := manifest.SelectVersion(name + ":" + tip)
-	if err != nil || len(stack) == 0 {
-		return ""
-	}
-	return stack[0].ID
+		stack, err := manifest.SelectVersion(name + ":" + tip)
+		if err != nil || len(stack) == 0 {
+			return nil
+		}
+		id = stack[0].ID
+		return nil
+	})
+	return id
 }
 
 // runDMGCreate packs a directory into a new dmg image. A build from
@@ -731,19 +775,24 @@ func publishDMG(req image.DMGRequest) (image.ImageMeta, error) {
 }
 
 func latestVersionID(cfg config.Config, name string) string {
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		return ""
-	}
-	manifest, err := image.LoadVersionManifest(repo)
-	if err != nil {
-		return ""
-	}
-	stack, err := manifest.SelectVersion(name)
-	if err != nil || len(stack) == 0 {
-		return ""
-	}
-	return stack[len(stack)-1].ID
+	id := ""
+	_ = image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, name)
+		if err != nil {
+			return nil
+		}
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			return nil
+		}
+		stack, err := manifest.SelectVersion(name)
+		if err != nil || len(stack) == 0 {
+			return nil
+		}
+		id = stack[len(stack)-1].ID
+		return nil
+	})
+	return id
 }
 
 // warnDMGBakeKeepsOldBase is the stderr warning a successful bake

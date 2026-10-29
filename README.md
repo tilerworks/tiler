@@ -228,16 +228,19 @@ Available now:
   identity is a conflict error, never a silent restack.
   `--read-only` mounts a single image straight onto `<dir>`, or
   merges a chain lowerdir-only.
-  `<image>` is the path of one squashfs file, or a 1-to-5 segment
-  library name that resolves through the active metadata into the
-  full image plus its incremental chain, at most eight members in
-  one stack; when the cleaned path exists as a regular file, that
-  file wins over a library name. `--file <path> <library-name>`
-  registers an external image in the library, then mounts by name
-  (see External images below); it cannot combine with a positional
-  file path. Library members pass a quick size and mtime check
-  first; `--verify` re-hashes every recorded sha256 digest instead
-  (a bare file path records none).
+  `<image>` is the path of one squashfs or erofs file, or a 1-to-5
+  segment library name that resolves through the active metadata
+  into the full image plus its incremental chain, at most eight
+  members in one stack; when the cleaned path exists as a regular
+  file, that file wins over a library name. Import an external
+  image with `tiler build --link` or `tiler build --copy`, then
+  mount the library name (see External images below). Library
+  members pass a quick size and mtime check first; `--verify`
+  re-hashes every recorded sha256 digest instead (a bare file path
+  records none). A version whose digest is 64 zeros is unknown:
+  `--verify` skips that sha256, still checks reachability, format,
+  size, and mtime, and reports the skip. Other versions and known
+  blocks stay on the full hash.
   `--subdir <path>` exposes one image subdirectory as the mount
   root: members missing the subdirectory drop out of the stack,
   and when no member has it the mount fails before anything is
@@ -428,51 +431,107 @@ kept alice/app:<id>: initialized (activity refreshed by this scan)
 ### External images
 
 NAS shares and vendor trees often hold a ready-made squashfs, erofs,
-or dmg without tiler's library layout (`meta.yaml`, `image.sqsh`, or
-`image.dmg`). Two mount paths apply:
+or dmg without tiler's library layout. Import the file, then mount
+the library name. A bare path still mounts without entering the
+library.
 
 | Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
 |------|---------------|---------|-------------------------|--------------------|
 | Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
-| Register + mount | `tiler mount --file /path/to/file.sqsh alice/app work` | external link + meta under `images_dir` | yes | yes on Linux |
+| Link, then mount | `tiler build --link /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | position file + meta under `images_dir` | yes | yes on Linux |
+| Copy, then mount | `tiler build --copy /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | local payload + meta | yes | yes on Linux |
 
-`--file` records the external file under the library leaf as an
-absolute symlink when the host supports it; if symlink creation
-fails, it writes a path-ref regular file whose content is the
-absolute path plus a newline (the same shape git uses when
-`core.symlinks` is false). It hashes the target for `meta.yaml`,
-then runs the same library-name mount as a published image. Mount,
-verify, and cache open the target bytes whether the leaf is a
-symlink or a path-ref. A second call with the same target and
-digest is idempotent for the leaf.
+`--link` and `--copy` are mutually exclusive, require `--image`, and
+accept no positional directory. They do not pack, mount, or open a
+session. Ordinary `tiler build [dir]` still packs a directory, and
+`-F/--file` still reads a description. Those pack and description
+flags cannot combine with import. Usage mistakes exit 2. A missing
+file, a bad digest, or a version conflict exits 1.
 
-Platform format gates match `build` (wrong format is a usage error,
-exit 2):
+A regular file imports as one full image with no parent. To keep an
+incremental chain or split blocks, point `--link` or `--copy` at a
+directory that contains `meta.yaml`. `created_at` is stored as
+RFC 3339 in the local zone, to the second
+(`2026-10-29T18:07:56+08:00`). Older values, including a UTC
+timestamp with a fractional second, still load, and the fraction
+is discarded.
 
-| Host | Allowed source | Library leaf | Refused |
-|------|----------------|--------------|---------|
+Directory selection:
+
+- Omit `--hash` to import the latest version (newest `created_at`,
+  then the smallest full id) and every ancestor from the root.
+- `--hash <prefix>` imports the one version whose id matches that
+  4-to-64 hex prefix, plus its ancestors. The prefix is matched in
+  lower case. A missing or ambiguous prefix fails and lists the
+  candidates.
+- `--hash all` imports every version, parents before children.
+  Shared ancestors are planned once. The word is exactly `all`.
+
+`--link` writes a position file whose only content is the absolute
+source path and a newline. It does not copy the payload and does not
+hash it. For one file it reads `<image-file>.sha256` when that
+sidecar exists. A missing sidecar records the unknown digest: 64
+zero hex digits. That marker is not a content address. It is not
+used to deduplicate repositories or to share a content cache. One
+image name has at most one all-zero version. The same source with
+the same format, size, and mtime is a no-op. A different source, or
+a changed size or mtime, is a conflict. An unknown digest does not
+prove the bytes are unchanged.
+
+`--copy` ignores the sidecar, streams the payload into the target
+repository, and records the SHA-256 of the copied bytes. A known
+digest that equals the all-zero marker is an error.
+
+`mount` of a library name still does the quick size and mtime check.
+`mount --verify` re-hashes recorded digests. For an unknown version
+it skips that sha256, still checks that the source is reachable, and
+checks format, size, and mtime. It prints that the digest is unknown
+and was skipped. Other versions and every known block are hashed.
+A missing or changed source fails the mount. An unknown version is
+not copied into the shared content cache.
+
+Merging into an existing name does not overwrite version facts. The
+same id is a no-op when the link source and the recorded facts match.
+The same id aimed at a different final path is a source conflict,
+even when the declared digest matches. A different parent, format,
+size, or block list is a conflict. `--copy` of a known link keeps
+that id (`converted`), replaces the position file with a local
+payload, and leaves session references valid. `--link` of an id that
+is already a local copy keeps the local copy. `--copy` of an
+all-zero link publishes a new id with the real digest, keeps the old
+zero version and its position file for existing references, and does
+not rewrite sessions. Success lines are `link`, `copy`, `no-op`, or
+`converted`, followed by the image name and version id.
+
+A refused container format exits 1:
+
+| Host | Allowed source | Position or payload name | Refused |
+|------|----------------|--------------------------|---------|
 | Linux | squashfs, erofs | `image.sqsh` | dmg |
 | macOS | dmg only | `image.dmg` | squashfs, erofs |
 
-NAS lifecycle for a linked image:
-
-- Published links and increments use immutable `_objects/<id>/` versions;
-  GC preserves them, and removal deletes local data, never the target.
-- With `--cache`, member bytes copy into `cache_dir` for mounting,
-  but the mount table and session still name the library path
-  (`images_dir/.../image.*`), not the cache file.
+Removal and GC delete the local position file, metadata, and derived
+cache. They do not delete the external source. After `--copy`, the
+version no longer depends on that source. With `--cache`, a known
+digest may be copied into `cache_dir`; the mount table and session
+still name the library path.
 
 Example:
 
 ```bash
-# Linux: register a NAS squashfs, develop, append local incr layers
-tiler mount --file /mnt/nas/vendor/app.sqsh vendor/app work
+# Linux: link a NAS squashfs, mount by name, append a local layer
+tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app
+tiler mount vendor/app work
 # edit under work
 tiler build -i
 tiler umount work
 
-# macOS: register an external dmg (writable shadow; full bake to materialize)
-tiler mount --file /Volumes/share/base.dmg vendor/base work
+# Copy the same known link into a local payload and keep its id
+tiler build --copy /mnt/nas/vendor/app.sqsh --image vendor/app
+
+# macOS: link an external dmg, then mount by name
+tiler build --link /Volumes/share/base.dmg --image vendor/base
+tiler mount vendor/base work
 ```
 
 ### Split storage
@@ -604,8 +663,9 @@ discovery inside a test sandbox or a checkout that must not inherit a
 parent directory's configuration.
 
 `tiler doctor` reports the resolved configuration in the `📋 Config`
-section before `🔧 Checks`: the config file location and the core
-directories, one space-aligned row each.
+section before `🔧 Checks`: the nearest `.tiler.yaml` the walk
+actually read (the user file when no project file exists) and the
+core directories, one space-aligned row each.
 
 The `--json` form carries the same data as a top-level `config`
 object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,

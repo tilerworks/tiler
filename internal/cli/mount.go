@@ -32,6 +32,9 @@ var (
 	mountRun func(name string, args ...string) error
 	// ensureCache copies one image into the cache directory.
 	ensureCache = image.EnsureCached
+	// mountNotice receives short diagnostics that do not fail the
+	// mount, such as a skipped unknown digest.
+	mountNotice io.Writer = os.Stderr
 	// assembleBlocks materializes a blocks payload into the cache.
 	assembleBlocks = image.AssembleBlocks
 	// mountEngine builds the workspace mount.
@@ -60,7 +63,6 @@ type mountFlags struct {
 	verify   bool
 	session  string
 	rm       bool
-	file     string
 	// pruneUpper asks the engine to prune a reused upper against
 	// the lower stack before merging. Only session replay sets it,
 	// when the recorded served stack resolves differently from the
@@ -81,12 +83,14 @@ func newMountCmd() *cobra.Command {
 			"default, or a read-only view with --read-only. <image> is the\n" +
 			"path of one squashfs or erofs file, or a 1-to-5 segment library\n" +
 			"name. When the cleaned path exists as a regular file, that\n" +
-			"file wins over a library name unless --file registers an external\n" +
-			"image: --file <path> <library-name> <dir> symlinks the external\n" +
-			"file into the library and mounts by name. Chain layers mount as a cascade,\n" +
-			"--subdir exposes one image subdirectory as the mount root,\n" +
-			"and --verify re-hashes every recorded digest instead of the\n" +
-			"default quick check. <dir> must be an empty directory owned\n" +
+			"file wins over a library name. Import an external image with\n" +
+			"build --link or build --copy, then mount the library name.\n" +
+			"Chain layers mount as a cascade, --subdir exposes one image\n" +
+			"subdirectory as the mount root, and --verify re-hashes every\n" +
+			"recorded digest instead of the default quick check. A digest\n" +
+			"of 64 zeros is unknown: --verify skips that sha256, still\n" +
+			"checks reachability, format, size, and mtime, and\n" +
+			"reports the skip. <dir> must be an empty directory owned\n" +
 			"by the current user, outside every reserved tree, and must\n" +
 			"not cover the sessions_dir, images_dir, or cache_dir paths\n" +
 			"from .tiler.yaml, or $HOME/.tiler.\n" +
@@ -112,8 +116,6 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flags.session, "session", "s", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
 		"remove the just-created session and purge its runtime when its last view unmounts")
-	cmd.Flags().StringVar(&flags.file, "file", "",
-		"register an external image file in the library before mounting by name")
 	return cmd
 }
 
@@ -146,13 +148,6 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		return usageError{err}
 	}
 	selector := args[0]
-	if flags.file != "" {
-		var err error
-		selector, err = linkMountFile(cfg, args[0], flags.file)
-		if err != nil {
-			return err
-		}
-	}
 	target, err := resolveRuntimeMount(cfg, selector)
 	if err != nil {
 		if isResolveUsage(err) {
@@ -295,7 +290,13 @@ func validateMountTarget(cfg config.Config, target image.Target, flags mountFlag
 }
 
 func resolveRuntimeMount(cfg config.Config, selector string) (image.Target, error) {
-	return image.ResolveVersionMount(cfg, selector)
+	var target image.Target
+	err := image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		var resolveErr error
+		target, resolveErr = image.ResolveVersionMount(cfg, selector)
+		return resolveErr
+	})
+	return target, err
 }
 
 // resolveMountSession applies the session priority: the --session
@@ -638,39 +639,6 @@ func ownedLibrarySource(imagesDir string) func(string) bool {
 	}
 }
 
-// linkMountFile registers one external image under a library name
-// before the mount resolves that name. It refuses the combination
-// with a file-path first argument, which --file replaces.
-func linkMountFile(cfg config.Config, name, src string) (string, error) {
-	cleaned := filepath.Clean(name)
-	if info, err := os.Stat(cleaned); err == nil && info.Mode().IsRegular() {
-		return "", usageError{errors.New(
-			"mount: --file cannot be combined with a file-path image argument")}
-	}
-	id, err := image.LinkExternalVersion(cfg.ImagesDir, name, src, Version)
-	if err != nil {
-		if isLinkUsage(err) {
-			return "", usageError{err}
-		}
-		return "", fmt.Errorf("mount: %w", err)
-	}
-	return name + ":" + id, nil
-}
-
-// isLinkUsage reports whether LinkExternal failed on argument shape
-// or OS format policy, which mount treats as a usage problem.
-func isLinkUsage(err error) bool {
-	if isResolveUsage(err) {
-		return true
-	}
-	if errors.Is(err, container.ErrNotDetected) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "not available on macOS") ||
-		strings.Contains(msg, "dmg is not available on this host")
-}
-
 // isResolveUsage reports whether a resolve failure rejects the
 // argument shape itself, which is a command-line usage problem. A
 // library state failure stays a runtime error.
@@ -684,8 +652,9 @@ func isResolveUsage(err error) bool {
 // verifyTarget runs the pre-mount integrity check of the resolved
 // target: the cheap size and mtime probe by default, the full sha256
 // re-hash with --verify. A blocks payload checks every manifest
-// block; the single-file cascade checks its stack members. A
-// file-path target records no facts and skips verification.
+// block; the single-file cascade checks its stack members. An
+// unknown single-file digest keeps the quick probe under --verify.
+// A file-path target records no facts and skips verification.
 func verifyTarget(target image.Target, verify bool) error {
 	if !target.Library {
 		return nil
@@ -701,37 +670,55 @@ func verifyTarget(target image.Target, verify bool) error {
 
 // verifyMembers checks every stack member of a single-file cascade
 // against its recorded facts: the cheap size and mtime probe by
-// default, the full sha256 re-hash with --verify.
+// default, the full sha256 re-hash with --verify. An unknown member
+// digest keeps the quick probe even under --verify. Known members
+// and every block digest stay on the requested probe.
 func verifyMembers(target image.Target, verify bool) error {
 	for _, m := range target.Members {
-		if len(m.Blocks) != 0 {
-			for _, block := range m.Blocks {
-				node := image.ImageMeta{Size: block.Size, MtimeUnix: block.MtimeUnix,
-					SHA256: block.SHA256}
-				var err error
-				if verify {
-					err = image.VerifySHA256(node, block.Path)
-				} else {
-					err = image.QuickCheck(node, block.Path)
-				}
-				if err != nil {
-					return fmt.Errorf("mount: %w", err)
-				}
-			}
-			continue
-		}
-		node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
-		var err error
-		if verify {
-			err = image.VerifySHA256(node, m.Path)
-		} else {
-			err = image.QuickCheck(node, m.Path)
-		}
-		if err != nil {
+		if err := verifyMember(m, verify); err != nil {
 			return fmt.Errorf("mount: %w", err)
 		}
 	}
 	return nil
+}
+
+func verifyMember(m image.Member, verify bool) error {
+	if len(m.Blocks) != 0 {
+		return verifyMemberBlocks(m.Blocks, verify)
+	}
+	node := image.ImageMeta{Size: m.Size, MtimeUnix: m.MtimeUnix, SHA256: m.SHA256}
+	skipped, err := image.VerifyMountDigest(node, m.Path, verify)
+	if err != nil {
+		return err
+	}
+	if skipped {
+		noteUnknownDigest(m.ID)
+	}
+	return nil
+}
+
+func verifyMemberBlocks(blocks []image.BlockFile, verify bool) error {
+	for _, block := range blocks {
+		node := image.ImageMeta{Size: block.Size, MtimeUnix: block.MtimeUnix,
+			SHA256: block.SHA256}
+		var err error
+		if verify {
+			err = image.VerifySHA256(node, block.Path)
+		} else {
+			err = image.QuickCheck(node, block.Path)
+		}
+		if err != nil {
+			return fmt.Errorf("block %s: %w", block.Name, err)
+		}
+	}
+	return nil
+}
+
+func noteUnknownDigest(id string) {
+	if id == "" {
+		id = "image"
+	}
+	_, _ = fmt.Fprintf(mountNotice, "mount: %s: digest unknown, skipped sha256 verification\n", listID(id))
 }
 
 // mountRequest assembles the engine request. With the cache enabled
@@ -830,22 +817,26 @@ func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) 
 			if format == "" {
 				format = target.Format
 			}
+			if len(member.Blocks) != 0 {
+				// Assembly still checks every known block digest before
+				// write-ahead. Format magic is read from the resolved
+				// block windows, not from position-file text.
+				if _, err := materializeBlockLayers(cfg, image.Target{
+					Library: true, Format: format, Form: image.PayloadBlocks,
+					Members: []image.Member{member},
+				}); err != nil {
+					return nil, err
+				}
+				if err := matchResolvedBlockFormat(member, format); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			one := image.Target{Library: true, Format: format,
 				Members: []image.Member{member}}
-			paths := []string{member.Path}
-			if len(member.Blocks) != 0 {
-				one.Form = image.PayloadBlocks
-				path, err := materializeBlockLayers(cfg, one)
-				if err != nil {
-					return nil, err
-				}
-				paths = path
-			} else {
-				var err error
-				paths, err = payloadBytesPaths(paths)
-				if err != nil {
-					return nil, err
-				}
+			paths, err := payloadBytesPaths([]string{member.Path})
+			if err != nil {
+				return nil, err
 			}
 			if _, err := matchLibraryFormat(one, paths); err != nil {
 				return nil, err
@@ -963,6 +954,28 @@ func matchLibraryFormat(target image.Target, paths []string) (string, error) {
 		}
 	}
 	return want.Type(), nil
+}
+
+// matchResolvedBlockFormat compares metadata with the container magic
+// of the resolved block payloads. It does not read position-file text.
+// A missing or unreadable block stays a block-location error. Only a
+// detected type, or ErrNotDetected, is a format mismatch.
+func matchResolvedBlockFormat(member image.Member, format string) error {
+	got, err := image.ProbeLogicalFormat(member.Blocks)
+	what := member.ID
+	if what == "" && len(member.Blocks) > 0 {
+		what = member.Blocks[0].Name
+	}
+	if errors.Is(err, container.ErrNotDetected) {
+		return fmt.Errorf("mount: %s does not match meta format %s: %w", what, format, err)
+	}
+	if err != nil {
+		return err
+	}
+	if got != format {
+		return fmt.Errorf("mount: %s is %s but meta records %s", what, got, format)
+	}
+	return nil
 }
 
 // matchOneFormat reports when path is not the container want names.

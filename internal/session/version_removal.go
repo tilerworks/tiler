@@ -91,6 +91,9 @@ func (c ReferenceCoordinator) planVersionNodesLocked(name string,
 func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.ImageMeta, error) {
 	var removed []image.ImageMeta
 	err := c.withLibrary(func() error {
+		if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
+			return err
+		}
 		repo, err := image.OpenRepo(c.ImagesDir, name)
 		if err != nil {
 			return err
@@ -117,6 +120,9 @@ func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.I
 func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.ImageMeta, error) {
 	var removed []image.ImageMeta
 	err := c.withLibrary(func() error {
+		if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
+			return err
+		}
 		repo, err := image.OpenRepo(c.ImagesDir, name)
 		if err != nil {
 			return err

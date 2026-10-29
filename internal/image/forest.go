@@ -66,6 +66,37 @@ func forestOrder(children map[string][]ImageMeta) []ImageMeta {
 	return order
 }
 
+func (f Forest) newer(node, latest ImageMeta) bool {
+	if node.CreatedAt.After(latest.CreatedAt) {
+		return true
+	}
+	if node.CreatedAt.Before(latest.CreatedAt) {
+		return false
+	}
+	switch {
+	case f.descendsFrom(node.ID, latest.ID):
+		return true
+	case f.descendsFrom(latest.ID, node.ID):
+		return false
+	default:
+		return node.ID < latest.ID
+	}
+}
+
+func (f Forest) descendsFrom(id, ancestor string) bool {
+	for id != "" {
+		node, ok := f.nodes[id]
+		if !ok || node.Parent == "" {
+			return false
+		}
+		if node.Parent == ancestor {
+			return true
+		}
+		id = node.Parent
+	}
+	return false
+}
+
 func compareCreated(a, b ImageMeta) int {
 	if order := a.CreatedAt.Compare(b.CreatedAt); order != 0 {
 		return order
@@ -73,13 +104,14 @@ func compareCreated(a, b ImageMeta) int {
 	return strings.Compare(a.ID, b.ID)
 }
 
-// Latest selects by creation time, breaking ties with the smallest full ID.
+// Latest selects by creation time. A descendant wins a tie with its
+// ancestor, so a layer built in the same second stays newer after
+// timestamps are stored to the second. Otherwise the smallest ID wins.
 func (f Forest) Latest() (ImageMeta, bool) {
 	var latest ImageMeta
 	found := false
 	for _, node := range f.topology {
-		if !found || node.CreatedAt.After(latest.CreatedAt) ||
-			(node.CreatedAt.Equal(latest.CreatedAt) && node.ID < latest.ID) {
+		if !found || f.newer(node, latest) {
 			latest, found = node, true
 		}
 	}

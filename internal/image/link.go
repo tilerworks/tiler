@@ -66,6 +66,9 @@ func LinkExternalVersion(imagesDir, name, srcPath, builder string) (string, erro
 		return "", fmt.Errorf("link: %w", err)
 	}
 	defer release()
+	if err := PrepareTargetLocked(imagesDir); err != nil {
+		return "", fmt.Errorf("link: %w", err)
+	}
 	if err := checkNamePlacement(imagesDir, repo.Segments); err != nil {
 		return "", fmt.Errorf("link: %w", err)
 	}

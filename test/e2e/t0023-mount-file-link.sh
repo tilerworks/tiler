@@ -1,28 +1,28 @@
 #!/bin/sh
 #
-# tiler end-to-end test: register an external squashfs with mount --file.
+# tiler end-to-end test: link an external squashfs, then mount by name.
 #
 # Companion to t0013-mount-file-path.sh (bare path mount stays out of the
 # library). This case covers the NAS link form:
 #
 #   1. pack a bare squashfs outside images_dir,
-#   2. mount --file registers symlink + meta.yaml and mounts by library name,
-#   3. repeat mount --file with the same args is idempotent for the leaf,
-#   4. confirm the view is writable and build --incremental appends _incr,
-#   5. mount --file with a dmg (fake koly) is refused on Linux (exit 2).
+#   2. build --link writes a position file and meta.yaml; mount by name,
+#   3. repeat build --link is a no-op and the still-mounted view stays up,
+#   4. confirm the view is writable and build --incremental appends a layer,
+#   5. build --link with a dmg (fake koly) is refused on Linux (exit 1),
+#   6. umount, then an ordinary mount of the position file serves content.
 #
 # A real mount needs a writable /dev/fuse plus the squashfs and overlay
 # toolchain that `tiler doctor` treats as fail-level. FUSE_TOOLCHAIN from
 # sharness.d/tiler.sh models exactly that, so the case skips cleanly --
 # rather than false-fails -- on a host without the toolchain.
 #
-# Scope guard: this case asserts --file registration, library mount,
-# incremental build, link idempotency, path-ref remount (git-style
-# text leaf), and Linux dmg refusal only. It does not cover macOS
-# dmg --file (t0024), bare path mounts, split blocks, or images
-# remove/gc against NAS files.
+# Scope guard: this case asserts link import, library mount,
+# incremental build, link idempotency, position-file remount, and
+# Linux dmg refusal only. It does not cover macOS dmg link (t0024),
+# bare path mounts, split blocks, or images remove/gc against NAS files.
 
-test_description='tiler mount --file links NAS squashfs and supports incr'
+test_description='build --link imports a NAS squashfs and ordinary mount supports incr'
 
 # Resolve paths against this script's location BEFORE sourcing the
 # framework: test-lib.sh moves the working directory into a per-run
@@ -46,7 +46,6 @@ nas_dir=$HOME/nas
 img=$nas_dir/vendor.sqsh
 lib_name=nas/vendor
 work_dir=$HOME/work/vendor
-dmg_try_dir=$HOME/work/dmg-refuse
 img_dir=$HOME/.tiler/images/nas/vendor
 meta_file=$img_dir/meta.yaml
 images_dir=$HOME/.tiler/images
@@ -82,17 +81,20 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'pack a bare squashfs outside ima
 	test_path_is_missing "$img_dir/meta.yaml"
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file registers symlink meta and serves content' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --link records a position file and mount serves content' '
 	mkdir -p "$work_dir" &&
-	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >mount.out 2>mount.err &&
+	"$tiler_bin" build --link "$img" --image "$lib_name" >link.out 2>link.err &&
+	test_grep -E "^link $lib_name [0-9a-f]+$" link.out &&
+	base_id=$(cut -d" " -f3 link.out) &&
+	test -n "$base_id" &&
+	"$tiler_bin" mount "$lib_name" "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^new session created: [a-z]+-[a-z]+[0-9]?$" mount.out &&
 	test_grep -E "^mounted " mount.out &&
 	test_path_is_file "$meta_file" &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
-	base_id=$(sed -n "s/^[[:space:]]*- id: //p" "$meta_file") &&
-	test -n "$base_id" &&
 	payload=$img_dir/_objects/$base_id/image.sqsh &&
 	test_path_is_file "$payload" &&
+	! test -L "$payload" &&
 	test "$(cat "$payload")" = "$img" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	test_path_is_file "$work_dir/docs/guide.md" &&
@@ -105,11 +107,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file registers symlink m
 	test_grep -F "\"full_id\": \"$base_id\"" showj.out
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount --file leaves meta unchanged' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat build --link leaves meta unchanged' '
 	cp "$meta_file" meta.before &&
-	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >link2.out 2>link2.err &&
-	test_grep -E "^already mounted " link2.out &&
-	test_cmp meta.before "$meta_file"
+	"$tiler_bin" build --link "$img" --image "$lib_name" >link2.out 2>link2.err &&
+	test_grep -E "^no-op $lib_name $base_id$" link2.out &&
+	test_cmp meta.before "$meta_file" &&
+	"$tiler_bin" mount "$lib_name" "$work_dir" >link2mount.out 2>link2mount.err &&
+	test_grep -E "^already mounted " link2mount.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --incremental grow the chain' '
@@ -127,14 +131,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --increm
 	test_grep -E "^  parent +$base_id$" show.out
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --file refuses a dmg source on Linux' '
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --link refuses a dmg source on Linux' '
 	dmg=$nas_dir/fake.dmg &&
 	printf koly >"$dmg" &&
 	dd if=/dev/zero bs=508 count=1 >>"$dmg" 2>/dev/null &&
 	test_path_is_file "$dmg" &&
-	mkdir -p "$dmg_try_dir" &&
-	test_expect_code 2 "$tiler_bin" mount --file "$dmg" nas/disk "$dmg_try_dir" >dmg.out 2>dmg.err &&
-	test_grep dmg dmg.err
+	test_expect_code 1 "$tiler_bin" build --link "$dmg" --image nas/disk >dmg.out 2>dmg.err &&
+	test_grep dmg dmg.err &&
+	test_path_is_missing "$images_dir/nas/disk"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
@@ -142,15 +146,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears the view down' '
 	test_grep -E "^unmounted " umount.out
 '
 
-# Simulate git core.symlinks=false: replace the leaf symlink with a
-# regular file whose content is the absolute NAS path. The symlink
-# must be removed first, because ">" through it would truncate the
-# NAS source instead of the leaf.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'path-ref leaf mounts like a symlink' '
+# The link import already stored a position file: one absolute path
+# and a newline, never a symlink. Remount by library name.
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'position file mounts by library name' '
 	test_path_is_file "$payload" &&
 	! test -L "$payload" &&
 	mkdir -p "$work_dir" &&
-	"$tiler_bin" mount --file "$img" "$lib_name" "$work_dir" >pathref.out 2>pathref.err &&
+	"$tiler_bin" mount "$lib_name" "$work_dir" >pathref.out 2>pathref.err &&
 	test_grep -E "^mounted " pathref.out &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	"$tiler_bin" umount "$work_dir" >pathref-umount.out 2>pathref-umount.err &&

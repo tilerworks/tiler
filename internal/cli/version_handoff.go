@@ -21,6 +21,9 @@ func publishVersionAndRebase(cfg config.Config, mountpoint, name string,
 		return image.ImageMeta{}, err
 	}
 	defer release()
+	if err := image.PrepareTargetLocked(cfg.ImagesDir); err != nil {
+		return image.ImageMeta{}, err
+	}
 	node, err := publish()
 	if err != nil {
 		return image.ImageMeta{}, err
@@ -42,6 +45,9 @@ func resolveVersionAndPin(cfg config.Config, sessionName, selector string,
 		return err
 	}
 	defer release()
+	if err := image.PrepareTargetLocked(cfg.ImagesDir); err != nil {
+		return err
+	}
 	target, err := image.ResolveVersionMount(cfg, selector)
 	if err != nil {
 		return err

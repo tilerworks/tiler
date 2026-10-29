@@ -17,9 +17,11 @@ const pathRefMaxSize = 4096
 
 // ResolvePayloadBytesPath maps a library leaf path to the file whose
 // bytes are the container. A symlink or path-ref leaf resolves to the
-// external absolute path. A real payload (DetectFile succeeds on the
-// leaf, following a symlink when present) returns the leaf itself so
-// callers keep opening the library path when the OS follows links.
+// external absolute path. A path-ref whose target is missing returns
+// that stat error instead of the location file. A real payload
+// (DetectFile succeeds on the leaf, following a symlink when present)
+// returns the leaf itself so callers keep opening the library path
+// when the OS follows links.
 func ResolvePayloadBytesPath(leaf string) (string, error) {
 	info, err := os.Lstat(leaf)
 	if err != nil {
@@ -49,6 +51,31 @@ func ResolvePayloadBytesPath(leaf string) (string, error) {
 		return target, nil
 	}
 	return leaf, nil
+}
+
+// resolveBlockBytes returns the file whose bytes are block. A symlink
+// or position file resolves to the external payload. A broken location
+// names the block so callers do not hash or mount the position text.
+func resolveBlockBytes(block BlockFile) (string, error) {
+	path, err := ResolvePayloadBytesPath(block.Path)
+	if err != nil {
+		return "", fmt.Errorf("block %s: %w", block.Name, err)
+	}
+	return path, nil
+}
+
+// statBlockPayload stats the resolved block payload. The position file
+// itself is not the recorded size or mtime.
+func statBlockPayload(block BlockFile) (os.FileInfo, error) {
+	path, err := resolveBlockBytes(block)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("block %s: %w", block.Name, err)
+	}
+	return info, nil
 }
 
 // isContainerPayload reports whether leaf looks like a registered
@@ -88,11 +115,19 @@ func readExternalLinkTarget(leaf string) (string, bool, error) {
 	if isContainerPayload(leaf) {
 		return "", false, nil
 	}
-	return readPathRefContent(leaf, info.Size())
+	target, ok, err := readPathRefContent(leaf, info.Size())
+	// Registration treats a missing target as "not a link".
+	// Resolution returns the stat error so the location file is
+	// not used as the payload.
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	return target, ok, err
 }
 
 // readPathRefContent parses a small regular file as a single-line
-// absolute path to an existing regular file.
+// absolute path. A grammar match whose target is missing returns
+// that error. Any other body is not a path-ref.
 func readPathRefContent(leaf string, size int64) (string, bool, error) {
 	if size <= 0 || size > pathRefMaxSize {
 		return "", false, nil
@@ -113,10 +148,10 @@ func readPathRefContent(leaf string, size int64) (string, bool, error) {
 	}
 	target := filepath.Clean(line)
 	info, err := os.Stat(target)
-	if err != nil {
-		return "", false, nil
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, err
 	}
-	if !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() {
 		return "", false, nil
 	}
 	return target, true, nil

@@ -18,7 +18,7 @@ func UpdateVersionDescription(imagesDir, name, id, old, next string) (bool, erro
 		return false, err
 	}
 	defer release()
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := PrepareTargetLocked(imagesDir); err != nil {
 		return false, err
 	}
 	repo, err := OpenRepo(imagesDir, name)

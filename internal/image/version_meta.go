@@ -78,6 +78,7 @@ func DecodeVersionManifest(data []byte) (VersionManifest, error) {
 	if err := dec.Decode(&manifest); err != nil {
 		return VersionManifest{}, err
 	}
+	normalizeManifestTimes(manifest.Images)
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return VersionManifest{}, errors.New("metadata must contain exactly one document")
 	}
@@ -92,5 +93,5 @@ func EncodeVersionManifest(manifest VersionManifest) ([]byte, error) {
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
-	return yaml.Marshal(manifest)
+	return encodeTimestampDocument(manifest)
 }

@@ -20,10 +20,20 @@ import (
 // then renames it into place, so a source that disagrees with the
 // recorded digest fails before anything is cached and no partial
 // entry survives a failure.
+//
+// An unknown digest is not a content address. The resolved source is
+// stat'd and returned as-is, so two image names cannot share a
+// <zeros>.sqsh entry and the payload is not read to invent a key.
 func EnsureCached(cacheDir, src, want string) (path string, sha256 string, err error) {
 	bytesSrc, err := ResolvePayloadBytesPath(src)
 	if err != nil {
 		return "", "", fmt.Errorf("cache: %w", err)
+	}
+	if IsUnknownSHA256(want) {
+		if _, statErr := os.Stat(bytesSrc); statErr != nil {
+			return "", "", fmt.Errorf("cache: %w", statErr)
+		}
+		return bytesSrc, want, nil
 	}
 	sum := want
 	if sum == "" {

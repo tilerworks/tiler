@@ -192,6 +192,16 @@ func versionPayloadKind(node image.ImageMeta) string {
 }
 
 func collectVersionImages(imagesDir string) ([]versionImageView, error) {
+	var views []versionImageView
+	err := image.WithPreparedTarget(imagesDir, func() error {
+		var loadErr error
+		views, loadErr = listPreparedImages(imagesDir)
+		return loadErr
+	})
+	return views, err
+}
+
+func listPreparedImages(imagesDir string) ([]versionImageView, error) {
 	repos, err := image.ListRepos(imagesDir)
 	if err != nil {
 		return nil, fmt.Errorf("images list: %w", err)
@@ -208,6 +218,16 @@ func collectVersionImages(imagesDir string) ([]versionImageView, error) {
 }
 
 func collectVersionShow(imagesDir, selector string) (versionImageView, error) {
+	var view versionImageView
+	err := image.WithPreparedTarget(imagesDir, func() error {
+		var loadErr error
+		view, loadErr = showPreparedImage(imagesDir, selector)
+		return loadErr
+	})
+	return view, err
+}
+
+func showPreparedImage(imagesDir, selector string) (versionImageView, error) {
 	name, _, err := image.ParseVersionSelector(selector)
 	if err != nil {
 		return versionImageView{}, err

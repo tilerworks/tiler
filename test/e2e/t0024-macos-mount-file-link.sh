@@ -1,19 +1,19 @@
 #!/bin/sh
 #
-# tiler end-to-end test: register an external dmg with mount --file.
+# tiler end-to-end test: link an external dmg, then mount by name.
 #
 # Companion to t0023-mount-file-link.sh (Linux squashfs link). On macOS:
 #
 #   1. build a dmg outside images_dir,
-#   2. mount --file registers a payload reference and mounts by name,
+#   2. build --link records a position file; mount by library name,
 #   3. a writable mount writes through upper.shadow,
 #   4. full bake materializes image.dmg while the NAS file stays put,
-#   5. mount --file with squashfs magic is refused (exit 2).
+#   5. build --link with squashfs magic is refused (exit 1).
 #
 # The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
 # host without hdiutil_bin skips the file instead of failing.
 
-test_description='macOS mount --file links external dmg and refuses squashfs'
+test_description='macOS build --link imports an external dmg and refuses squashfs'
 
 tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
 TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
@@ -27,7 +27,7 @@ export TEST_DIRECTORY
 
 if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
 then
-	skip_all="skipping macOS mount --file link; $hdiutil_bin is missing"
+	skip_all="skipping macOS build --link; $hdiutil_bin is missing"
 	test_done
 fi
 
@@ -82,18 +82,21 @@ test_expect_success TILER,MACOS 'build a dmg outside images_dir' '
 	esac
 '
 
-test_expect_success TILER,MACOS 'mount --file registers a payload reference and mounts with shadow' '
+test_expect_success TILER,MACOS 'build --link records a position file and mounts with shadow' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	test_grep -E "^created dev$" new.out &&
-	"$tiler_bin" mount --session dev --file "$dmg" "$lib_name" "$work_dir" >mount.out 2>mount.err &&
+	"$tiler_bin" build --link "$dmg" --image "$lib_name" >link.out 2>link.err &&
+	test_grep -E "^link $lib_name [0-9a-f]+$" link.out &&
+	base_id=$(cut -d" " -f3 link.out) &&
+	test -n "$base_id" &&
+	"$tiler_bin" mount --session dev "$lib_name" "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
 	test_path_is_file "$meta_file" &&
 	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
-	base_id=$(sed -n "s/^[[:space:]]*- id: //p" "$meta_file") &&
-	test -n "$base_id" &&
 	payload=$img_dir/_objects/$base_id/image.dmg &&
 	test_path_is_file "$payload" &&
+	! test -L "$payload" &&
 	test "$(cat "$payload")" = "$dmg" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	echo linked >"$work_dir/LINK.txt" &&
@@ -137,12 +140,13 @@ test_expect_success TILER,MACOS 'read-only mount of baked image has the writes' 
 	test_path_is_missing "$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow"
 '
 
-test_expect_success TILER,MACOS 'mount --file refuses squashfs on macOS' '
+test_expect_success TILER,MACOS 'build --link refuses squashfs on macOS' '
 	sqsh=$nas_dir/vendor.sqsh &&
 	printf hsqs-fake >"$sqsh" &&
 	mkdir -p "$sqsh_try_dir" &&
-	test_expect_code 2 "$tiler_bin" mount --file "$sqsh" nas/sqsh "$sqsh_try_dir" >sq.out 2>sq.err &&
-	test_grep "not available on macOS" sq.err
+	test_expect_code 1 "$tiler_bin" build --link "$sqsh" --image nas/sqsh >sq.out 2>sq.err &&
+	test_grep "not available on macOS" sq.err &&
+	test_path_is_missing "$images_dir/nas/sqsh"
 '
 
 test_expect_success TILER,MACOS 'umount tears the writable view down' '

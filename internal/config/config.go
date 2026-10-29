@@ -81,6 +81,10 @@ type Config struct {
 	// Apply keeps the value from the lower config, so it survives
 	// project and command-line overlays.
 	userFile string
+	// configFile is the nearest .tiler.yaml Load actually read. It
+	// starts as the user file path and becomes a project file when
+	// the upward walk finds one.
+	configFile string
 }
 
 // Patch records fields present in one document. Nil means omitted.
@@ -115,6 +119,7 @@ func Defaults(home string) Config {
 		LogLevel:      DefaultLogLevel,
 		reservedRoot:  root,
 		userFile:      filepath.Join(home, fileName),
+		configFile:    filepath.Join(home, fileName),
 	}
 }
 
@@ -122,6 +127,16 @@ func Defaults(home string) Config {
 // from. It is the canonical user-level config location whether or not
 // the file exists on disk.
 func (c Config) UserFile() string {
+	return c.userFile
+}
+
+// ConfigFile returns the nearest .tiler.yaml Load read. A project file
+// found by walking upward from the working directory replaces the user
+// file. When no file exists, the result stays the user file path.
+func (c Config) ConfigFile() string {
+	if c.configFile != "" {
+		return c.configFile
+	}
 	return c.userFile
 }
 

@@ -56,7 +56,7 @@ func publishVersionLocked(imagesDir, name, staged string, node ImageMeta, parent
 }
 
 func publishVersionCallerLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := PrepareTargetLocked(imagesDir); err != nil {
 		return ImageMeta{}, err
 	}
 	repo, err := OpenRepo(imagesDir, name)

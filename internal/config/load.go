@@ -82,7 +82,9 @@ func applyFile(cfg Config, path, home string, origin *valueOrigin) (Config, erro
 	}
 	origin.note(patch, path)
 	resolved := resolvePatch(patch, filepath.Dir(path), home)
-	return resolved.Apply(cfg), nil
+	cfg = resolved.Apply(cfg)
+	cfg.configFile = path
+	return cfg, nil
 }
 
 func readPatch(path string) (Patch, bool, error) {

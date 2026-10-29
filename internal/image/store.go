@@ -57,6 +57,7 @@ func DecodeManifest(data []byte) (Manifest, error) {
 		if err := yaml.Unmarshal(data, &manifest); err != nil {
 			return Manifest{}, err
 		}
+		normalizeManifestTimes(manifest.Images)
 	default:
 		return Manifest{}, fmt.Errorf(
 			"unsupported metadata version %q", version)
@@ -86,6 +87,7 @@ func decodeV1(data []byte) (Manifest, error) {
 	if meta.Version == "" {
 		meta.Version = MetaVersion
 	}
+	normalizeV1Times(&meta)
 	if err := meta.validate(); err != nil {
 		return Manifest{}, err
 	}
@@ -100,7 +102,7 @@ func EncodeManifest(manifest Manifest) ([]byte, error) {
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
-	data, err := yaml.Marshal(manifest)
+	data, err := encodeTimestampDocument(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("meta: %w", err)
 	}

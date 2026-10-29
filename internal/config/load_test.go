@@ -188,6 +188,40 @@ func TestLoadRelativePaths(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFileIsNearestExistingFile(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	sandbox := filepath.Join(home, "tmp", "tiler-test")
+	work := filepath.Join(sandbox, "ws-standard")
+	mustMkdir(t, work)
+	user := writeConfig(t, home, "log_level: warn\n")
+	project := writeConfig(t, sandbox, "images_dir: .tiler/images\n")
+
+	got, err := Load(work, home, base, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConfigFile() != project {
+		t.Fatalf("ConfigFile() = %q, want %q", got.ConfigFile(), project)
+	}
+	if got.UserFile() != user {
+		t.Fatalf("UserFile() = %q, want %q", got.UserFile(), user)
+	}
+	if got.ImagesDir != filepath.Join(sandbox, ".tiler", "images") {
+		t.Fatalf("images = %q", got.ImagesDir)
+	}
+
+	onlyUser := filepath.Join(home, "plain")
+	mustMkdir(t, onlyUser)
+	got, err = Load(onlyUser, home, base, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConfigFile() != user {
+		t.Fatalf("ConfigFile() = %q, want the user file %q", got.ConfigFile(), user)
+	}
+}
+
 func TestLoadWalkInsideHomeSkipsHomeProjectFile(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")

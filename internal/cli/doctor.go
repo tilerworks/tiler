@@ -44,11 +44,11 @@ type doctorDocument struct {
 }
 
 // configSummary maps the loaded configuration onto the config section
-// doctor reports: the user config file location and the core runtime
-// directories and log level.
+// doctor reports: the .tiler.yaml Load actually read and the core
+// runtime directories and log level.
 func configSummary(cfg config.Config) doctor.ConfigSummary {
 	return doctor.ConfigSummary{
-		Path:        cfg.UserFile(),
+		Path:        cfg.ConfigFile(),
 		ImagesDir:   cfg.ImagesDir,
 		SessionsDir: cfg.SessionsDir,
 		CacheDir:    cfg.CacheDir,
