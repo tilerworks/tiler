@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -42,37 +43,10 @@ const (
 	PayloadBlocks = "blocks"
 )
 
-// MetaVersion is the legacy v1 metadata layout version. Version is
-// a reserved compatibility field: a loader refuses every value it
-// does not understand, so a future layout upgrade stays fail-closed.
-// LoadManifest reads v1 documents only for isolated compatibility decoding.
-const MetaVersion = "1.0"
-
-// ManifestVersion is the DAG metadata layout version. LoadManifest
-// also accepts MetaVersion and converts the linear v1 chain into a
-// DAG; every other version stays refused. EncodeManifest writes
-// only ManifestVersion, so rewriting a lazily migrated v1 document
-// upgrades it.
-const ManifestVersion = "2.0"
-
 // Format is the container recorded on an image.
 type Format struct {
 	Type        string `yaml:"type"`
 	Compression string `yaml:"compression"`
-}
-
-// chainEntryV1 is one incremental layer of a legacy v1 document.
-// Kind is not repeated there; every member is incremental. Blocks
-// is set when the layer is stored as _blocks/<id>/; digest and size
-// still describe the whole logical squashfs.
-type chainEntryV1 struct {
-	ID        string       `yaml:"id"`
-	Parent    string       `yaml:"parent"`
-	Size      int64        `yaml:"size"`
-	SHA256    string       `yaml:"sha256"`
-	MtimeUnix int64        `yaml:"mtime_unix"`
-	CreatedAt time.Time    `yaml:"created_at"`
-	Blocks    []BlockEntry `yaml:"blocks,omitempty"`
 }
 
 // BlockEntry is one fixed-size byte block of a blocks payload. The
@@ -83,41 +57,6 @@ type BlockEntry struct {
 	Size      int64  `yaml:"size"`
 	SHA256    string `yaml:"sha256"`
 	MtimeUnix int64  `yaml:"mtime_unix"`
-}
-
-// metaV1 is the legacy v1 YAML document stored beside an image
-// before the DAG layout. Only the compatibility decoder reads this
-// shape; nothing writes it. Unknown fields are dropped on load.
-type metaV1 struct {
-	ID string `yaml:"id"`
-	// Name is the canonical library name this image belongs to.
-	Name string `yaml:"name"`
-	// Version is the reserved metadata layout version. Legacy
-	// documents carry MetaVersion, and documents predating the
-	// reserved field carry an empty version that decodeV1
-	// normalizes; validate refuses any other value.
-	Version    string    `yaml:"version"`
-	Kind       string    `yaml:"kind"`
-	Format     Format    `yaml:"format"`
-	Size       int64     `yaml:"size"`
-	SHA256     string    `yaml:"sha256"`
-	MtimeUnix  int64     `yaml:"mtime_unix"`
-	CreatedAt  time.Time `yaml:"created_at"`
-	Builder    string    `yaml:"builder"`
-	Deprecated bool      `yaml:"deprecated"`
-	// ContentSHA256 is the logical content fingerprint for a dmg
-	// publish. Directory creates hash the packed source tree. Shadow
-	// bakes hash the session upper.shadow after convert (hdiutil
-	// rewrites that file, so the pre-convert bytes cannot mark an
-	// idle bake). Empty on squashfs and erofs, where the packed
-	// payload is already deterministic. An identical fingerprint is
-	// an idle rebuild that skips hdiutil, because real disk images
-	// embed timestamps.
-	ContentSHA256 string         `yaml:"content_sha256,omitempty"`
-	Chain         []chainEntryV1 `yaml:"chain,omitempty"`
-	// Blocks is the byte-block manifest of a split payload. It stays
-	// empty for the single-file form.
-	Blocks []BlockEntry `yaml:"blocks,omitempty"`
 }
 
 // ImageMeta records one image node of the manifest DAG. The full
@@ -150,12 +89,12 @@ type ImageMeta struct {
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
 }
 
-// Manifest is the v2 metadata document stored beside an image
-// repository: one full root plus the incremental nodes descending
-// from it form a DAG, and Head names the active stack tip. The
-// mount order of a tip is its root-to-tip path with the root first.
+// Manifest is the in-memory single-root graph used by older build
+// steps. meta.yaml stores a VersionManifest instead. Head names the
+// active stack tip. The mount order of a tip is its root-to-tip
+// path with the root first.
 type Manifest struct {
-	Version string `yaml:"version"`
+	Version int
 	// Name is the canonical library name this manifest belongs to.
 	Name   string `yaml:"name"`
 	Format Format `yaml:"format"`
@@ -302,42 +241,33 @@ func (m Manifest) Branches() int {
 	return len(m.Images) - len(m.Reachable(m.Head))
 }
 
-// manifestFromV1 converts a legacy v1 document into the DAG form.
-// The v1 root is the full image and every chain member is
-// incremental, so the recorded parent edges form a linear DAG; head
-// becomes the chain tail, or the full id when the chain is empty.
-func manifestFromV1(meta metaV1) Manifest {
-	manifest := Manifest{
-		Version: ManifestVersion,
-		Name:    meta.Name,
-		Format:  meta.Format,
-		Head:    meta.ID,
-		Images:  make([]ImageMeta, 0, 1+len(meta.Chain)),
+// versionDocument is the meta.yaml form of an in-memory graph.
+// Node formats fall back to the shared manifest format.
+func (m Manifest) versionDocument() VersionManifest {
+	images := slices.Clone(m.Images)
+	for i := range images {
+		if images[i].Format == (Format{}) {
+			images[i].Format = m.Format
+		}
 	}
-	manifest.Images = append(manifest.Images, ImageMeta{
-		ID:            meta.ID,
-		Kind:          KindFull,
-		Size:          meta.Size,
-		SHA256:        meta.SHA256,
-		MtimeUnix:     meta.MtimeUnix,
-		CreatedAt:     meta.CreatedAt,
-		Builder:       meta.Builder,
-		Deprecated:    meta.Deprecated,
-		ContentSHA256: meta.ContentSHA256,
-		Blocks:        meta.Blocks,
-	})
-	for _, entry := range meta.Chain {
-		manifest.Images = append(manifest.Images, ImageMeta{
-			ID:        entry.ID,
-			Kind:      KindIncremental,
-			Parent:    entry.Parent,
-			Size:      entry.Size,
-			SHA256:    entry.SHA256,
-			MtimeUnix: entry.MtimeUnix,
-			CreatedAt: entry.CreatedAt,
-			Blocks:    entry.Blocks,
-		})
-		manifest.Head = entry.ID
+	return VersionManifest{Version: VersionManifestVersion, Name: m.Name, Images: images}
+}
+
+// manifestFromVersion adapts a stored version forest to the
+// in-memory single-root graph. Head is the latest version.
+func manifestFromVersion(doc VersionManifest) Manifest {
+	var format Format
+	for _, node := range doc.Images {
+		if node.Kind == KindFull && node.Parent == "" {
+			format = node.Format
+			break
+		}
 	}
-	return manifest
+	head := ""
+	if forest, err := NewForest(doc.Images); err == nil {
+		if latest, ok := forest.Latest(); ok {
+			head = latest.ID
+		}
+	}
+	return Manifest{Version: doc.Version, Name: doc.Name, Format: format, Head: head, Images: doc.Images}
 }

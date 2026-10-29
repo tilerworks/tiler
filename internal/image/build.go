@@ -317,7 +317,7 @@ func packedManifest(repo Repo, req FullRequest, tmp string, now func() time.Time
 // writes: the full image is the whole DAG and the head.
 func fullManifest(name string, format Format, root ImageMeta) Manifest {
 	return Manifest{
-		Version: ManifestVersion,
+		Version: VersionManifestVersion,
 		Name:    name,
 		Format:  format,
 		Head:    root.ID,

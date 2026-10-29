@@ -10,13 +10,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// VersionManifestVersion identifies immutable, independently addressable versions.
-const VersionManifestVersion = "3.0"
+// VersionManifestVersion is the only metadata schema. tiler has not
+// shipped, so the baseline is the integer 1.
+const VersionManifestVersion = 1
 
 // VersionManifest stores multiple full roots and their single-parent descendants.
-// Runtime readers continue to use Manifest until the new layout is activated.
 type VersionManifest struct {
-	Version string      `yaml:"version"`
+	Version int         `yaml:"version"`
 	Name    string      `yaml:"name"`
 	Images  []ImageMeta `yaml:"images"`
 }
@@ -35,7 +35,7 @@ func LoadVersionManifest(repo Repo) (VersionManifest, error) {
 func (m VersionManifest) Validate() error {
 	var list issueList
 	if m.Version != VersionManifestVersion {
-		list.add("version: unsupported metadata version %q", m.Version)
+		list.add("version: unsupported metadata version %d", m.Version)
 	}
 	checkNameField(m.Name, &list)
 	for i := range m.Images {
@@ -55,17 +55,18 @@ func (m VersionManifest) Validate() error {
 	return list.err()
 }
 
-// DecodeVersionManifest accepts exactly one v3 document, never upgrading old data.
+// DecodeVersionManifest accepts exactly one document at the baseline
+// schema, never upgrading an older layout.
 func DecodeVersionManifest(data []byte) (VersionManifest, error) {
 	var header struct {
-		Version string                 `yaml:"version"`
+		Version any                    `yaml:"version"`
 		Images  []map[string]yaml.Node `yaml:"images"`
 	}
 	if err := yaml.Unmarshal(data, &header); err != nil {
 		return VersionManifest{}, err
 	}
-	if header.Version != VersionManifestVersion {
-		return VersionManifest{}, fmt.Errorf("unsupported metadata version %q; rebuild images and sessions", header.Version)
+	if version, ok := header.Version.(int); !ok || version != VersionManifestVersion {
+		return VersionManifest{}, fmt.Errorf("unsupported metadata version %v; rebuild images and sessions", header.Version)
 	}
 	for _, node := range header.Images {
 		if _, legacy := node["deprecated"]; legacy {

@@ -12,7 +12,7 @@ import (
 )
 
 // VersionRecordVersion identifies records with complete immutable version pins.
-const VersionRecordVersion = "1.0"
+const VersionRecordVersion = 1
 
 // NewVersionRecord creates a fresh identity even when a session name is reused.
 func NewVersionRecord(name string, now time.Time) (Record, error) {
@@ -34,7 +34,7 @@ func (r Record) ValidateVersion() error {
 		return err
 	}
 	if r.Version != VersionRecordVersion {
-		return fmt.Errorf("session: unsupported record version %q; rebuild sessions", r.Version)
+		return fmt.Errorf("session: unsupported record version %d; rebuild sessions", r.Version)
 	}
 	if !completeHash(r.InstanceID) || r.CreatedAt.IsZero() {
 		return fmt.Errorf("session: %s: invalid instance identity or creation time", r.Name)

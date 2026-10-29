@@ -63,7 +63,7 @@ func TestReferenceControlsPreserveStateAndTransactionSnapshots(t *testing.T) {
 	if err := unsafe.SaveReferenceState(state); err == nil {
 		t.Fatal("accepted unsafe control path")
 	}
-	for _, body := range []string{"{", `{ "version": "9" }`, `{ "version": "1.0", "unknown": true }`, `{} {}`} {
+	for _, body := range []string{"{", `{ "version": 9 }`, `{ "version": "1.0", "unknown": true }`, `{} {}`} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

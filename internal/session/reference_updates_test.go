@@ -128,7 +128,7 @@ func TestReferenceUpdatesRejectMissingOldAndCorruptShards(t *testing.T) {
 	if data, _ := os.ReadFile(path); string(data) != "{" {
 		t.Fatal("failed planning changed shard")
 	}
-	journal.Version = "legacy"
+	journal.Version = 2
 	if _, err := store.ReferenceUpdates(journal); err == nil {
 		t.Fatal("invalid journal accepted")
 	}

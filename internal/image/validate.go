@@ -9,30 +9,17 @@ import (
 	"github.com/jiangxin/tiler/internal/container"
 )
 
-// validate reports every v1 rule violation in one error. Only the
-// legacy decoder calls it: a v1 document must satisfy the rules it
-// was written under before it converts into a DAG.
-func (m metaV1) validate() error {
-	var list issueList
-	m.checkIdentity(&list)
-	m.checkPayload(&list)
-	m.checkSplit(&list)
-	m.checkChain(&list)
-	return list.err()
-}
-
 // Validate reports every manifest rule violation in one error. The
-// graph rules mirror the v1 chain rules: unique well-formed ids,
-// exactly one parentless full root, every other node parented
-// inside the graph, no cycles, a head inside the graph, root-to-node
-// paths within the stack limit, and one payload kind across nodes.
-// Every node also carries the v1 payload facts — digest, size,
-// mtime, and created_at — and the full root carries the v1 root
-// facts: the builder and, when recorded, the content digest.
+// graph rules require unique well-formed ids, exactly one parentless
+// full root, every other node parented inside the graph, no cycles,
+// a head inside the graph, root-to-node paths within the stack limit,
+// and one payload kind across nodes. Every node also carries the
+// payload facts — digest, size, mtime, and created_at — and the full
+// root carries the builder and, when recorded, the content digest.
 func (m Manifest) Validate() error {
 	var list issueList
-	if m.Version != ManifestVersion {
-		list.add("version: unsupported metadata version %q", m.Version)
+	if m.Version != VersionManifestVersion {
+		list.add("version: unsupported metadata version %d", m.Version)
 	}
 	checkNameField(m.Name, &list)
 	checkContainer(m.Format, &list)
@@ -194,39 +181,12 @@ func (m Manifest) checkWalks(index map[string]int, list *issueList) {
 	}
 }
 
-func (m metaV1) checkIdentity(list *issueList) {
-	checkDigest(m.ID, m.SHA256, "", list)
-	checkNameField(m.Name, list)
-	if m.Version != MetaVersion {
-		list.add("version: unsupported metadata version %q", m.Version)
-	}
-	if m.Kind != KindFull && m.Kind != KindIncremental {
-		list.add("kind: must be full or incremental")
-	}
-	if m.Builder == "" {
-		list.add("builder: must be set")
-	}
-}
-
 // checkNameField requires Name to parse as a canonical 1-to-5
 // segment library name that round-trips through ParseName.
 func checkNameField(name string, list *issueList) {
 	segs, err := ParseName(name)
 	if err != nil || strings.Join(segs, "/") != name {
 		list.add("name: invalid image name")
-	}
-}
-
-// checkPayload checks the active container and the payload facts.
-// The active format covers the chain: layers do not store a separate
-// type or compression, so every member stays on this container.
-func (m metaV1) checkPayload(list *issueList) {
-	checkContainer(m.Format, list)
-	checkSize("size", m.Size, list)
-	checkMtime("mtime_unix", m.MtimeUnix, list)
-	checkTime("created_at", m.CreatedAt, list)
-	if m.ContentSHA256 != "" {
-		checkSum("content_sha256", m.ContentSHA256, list)
 	}
 }
 
@@ -250,48 +210,6 @@ func checkContainer(format Format, list *issueList) {
 	if format.Compression == "" || !f.AllowsCompression(format.Compression) {
 		list.add("format.compression: %s does not allow %q", f.Type(), format.Compression)
 	}
-}
-
-func (m metaV1) checkChain(list *issueList) {
-	seen := map[string]struct{}{}
-	if m.ID != "" {
-		seen[m.ID] = struct{}{}
-	}
-	parent := m.ID
-	blocksForm := len(m.Blocks) > 0
-	for i := range m.Chain {
-		entry := &m.Chain[i]
-		prefix := fmt.Sprintf("chain[%d]", i)
-		checkDigest(entry.ID, entry.SHA256, prefix, list)
-		checkSize(prefix+".size", entry.Size, list)
-		checkMtime(prefix+".mtime_unix", entry.MtimeUnix, list)
-		checkTime(prefix+".created_at", entry.CreatedAt, list)
-		if entry.Parent != parent {
-			list.add("%s.parent: must continue the linear chain", prefix)
-		}
-		switch {
-		case blocksForm && len(entry.Blocks) == 0:
-			list.add("%s.blocks: must be set for blocks payloads", prefix)
-		case !blocksForm && len(entry.Blocks) > 0:
-			list.add("%s.blocks: must be empty for single payloads", prefix)
-		}
-		checkBlockList(prefix+".blocks", entry.Blocks, list)
-		noteDuplicate(prefix, entry.ID, seen, list)
-		parent = entry.ID
-	}
-}
-
-// checkSplit validates the split payload manifests. The single-file
-// form carries no manifest, so its rules stay untouched. Blocks may
-// carry a chain whose entries each hold their own Blocks list.
-func (m metaV1) checkSplit(list *issueList) {
-	if len(m.Blocks) == 0 {
-		return
-	}
-	if m.Kind != KindFull {
-		list.add("kind: must be full for split payloads")
-	}
-	checkBlockList("blocks", m.Blocks, list)
 }
 
 // checkBlockList validates one byte-block manifest: names follow the

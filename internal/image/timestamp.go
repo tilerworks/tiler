@@ -32,13 +32,6 @@ func normalizeManifestTimes(images []ImageMeta) {
 	}
 }
 
-func normalizeV1Times(meta *metaV1) {
-	meta.CreatedAt = normalizeCreatedAt(meta.CreatedAt)
-	for i := range meta.Chain {
-		meta.Chain[i].CreatedAt = normalizeCreatedAt(meta.Chain[i].CreatedAt)
-	}
-}
-
 // createdStamp is one created_at scalar still carrying its original instant.
 type createdStamp struct {
 	node *yaml.Node

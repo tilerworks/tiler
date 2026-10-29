@@ -321,9 +321,9 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	var doc struct {
-		SchemaVersion string `json:"schema_version"`
+		SchemaVersion int `json:"schema_version"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.SchemaVersion != "3.0" {
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.SchemaVersion != 1 {
 		t.Fatalf("json = %q, %v", out.String(), err)
 	}
 

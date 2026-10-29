@@ -40,7 +40,7 @@ func TestVersionManifestRoundTrip(t *testing.T) {
 
 func TestVersionManifestRejectsInvalidFacts(t *testing.T) {
 	for _, edit := range []func(*VersionManifest){
-		func(m *VersionManifest) { m.Version = ManifestVersion },
+		func(m *VersionManifest) { m.Version = 2 },
 		func(m *VersionManifest) { m.Name = "bad:name" },
 		func(m *VersionManifest) { m.Images[0].ID = strings.Repeat("a", 16) },
 		func(m *VersionManifest) { m.Images[0].SHA256 = strings.Repeat("b", 64) },

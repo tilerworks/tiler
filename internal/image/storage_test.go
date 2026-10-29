@@ -114,11 +114,15 @@ func rootOf(m Manifest) ImageMeta {
 
 func mustLoadManifest(t *testing.T, path string) Manifest {
 	t.Helper()
-	manifest, err := LoadManifest(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return manifest
+	doc, err := DecodeVersionManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifestFromVersion(doc)
 }
 
 func buildConfig(t *testing.T) config.Config {

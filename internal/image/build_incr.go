@@ -784,7 +784,7 @@ func incrNode(
 // previous head.
 func withNode(active Manifest, node ImageMeta) Manifest {
 	next := active
-	next.Version = ManifestVersion
+	next.Version = VersionManifestVersion
 	next.Images = append(slices.Clone(active.Images), node)
 	next.Head = node.ID
 	return next
@@ -794,7 +794,7 @@ func withNode(active Manifest, node ImageMeta) Manifest {
 // the swap fails after the rename landed, the previous manifest is
 // written back so the graph and the incr files stay consistent.
 func replaceMeta(repo Repo, old, next Manifest, seam hooks) error {
-	body, err := EncodeManifest(next)
+	body, err := EncodeVersionManifest(next.versionDocument())
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -806,7 +806,9 @@ func replaceMeta(repo Repo, old, next Manifest, seam hooks) error {
 		undoLanded(metaTmp, repo.MetaPath())
 		removeFile(metaTmp)
 		if _, statErr := os.Stat(repo.MetaPath()); errors.Is(statErr, os.ErrNotExist) {
-			_ = StoreManifest(repo.MetaPath(), old)
+			if restored, encErr := EncodeVersionManifest(old.versionDocument()); encErr == nil {
+				_ = os.WriteFile(repo.MetaPath(), restored, 0o644)
+			}
 		}
 		return fmt.Errorf("build: %w", err)
 	}

@@ -126,7 +126,7 @@ func TestReferenceInventoryRejectsDamagedSourcesBeforeIndexWrites(t *testing.T) 
 			case "corrupt":
 				err = os.WriteFile(path, []byte("{"), 0o600)
 			case "legacy":
-				rec.Version = ""
+				rec.Version = 0
 				err = c.Save(rec)
 			case "symlink":
 				err = os.Remove(path)

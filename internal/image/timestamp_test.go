@@ -81,7 +81,7 @@ func TestEncodeManifestSavesLocalCreatedAt(t *testing.T) {
 	when := time.Date(2026, 10, 29, 10, 7, 56, 733866959, time.UTC)
 	manifest := validManifest()
 	manifest.Images[0].CreatedAt = when
-	body, err := EncodeManifest(manifest)
+	body, err := EncodeVersionManifest(manifest.versionDocument())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestEncodeManifestSavesLocalCreatedAt(t *testing.T) {
 	if !strings.Contains(string(body), "created_at: "+want) {
 		t.Fatalf("saved created_at is not %s\n%s", want, body)
 	}
-	got, err := DecodeManifest(body)
+	got, err := DecodeVersionManifest(body)
 	if err != nil {
 		t.Fatal(err)
 	}

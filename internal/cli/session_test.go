@@ -157,7 +157,7 @@ func TestSessionReadCommandsRejectLegacyRecords(t *testing.T) {
 	for _, args := range [][]string{{"session", "list"}, {"session", "show", "legacy"}} {
 		stdout, _, _, err := runCmd(t, append(lib, args...)...)
 		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "session: parse") ||
-			!strings.Contains(err.Error(), `unsupported record version ""`) ||
+			!strings.Contains(err.Error(), "unsupported record version 0") ||
 			!strings.Contains(err.Error(), "rebuild sessions") {
 			t.Errorf("%v: stdout = %q, error = %v", args, stdout, err)
 		}

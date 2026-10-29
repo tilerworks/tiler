@@ -69,7 +69,19 @@ func storeFixtureMeta(t *testing.T, repoDir string, manifest image.Manifest) {
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := image.StoreManifest(filepath.Join(repoDir, "meta.yaml"), manifest); err != nil {
+	images := append([]image.ImageMeta{}, manifest.Images...)
+	for i := range images {
+		if images[i].Format == (image.Format{}) {
+			images[i].Format = manifest.Format
+		}
+	}
+	body, err := image.EncodeVersionManifest(image.VersionManifest{
+		Version: image.VersionManifestVersion, Name: manifest.Name, Images: images,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "meta.yaml"), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -99,7 +111,7 @@ func writeBlocksFixture(t *testing.T, imagesDir, name string, bodies []string, v
 	if view {
 		writeSplitFile(t, filepath.Join(dir, concatViewFile), strings.Join(names, "\n")+"\n")
 	}
-	storeFixtureMeta(t, repo.Dir, image.Manifest{Version: image.ManifestVersion, Name: repo.Name(),
+	storeFixtureMeta(t, repo.Dir, image.Manifest{Version: image.VersionManifestVersion, Name: repo.Name(),
 		Format: image.Format{Type: image.FormatSquashfs, Compression: image.CompressionZstd}, Head: id, Images: []image.ImageMeta{node}})
 	return id
 }

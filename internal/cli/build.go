@@ -640,15 +640,6 @@ func versionRootID(cfg config.Config, name, tip string) string {
 		}
 		manifest, err := image.LoadVersionManifest(repo)
 		if err != nil {
-			legacy, legacyErr := image.LoadManifest(repo.MetaPath())
-			if legacyErr != nil {
-				return nil
-			}
-			root, legacyErr := legacy.Full()
-			if legacyErr != nil {
-				return nil
-			}
-			id = root.ID
 			return nil
 		}
 		stack, err := manifest.SelectVersion(name + ":" + tip)

@@ -39,8 +39,8 @@ func TestVersionRecordStoreAndRecreatedIdentity(t *testing.T) {
 	path, _ := store.recordPath(rec.Name)
 	before, _ := os.ReadFile(path)
 	for name, edit := range map[string]func(*Record){
-		"legacy":            func(r *Record) { r.Version = "" },
-		"unknown schema":    func(r *Record) { r.Version = "9" },
+		"legacy":            func(r *Record) { r.Version = 0 },
+		"unknown schema":    func(r *Record) { r.Version = 9 },
 		"instance":          func(r *Record) { r.InstanceID = "short" },
 		"creation time":     func(r *Record) { r.CreatedAt = time.Time{} },
 		"short tip":         func(r *Record) { r.Actions[0].TipID = "abcd" },
@@ -65,7 +65,7 @@ func TestVersionRecordStoreAndRecreatedIdentity(t *testing.T) {
 		})
 	}
 	legacy := rec
-	legacy.Version, legacy.InstanceID = "", ""
+	legacy.Version, legacy.InstanceID = 0, ""
 	if err := store.Save(legacy); err != nil {
 		t.Fatal(err)
 	}

@@ -258,14 +258,14 @@ func checkLinkIdle(repo Repo, absSrc string, next Manifest) (bool, error) {
 }
 
 func linkExisting(repo Repo) (Manifest, bool, error) {
-	manifest, err := LoadManifest(repo.MetaPath())
+	doc, err := LoadVersionManifest(repo)
 	if errors.Is(err, os.ErrNotExist) {
 		return Manifest{}, false, nil
 	}
 	if err != nil {
 		return Manifest{}, false, err
 	}
-	return manifest, true, nil
+	return manifestFromVersion(doc), true, nil
 }
 
 func checkStrayPayload(dir, absSrc string, next Manifest) error {
@@ -348,7 +348,7 @@ func writeLinkExternal(absSrc, payloadPath string) error {
 }
 
 func writeLinkMeta(repo Repo, manifest Manifest, seam hooks) error {
-	body, err := EncodeManifest(manifest)
+	body, err := EncodeVersionManifest(manifest.versionDocument())
 	if err != nil {
 		return fmt.Errorf("link: %w", err)
 	}

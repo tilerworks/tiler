@@ -170,7 +170,7 @@ func newVersionImageJSON(view versionImageView) versionImageJSON {
 
 func writeVersionImagesJSON(w io.Writer, views []versionImageView) error {
 	doc := struct {
-		SchemaVersion string             `json:"schema_version"`
+		SchemaVersion int                `json:"schema_version"`
 		Repositories  []versionImageJSON `json:"repositories"`
 	}{SchemaVersion: image.VersionManifestVersion, Repositories: make([]versionImageJSON, 0, len(views))}
 	for _, view := range views {

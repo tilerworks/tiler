@@ -11,7 +11,7 @@ import (
 )
 
 // ReferenceControlVersion identifies reference bookkeeping and journal schemas.
-const ReferenceControlVersion = "1.0"
+const ReferenceControlVersion = 1
 
 // ReferenceRevision describes one source record in the derived inventory.
 type ReferenceRevision struct {
@@ -23,7 +23,7 @@ type ReferenceRevision struct {
 
 // ReferenceState is bookkeeping, not independent proof that an index is trusted.
 type ReferenceState struct {
-	Version         string                       `json:"version"`
+	Version         int                          `json:"version"`
 	Generation      uint64                       `json:"generation"`
 	Dirty           bool                         `json:"dirty"`
 	Inventory       map[string]ReferenceRevision `json:"inventory"`
@@ -36,7 +36,7 @@ type ReferenceState struct {
 // ReferenceJournal retains source snapshots until their generation is complete.
 // A nil Before creates a session; a nil After removes its retained record.
 type ReferenceJournal struct {
-	Version    string  `json:"version"`
+	Version    int     `json:"version"`
 	Generation uint64  `json:"generation"`
 	Before     *Record `json:"before"`
 	After      *Record `json:"after"`

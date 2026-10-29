@@ -115,7 +115,7 @@ type Action struct {
 type Record struct {
 	// Version and InstanceID identify the new schema and one session incarnation.
 	// Legacy runtime records omit both until the new layout is activated.
-	Version    string `json:"version,omitempty"`
+	Version    int    `json:"version,omitempty"`
 	InstanceID string `json:"instance_id,omitempty"`
 	// Name is the session name and the record file stem.
 	Name string `json:"name"`

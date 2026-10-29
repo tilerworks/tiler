@@ -121,7 +121,7 @@ func TestPlanImportClosureRejectsSelectorsAndMetadata(t *testing.T) {
 		{name: "parent", body: bytes.Replace(base, []byte("parent: "+graph.root), []byte("parent: "+strings.Repeat("9", 64)), 1), want: "parent"},
 		{name: "duplicate", body: bytes.ReplaceAll(base, []byte(graph.branch), []byte(graph.root)), want: "duplicate"},
 		{name: "block", body: bytes.Replace(base, []byte("blk.000"), []byte("blk.002"), 1), want: "blk.000"},
-		{name: "version", body: bytes.Replace(base, []byte(`version: "3.0"`), []byte(`version: "2.0"`), 1), want: "unsupported"},
+		{name: "version", body: bytes.Replace(base, []byte("version: 1\n"), []byte("version: 2\n"), 1), want: "unsupported"},
 		{name: "unselected id", body: bytes.ReplaceAll(base, []byte(graph.child), []byte(strings.Repeat("F", 64))), want: "lowercase"},
 		{name: "block digest", body: bytes.Replace(base, []byte(strings.Repeat("1", 64)), []byte(UnknownSHA256), 1), want: "unknown digest"},
 	}

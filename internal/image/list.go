@@ -129,12 +129,12 @@ func findDeeperLeaf(dir string, segments []string) (string, bool) {
 }
 
 func loadActiveManifest(repo Repo) (Manifest, bool, error) {
-	manifest, err := LoadManifest(repo.MetaPath())
+	doc, err := LoadVersionManifest(repo)
 	if errors.Is(err, os.ErrNotExist) {
 		return Manifest{}, false, nil
 	}
 	if err != nil {
 		return Manifest{}, false, err
 	}
-	return manifest, true, nil
+	return manifestFromVersion(doc), true, nil
 }
