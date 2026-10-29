@@ -70,6 +70,7 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 		return node, err
 	}
 	node.Format, node.Description = Format{Type: full.Format, Compression: full.Compression}, req.Description
+	node.placeAfter = true
 	if err := runIncrSmoke(req, tmp, node, node.Format); err != nil {
 		return ImageMeta{}, err
 	}

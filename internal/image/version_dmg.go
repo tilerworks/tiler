@@ -115,6 +115,6 @@ func commitDMGVersion(repo Repo, req DMGRequest, staged, content string) (ImageM
 		return ImageMeta{}, err
 	}
 	node := manifest.Images[0]
-	node.Format, node.Description = manifest.Format, req.Description
+	node.Format, node.Description, node.placeAfter = manifest.Format, req.Description, true
 	return publishFullVersion(req.Config.ImagesDir, repo, staged, node, req.DescriptionSet, hooks{})
 }

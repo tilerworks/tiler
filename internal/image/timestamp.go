@@ -26,6 +26,19 @@ func normalizeCreatedAt(t time.Time) time.Time {
 	return t.UTC().Truncate(time.Second)
 }
 
+// createdAfterExisting moves a new local build to the next whole
+// second when a stored version already occupies that second or a
+// later one. Existing timestamps stay where they are.
+func createdAfterExisting(existing []ImageMeta, created time.Time) time.Time {
+	created = created.UTC().Truncate(time.Second)
+	for _, node := range existing {
+		if t := node.CreatedAt.UTC().Truncate(time.Second); !created.After(t) {
+			created = t.Add(time.Second)
+		}
+	}
+	return created
+}
+
 func normalizeManifestTimes(images []ImageMeta) {
 	for i := range images {
 		images[i].CreatedAt = normalizeCreatedAt(images[i].CreatedAt)

@@ -87,6 +87,9 @@ type ImageMeta struct {
 	// Blocks is the byte-block manifest of a split payload node. It
 	// stays empty for the single-file form.
 	Blocks []BlockEntry `yaml:"blocks,omitempty"`
+	// placeAfter asks publication to keep this local build later than
+	// every version already stored. It is not written to metadata.
+	placeAfter bool
 }
 
 // Manifest is the in-memory single-root graph used by older build

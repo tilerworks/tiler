@@ -52,7 +52,8 @@ func BuildFullVersion(req FullRequest) (node ImageMeta, err error) {
 	}
 	node = ImageMeta{ID: ID(sum), Kind: KindFull, Size: info.Size(), SHA256: ID(sum),
 		MtimeUnix: info.ModTime().Unix(), CreatedAt: buildNow(req)().UTC(), Builder: req.Builder,
-		Format: Format{Type: req.Format, Compression: req.Compression}, Description: req.Description}
+		Format: Format{Type: req.Format, Compression: req.Compression}, Description: req.Description,
+		placeAfter: true}
 	payload := tmp
 	if size := cmp.Or(req.BlockSize, req.Config.SplitSize); size > 0 {
 		dir := filepath.Join(stage, "split")

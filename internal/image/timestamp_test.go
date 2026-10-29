@@ -98,3 +98,15 @@ func TestEncodeManifestSavesLocalCreatedAt(t *testing.T) {
 		t.Fatalf("loaded = %v", got.Images[0].CreatedAt)
 	}
 }
+
+func TestCreatedAfterExistingMovesToTheNextSecond(t *testing.T) {
+	existing := time.Date(2026, 10, 29, 11, 13, 2, 0, time.UTC)
+	got := createdAfterExisting([]ImageMeta{{CreatedAt: existing}}, existing)
+	if !got.Equal(existing.Add(time.Second)) || got.Location() != time.UTC {
+		t.Fatalf("tied build = %v", got)
+	}
+	later := existing.Add(2 * time.Second)
+	if got := createdAfterExisting([]ImageMeta{{CreatedAt: existing}}, later); !got.Equal(later) {
+		t.Fatalf("later build = %v", got)
+	}
+}

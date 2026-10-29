@@ -39,6 +39,10 @@ func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (
 	if err != nil {
 		return ImageMeta{}, err
 	}
+	if node.placeAfter {
+		node.CreatedAt = createdAfterExisting(manifest.Images, node.CreatedAt)
+		node.placeAfter = false
+	}
 	if err := versionWithNode(manifest, node).Validate(); err != nil {
 		return ImageMeta{}, err
 	}
