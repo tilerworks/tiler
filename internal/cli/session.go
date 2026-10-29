@@ -39,6 +39,7 @@ func newSessionCmd() *cobra.Command {
 	cmd.AddCommand(newSessionOpenCmd())
 	cmd.AddCommand(newSessionCloseCmd())
 	cmd.AddCommand(newSessionRemoveCmd())
+	cmd.AddCommand(newSessionGCCmd())
 	cmd.AddCommand(newSessionListCmd())
 	cmd.AddCommand(newSessionShowCmd())
 	return cmd

@@ -9,6 +9,9 @@ import (
 )
 
 func TestDMGVersionBakeConvertsLinkedPayload(t *testing.T) {
+	original := linkDarwinHost
+	linkDarwinHost = func() bool { return true }
+	t.Cleanup(func() { linkDarwinHost = original })
 	cfg := buildConfig(t)
 	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
 	external := writeFakeDMG(t, t.TempDir(), []byte("linked"))

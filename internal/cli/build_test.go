@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -314,9 +315,17 @@ func TestBuildDescriptionFlagsRejectInvalidCombinationsAndConflicts(t *testing.T
 
 func runCmdInput(t *testing.T, stdin string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
+	return runCmdReader(t, strings.NewReader(stdin), args...)
+}
+
+// runCmdReader executes one command over the injected standard input
+// reader, so a test can observe or mutate state at the moment the
+// command reads its input.
+func runCmdReader(t *testing.T, in io.Reader, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	cmd := NewRootCmd()
 	var out, errBuf bytes.Buffer
-	cmd.SetIn(strings.NewReader(stdin))
+	cmd.SetIn(in)
 	cmd.SetOut(&out)
 	cmd.SetErr(&errBuf)
 	cmd.SetArgs(args)

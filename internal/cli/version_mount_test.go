@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -133,10 +135,17 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", stage, node, false); err != nil {
 		t.Fatal(err)
 	}
-	originalLook, originalEngine, originalTable := toolLookPath, mountEngine, loadMountTable
+	originalLook, originalFormat, originalEngine, originalTable := toolLookPath, toolFormatLookup, mountEngine, loadMountTable
 	t.Cleanup(func() {
 		toolLookPath, mountEngine, loadMountTable = originalLook, originalEngine, originalTable
+		toolFormatLookup = originalFormat
 	})
+	toolFormatLookup = func(typ string) (container.Format, error) {
+		if typ == image.FormatDMG {
+			return container.DMG(), nil
+		}
+		return originalFormat(typ)
+	}
 	toolLookPath = func(name string) (string, error) {
 		if name == "hdiutil" {
 			return "/usr/bin/hdiutil", nil
@@ -158,5 +167,20 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("DMG mount did not reach the workspace engine")
+	}
+}
+
+func TestFormatToolGateRejectsUnregisteredDMG(t *testing.T) {
+	if _, err := container.Lookup(image.FormatDMG); err == nil {
+		t.Skip("DMG is registered on this host")
+	}
+	original := toolLookPath
+	toolLookPath = func(string) (string, error) {
+		t.Fatal("tool lookup must not bypass native format restrictions")
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { toolLookPath = original })
+	if err := gateFormatTools("mount", image.FormatDMG); !errors.Is(err, container.ErrUnknownType) {
+		t.Fatalf("unsupported-host error = %v", err)
 	}
 }
