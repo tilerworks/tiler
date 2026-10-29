@@ -133,6 +133,11 @@ func restoreImportManifest(repo Repo, before VersionManifest, seam hooks) error 
 	if err != nil || match {
 		return err
 	}
+	// A first import records an empty before snapshot. The metadata file
+	// did not exist yet, so rollback must not create one.
+	if _, statErr := os.Lstat(repo.MetaPath()); errors.Is(statErr, os.ErrNotExist) && len(before.Images) == 0 {
+		return nil
+	}
 	if err := seam.guard(repo.MetaPath(), "metadata"); err != nil {
 		return err
 	}
