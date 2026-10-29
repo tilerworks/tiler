@@ -75,10 +75,30 @@ func finishImportWork(imagesDir string, repo Repo, seam hooks) error {
 	if err := refreshImportIndexes(repo, seam); err != nil {
 		return pendingImport(err)
 	}
+	if err := removeEmptyImportDir(filepath.Join(repo.Dir, importBackupRel)); err != nil {
+		return pendingImport(err)
+	}
+	if err := removeEmptyImportDir(filepath.Join(repo.Dir, importStageRel)); err != nil {
+		return pendingImport(err)
+	}
 	if err := syncExisting(repo.Dir); err != nil {
 		return pendingImport(err)
 	}
 	return finishImportTxn(imagesDir, seam)
+}
+
+// removeEmptyImportDir drops a transaction directory after its files are
+// gone. A directory that still has entries stays; those entries are not
+// necessarily owned by this journal.
+func removeEmptyImportDir(dir string) error {
+	err := os.Remove(dir)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if _, statErr := os.Lstat(dir); statErr == nil {
+		return nil
+	}
+	return err
 }
 
 func restoreImportBackups(repo Repo, backups []ImportBackup, seam hooks) error {
