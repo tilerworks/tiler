@@ -28,9 +28,6 @@ func BuildFullVersion(req FullRequest) (node ImageMeta, err error) {
 	if (req.Run == nil && runtime.GOOS != "linux") || req.Format == FormatDMG {
 		return node, errors.New("version build: full versions require Linux squashfs or erofs")
 	}
-	if err := prepareScene(req); err != nil {
-		return node, err
-	}
 	if err := configOutsideStage(req); err != nil {
 		return node, err
 	}

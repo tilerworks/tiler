@@ -163,8 +163,6 @@ func gitWorkSource(t *testing.T) string {
 		"commit", "-m", "initial import")
 	runGit(t, src, "branch", "feature")
 	runGit(t, src, "tag", "v1")
-	// A pack keeps the build's multi-pack-index write working, the
-	// same preparation the image round trip uses.
 	runGit(t, src, "repack", "-d")
 	return src
 }

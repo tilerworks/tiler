@@ -11,7 +11,6 @@ import (
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
-	"github.com/jiangxin/tiler/internal/gitscene"
 )
 
 // toolOutputLimit caps how much tool output one error carries.
@@ -23,8 +22,8 @@ const toolOutputLimit = 2048
 // inherited environment, and an empty env changes nothing.
 type ToolRunner func(name string, env []string, args ...string) error
 
-// FullRequest is one full image build. Callers or scene scripts
-// prepare the source directory first; the build only packs it.
+// FullRequest is one full image build. The caller prepares the source
+// directory; the build only packs it and does not modify it.
 type FullRequest struct {
 	// Config supplies the image library location and split policy.
 	Config config.Config
@@ -56,10 +55,6 @@ type FullRequest struct {
 	// Run executes external tools. Nil runs the container packer
 	// through exec.
 	Run ToolRunner
-	// PrepareScene sanitizes a git source before packing. Nil uses
-	// gitscene.Prepare when the source looks like a git repository;
-	// non-git sources are skipped without invoking git.
-	PrepareScene func(dir string) error
 	// Description fields apply only to immutable version builds.
 	Description    string
 	DescriptionSet bool
@@ -86,10 +81,10 @@ type FullResult struct {
 // SplitSize and BlockSize packs one image file. Production builds
 // leave BlockSize zero and rely on SplitSize from configuration or
 // `tiler build --split`. The source must exist and stay
-// outside every reserved tree. When the source is a git repository,
-// it is sanitized first and any git failure aborts the build before
-// packing. The container packer writes a synced temporary file inside the
-// repository directory; the image is hashed from disk, the manifest
+// outside every reserved tree. The build packs that directory as it
+// stands and does not modify it. The container packer writes a synced
+// temporary file inside the repository directory; the image is hashed
+// from disk, the manifest
 // is validated, and the atomic publish renames both into place,
 // archiving the previous DAG when it is not referenced. The publish
 // restarts the DAG: the new full image is the only manifest node and
@@ -129,22 +124,6 @@ func buildNow(req FullRequest) func() time.Time {
 		return req.Now
 	}
 	return time.Now
-}
-
-// prepareScene sanitizes the source when it is a git repository. A
-// non-git directory is skipped without invoking git.
-func prepareScene(req FullRequest) error {
-	if !gitscene.IsGit(req.SrcDir) {
-		return nil
-	}
-	prepare := req.PrepareScene
-	if prepare == nil {
-		prepare = gitscene.Prepare
-	}
-	if err := prepare(req.SrcDir); err != nil {
-		return fmt.Errorf("build: %w", err)
-	}
-	return nil
 }
 
 func validateFull(req *FullRequest) (Repo, error) {
