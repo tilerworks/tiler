@@ -27,7 +27,7 @@ type removalJournal struct {
 // RemoveVersionSubtreeLocked commits removal of root and all descendants.
 // The caller must hold the library lock and must already have checked refs.
 func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, error) {
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := PrepareTargetLocked(imagesDir); err != nil {
 		return nil, err
 	}
 	repo, err := OpenRepo(imagesDir, name)
@@ -68,7 +68,7 @@ func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, erro
 // RemoveVersionRepositoryLocked commits removal of every version and then
 // removes the repository leaf. The journal and library lock remain outside it.
 func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) {
-	if err := recoverVersionRemoval(imagesDir, hooks{}); err != nil {
+	if err := PrepareTargetLocked(imagesDir); err != nil {
 		return nil, err
 	}
 	repo, err := OpenRepo(imagesDir, name)
@@ -200,6 +200,9 @@ func validRemovalJournal(j removalJournal) bool {
 }
 
 func saveRemovalJournal(imagesDir string, j removalJournal, seam hooks) error {
+	if err := importTxnPending(imagesDir); err != nil {
+		return err
+	}
 	body, err := json.Marshal(j)
 	if err != nil {
 		return err

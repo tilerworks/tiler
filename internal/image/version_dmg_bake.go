@@ -61,6 +61,9 @@ func versionBakeSource(repo Repo, req DMGRequest) (ImageMeta, string, error) {
 		return ImageMeta{}, "", err
 	}
 	defer release()
+	if err := PrepareTargetLocked(req.Config.ImagesDir); err != nil {
+		return ImageMeta{}, "", err
+	}
 	manifest, _, err := loadVersionMeta(repo)
 	if err != nil {
 		return ImageMeta{}, "", err

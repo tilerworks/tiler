@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+
+	"github.com/jiangxin/tiler/internal/image"
 )
 
 // ErrReferenceScopeClosed means a scoped store escaped its held-lock callback.
@@ -34,6 +36,11 @@ func (c ReferenceCoordinator) withSessionScope(name string, run func(Store) erro
 		return errors.New("session: invalid reference mutation callback or nested scope")
 	}
 	runLocked := func() error {
+		if c.ImagesDir != "" {
+			if err := image.PrepareTargetLocked(c.ImagesDir); err != nil {
+				return err
+			}
+		}
 		if _, err := c.ensureInventoryLocked(false, nil); err != nil {
 			return err
 		}

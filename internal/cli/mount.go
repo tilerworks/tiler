@@ -298,7 +298,13 @@ func validateMountTarget(cfg config.Config, target image.Target, flags mountFlag
 }
 
 func resolveRuntimeMount(cfg config.Config, selector string) (image.Target, error) {
-	return image.ResolveVersionMount(cfg, selector)
+	var target image.Target
+	err := image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		var resolveErr error
+		target, resolveErr = image.ResolveVersionMount(cfg, selector)
+		return resolveErr
+	})
+	return target, err
 }
 
 // resolveMountSession applies the session priority: the --session

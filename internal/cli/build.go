@@ -394,11 +394,15 @@ func promoteOversizedIncr(stderr io.Writer, cfg config.Config, decision *mountin
 	if decision.MountPoint == "" || decision.Upper == "" {
 		return false, nil
 	}
-	repo, err := image.OpenRepo(cfg.ImagesDir, decision.Name.String())
-	if err != nil {
-		return false, fmt.Errorf("build: %w", err)
-	}
-	manifest, err := image.LoadVersionManifest(repo)
+	var manifest image.VersionManifest
+	err := image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, decision.Name.String())
+		if err != nil {
+			return err
+		}
+		manifest, err = image.LoadVersionManifest(repo)
+		return err
+	})
 	if err != nil {
 		return false, fmt.Errorf("build: %w", err)
 	}
@@ -594,27 +598,33 @@ func mountedBuildTip(sessionsDir string, decision mountinfo.Decision) (string, e
 }
 
 func versionRootID(cfg config.Config, name, tip string) string {
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		return ""
-	}
-	manifest, err := image.LoadVersionManifest(repo)
-	if err != nil {
-		legacy, legacyErr := image.LoadManifest(repo.MetaPath())
-		if legacyErr != nil {
-			return ""
+	id := ""
+	_ = image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, name)
+		if err != nil {
+			return nil
 		}
-		root, legacyErr := legacy.Full()
-		if legacyErr != nil {
-			return ""
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			legacy, legacyErr := image.LoadManifest(repo.MetaPath())
+			if legacyErr != nil {
+				return nil
+			}
+			root, legacyErr := legacy.Full()
+			if legacyErr != nil {
+				return nil
+			}
+			id = root.ID
+			return nil
 		}
-		return root.ID
-	}
-	stack, err := manifest.SelectVersion(name + ":" + tip)
-	if err != nil || len(stack) == 0 {
-		return ""
-	}
-	return stack[0].ID
+		stack, err := manifest.SelectVersion(name + ":" + tip)
+		if err != nil || len(stack) == 0 {
+			return nil
+		}
+		id = stack[0].ID
+		return nil
+	})
+	return id
 }
 
 // runDMGCreate packs a directory into a new dmg image. A build from
@@ -731,19 +741,24 @@ func publishDMG(req image.DMGRequest) (image.ImageMeta, error) {
 }
 
 func latestVersionID(cfg config.Config, name string) string {
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		return ""
-	}
-	manifest, err := image.LoadVersionManifest(repo)
-	if err != nil {
-		return ""
-	}
-	stack, err := manifest.SelectVersion(name)
-	if err != nil || len(stack) == 0 {
-		return ""
-	}
-	return stack[len(stack)-1].ID
+	id := ""
+	_ = image.WithPreparedTarget(cfg.ImagesDir, func() error {
+		repo, err := image.OpenRepo(cfg.ImagesDir, name)
+		if err != nil {
+			return nil
+		}
+		manifest, err := image.LoadVersionManifest(repo)
+		if err != nil {
+			return nil
+		}
+		stack, err := manifest.SelectVersion(name)
+		if err != nil || len(stack) == 0 {
+			return nil
+		}
+		id = stack[len(stack)-1].ID
+		return nil
+	})
+	return id
 }
 
 // warnDMGBakeKeepsOldBase is the stderr warning a successful bake

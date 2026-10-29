@@ -93,6 +93,9 @@ func incrVersionParent(repo Repo, req IncrRequest) (ImageMeta, error) {
 		return ImageMeta{}, err
 	}
 	defer release()
+	if err := PrepareTargetLocked(req.Config.ImagesDir); err != nil {
+		return ImageMeta{}, err
+	}
 	manifest, _, err := loadVersionMeta(repo)
 	if err != nil {
 		return ImageMeta{}, err
