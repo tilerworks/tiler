@@ -16,10 +16,10 @@ external document numbers.
 
 Builds use Go 1.25 or newer with `CGO_ENABLED=0` static binaries.
 Call git and FUSE tools only through `exec`. Do not add go-git, and do
-not add CGO FUSE bindings. Keep Linux-only code in one
-`//go:build linux` package so the rest of the module can be tested on
-any platform. Integration tests that need root or mounts call `t.Skip`
-when that permission is missing.
+not add CGO FUSE bindings. Platform-specific code lives in
+`//go:build` files (`linux`, `darwin`, and `!linux && !darwin`), not
+in a single Linux package. Integration tests that need root or mounts
+call `t.Skip` when that permission is missing.
 
 The default runtime layout is under the user home directory:
 `$HOME/.tiler/images`, `$HOME/.tiler/sessions`, and
@@ -27,6 +27,71 @@ The default runtime layout is under the user home directory:
 `sessions_dir` (`sessions/<name>/` with `runtime/m<seq>/` under it).
 tiler does not gain a registry, a pull command, or certificate
 signing. Integrity checks, when added later, use sha256 only.
+
+## Platforms
+
+The library, session record, and import graph are the same on every
+host. The container and the writable upper are not.
+
+Linux packs and mounts squashfs and erofs through FUSE. A writable
+view is an overlay upper. Mounting needs `/dev/fuse` and the pack
+tools. `dmg` is refused. macOS packs and mounts UDIF disk images
+through `hdiutil`, also reached only by `exec`. A writable view is
+the session shadow `upper.shadow`. The host default format is `dmg`.
+`squashfs` and `erofs` are refused. A new image uses APFS, or HFS+
+when this OS cannot `attach -shadow` an APFS image. That choice is
+not a configuration key.
+
+`dmg` metadata stays readable on a host that did not register the
+format, so a library copied to Linux can still be shown. Format
+policy applies when linking, building, or mounting, not when decoding
+`meta.yaml`.
+
+Shell end-to-end cases name the host they need. `LINUX` and
+`FUSE_TOOLCHAIN` cover the FUSE stack. `MACOS` covers `hdiutil`.
+`make e2e` skips a case whose prerequisite is missing. A green Linux
+run does not execute the macOS disk-image scripts.
+
+## Keeping both hosts green
+
+`make darwin-check` and `make linux-check` only compile tests. They
+do not run them, and they do not see symlink resolution, timers, or
+`hdiutil`. A behavior that differs by host needs a seam or an
+explicit case on that host.
+
+Replace `runtime.GOOS` at the policy boundary and test both sides on
+one machine. `hostDefaultType` and `linkDarwinHost` are the format
+seams. Tests install `withLinuxLinkPolicy` for the Linux link rules,
+and a Darwin-shaped seam when the case is the macOS refusal. Inject
+the `hdiutil` runner the same way. Do not exec `hdiutil` from a unit
+test. Real attach and convert stay in the `MACOS` end-to-end scripts.
+
+Apply the more specific check before the host format policy. Split
+copy requires a directory; a regular file fails that check before
+macOS rejects `squashfs`. Both hosts then report the directory
+requirement.
+
+The reserved digest of sixty-four zeros means the content hash is
+unknown. Mount and bake share one probe for it: size and mtime, no
+content hash. A known digest still requires the full hash. A new
+caller that hashes the reserved marker fails macOS `--link` imports,
+which omit the sidecar, while Linux links that stored a real digest
+stay green.
+
+Compare paths only after the same canonicalization the product uses.
+`canonicalPath` resolves symlinks. On macOS, `/var` and `/tmp` point
+at `/private/var` and `/private/tmp`, and `t.TempDir()` is usually
+the unresolved spelling. Linux `/tmp` usually is not a symlink, so an
+equality check against `t.TempDir()` passes there and fails on macOS.
+
+Do not assert a formatted MiB/s that comes from the wall clock. Assert
+the byte numerator, or inject the elapsed time. A slower temporary
+directory turns a non-zero rate into `0.0` and fails only that host.
+
+A change to disk images, shadows, `hdiutil`, or link-and-bake still
+needs the `MACOS` end-to-end scripts on Darwin. A change to FUSE
+mounts, overlay uppers, squashfs, or erofs still needs the `LINUX`
+scripts on Linux.
 
 ## Dependencies
 
