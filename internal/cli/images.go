@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/image"
@@ -185,34 +184,6 @@ func listID(id string) string {
 func writeDetailField(w io.Writer, key, value string) error {
 	_, err := fmt.Fprintf(w, "  %-10s  %s\n", key, value)
 	return err
-}
-
-func newImagesGCCmd() *cobra.Command {
-	return &cobra.Command{Use: "gc", Short: "Recover image cleanup and clean sessions",
-		Long: "Garbage collection recovers interrupted version removal, removes orphan immutable objects, preserves every version recorded by metadata, and then cleans eligible session records.",
-		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, ok := loadedConfig(cmd)
-			if !ok {
-				return errors.New("images gc: configuration is not loaded")
-			}
-			now := time.Now()
-			events, gcErr := image.GC(cfg, session.Refs{Dir: cfg.SessionsDir}, now)
-			for _, event := range events {
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s\n", event.Action, event.Name, event.FullID); err != nil {
-					return err
-				}
-			}
-			cleaned, cleanErr := sessionEngine(cfg).Cleanup(cfg.SessionMaxAge, cfg.SessionAutocloseStale, now, sessionUmount(cfg))
-			for _, event := range cleaned {
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s session %s\n", event.Action, event.Session); err != nil {
-					return err
-				}
-			}
-			if err := errors.Join(gcErr, cleanErr); err != nil {
-				return fmt.Errorf("images gc: %w", err)
-			}
-			return nil
-		}}
 }
 
 func newImagesRemoveCmd() *cobra.Command {

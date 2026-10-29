@@ -173,14 +173,12 @@ tiler session close feature                # 逆序卸载，记录保留
   进制前缀（含 `images list` 打出的 10 位 id）。记录包括身份、一行
   `format`（例如 `squashfs/zstd`）、每一层增量、blocks 载荷块数
   及其版本拓扑。`--json` 输出相同的版本信息。
-- `tiler images gc` 恢复中断的版本删除，清除没有元数据引用的孤立
-  对象，并保留 `meta.yaml` 中记录的所有历史版本。同一趟回收一并
-  清理 session 记录：closed 且完成时间超过 `--session-max-age`
-  的记录被删除；active 记录永不自动删除，但挂载全部失活的记录
-  会报告 stale；开启 `session_autoclose_stale`（默认关）后，无挂
-  载且超龄的 active 记录自动转 closed，进入之后的删除范围。
-  唯一的例外是视图全部失活的 `--rm` active 记录：无论年龄几何，
-  都会被拆除视图、清理 runtime 并删除记录。
+- `tiler images gc` 只处理镜像：列出过期且未被 session 引用的版本，
+  以及 pending-cleanup 与孤立对象，并保留仍被需要的祖先。删除只在
+  `--yes` 或交互式输入 `yes` 之后发生；非交互且没有 `--yes` 时只
+  预览。保留期是 `--expire`（默认 30 天）；0 表示过期所有未活动
+  对象。它不清理、关闭或卸载 session。中断的清理单独执行，之后
+  再运行 `images gc` 才会检查过期。
 - `tiler image rm <name:hash>` 删除指定版本及其所有后代；
   `tiler image rm <name>` 删除整个 image 及全部版本。任何待删除版本
   被 session 引用时操作都会拒绝。
@@ -426,7 +424,8 @@ log_level: info
 第一份入库镜像只需一条命令：场景脚本准备好目录，
 `tiler build --image alice/app dir` 把它打进 `~/.tiler/images/` 下的
 镜像库；同名下一次全量构建会把上一份归档，而不是打断读者。之后
-`tiler images gc` 按份数与时长裁剪归档。
+`tiler images gc` 先列出候选再确认，按 `--expire`（默认 30 天，
+0 表示过期所有未活动对象）删除未引用的过期镜像，不清理 session。
 
 只读基座保持不可变。上层可以丢弃后重新挂载。
 

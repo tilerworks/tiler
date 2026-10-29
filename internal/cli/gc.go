@@ -81,22 +81,57 @@ type gcPreview struct {
 	Title string
 	// Rows render one candidate each.
 	Rows []string
+	// Sections replaces Title and Rows when a listing needs more than one
+	// heading. Each heading describes only its own rows, and headings are
+	// not candidates.
+	Sections []gcSection
 	// Notice explains what removing the rows destroys, for example the
 	// session runtime and its upper data. It prints only with a candidate.
 	Notice string
 }
 
+// gcSection is one headed group of candidates inside a preview.
+type gcSection struct {
+	Title string
+	Rows  []string
+}
+
+// listing is the headed groups to print. A preview without sections is one
+// group, so session GC keeps a single title.
+func (p gcPreview) listing() []gcSection {
+	if len(p.Sections) > 0 {
+		return p.Sections
+	}
+	return []gcSection{{Title: p.Title, Rows: p.Rows}}
+}
+
+// candidateCount is the number of removable objects, ignoring headings.
+func (p gcPreview) candidateCount() int {
+	count := 0
+	for _, section := range p.listing() {
+		count += len(section.Rows)
+	}
+	return count
+}
+
 // write prints the listing and reports the first write failure.
 func (p gcPreview) write(out io.Writer) error {
-	if _, err := fmt.Fprintln(out, p.Title); err != nil {
-		return err
-	}
-	for _, row := range p.Rows {
-		if _, err := fmt.Fprintln(out, row); err != nil {
+	for i, section := range p.listing() {
+		if i > 0 {
+			if _, err := fmt.Fprintln(out); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(out, section.Title); err != nil {
 			return err
 		}
+		for _, row := range section.Rows {
+			if _, err := fmt.Fprintln(out, row); err != nil {
+				return err
+			}
+		}
 	}
-	if len(p.Rows) == 0 || p.Notice == "" {
+	if p.candidateCount() == 0 || p.Notice == "" {
 		return nil
 	}
 	_, err := fmt.Fprintln(out, p.Notice)
@@ -129,7 +164,7 @@ func (c gcConfirmation) approved() (bool, error) {
 	if err := c.Preview.write(c.Out); err != nil {
 		return false, fmt.Errorf("gc: preview: %w", err)
 	}
-	if len(c.Preview.Rows) == 0 {
+	if c.Preview.candidateCount() == 0 {
 		return false, nil
 	}
 	if c.AssumeYes {
@@ -138,7 +173,7 @@ func (c gcConfirmation) approved() (bool, error) {
 	if !inputTerminal(c.In) {
 		_, err := fmt.Fprintf(c.ErrOut,
 			"Nothing removed: confirmation needs an interactive terminal; rerun with --yes to remove %d %s.\n",
-			len(c.Preview.Rows), c.Objects)
+			c.Preview.candidateCount(), c.Objects)
 		if err != nil {
 			return false, fmt.Errorf("gc: advice: %w", err)
 		}
@@ -153,7 +188,7 @@ func (c gcConfirmation) approved() (bool, error) {
 // check that accepted a never-answering device still ends in a cancel.
 func (c gcConfirmation) read() (bool, error) {
 	if _, err := fmt.Fprintf(c.ErrOut, "Type yes to remove %d %s: ",
-		len(c.Preview.Rows), c.Objects); err != nil {
+		c.Preview.candidateCount(), c.Objects); err != nil {
 		return false, fmt.Errorf("gc: prompt: %w", err)
 	}
 	answer, err := bufio.NewReader(io.LimitReader(c.In, maxAnswerBytes)).ReadString('\n')

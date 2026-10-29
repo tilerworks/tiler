@@ -206,16 +206,13 @@ Available now:
   `images describe|desc <name>:<hash>` also opens `$EDITOR` by default.
 - `tiler image rm <name>:<hash>` removes that node and its descendants;
   `tiler image rm <name>` removes the repository. Session references
-  block either operation. `images gc` recovers cleanup and orphans but
-  preserves every version retained by metadata. The same pass
-  cleans the session records: a closed record past
-  `--session-max-age` is removed, an active record is never
-  auto-deleted but one whose mounts are all dead is reported
-  stale, and with `session_autoclose_stale` enabled (off by
-  default) an aged stale record flips to closed and becomes
-  eligible for a later removal. The one exception is a `--rm`
-  active record whose views are all dead: it is torn down, its
-  runtime purged, and its record removed whatever its age.
+  block either operation. `images gc` lists expired unreferenced
+  image versions, plus pending-cleanup and orphan objects, and
+  deletes only after `--yes` or an interactive `yes`. It does not
+  remove, close, or unmount sessions. Retention is `--expire`
+  (default 30 days); zero expires every inactive object. A pending
+  cleanup runs alone; rerun `images gc` afterward to inspect
+  expiration. Ancestors required by a retained version stay.
 - Session records remain authoritative when the reverse-index cache is stale.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
