@@ -48,7 +48,15 @@ A change is complete when these commands are green:
 - `make test`
 
 Also run `make build` when `cmd/` changes. `make build` produces a
-`CGO_ENABLED=0` static binary under `bin/`.
+`CGO_ENABLED=0` static binary under `bin/` for the host OS. It does
+not cross-compile.
+
+Linux development also runs `make darwin-check`. macOS development
+also runs `make linux-check`. Each target compiles tests for arm64
+and amd64 and discards the binaries. `GOOS` and `GOARCH` are set
+only on those command lines, so neither target rewrites `bin/tiler`.
+They do not run the tests. Real hdiutil checks stay on macOS, and
+mount checks stay on Linux.
 
 ## CI
 
