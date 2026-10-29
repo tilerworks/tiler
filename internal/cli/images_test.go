@@ -288,11 +288,11 @@ func TestImagesGCPreservesReferencedImmutableVersions(t *testing.T) {
 	if !strings.Contains(out, listID(id1)) || !strings.Contains(out, listID(id2)) {
 		t.Fatalf("list omitted immutable versions:\n%s", out)
 	}
-	if out := mustGC(t, lib); out != "" {
+	if out := mustGC(t, lib); !strings.Contains(out, "No image objects eligible") {
 		t.Fatalf("gc with a referenced version printed %q", out)
 	}
 	writeSession(t, sessions, "s1", "alice/app", id1, "closed")
-	if out := mustGC(t, lib); out != "" {
+	if out := mustGC(t, lib); !strings.Contains(out, "No image objects eligible") {
 		t.Fatalf("idle gc printed %q", out)
 	}
 	out = mustList(t, lib)
@@ -301,7 +301,7 @@ func TestImagesGCPreservesReferencedImmutableVersions(t *testing.T) {
 	}
 }
 
-func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
+func TestImagesGCPreservesExpiredSessionRecords(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	sessions := sessionsDir(home)
@@ -313,15 +313,14 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	writeSession(t, sessions, "live", "alice/app", id1, "running")
 	writeTestFile(t, filepath.Join(src, "a.txt"), "v2")
 	activeID := buildImmutableImage(t, lib, "alice/app", src)
-	// An aged closed record is reclaimed while immutable image
-	// history and the active record survive.
+	// Image GC leaves both aged and active session records untouched.
 	writeClosedSession(t, sessions, "old", time.Now().Add(-31*24*time.Hour))
 
-	if out := mustGC(t, lib); out != "removed session old\n" {
-		t.Fatalf("gc report:\n%s\nwant:\nremoved session old\n", out)
+	if out := mustGC(t, lib, "--yes"); strings.Contains(out, "removed") {
+		t.Fatalf("gc reported a deletion:\n%s", out)
 	}
-	if _, err := os.Stat(filepath.Join(sessions, "old")); !os.IsNotExist(err) {
-		t.Fatalf("the aged record survived: %v", err)
+	if _, err := os.Stat(filepath.Join(sessions, "old", "session.json")); err != nil {
+		t.Fatalf("the aged record was deleted: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(sessions, "live", "session.json")); err != nil {
 		t.Fatalf("the active record was deleted: %v", err)
@@ -332,13 +331,12 @@ func TestImagesGCCleansExpiredSessionRecords(t *testing.T) {
 	}
 }
 
-func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
+func TestImagesGCDoesNotClassifyActiveSessions(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	sessions := sessionsDir(home)
 	withBuildSeams(t, nil)
-	// Every recorded mount verifies dead, so the active session is
-	// reported stale and never deleted.
+	// Session health and stale classification are outside image GC.
 	withSessionSeams(t, func(engine *session.Engine) {
 		engine.Health = func(string) bool { return false }
 	})
@@ -347,8 +345,8 @@ func TestImagesGCReportsStaleActiveSessions(t *testing.T) {
 	id1 := buildImmutableImage(t, lib, "alice/app", src)
 	writeSession(t, sessions, "dev", "alice/app", id1, "running")
 
-	if out := mustGC(t, lib); out != "stale session dev\n" {
-		t.Fatalf("gc report:\n%s\nwant:\nstale session dev\n", out)
+	if out := mustGC(t, lib); strings.Contains(out, "session dev") {
+		t.Fatalf("image gc classified a session:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(sessions, "dev", "session.json")); err != nil {
 		t.Fatalf("the stale active record was deleted: %v", err)
@@ -365,10 +363,10 @@ func TestImagesGCIgnoresLegacyVersionRetention(t *testing.T) {
 		writeTestFile(t, filepath.Join(src, "a.txt"), body)
 		ids = append(ids, buildImmutableImage(t, lib, "alice/app", src))
 	}
-	if out := mustGC(t, lib, "--keep-versions=1"); out != "" {
+	if out := mustGC(t, lib, "--keep-versions=1"); !strings.Contains(out, "No image objects eligible") {
 		t.Fatalf("gc removed immutable versions: %q", out)
 	}
-	if out := mustGC(t, lib, "--keep-versions=1"); out != "" {
+	if out := mustGC(t, lib, "--keep-versions=1"); !strings.Contains(out, "No image objects eligible") {
 		t.Fatalf("second gc printed %q", out)
 	}
 	out := mustList(t, lib)

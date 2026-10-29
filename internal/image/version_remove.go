@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 )
 
@@ -165,6 +166,8 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 			return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 		}
 		removeEmptyAncestors(filepath.Dir(repo.Dir), imagesDir)
+	} else if _, err := EnsureVersionIndexes(repo); err != nil {
+		return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 	}
 	return finishRemovalJournal(imagesDir, seam)
 }
@@ -191,7 +194,8 @@ func validRemovalJournal(j removalJournal) bool {
 	if j.Delete && len(want) != 0 {
 		return false
 	}
-	return slices.EqualFunc(want, j.After.Images, func(a, b ImageMeta) bool { return a.ID == b.ID }) &&
+	return j.Before.Version == j.After.Version && slices.EqualFunc(want, j.After.Images,
+		func(a, b ImageMeta) bool { return reflect.DeepEqual(a, b) }) &&
 		len(want)+len(removed) == len(j.Before.Images)
 }
 

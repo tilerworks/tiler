@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/config"
+	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -35,7 +37,7 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	branch := versionNode("d", image.KindIncremental, newRoot.ID, newRoot.CreatedAt.Add(time.Minute))
 	writeVersionForest(t, cfg.ImagesDir, "alice/app", base, child, newRoot, branch)
 
-	req, err := versionMountRequest(cfg, action, "/view", mountFlags{readOnly: true}, "/runtime")
+	req, _, err := versionMountRequest(cfg, action, "/view", mountFlags{readOnly: true}, "/runtime")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,7 @@ func TestVersionMountRequestCachesAndMaterializesEverySplitMember(t *testing.T) 
 		return filepath.Join(cfg.CacheDir, sum+image.SquashExt), nil
 	}
 	t.Cleanup(func() { assembleBlocks = original })
-	req, err := versionMountRequest(cfg, versionMountAction(base.ID, child.ID),
+	req, _, err := versionMountRequest(cfg, versionMountAction(base.ID, child.ID),
 		"/view", mountFlags{}, "/runtime")
 	if err != nil {
 		t.Fatal(err)
@@ -133,10 +135,17 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", stage, node, false); err != nil {
 		t.Fatal(err)
 	}
-	originalLook, originalEngine, originalTable := toolLookPath, mountEngine, loadMountTable
+	originalLook, originalFormat, originalEngine, originalTable := toolLookPath, toolFormatLookup, mountEngine, loadMountTable
 	t.Cleanup(func() {
 		toolLookPath, mountEngine, loadMountTable = originalLook, originalEngine, originalTable
+		toolFormatLookup = originalFormat
 	})
+	toolFormatLookup = func(typ string) (container.Format, error) {
+		if typ == image.FormatDMG {
+			return container.DMG(), nil
+		}
+		return originalFormat(typ)
+	}
 	toolLookPath = func(name string) (string, error) {
 		if name == "hdiutil" {
 			return "/usr/bin/hdiutil", nil
@@ -152,11 +161,26 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 		}
 		return &workspace.Workspace{MergedDir: req.MergedDir}, nil
 	}
-	if _, err := runVersionMountEngine(cfg, versionMountAction(node.ID, node.ID),
+	if _, err := runVersionMountEngine(cfg, "dev", versionMountAction(node.ID, node.ID),
 		filepath.Join(t.TempDir(), "view"), mountFlags{}, filepath.Join(t.TempDir(), "runtime")); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
 		t.Fatal("DMG mount did not reach the workspace engine")
+	}
+}
+
+func TestFormatToolGateRejectsUnregisteredDMG(t *testing.T) {
+	if _, err := container.Lookup(image.FormatDMG); err == nil {
+		t.Skip("DMG is registered on this host")
+	}
+	original := toolLookPath
+	toolLookPath = func(string) (string, error) {
+		t.Fatal("tool lookup must not bypass native format restrictions")
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { toolLookPath = original })
+	if err := gateFormatTools("mount", image.FormatDMG); !errors.Is(err, container.ErrUnknownType) {
+		t.Fatalf("unsupported-host error = %v", err)
 	}
 }

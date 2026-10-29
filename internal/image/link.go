@@ -80,6 +80,12 @@ func LinkExternalVersion(imagesDir, name, srcPath, builder string) (string, erro
 		if !sameVersionIdentity(old, node) {
 			return "", fmt.Errorf("link: identity conflict for %s", node.ID)
 		}
+		// The payload already exists, so this call publishes nothing and
+		// leaves the shared commit boundary below unused. The use is
+		// still activity, and a repeated import must not look idle.
+		if err := recordVersionReuse(repo, old); err != nil {
+			return "", fmt.Errorf("link: %w", err)
+		}
 		return node.ID, nil
 	}
 	payloadPath, err := repo.ObjectPayloadPath(node)

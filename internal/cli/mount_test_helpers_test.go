@@ -29,6 +29,9 @@ type mountFake struct {
 	removed    int
 	mountErr   error
 	umountErr  error
+	// mountHook runs inside one mount call, so a test can change the
+	// filesystem between the request and the recorded outcome.
+	mountHook func()
 
 	assembleCalls      [][]string
 	assembleBlockPaths [][]string
@@ -50,6 +53,9 @@ func (f *mountFake) runTool(name string, args ...string) error {
 
 func (f *mountFake) mount(req workspace.Request) (*workspace.Workspace, error) {
 	f.mountReqs = append(f.mountReqs, req)
+	if f.mountHook != nil {
+		f.mountHook()
+	}
 	if f.mountErr != nil {
 		return nil, f.mountErr
 	}

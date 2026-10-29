@@ -46,7 +46,10 @@ cannot support them:
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
   stale case in `t0009-status.sh` also need `pgrep` to find the daemon
   they SIGKILL. Where they are absent, the case skips rather than
-  false-fails.
+  false-fails. `t0026-activity-gc.sh` previews and deletes without a
+  mount. Its session half needs only `tiler`. Its image half also
+  needs `mksquashfs` (`SQUASHFS_PACK`) and skips that half when the
+  packer is missing.
 - **No EROFS toolchain** — `t0015-erofs-image.sh` needs `/dev/fuse`,
   `mkfs.erofs`, `erofsfuse`, `fuse-overlayfs`, `fusermount3`, and
   `git`. It skips cleanly on a squashfs-only host.
@@ -80,10 +83,15 @@ equipped host, so a genuine regression is never masked by a skip.
   it, and appends two distinct incremental layers, then confirms the
   chain cascades in `images show` and in `meta.yaml`. A fresh remount
   covers mixed-format history, index recovery, GC retention, and editor
-  descriptions.
+  descriptions. An incremental publication stamps its parent with the
+  same time and leaves a sibling branch unchanged. A later GC
+  initializes a missing child log once, refreshes that parent, and
+  then removes an old sibling and an old independent root while the
+  parent of a retained child stays.
 - `e2e/t0005-images-ls-gc-rm.sh` — exercises the library subcommands
   over a mounted image: `images list` / `images show` (all images,
-  one-name detail, `--json`) and pinned or complete repository removal.
+  one-name detail, `--json`), a GC preview that does not delete while
+  a session is attached, and pinned or complete repository removal.
 - `e2e/t0006-session-lifecycle.sh` — drives the `session` command over
   a named session end to end: `new` (with duplicate and invalid-name
   refusals), grouping views with `mount --session` and
@@ -91,9 +99,17 @@ equipped host, so a genuine regression is never masked by a skip.
   `show`/`open` on a missing record, `remove` refused while active,
   `umount` of one view leaving the session active, `close` tearing the
   views down in reverse and keeping the record (idempotent once
-  closed), a mount into a closed session refused, and `remove`
-  deleting the closed record. Needs the FUSE toolchain; skips cleanly
-  without it.
+  closed), a `session gc` preview that lists the closed record and
+  does not delete it, a mount into a closed session refused, and
+  `remove` deleting the closed record. Needs the FUSE toolchain;
+  skips cleanly without it.
+- `e2e/t0026-activity-gc.sh` — nonprivileged GC. A legacy
+  `session_max_age: 0s` file still loads and does not block
+  `session gc`. The session half checks the preview, a piped `yes`,
+  one-time log initialization, and `--yes` removal of `runtime/`
+  upper data. The image half packs one full version with `mksquashfs`
+  (no FUSE), checks the same preview and initialization contract, and
+  skips when the packer is missing.
 - `e2e/t0007-session-recovery.sh` — simulates a daemon crash by
   SIGKILLing the FUSE process behind a named session's writable view
   (a `kill_view` helper), confirms the write-ahead record survives
@@ -182,7 +198,7 @@ time.
 Shared helpers load automatically from `e2e/sharness.d/*.sh` (see
 `e2e/sharness.d/tiler.sh`): `tiler_bin`, the `TILER` prereq, OS
 prereqs `LINUX` and `MACOS`, lazy prereqs `FUSE_TOOLCHAIN`,
-`EROFS_TOOLCHAIN`, and `KILL_VIEW`, plus `kill_view`. Mount cases
+`EROFS_TOOLCHAIN`, `SQUASHFS_PACK`, and `KILL_VIEW`, plus `kill_view`. Mount cases
 list `LINUX` with the toolchain so `make e2e` on macOS skips them
 instead of failing; later macOS mount cases will list `MACOS`.
 Config-only cases stay on `TILER` alone and run on both hosts.

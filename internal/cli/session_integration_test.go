@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
@@ -223,22 +222,11 @@ func TestSessionEndToEndWithImplicitSessionAndGC(t *testing.T) {
 		t.Fatalf("record = %+v, want an active record with no close time", rec)
 	}
 
-	// Close again and age the completion time past the retention.
+	// Close again; session GC with zero retention can remove the idle record.
 	if out := mustCmd(t, append(lib, "session", "close", generated)...); out != "closed "+generated+"\n" {
 		t.Fatalf("second close output = %q", out)
 	}
-	store := session.Store{Dir: sessionsDir(home)}
-	rec, err := store.Load(generated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec.ClosedAt = rec.ClosedAt.Add(-48 * time.Hour)
-	if err := store.Save(rec); err != nil {
-		t.Fatal(err)
-	}
-
-	// The garbage collector removes exactly the aged closed record.
-	if out := mustGC(t, lib, "--session-max-age=24h"); out != "removed session "+generated+"\n" {
+	if out := mustCmd(t, append(lib, "session", "gc", "--expire=0", "--yes")...); !strings.Contains(out, "removed "+generated+"\n") {
 		t.Fatalf("gc output = %q", out)
 	}
 	if left := listSessionNames(t, sessionsDir(home)); len(left) != 0 {

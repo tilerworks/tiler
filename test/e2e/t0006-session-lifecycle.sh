@@ -184,6 +184,19 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session close tears down views a
 	test_grep -E "^closed dev$" close2.out
 '
 
+# GC of an idle closed session only prints the candidate. Without
+# --yes nothing is removed, so the later remove still has a record.
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session gc previews a closed session without removing it' '
+	"$tiler_bin" session gc --expire 0 >gc.out 2>gc.err &&
+	test_grep "Expired sessions" gc.out &&
+	test_grep "  dev  " gc.out &&
+	test_grep "runtime/" gc.out &&
+	test_grep "Nothing removed" gc.err &&
+	test_grep ! -E "^removed " gc.out &&
+	"$tiler_bin" session list >listgc.out 2>listgc.err &&
+	test_grep -E "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" listgc.out
+'
+
 # A closed record never accepts a new mount; the caller must create a
 # fresh session. The record is left untouched.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount into a closed session is refused' '

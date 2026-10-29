@@ -206,16 +206,16 @@ Available now:
   `images describe|desc <name>:<hash>` also opens `$EDITOR` by default.
 - `tiler image rm <name>:<hash>` removes that node and its descendants;
   `tiler image rm <name>` removes the repository. Session references
-  block either operation. `images gc` recovers cleanup and orphans but
-  preserves every version retained by metadata. The same pass
-  cleans the session records: a closed record past
-  `--session-max-age` is removed, an active record is never
-  auto-deleted but one whose mounts are all dead is reported
-  stale, and with `session_autoclose_stale` enabled (off by
-  default) an aged stale record flips to closed and becomes
-  eligible for a later removal. The one exception is a `--rm`
-  active record whose views are all dead: it is torn down, its
-  runtime purged, and its record removed whatever its age.
+  block either operation. `images gc` lists expired unreferenced
+  image versions, plus pending-cleanup and orphan objects, and
+  deletes only after `--yes` or an interactive `yes`. It does not
+  remove, close, or unmount sessions. Retention is `--expire`
+  (default 30 days); zero expires every inactive object. A pending
+  cleanup runs alone; rerun `images gc` afterward to inspect
+  expiration. Ancestors required by a retained version stay.
+  `session gc` uses the same confirmation and deletes an expired
+  idle session directory, upper data included. Sample output is
+  under Activity and garbage collection.
 - Session records remain authoritative when the reverse-index cache is stale.
 - `tiler mount <image> <dir>` serves an image as a workspace. The
   default view is writable: every squashfs member mounts read-only
@@ -314,6 +314,116 @@ Available now:
   and a path inside the runtime tree (an upper or a lower transit
   point) both resolve back to the covering session, and a path no
   session covers is an error.
+
+### Activity and garbage collection
+
+Each session and each image version has its own `actions.log`.
+The session file is `sessions/<name>/actions.log`. A version file
+is `images/<name>/_objects/<id>/actions.log`, whether that version
+is full or incremental. `actions.log.lock` is the stable lock
+inode. The log and the lock are mode 0600. Activity bytes are not
+part of the payload, so they do not change a version id, sha256,
+or the manifest schema. A mount of a file that is not a library
+version updates the session log only.
+
+Records are UTF-8 JSON lines. The time of the newest complete line
+is the last activity, in UTC. A file that would grow past 100 KiB
+(102400 bytes) is compacted in place to its newest complete lines,
+about 50 KiB, and the new line is appended. No rotated copy is kept.
+Compaction and a tail read do not count as activity.
+
+An image event is stored on the source version and on every
+ancestor through the full root. The source line keeps the real
+event, such as `image.create.full`, `image.create.incremental`,
+or `mount`. Each ancestor line is `image.dependency.activity`,
+with `version` set to that ancestor, `source_version` set to the
+source id, and `source_event` set to the original event name.
+The phase is unchanged. One batch shares one timestamp, the later
+of the current UTC time and any tail already in the chain. Lines
+are synced from the root toward the source, holding one log lock
+at a time, so a source line means every ancestor line for that
+phase is already durable. An ancestor line does not start another
+walk. A sibling, another full root, and another repository are
+not updated.
+
+The first GC scan that finds a missing log writes
+`activity.initialize` at the current time and keeps that object
+for this scan, including `--expire 0`. On an image version that
+initialization also appends one dependency line on each ancestor
+and may refresh an ancestor that already has a log. The next scan
+only reads. It does not append, and it does not extend retention.
+
+`tiler session gc` and `tiler images gc` (and the `sessions` and
+`image` aliases) take `--expire N` and `--yes`. `N` is a
+nonnegative whole number of days, default 30. A day is 24 hours.
+Zero expires objects that are already inactive. A negative number,
+a fraction, or a value that overflows the duration range is a
+usage error and exits 2.
+
+Both commands print every candidate before deleting anything. An
+interactive terminal must answer `yes` in lower case. `--yes`
+prints the list and then deletes. Without `--yes`, a pipe, a
+file, or any other noninteractive input only prints the list,
+even when that input is `yes`. An empty list does not ask.
+Nothing is removed, unmounted, or closed in that preview, though
+a missing log may be initialized.
+
+A session is listed only when it has no attached mount, no other
+process holds its lock, and its last activity is strictly before
+the cutoff. An active session with no mount can expire. GC does
+not unmount. Removal deletes the whole session directory: the
+record, the log, and `runtime/` upper data.
+
+```text
+Expired sessions (last activity before 2026-09-29T03:11:06Z):
+  idle  active  last active 2020-01-01T00:00:00Z
+Removing a session deletes its whole directory: the record, its
+activity log, and runtime/, upper data of every view included.
+```
+
+The question and the noninteractive hint go to stderr:
+
+```text
+Nothing removed: confirmation needs an interactive terminal; rerun with --yes to remove 1 sessions.
+```
+
+`--yes` repeats the list, then prints the outcome:
+
+```text
+removed idle
+removed 1 of 1 approved sessions, kept 0
+```
+
+A log created by that scan is not a candidate:
+
+```text
+kept idle: initialized (activity log created by this scan)
+```
+
+Image GC decides per version. A version is listed when it is
+expired, no session references it, and dropping it would not
+remove an ancestor of a version that stays. That closure is
+calculated from the manifest at GC time. It is separate from the
+activity walk, so an old parent of a retained child stays even
+when the parent's log was never refreshed. Another expired root
+in the same repository can still be removed. Rows are
+child-before-parent. Pending-cleanup and orphan objects are
+labeled in the same preview and wait for the same answer.
+`images gc` never deletes a session or an external source file.
+
+```text
+Image GC candidates (last activity before 2026-10-29T03:11:06Z):
+  expired  alice/app:<id>  last active 2026-10-29T03:11:06Z  age 0d
+Only listed image objects are eligible; sessions and external source files are preserved.
+```
+
+A confirmed run then prints `removed alice/app:<id>` and
+`removed 1 of 1 approved image objects, skipped 0`. A version
+initialized by the scan is reported on stderr:
+
+```text
+kept alice/app:<id>: initialized (activity refreshed by this scan)
+```
 
 ### External images
 
@@ -468,9 +578,15 @@ complete. `squashfs_options` is consumed only by the squashfs
 implementation. There is no `erofs_options` key.
 
 `sessions_dir` is the only session root. Each session is a self-contained
-directory under it (`session.json`, `session.lock`, and
-`runtime/m<seq>/` combination trees). There is no separate global
+directory under it (`session.json`, `session.lock`, `actions.log`,
+and `runtime/m<seq>/` combination trees). There is no separate global
 `runtime_dir`.
+
+`session_max_age` and `session_autoclose_stale` still load, including
+an explicit zero, so an older file keeps parsing. Garbage collection
+does not read them. `session_max_age: 0s` does not disable
+`session gc`. Those commands use `--expire` only. `session close --rm`
+still deletes on close and does not ask for a GC confirmation.
 
 Values resolve in layers, each overriding the last: the built-in
 defaults, the user file `$HOME/.tiler.yaml`, the project-level

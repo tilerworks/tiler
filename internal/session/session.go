@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
@@ -111,6 +112,18 @@ type Engine struct {
 	// leave it nil; tests inject it where flock is unavailable or
 	// not the subject.
 	Lock func(name string, timeout time.Duration) (func(), error)
+	// Activity overrides the activity log of one session. Nil opens
+	// <sessions root>/<name>/actions.log and records nothing when no
+	// sessions root is set. It is called while the session's
+	// exclusive lock is held, so tests inject write failures here.
+	Activity func(name string) (*activity.Writer, error)
+	// HealthyMount, when set, reports one recorded mount a replay
+	// adopted because the view still answers reads. The mount itself
+	// never runs again, so the hook is the only chance to renew the
+	// activity of the image stack the view keeps serving; nil reports
+	// nothing. It runs inside the version scope, so the caller already
+	// holds the library lock.
+	HealthyMount func(name string, action Action) error
 }
 
 // New creates one fresh active record under the session's exclusive
@@ -159,7 +172,10 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 		}
 		rec.RemoveOnClose = removeOnClose
 	}
-	return e.Save(rec)
+	if err := e.Save(rec); err != nil {
+		return err
+	}
+	return e.recordCreated(name)
 }
 
 // RunMount records one mount action write-ahead and executes it
@@ -167,7 +183,9 @@ func (e *Engine) newRecord(name string, removeOnClose bool) error {
 // before the mount runs, and the outcome is written back after. A
 // failed execution keeps the write-ahead record with a failed
 // status, so a later Open replays it, and returns the execution
-// error.
+// error. A callback that reports ErrActivityFailed mounted the view
+// and only lost a record of it, so the action is written back as
+// mounted and the error is reported without tearing the view down.
 func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, error) {
 	if e.needsVersionScope() {
 		var result Result
@@ -199,17 +217,31 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := mount(stored)
+	// The started record lands after the write-ahead action, so it can
+	// carry the sequence, and before the mount runs: a log that cannot
+	// be written leaves the pending action for a later Open instead of
+	// creating a view nothing records.
+	finish, err := e.beginActionActivity(name, activity.EventMount, stored)
 	if err != nil {
-		if wbErr := e.Writeback(name, stored.Seq, StatusFailed, ""); wbErr != nil {
-			return Result{}, fmt.Errorf("%w (writeback: %v)", err, wbErr)
-		}
 		return Result{}, err
+	}
+	result, mountErr := mount(stored)
+	logErr := finish(mountErr)
+	if mountedWithLostRecord(mountErr) {
+		// The view is up; only its record is missing. The failed
+		// write-back would strand a live view behind status=failed.
+		mountErr = nil
+	}
+	if mountErr != nil {
+		if wbErr := e.Writeback(name, stored.Seq, StatusFailed, ""); wbErr != nil {
+			return Result{}, fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
+		}
+		return Result{}, logErr
 	}
 	if wbErr := e.Writeback(name, stored.Seq, StatusMounted, result.Mountpoint); wbErr != nil {
 		return result, wbErr
 	}
-	return result, nil
+	return result, logErr
 }
 
 // Open replays one record into a consistent mounted state: the
@@ -232,10 +264,27 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 		return err
 	}
 	defer release()
+	return e.openLocked(name, mount)
+}
+
+// openLocked records the open activity and replays the record under
+// the session's exclusive lock. The started record lands first, so a
+// session whose log cannot be written is left untouched.
+func (e *Engine) openLocked(name string, mount MountFunc) error {
 	rec, err := e.Load(name)
 	if err != nil {
 		return err
 	}
+	finish, err := e.beginActivity(name, activity.EventSessionOpen)
+	if err != nil {
+		return err
+	}
+	return finish(e.openRecord(name, rec, mount))
+}
+
+// openRecord replays one loaded record: healthy views are reconciled,
+// stale ones are cleaned and rebuilt, and a closed record reopens.
+func (e *Engine) openRecord(name string, rec Record, mount MountFunc) error {
 	if e.useDiskImages() {
 		return e.openFromDisk(name, rec, mount)
 	}
@@ -261,6 +310,9 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 			// already-mounted action is left untouched: a healthy
 			// mounted view carrying served ids still serves the
 			// replaced stack.
+			if err := e.reportHealthyMount(name, action); err != nil {
+				return err
+			}
 			if action.Status != StatusMounted {
 				if err := e.WritebackMounted(name, action.Seq, "", true); err != nil {
 					return err
@@ -278,6 +330,17 @@ func (e *Engine) Open(name string, mount MountFunc) error {
 	return nil
 }
 
+// reportHealthyMount renews the activity of one view a replay adopted
+// instead of remounting. A nil hook reports nothing, and the activity
+// failure fails the open: a stack the caller cannot account for is
+// never adopted silently.
+func (e *Engine) reportHealthyMount(name string, action Action) error {
+	if e.HealthyMount == nil {
+		return nil
+	}
+	return e.HealthyMount(name, action)
+}
+
 // reopen flips one replayed closed record back to active: its views
 // are up again, so the closed state no longer describes reality.
 func (e *Engine) reopen(name string) error {
@@ -291,7 +354,10 @@ func (e *Engine) reopen(name string) error {
 }
 
 // replay cleans one stale action and rebuilds it through the mount
-// seam, writing the outcome back to the record. A real remount —
+// seam, writing the outcome back to the record. The started record
+// lands before the clean: a log that cannot be written leaves the
+// stale view attached and the record untouched instead of tearing a
+// view down that nothing would rebuild. A real remount —
 // not the adoption of an already-healthy view — serves the desired
 // stack again, so the mounted status and the emptied served stack
 // ids land in the same atomic write and the old stack stops being
@@ -301,21 +367,45 @@ func (e *Engine) reopen(name string) error {
 // the post-rebase steady state, so no later open could tell the two
 // apart and heal it.
 func (e *Engine) replay(name string, action Action, clean CleanFunc, mount MountFunc) error {
+	finish, err := e.beginActionActivity(name, activity.EventMount, action)
+	if err != nil {
+		return err
+	}
 	if action.Mountpoint != "" {
-		if err := clean(action.Mountpoint); err != nil {
-			return err
+		if cleanErr := clean(action.Mountpoint); cleanErr != nil {
+			return finish(replayError(name, action.Seq, cleanErr))
 		}
 	}
-	result, err := mount(action)
-	if err != nil {
+	result, mountErr := mount(action)
+	if mountErr != nil {
+		mountErr = replayError(name, action.Seq, mountErr)
+	}
+	logErr := finish(mountErr)
+	if mountErr != nil && !mountedWithLostRecord(mountErr) {
 		if wbErr := e.Writeback(name, action.Seq, StatusFailed, ""); wbErr != nil {
-			return fmt.Errorf("%w (writeback: %v)", err, wbErr)
+			return fmt.Errorf("%w (writeback: %v)", mountErr, wbErr)
 		}
-		return fmt.Errorf("session: %s: replay seq %d: %w", name, action.Seq, err)
+		return logErr
 	}
 	// An adopted (Reused) view still serves the stack its served
-	// ids name, so only a real remount clears them.
-	return e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused)
+	// ids name, so only a real remount clears them. A rebuilt view
+	// with a lost record keeps the mounted write-back too: only its
+	// activity entry is missing, and the error still reports that.
+	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused); wbErr != nil {
+		return wbErr
+	}
+	return logErr
+}
+
+// mountedWithLostRecord reports a mount callback that mounted the view
+// and lost a record of it, which must not be written back as a failure.
+func mountedWithLostRecord(err error) bool {
+	return errors.Is(err, ErrActivityFailed)
+}
+
+// replayError adds the replay context of one action to its error.
+func replayError(name string, seq int, err error) error {
+	return fmt.Errorf("session: %s: replay seq %d: %w", name, seq, err)
 }
 
 // Close tears every recorded mount down in reverse record order. A
@@ -344,10 +434,10 @@ func (e *Engine) Close(name string, umount UmountFunc) (bool, error) {
 	return e.closeLocked(name, umount)
 }
 
-// closeLocked performs the reverse-order teardown of Close and then
-// either flips the record to closed or, for a --rm record, purges
-// its runtime and deletes it. The caller holds the session's
-// exclusive lock. The return reports whether the record was removed.
+// closeLocked records the close activity and tears the record down.
+// A closed record is a no-op without an activity record, so repeated
+// closes never renew an existing log. The caller holds the session's
+// exclusive lock.
 func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 	rec, err := e.Load(name)
 	if err != nil {
@@ -356,22 +446,52 @@ func (e *Engine) closeLocked(name string, umount UmountFunc) (bool, error) {
 	if rec.State == StateClosed {
 		return false, nil
 	}
+	finish, err := e.beginActivity(name, activity.EventSessionClose)
+	if err != nil {
+		return false, err
+	}
+	removed, opErr := e.closeRecord(name, rec, umount)
+	if err := finish(opErr); err != nil {
+		return removed, err
+	}
+	if !removed {
+		return false, nil
+	}
+	return true, e.purgeRemovable(name, rec)
+}
+
+// closeRecord tears every recorded mount down in reverse record order
+// and then either marks the record closed or reports that a --rm
+// record must be purged. The outcome activity is written before the
+// --rm purge removes the session directory, log included.
+func (e *Engine) closeRecord(name string, rec Record, umount UmountFunc) (bool, error) {
 	for i := len(rec.Actions) - 1; i >= 0; i-- {
 		action := rec.Actions[i]
 		if action.Type != TypeMount || action.Mountpoint == "" ||
 			action.Status == StatusUnmounted {
 			continue
 		}
-		if err := umount(action.Mountpoint); err != nil {
-			return false, fmt.Errorf("session: %s: close seq %d: %w",
-				name, action.Seq, err)
+		finish, err := e.beginActionActivity(name, activity.EventUnmount, action)
+		if err != nil {
+			return false, err
+		}
+		umountErr := umount(action.Mountpoint)
+		if umountErr != nil {
+			umountErr = fmt.Errorf("session: %s: close seq %d: %w",
+				name, action.Seq, umountErr)
+		}
+		if err := finish(umountErr); err != nil {
+			return false, err
+		}
+		if umountErr != nil {
+			return false, umountErr
 		}
 		if err := e.Writeback(name, action.Seq, StatusUnmounted, ""); err != nil {
 			return false, err
 		}
 	}
 	if rec.RemoveOnClose {
-		return true, e.purgeRemovable(name, rec)
+		return true, nil
 	}
 	closed, err := e.Load(name)
 	if err != nil {

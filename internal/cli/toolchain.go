@@ -13,6 +13,10 @@ import (
 // do not depend on the host toolchain.
 var toolLookPath = exec.LookPath
 
+// toolFormatLookup keeps native platform restrictions at the tool gate.
+// Tests replace it when simulating a foreign host's registered formats.
+var toolFormatLookup = container.Lookup
+
 // erofsHelp is the text of mkfs.erofs --help. Tests replace it so
 // compression selection does not depend on how the host was built.
 var erofsHelp = readErofsHelp
@@ -38,7 +42,7 @@ func gateAnyStack(label string) error {
 // gateFormatTools refuses the command when typ's packer or FUSE
 // client is missing, even if another stack is complete.
 func gateFormatTools(label, typ string) error {
-	format, err := container.Lookup(typ)
+	format, err := toolFormatLookup(typ)
 	if err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}

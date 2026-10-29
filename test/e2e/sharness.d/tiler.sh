@@ -74,6 +74,13 @@ test_lazy_prereq EROFS_TOOLCHAIN '
 	command -v git >/dev/null 2>&1
 '
 
+# Packing a squashfs image needs mksquashfs and does not need a
+# mount. GC cases that publish a full image and never mount list
+# this prereq so a host without /dev/fuse still runs them.
+test_lazy_prereq SQUASHFS_PACK '
+	command -v mksquashfs >/dev/null 2>&1
+'
+
 # kill_view needs pgrep and /proc/<pid>/cmdline. Gate crash/stale
 # assertions on this alone so mount cases without a kill still run
 # when pgrep is missing; require LINUX because /proc is Linux-only.
