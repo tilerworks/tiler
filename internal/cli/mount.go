@@ -63,7 +63,6 @@ type mountFlags struct {
 	verify   bool
 	session  string
 	rm       bool
-	file     string
 	// pruneUpper asks the engine to prune a reused upper against
 	// the lower stack before merging. Only session replay sets it,
 	// when the recorded served stack resolves differently from the
@@ -84,9 +83,7 @@ func newMountCmd() *cobra.Command {
 			"default, or a read-only view with --read-only. <image> is the\n" +
 			"path of one squashfs or erofs file, or a 1-to-5 segment library\n" +
 			"name. When the cleaned path exists as a regular file, that\n" +
-			"file wins over a library name unless --file registers an external\n" +
-			"image: --file <path> <library-name> <dir> symlinks the external\n" +
-			"file into the library and mounts by name. Chain layers mount as a cascade,\n" +
+			"file wins over a library name. Chain layers mount as a cascade,\n" +
 			"--subdir exposes one image subdirectory as the mount root,\n" +
 			"and --verify re-hashes every recorded digest instead of the\n" +
 			"default quick check. <dir> must be an empty directory owned\n" +
@@ -115,8 +112,6 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flags.session, "session", "s", "", "session that records this mount")
 	cmd.Flags().BoolVar(&flags.rm, "rm", false,
 		"remove the just-created session and purge its runtime when its last view unmounts")
-	cmd.Flags().StringVar(&flags.file, "file", "",
-		"register an external image file in the library before mounting by name")
 	return cmd
 }
 
@@ -149,13 +144,6 @@ func runMount(cmd *cobra.Command, args []string, flags mountFlags) error {
 		return usageError{err}
 	}
 	selector := args[0]
-	if flags.file != "" {
-		var err error
-		selector, err = linkMountFile(cfg, args[0], flags.file)
-		if err != nil {
-			return err
-		}
-	}
 	target, err := resolveRuntimeMount(cfg, selector)
 	if err != nil {
 		if isResolveUsage(err) {
@@ -645,39 +633,6 @@ func ownedLibrarySource(imagesDir string) func(string) bool {
 		_, ok := mountinfo.LibraryName(imagesDir, source)
 		return ok
 	}
-}
-
-// linkMountFile registers one external image under a library name
-// before the mount resolves that name. It refuses the combination
-// with a file-path first argument, which --file replaces.
-func linkMountFile(cfg config.Config, name, src string) (string, error) {
-	cleaned := filepath.Clean(name)
-	if info, err := os.Stat(cleaned); err == nil && info.Mode().IsRegular() {
-		return "", usageError{errors.New(
-			"mount: --file cannot be combined with a file-path image argument")}
-	}
-	id, err := image.LinkExternalVersion(cfg.ImagesDir, name, src, Version)
-	if err != nil {
-		if isLinkUsage(err) {
-			return "", usageError{err}
-		}
-		return "", fmt.Errorf("mount: %w", err)
-	}
-	return name + ":" + id, nil
-}
-
-// isLinkUsage reports whether LinkExternal failed on argument shape
-// or OS format policy, which mount treats as a usage problem.
-func isLinkUsage(err error) bool {
-	if isResolveUsage(err) {
-		return true
-	}
-	if errors.Is(err, container.ErrNotDetected) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "not available on macOS") ||
-		strings.Contains(msg, "dmg is not available on this host")
 }
 
 // isResolveUsage reports whether a resolve failure rejects the

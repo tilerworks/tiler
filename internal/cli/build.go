@@ -50,6 +50,9 @@ func newBuildCmd() *cobra.Command {
 		compression string
 		messages    []string
 		files       []string
+		link        string
+		copySrc     string
+		hash        string
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
@@ -91,10 +94,15 @@ func newBuildCmd() *cobra.Command {
 			"image_compression key in .tiler.yaml, or that format's default.\n" +
 			"--format squashfs or erofs on macOS is a usage error.\n" +
 			"An incremental build inherits the base image; a flag that\n" +
-			"disagrees is a usage error.",
+			"disagrees is a usage error.\n" +
+			"\n" +
+			"--link <path> or --copy <path> imports an image file or a\n" +
+			"directory with meta.yaml. Import requires --image, accepts no\n" +
+			"positional directory, and does not pack, mount, or open a\n" +
+			"session. --hash selects one directory version prefix or all.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files)
+			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files, link, copySrc, hash)
 		},
 	}
 	cmd.Flags().BoolVarP(&full, "full", "f", false, "force a full build")
@@ -109,6 +117,12 @@ func newBuildCmd() *cobra.Command {
 		"image description paragraph (repeatable)")
 	cmd.Flags().StringArrayVarP(&files, "file", "F", nil,
 		"read image description from file (use - for stdin)")
+	cmd.Flags().StringVar(&link, "link", "",
+		"import a file or image directory as position files")
+	cmd.Flags().StringVar(&copySrc, "copy", "",
+		"import a file or image directory by copying payload bytes")
+	cmd.Flags().StringVar(&hash, "hash", "",
+		"directory version prefix, or all")
 	return cmd
 }
 
@@ -117,10 +131,14 @@ type buildDescription struct {
 	set  bool
 }
 
-func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split, format, compression string, messages, files []string) error {
+func runBuild(cmd *cobra.Command, args []string, full, incr bool, imageName, split, format, compression string, messages, files []string, link, copySrc, hash string) error {
 	cfg, ok := loadedConfig(cmd)
 	if !ok {
 		return errors.New("build: configuration is not loaded")
+	}
+	handled, err := runBuildImport(cmd, args, cfg, imageName, link, copySrc, hash)
+	if handled || err != nil {
+		return err
 	}
 	description, err := readBuildDescription(cmd, messages, files)
 	if err != nil {
