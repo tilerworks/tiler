@@ -97,9 +97,25 @@ func newBuildCmd() *cobra.Command {
 			"disagrees is a usage error.\n" +
 			"\n" +
 			"--link <path> or --copy <path> imports an image file or a\n" +
-			"directory with meta.yaml. Import requires --image, accepts no\n" +
-			"positional directory, and does not pack, mount, or open a\n" +
-			"session. --hash selects one directory version prefix or all.",
+			"directory with meta.yaml, then an ordinary mount uses the name:\n" +
+			"\n" +
+			"  tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app\n" +
+			"  tiler mount vendor/app work\n" +
+			"\n" +
+			"Import requires --image, accepts no positional directory, and\n" +
+			"does not pack, mount, or open a session. --link and --copy are\n" +
+			"mutually exclusive. -F/--file still reads a build description\n" +
+			"and cannot combine with import. A file imports as one full\n" +
+			"image. Omit --hash to import the latest directory version and\n" +
+			"its ancestors; --hash takes one 4-to-64 hex prefix plus\n" +
+			"ancestors, or all for the whole forest. --link writes a\n" +
+			"position file and does not hash the payload. A missing sidecar\n" +
+			"records the unknown digest of 64 zeros. mount --verify skips\n" +
+			"sha256 for that version and still checks reachability, format,\n" +
+			"size, and mtime. The same id with a different final source is\n" +
+			"a source conflict. --copy of a known link keeps that id;\n" +
+			"--copy of an unknown link publishes the real digest and keeps\n" +
+			"the old zero version.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files, link, copySrc, hash)
@@ -118,11 +134,11 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&files, "file", "F", nil,
 		"read image description from file (use - for stdin)")
 	cmd.Flags().StringVar(&link, "link", "",
-		"import a file or image directory as position files")
+		"import a file or image directory as position files, then mount the name")
 	cmd.Flags().StringVar(&copySrc, "copy", "",
-		"import a file or image directory by copying payload bytes")
+		"import a file or image directory by copying payload bytes, then mount the name")
 	cmd.Flags().StringVar(&hash, "hash", "",
-		"directory version prefix, or all")
+		"directory version: omit for latest, or a prefix, or all")
 	return cmd
 }
 

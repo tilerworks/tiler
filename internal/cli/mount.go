@@ -83,10 +83,14 @@ func newMountCmd() *cobra.Command {
 			"default, or a read-only view with --read-only. <image> is the\n" +
 			"path of one squashfs or erofs file, or a 1-to-5 segment library\n" +
 			"name. When the cleaned path exists as a regular file, that\n" +
-			"file wins over a library name. Chain layers mount as a cascade,\n" +
-			"--subdir exposes one image subdirectory as the mount root,\n" +
-			"and --verify re-hashes every recorded digest instead of the\n" +
-			"default quick check. <dir> must be an empty directory owned\n" +
+			"file wins over a library name. Import an external image with\n" +
+			"build --link or build --copy, then mount the library name.\n" +
+			"Chain layers mount as a cascade, --subdir exposes one image\n" +
+			"subdirectory as the mount root, and --verify re-hashes every\n" +
+			"recorded digest instead of the default quick check. A digest\n" +
+			"of 64 zeros is unknown: --verify skips that sha256, still\n" +
+			"checks reachability, format, size, and mtime, and\n" +
+			"reports the skip. <dir> must be an empty directory owned\n" +
 			"by the current user, outside every reserved tree, and must\n" +
 			"not cover the sessions_dir, images_dir, or cache_dir paths\n" +
 			"from .tiler.yaml, or $HOME/.tiler.\n" +

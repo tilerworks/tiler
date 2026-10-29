@@ -141,11 +141,25 @@ func TestMountFileFlagRejected(t *testing.T) {
 	if strings.Contains(stdout, "--file") {
 		t.Fatalf("mount help still documents --file:\n%s", stdout)
 	}
+	for _, want := range []string{"build --link", "64 zeros is unknown", "reports the skip"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("mount help missing %s:\n%s", want, stdout)
+		}
+	}
 	stdout, stderr, _, err = runCmd(t, "build", "--help")
 	if err != nil {
 		t.Fatalf("build --help: %v\n%s", err, stderr)
 	}
-	for _, want := range []string{"--link", "--copy", "--hash"} {
+	for _, want := range []string{
+		"--link", "--copy", "--hash",
+		"tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app",
+		"tiler mount vendor/app work",
+		"latest directory version",
+		"unknown digest of 64 zeros",
+		"source conflict",
+		"keeps that id",
+		"read image description from file (use - for stdin)",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("build help missing %s:\n%s", want, stdout)
 		}

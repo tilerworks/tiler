@@ -193,11 +193,13 @@ tiler session close feature                # 逆序卸载，记录保留
   lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或 1 到 5
   段的库名：库名经活跃位 meta 解析为全量镜像加增量链，一个栈至多
   八个成员；清理后的路径若存在且是普通文件，则文件优先于库名。
-  `--file <path> <library-name>` 先把外部镜像登记进库再按库名挂载
-  （见下文「外部镜像」）；不能与「第一位置参数已是存在的常规
-  文件」同用。库成员默认先做 size 加 mtime 快速校验；`--verify`
-  改为对每个记录在案的 sha256 摘要整体重验（裸文件路径形态没有
-  记录摘要）。
+  Import an external image with `tiler build --link` or
+  `tiler build --copy`, then mount the library name (see External
+  images below). Library members pass a quick size and mtime check
+  first; `--verify` re-hashes every recorded sha256. A bare file
+  path records none. A version whose digest is 64 zeros is unknown:
+  `--verify` skips that sha256, still checks reachability, format,
+  size, and mtime, and reports the skip.
   `--subdir <path>` 把镜像内一个子目录暴露为挂载根：缺少该子目录
   的成员不进栈，全部缺失时挂载失败且不创建任何东西。子树内没有
   `.git` 时，工作区 git 命令会向上寻到挂载点之外，因此 subdir
@@ -255,55 +257,37 @@ tiler session close feature                # 逆序卸载，记录保留
   深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
   覆盖 session；无 session 覆盖的路径报错。
 
-### 外部镜像
+### External images
 
-NAS 共享或供应商目录里常有现成的 squashfs、erofs 或 dmg，但
-没有 tiler 库布局（`meta.yaml`、`image.sqsh` 或 `image.dmg`）。
-挂载有两种路径：
+Import a ready-made squashfs, erofs, or dmg, then mount the library
+name. See the English README for the same contract: directory
+selection, the unknown digest, source conflicts, and conversion.
 
-| 路径 | 命令形态 | 入库 | session `Name`/`FullID` | 视图内 `build -i` |
-|------|----------|------|-------------------------|-------------------|
-| 裸文件 | `tiler mount /path/to/file.sqsh work` | 否 | 否 | 无法反查库名 |
-| 登记后挂载 | `tiler mount --file /path/to/file.sqsh alice/app work` | 库内外链 + meta | 是 | Linux 可用 |
+| Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
+|------|---------------|---------|-------------------------|--------------------|
+| Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
+| Link, then mount | `tiler build --link /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | position file + meta | yes | yes on Linux |
+| Copy, then mount | `tiler build --copy /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | local payload + meta | yes | yes on Linux |
 
-`--file` 在库叶子上优先写指向外部文件的绝对 symlink；若主机无法
-创建 symlink，则写入 path-ref 普通文件（内容为绝对路径加换行，与
-`core.symlinks=false` 时 git 检出 symlink 的形态一致）。按目标内容
-写入 `meta.yaml` 后，与普通库名挂载走同一路径。挂载、校验与 cache
-都会解析 symlink 或 path-ref 再打开目标字节。相同目标与 digest 的
-第二次登记对叶子幂等。
-
-平台格式门禁与 `build` 对称（非法格式为 usage 错误，退出码 2）：
-
-| 主机 | 允许的源 | 库内文件名 | 拒绝 |
-|------|----------|------------|------|
-| Linux | squashfs、erofs | `image.sqsh` | dmg |
-| macOS | 仅 dmg | `image.dmg` | squashfs、erofs |
-
-已登记外部镜像的生命周期：
-
-- `tiler images remove` 与 `tiler images gc` 只删库内 meta、外链
-  叶子（symlink 或 path-ref）与本地增量层，**不会**删除 NAS 或
-  其他位置上的外部文件。
-- `tiler build --full`（macOS 上为 dmg bake）会在库内物化新的
-  active 载荷；先前的 active（含外链）进入 hold 或归档。
-- 可写视图产生的增量层落在库叶子下（Linux 为 `_incr/`）；active
-  载荷仍可保持为外链。
-- 开启 `--cache` 时，成员字节先拷入 `cache_dir` 再挂载，但挂载表
-  与 session 身份仍指向库路径（`images_dir/.../image.*`），而非
-  缓存文件。
-
-示例：
+`--link` and `--copy` require `--image`, accept no positional
+directory, and do not pack or mount. Omit `--hash` for the latest
+directory version and its ancestors. `--hash <prefix>` selects one
+4-to-64 hex prefix plus ancestors. `--hash all` imports the whole
+forest. A missing `<file>.sha256` sidecar records 64 zeros.
+`mount --verify` skips sha256 for that unknown version and still
+checks reachability, format, size, and mtime. The same id aimed at
+a different final path is a source conflict. `--copy` of a known
+link keeps that id. `--copy` of an all-zero link publishes the real
+digest and keeps the old zero version. A refused format exits 1.
+Removal deletes the local position file and never the external
+source.
 
 ```bash
-# Linux：登记 NAS 上的 squashfs，开发并追加本地增量层
-tiler mount --file /mnt/nas/vendor/app.sqsh vendor/app work
-# 在 work 内编辑
-tiler build -i
-tiler umount work
+tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app
+tiler mount vendor/app work
 
-# macOS：登记外部 dmg（可写 shadow；full bake 可物化 active）
-tiler mount --file /Volumes/share/base.dmg vendor/base work
+tiler build --link /Volumes/share/base.dmg --image vendor/base
+tiler mount vendor/base work
 ```
 
 ### 分块存储
