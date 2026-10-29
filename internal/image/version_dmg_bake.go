@@ -89,12 +89,24 @@ func mountedDMGVersion(repo Repo, manifest VersionManifest, id string) (ImageMet
 		if err != nil {
 			return ImageMeta{}, "", err
 		}
-		if _, err := verifyVersionFile(path, node); err != nil {
+		if err := verifyMountedPayload(path, node); err != nil {
 			return ImageMeta{}, "", err
 		}
 		return node, path, nil
 	}
 	return ImageMeta{}, "", errors.New("version bake: pinned full DMG version not found")
+}
+
+// verifyMountedPayload checks the file convert will read. A linked
+// import may record the reserved unknown digest. That marker is not
+// a content hash, so the check is size and mtime only, matching the
+// mount probe. A known digest still requires the full hash.
+func verifyMountedPayload(path string, node ImageMeta) error {
+	if IsUnknownSHA256(node.SHA256) {
+		return QuickCheck(node, path)
+	}
+	_, err := verifyVersionFile(path, node)
+	return err
 }
 
 func versionShadowContent(req DMGRequest) (string, error) {

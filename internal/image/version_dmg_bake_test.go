@@ -33,6 +33,63 @@ func TestDMGVersionBakeConvertsLinkedPayload(t *testing.T) {
 	}
 }
 
+func TestDMGVersionBakeConvertsUnknownLinkedDigest(t *testing.T) {
+	cfg := buildConfig(t)
+	repo, err := OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := writeFakeDMG(t, t.TempDir(), []byte("linked"))
+	info, err := os.Stat(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := ImageMeta{
+		ID: UnknownSHA256, Kind: KindFull, SHA256: UnknownSHA256,
+		Size: info.Size(), MtimeUnix: info.ModTime().Unix(),
+		Format:    Format{Type: FormatDMG, Compression: "ulfo"},
+		CreatedAt: fixedNow(), Builder: "import",
+	}
+	body, err := EncodeVersionManifest(VersionManifest{
+		Version: VersionManifestVersion, Name: repo.Name(), Images: []ImageMeta{node},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repo.MetaPath(), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := repo.ObjectPayloadPath(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(leaf), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePathRef(external, leaf); err != nil {
+		t.Fatal(err)
+	}
+	runner := &dmgRunner{body: []byte("baked")}
+	got, err := BuildDMGVersion(DMGRequest{
+		Config: cfg, Name: repo.Name(), MountedID: UnknownSHA256,
+		Shadow:  writeShadow(t, cfg.SessionsDir, "dev", 1, []byte("before")),
+		Builder: "test", Now: fixedNow, Run: runner.run,
+	})
+	if err != nil || IsUnknownSHA256(got.ID) {
+		t.Fatalf("bake from unknown link: %#v, %v", got, err)
+	}
+	if !strings.Contains(strings.Join(runner.calls[0], " "), external) {
+		t.Fatalf("convert did not use the linked file: %q", runner.calls)
+	}
+	target, ok, err := readExternalLinkTarget(leaf)
+	if err != nil || !ok || target != external {
+		t.Fatalf("linked payload = %q ok %v err %v", target, ok, err)
+	}
+}
+
 func TestDMGVersionBakePinsBaseAndReusesPostConvertContent(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
