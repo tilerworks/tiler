@@ -450,7 +450,11 @@ file, a bad digest, or a version conflict exits 1.
 
 A regular file imports as one full image with no parent. To keep an
 incremental chain or split blocks, point `--link` or `--copy` at a
-directory that contains `meta.yaml`.
+directory that contains `meta.yaml`. `created_at` is stored as
+RFC 3339 in the local zone, to the second
+(`2026-10-29T18:07:56+08:00`). Older values, including a UTC
+timestamp with a fractional second, still load, and the fraction
+is discarded.
 
 Directory selection:
 

@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+func TestLatestPrefersDescendantWhenCreatedAtTies(t *testing.T) {
+	when := time.Unix(5, 0)
+	images := []ImageMeta{
+		{ID: "a", Kind: KindFull, CreatedAt: when},
+		{ID: "f", Kind: KindIncremental, Parent: "a", CreatedAt: when},
+	}
+	f, err := NewForest(images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := f.Latest()
+	if !ok || latest.ID != "f" {
+		t.Fatalf("Latest = %s, %v", latest.ID, ok)
+	}
+}
+
 func TestForestOrdersMultipleRootsAndDeepBranches(t *testing.T) {
 	node := func(id, kind, parent string, created int64) ImageMeta {
 		return ImageMeta{ID: id, Kind: kind, Parent: parent, CreatedAt: time.Unix(created, 0)}
