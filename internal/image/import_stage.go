@@ -32,10 +32,12 @@ type StagedCopy struct {
 	root      string
 }
 
-// stageCopyHooks are test seams for one copy. open replaces the single
-// source open. sync replaces the staged-file sync. digest replaces the
-// encoded sum after the bytes are hashed. beforeProbe runs after the
-// source check and before the staged container is detected.
+// stageCopyHooks are test seams for one copy. open replaces each
+// source open. sync replaces the staged-file sync. digest replaces
+// the encoded sum of a single-file copy after the bytes are hashed.
+// beforeProbe runs after the source check and before the staged
+// container is detected. Split copies do not apply digest, so a
+// seam cannot hide a block or logical-image mismatch.
 type stageCopyHooks struct {
 	open        func(string) (io.ReadCloser, error)
 	sync        func(*os.File) error
@@ -124,14 +126,28 @@ func observeImportCopy(loc, staged string, before os.FileInfo, n int64, sum, roo
 }
 
 func streamImportCopy(dst *os.File, src io.Reader, seam stageCopyHooks) (int64, string, error) {
-	hash := sha256.New()
-	buf := make([]byte, importCopyBuffer)
-	n, copyErr := io.CopyBuffer(io.MultiWriter(dst, hash), src, buf)
-	err := joinWriteErr(copyErr, syncStaged(dst, seam), dst.Close())
+	n, sum, err := streamHashedCopy(dst, src, nil, seam)
 	if err != nil {
 		return 0, "", err
 	}
-	return n, encodeCopyDigest(hash.Sum(nil), seam), nil
+	return n, encodeCopyDigest(sum, seam), nil
+}
+
+// streamHashedCopy writes src through one fixed buffer. The same
+// bytes update the returned digest and also, when set. Callers hash
+// a logical image by passing one shared writer for every block.
+func streamHashedCopy(dst *os.File, src io.Reader, also io.Writer, seam stageCopyHooks) (int64, []byte, error) {
+	hash := sha256.New()
+	out := io.Writer(io.MultiWriter(dst, hash))
+	if also != nil {
+		out = io.MultiWriter(dst, hash, also)
+	}
+	n, copyErr := io.CopyBuffer(out, src, make([]byte, importCopyBuffer))
+	err := joinWriteErr(copyErr, syncStaged(dst, seam), dst.Close())
+	if err != nil {
+		return 0, nil, err
+	}
+	return n, hash.Sum(nil), nil
 }
 
 func prepareStageFile(repo Repo) (*os.File, error) {
@@ -211,9 +227,22 @@ func failStage(path, stop string, err error) (StagedCopy, error) {
 }
 
 func discardStage(path, stop string) {
-	removeFile(path)
+	if path != "" {
+		clearStageDir(path)
+		removeFile(path)
+	}
 	if path == "" || stop == "" {
 		return
 	}
 	removeEmptyAncestors(filepath.Dir(path), stop)
+}
+
+func clearStageDir(path string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		removeFile(filepath.Join(path, entry.Name()))
+	}
 }
