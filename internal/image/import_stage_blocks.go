@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // StagedBlocks is one unpublished split payload inside the target
@@ -41,6 +42,9 @@ func stageImportBlocks(ctx context.Context, req ImportRequest, id string, seam s
 	if req.Mode != ImportCopy {
 		return StagedBlocks{}, importFail(req, errors.New("copy staging requires copy mode"))
 	}
+	if err := rejectNonDirectorySplit(req); err != nil {
+		return StagedBlocks{}, err
+	}
 	read, err := readImportSource(req)
 	if err != nil {
 		return StagedBlocks{}, err
@@ -57,6 +61,26 @@ func stageImportBlocks(ctx context.Context, req ImportRequest, id string, seam s
 		return StagedBlocks{}, importFail(req, err)
 	}
 	return staged, nil
+}
+
+// rejectNonDirectorySplit fails a regular file before format policy.
+// Split copy never accepts a file. On macOS the squashfs refusal
+// would otherwise hide that requirement. A missing path stays with
+// readImportSource so the stat error is unchanged.
+func rejectNonDirectorySplit(req ImportRequest) error {
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		return nil
+	}
+	given, err := filepath.Abs(source)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(given)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
+		return nil
+	}
+	return importFail(req, errors.New("split copy requires an image directory"))
 }
 
 func bindStageCtx(ctx context.Context) context.Context {
