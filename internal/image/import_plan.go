@@ -33,9 +33,10 @@ const (
 	SourceDir SourceKind = "dir"
 )
 
-// ImportRequest is one import. Hash is a directory selector owned by
-// a later step; a file source rejects any non-empty value. Planning
-// does not create the target repository.
+// ImportRequest is one import. Hash selects a directory closure:
+// empty is the latest node, "all" is the whole forest, and any other
+// value is a version prefix. A file source rejects a non-empty hash.
+// Planning does not create the target repository.
 type ImportRequest struct {
 	Mode      ImportMode
 	ImagesDir string
@@ -63,75 +64,109 @@ type SourcePlan struct {
 	SHA256    string
 }
 
+// importRead is one canonical source plus the directory metadata read
+// that produced it. File sources leave the snapshot fields empty.
+type importRead struct {
+	plan     SourcePlan
+	manifest VersionManifest
+	body     []byte
+}
+
 // PlanImportSource classifies and canonicalizes req.Source. It reads
 // metadata, sidecars, and bounded container probes only. It does not
 // lock or write the source, write an index, or hash link payloads.
 func PlanImportSource(req ImportRequest) (SourcePlan, error) {
+	got, err := readImportSource(req)
+	if err != nil {
+		return SourcePlan{}, err
+	}
+	return got.plan, nil
+}
+
+func readImportSource(req ImportRequest) (importRead, error) {
 	if req.Mode != ImportLink && req.Mode != ImportCopy {
-		return SourcePlan{}, importFail(req, fmt.Errorf("mode %q must be link or copy", req.Mode))
+		return importRead{}, importFail(req, fmt.Errorf("mode %q must be link or copy", req.Mode))
 	}
 	if strings.TrimSpace(req.Source) == "" {
-		return SourcePlan{}, importFail(req, errors.New("source path is required"))
+		return importRead{}, importFail(req, errors.New("source path is required"))
 	}
 	repo, err := OpenRepo(req.ImagesDir, req.Name)
 	if err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
 	if err := checkNamePlacement(req.ImagesDir, repo.Segments); err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
-	return planImport(req, repo)
+	return readImport(req, repo)
 }
 
-func planImport(req ImportRequest, repo Repo) (SourcePlan, error) {
+func readImport(req ImportRequest, repo Repo) (importRead, error) {
 	given, err := filepath.Abs(req.Source)
 	if err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
 	given = filepath.Clean(given)
 	info, err := os.Stat(given)
 	if err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
 	plan := SourcePlan{Mode: req.Mode, Name: repo.Name(), Repo: repo, Given: given}
 	switch {
 	case info.IsDir():
-		return planDirectory(req, plan)
+		return readImportDirectory(req, plan)
 	case info.Mode().IsRegular():
-		return planFile(req, plan)
+		planned, err := planFile(req, plan)
+		if err != nil {
+			return importRead{}, err
+		}
+		return importRead{plan: planned}, nil
 	default:
-		return SourcePlan{}, importFail(req, fmt.Errorf("%s is not a file or directory", given))
+		return importRead{}, importFail(req, fmt.Errorf("%s is not a file or directory", given))
 	}
 }
 
-func planDirectory(req ImportRequest, plan SourcePlan) (SourcePlan, error) {
+func readImportDirectory(req ImportRequest, plan SourcePlan) (importRead, error) {
 	loc, err := canonicalPath(plan.Given)
 	if err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
 	if err := validateImportLocation(loc, plan.Repo.Dir); err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, importFail(req, err)
 	}
-	meta := filepath.Join(loc, fileMeta)
-	info, err := os.Stat(meta)
+	manifest, body, info, err := readVersionSnapshot(req, loc)
 	if err != nil {
-		return SourcePlan{}, importFail(req, fmt.Errorf("metadata: %w", err))
-	}
-	if !info.Mode().IsRegular() {
-		return SourcePlan{}, importFail(req, errors.New("metadata is not a regular file"))
-	}
-	body, err := os.ReadFile(meta)
-	if err != nil {
-		return SourcePlan{}, importFail(req, fmt.Errorf("metadata: %w", err))
-	}
-	if _, err := DecodeVersionManifest(body); err != nil {
-		return SourcePlan{}, importFail(req, err)
+		return importRead{}, err
 	}
 	plan.Kind = SourceDir
 	plan.Location = loc
 	plan.Size = info.Size()
 	plan.MtimeUnix = info.ModTime().Unix()
-	return plan, nil
+	return importRead{plan: plan, manifest: manifest, body: body}, nil
+}
+
+// readVersionSnapshot reads meta.yaml once. A size change between the
+// stat and the read is a retryable failure; the source is not locked.
+func readVersionSnapshot(req ImportRequest, loc string) (VersionManifest, []byte, os.FileInfo, error) {
+	meta := filepath.Join(loc, fileMeta)
+	info, err := os.Stat(meta)
+	if err != nil {
+		return VersionManifest{}, nil, nil, importFail(req, fmt.Errorf("metadata: %w", err))
+	}
+	if !info.Mode().IsRegular() {
+		return VersionManifest{}, nil, nil, importFail(req, errors.New("metadata is not a regular file"))
+	}
+	body, err := os.ReadFile(meta)
+	if err != nil {
+		return VersionManifest{}, nil, nil, importFail(req, fmt.Errorf("metadata: %w", err))
+	}
+	if int64(len(body)) != info.Size() {
+		return VersionManifest{}, nil, nil, importFail(req, errors.New("metadata changed while reading; retry"))
+	}
+	manifest, err := DecodeVersionManifest(body)
+	if err != nil {
+		return VersionManifest{}, nil, nil, importFail(req, err)
+	}
+	return manifest, body, info, nil
 }
 
 func planFile(req ImportRequest, plan SourcePlan) (SourcePlan, error) {
