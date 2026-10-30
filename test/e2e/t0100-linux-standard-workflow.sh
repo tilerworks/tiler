@@ -464,4 +464,114 @@ do
 	'
 done
 
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a full rebuild advances only its session and retains subsequent upper work' '
+	rebuild_point=$standard/mnt-rebuild &&
+	rebuild_record=$sessions/full-rebuild/session.json &&
+	rebuild_upper=$sessions/full-rebuild/runtime/m1/upper &&
+	mkdir -p "$rebuild_point" &&
+	cp "$edit_record" edit-pin.before &&
+	cp "$sessions/chain-edit/session.json" chain-pin.before &&
+	cp "$sessions/branch-edit/session.json" branch-pin.before &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session new full-rebuild >"$HOME/rebuild-new.out" 2>"$HOME/rebuild-new.err" &&
+		"$tiler_bin" mount --session full-rebuild "standard/app:$chain_tip_id" "$rebuild_point" 2>"$HOME/rebuild-mount.err"
+	) >rebuild-mount.out &&
+	test_cmp chain-published "$rebuild_point/chain.txt" &&
+	printf "README published in the rebuilt full\n" >rebuild-readme &&
+	printf "addition published in the rebuilt full\n" >rebuild-addition &&
+	cp rebuild-readme "$rebuild_point/README.txt" &&
+	cp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	(
+		cd "$rebuild_point" &&
+		"$tiler_bin" build -f --format squashfs -m "rebuilt full" 2>"$HOME/rebuild-build.err"
+	) >rebuild-build.out &&
+	test_grep -E "^full standard/app [0-9a-f]{64}$" rebuild-build.out &&
+	rebuilt_full_id=$(cut -d" " -f3 rebuild-build.out) &&
+	test "$rebuilt_full_id" != "$base_id" &&
+	test_grep -F "\"full_id\": \"$rebuilt_full_id\"" "$rebuild_record" &&
+	test_grep -F "\"tip_id\": \"$rebuilt_full_id\"" "$rebuild_record" &&
+	test_grep -F "\"served_id\": \"$base_id\"" "$rebuild_record" &&
+	test_grep -F "\"served_tip\": \"$chain_tip_id\"" "$rebuild_record" &&
+	printf "a distinctly longer README after the full publication\n" >rebuild-pending-readme &&
+	printf "work after the full publication\n" >rebuild-pending &&
+	cp rebuild-pending-readme "$rebuild_point/README.txt" &&
+	cp rebuild-pending "$rebuild_point/rebuild-pending.txt" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session close full-rebuild 2>"$HOME/rebuild-close.err"
+	) >rebuild-close.out &&
+	test_grep "^closed full-rebuild$" rebuild-close.out &&
+	find "$rebuild_point" -mindepth 1 -print >rebuild-unmounted &&
+	test_must_be_empty rebuild-unmounted &&
+	test_cmp rebuild-addition "$rebuild_upper/rebuilt.txt" &&
+	test_cmp rebuild-pending-readme "$rebuild_upper/README.txt" &&
+	test_cmp rebuild-pending "$rebuild_upper/rebuild-pending.txt" &&
+	test_grep -F "\"served_tip\": \"$chain_tip_id\"" "$rebuild_record"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'opening the rebuilt session prunes baked files and preserves other session pins' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" session open full-rebuild 2>"$HOME/rebuild-open.err"
+	) >rebuild-open.out &&
+	test_grep "^opened full-rebuild$" rebuild-open.out &&
+	test_grep -F "\"full_id\": \"$rebuilt_full_id\"" "$rebuild_record" &&
+	test_grep -F "\"tip_id\": \"$rebuilt_full_id\"" "$rebuild_record" &&
+	test_grep ! -F "\"served_id\":" "$rebuild_record" &&
+	test_grep ! -F "\"served_tip\":" "$rebuild_record" &&
+	test_path_is_missing "$rebuild_upper/rebuilt.txt" &&
+	test_cmp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	test_cmp rebuild-pending-readme "$rebuild_point/README.txt" &&
+	test_cmp rebuild-pending-readme "$rebuild_upper/README.txt" &&
+	test_cmp rebuild-pending "$rebuild_point/rebuild-pending.txt" &&
+	test_cmp rebuild-pending "$rebuild_upper/rebuild-pending.txt" &&
+	test_cmp chain-published "$rebuild_point/chain.txt" &&
+	test_path_is_missing "$rebuild_point/obsolete.txt" &&
+	test_cmp edit-pin.before "$edit_record" &&
+	test_cmp chain-pin.before "$sessions/chain-edit/session.json" &&
+	test_cmp branch-pin.before "$sessions/branch-edit/session.json"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the rebuilt full mounts independently and keeps all five historical versions' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" mount --rm "standard/app:$rebuilt_full_id" "$verify_point" 2>"$HOME/rebuild-verify.err" &&
+		"$tiler_bin" images show standard/app >"$HOME/rebuild-show.out" 2>"$HOME/rebuild-show.err"
+	) >rebuild-verify.out &&
+	verify_session=$(sed -n "s/^new session created: //p" rebuild-verify.out) &&
+	test -n "$verify_session" &&
+	test_grep -E "^  id +$rebuilt_full_id$" rebuild-show.out &&
+	test_grep -E "^  parent +-$" rebuild-show.out &&
+	test_grep -E "^[[:space:]]*kind: full$" "$images/_objects/$rebuilt_full_id/image.yaml" &&
+	test_grep ! -E "^[[:space:]]*parent:" "$images/_objects/$rebuilt_full_id/image.yaml" &&
+	test_cmp rebuild-readme "$verify_point/README.txt" &&
+	test_cmp rebuild-addition "$verify_point/rebuilt.txt" &&
+	test_cmp delta-addition "$verify_point/published.txt" &&
+	test_cmp chain-published "$verify_point/chain.txt" &&
+	test_path_is_missing "$verify_point/obsolete.txt" &&
+	test_path_is_missing "$verify_point/branch.txt" &&
+	test_path_is_missing "$verify_point/pending.txt" &&
+	test_path_is_missing "$verify_point/chain-pending.txt" &&
+	test_path_is_missing "$verify_point/rebuild-pending.txt" &&
+	grep "^[[:space:]]*- id:" "$images/meta.yaml" >rebuild-version-count &&
+	test_line_count = 5 rebuild-version-count &&
+	for tiler_version in "$base_id" "$delta_id" "$chain_tip_id" "$branch_tip_id" "$rebuilt_full_id"
+	do
+		test_grep -E "^[[:space:]]*- id: $tiler_version$" "$images/meta.yaml" || return 1
+	done &&
+	test_grep -E "^[[:space:]]*parent: $base_id$" "$images/_objects/$delta_id/image.yaml" &&
+	test_grep -E "^[[:space:]]*parent: $delta_id$" "$images/_objects/$chain_tip_id/image.yaml" &&
+	test_grep -E "^[[:space:]]*parent: $base_id$" "$images/_objects/$branch_tip_id/image.yaml" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" umount "$verify_point" 2>"$HOME/rebuild-verify-umount.err"
+	) >rebuild-verify-umount.out &&
+	find "$verify_point" -mindepth 1 -print >rebuild-verify-unmounted &&
+	test_must_be_empty rebuild-verify-unmounted &&
+	test_path_is_missing "$sessions/$verify_session" &&
+	test_path_is_missing "$logs/sessions/$verify_session.log" &&
+	test_path_is_missing "$logs/sessions/$verify_session.log.lock"
+'
+
 test_done
