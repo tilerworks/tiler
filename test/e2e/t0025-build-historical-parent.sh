@@ -41,8 +41,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build from historical full uses 
  "$tiler_bin" images show "alice/app:$child" >child.out &&
  test_grep -E "^  parent +$base$" child.out &&
  "$tiler_bin" images ls >tree.out &&
- test_grep "^    ${tip%${tip#??????????}}  " tree.out &&
- test_grep "^    ${child%${child#??????????}}  " tree.out &&
+ test_grep "^     ├─ ${tip%${tip#??????????}}  " tree.out &&
+ test_grep "^     └─ ${child%${child#??????????}} ★  " tree.out &&
  "$tiler_bin" mount "alice/app:$child" "$verify" &&
  test_path_is_file "$verify/base" &&
  test_path_is_file "$verify/file1" &&
@@ -59,7 +59,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build from historical incrementa
  "$tiler_bin" images show "alice/app:$next" >next-show.out &&
  test_grep -E "^  parent +$tip$" next-show.out &&
  "$tiler_bin" images ls >next-tree.out &&
- test_grep "^      ${next%${next#??????????}}  " next-tree.out &&
+ test_grep "^     │  └─ ${next%${next#??????????}} ★  " next-tree.out &&
  "$tiler_bin" umount "$verify" &&
  "$tiler_bin" mount "alice/app:$next" "$verify" &&
  test_path_is_file "$verify/old-tip" &&
