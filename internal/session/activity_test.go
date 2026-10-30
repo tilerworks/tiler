@@ -27,7 +27,7 @@ type activityRecord struct {
 // log reads as no records.
 func readActivityLog(t *testing.T, dir, name string) []activityRecord {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, name, activity.LogName))
+	data, err := os.ReadFile(filepath.Join(dir+".logs", "sessions", name+".log"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -67,6 +67,9 @@ func TestNewRecordsOneCreateEvent(t *testing.T) {
 	want := activity.EventSessionCreate + "/" + activity.PhaseSucceeded
 	if got := activityPhases(records); got != want {
 		t.Fatalf("phases = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dev", activity.LogName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session directory still has an activity log: %v", err)
 	}
 	if records[0].Session != "dev" {
 		t.Fatalf("session = %q, want dev", records[0].Session)
@@ -482,7 +485,10 @@ func TestMountActivityFailureAfterMountReportsCompletedOperation(t *testing.T) {
 	}
 	logDir := t.TempDir()
 	e.Activity = func(string) (*activity.Writer, error) {
-		return activity.OpenLog(logDir, logDir, e.Now)
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(logDir, logDir, activity.LogName, "", e.Now)
 	}
 	point := "/mnt/dev"
 	result, err := e.RunMount("dev", mountAction(point), func(a Action) (Result, error) {
@@ -659,7 +665,11 @@ func TestStartedReplayActivityFailureKeepsTheStaleView(t *testing.T) {
 		if calls > 1 {
 			return nil, errors.New("log boom")
 		}
-		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+		dir := filepath.Join(e.LogsDir, "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(e.LogsDir, dir, name+".log", "", e.Now)
 	}
 	seams := &callLog{}
 	e.Clean = func(string) error {
@@ -731,7 +741,11 @@ func TestStartedUnmountActivityFailureBlocksTeardown(t *testing.T) {
 		if calls > 1 {
 			return nil, errors.New("log boom")
 		}
-		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+		dir := filepath.Join(e.LogsDir, "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(e.LogsDir, dir, name+".log", "", e.Now)
 	}
 	umounts := &callLog{}
 	removed, err := e.Close("dev", func(point string) error {
@@ -771,5 +785,38 @@ func TestReadOnlyOperationsLeaveTheLogAlone(t *testing.T) {
 	after := readActivityLog(t, dir, "dev")
 	if len(after) != len(before) {
 		t.Fatalf("read-only operations wrote %d records", len(after)-len(before))
+	}
+}
+
+// TestActivityLogRenamesLegacySessionLog moves sessions/<name>/actions.log
+// onto logs_dir/sessions/<name>.log and keeps the recorded time.
+func TestActivityLogRenamesLegacySessionLog(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	sessionDir := filepath.Join(dir, "dev")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	at := testNow.Add(-time.Hour)
+	w, err := activity.OpenLog(dir, sessionDir, activity.LogName, "", func() time.Time { return at })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Append(activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := e.activityLog("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := opened.LastActivity()
+	if err != nil || !last.Equal(at) {
+		t.Fatalf("last activity = %v, %v, want %v", last, err, at)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy session log remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dev", activity.LogName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session directory still has %s: %v", activity.LogName, err)
 	}
 }

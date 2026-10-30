@@ -35,7 +35,7 @@ func openTestWriter(t *testing.T, clock Clock) (*Writer, string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenLog(root, dir, clock)
+	w, err := OpenLog(root, dir, LogName, "", clock)
 	if err != nil {
 		t.Fatalf("OpenLog: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestOpenLogRequiresClock(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenLog(root, dir, nil); err == nil || !strings.Contains(err.Error(), "clock") {
+	if _, err := OpenLog(root, dir, LogName, "", nil); err == nil || !strings.Contains(err.Error(), "clock") {
 		t.Fatalf("err = %v, want a missing clock error", err)
 	}
 }
@@ -302,7 +302,7 @@ func TestOpenLogRequiresClock(t *testing.T) {
 func TestOpenLogNeverRecreatesDirectory(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "sessions", "gone")
-	if _, err := OpenLog(root, dir, fixedClock(testTime)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := OpenLog(root, dir, LogName, "", fixedClock(testTime)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want a missing directory error", err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -335,7 +335,7 @@ func TestOpenLogRejectsPathsOutsideRoot(t *testing.T) {
 		"relative":     filepath.Join("sessions", "dev"),
 	}
 	for name, dir := range cases {
-		if _, err := OpenLog(root, dir, fixedClock(testTime)); !errors.Is(err, ErrInvalidPath) {
+		if _, err := OpenLog(root, dir, LogName, "", fixedClock(testTime)); !errors.Is(err, ErrInvalidPath) {
 			t.Fatalf("%s: err = %v, want ErrInvalidPath", name, err)
 		}
 	}
@@ -353,7 +353,7 @@ func TestOpenLogRejectsSymlinkDirectory(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenLog(root, link, fixedClock(testTime)); !errors.Is(err, ErrUnsafeFile) {
+	if _, err := OpenLog(root, link, LogName, "", fixedClock(testTime)); !errors.Is(err, ErrUnsafeFile) {
 		t.Fatalf("err = %v, want ErrUnsafeFile", err)
 	}
 }

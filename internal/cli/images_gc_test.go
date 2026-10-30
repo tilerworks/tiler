@@ -39,11 +39,12 @@ func imageGCFixture(t *testing.T) (string, []string, image.Repo, []image.ImageMe
 
 func seedImageGCActivity(t *testing.T, imagesDir string, repo image.Repo, id string, at time.Time) {
 	t.Helper()
-	dir, err := repo.ObjectDirPath(id)
-	if err != nil {
+	logs := filepath.Join(filepath.Dir(filepath.Dir(imagesDir)), ".tiler", "logs")
+	dir := filepath.Join(logs, "images", filepath.FromSlash(repo.Name()))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w, err := activity.OpenLog(imagesDir, dir, func() time.Time { return at })
+	w, err := activity.OpenLog(logs, dir, id+".log", "", func() time.Time { return at })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,16 +249,15 @@ func TestImagesGCInitializesChildAndAncestorsOnlyOnce(t *testing.T) {
 		t.Fatalf("initial scan stdout=%q stderr=%q error=%v", stdout, stderr, err)
 	}
 	logs := map[string][]byte{}
+	logDir := filepath.Join(home, ".tiler", "logs", "images", "alice", "app")
 	for _, node := range []image.ImageMeta{root, child} {
-		dir, _ := repo.ObjectDirPath(node.ID)
-		path := filepath.Join(dir, activity.LogName)
+		path := filepath.Join(logDir, node.ID+".log")
 		logs[path], err = os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	rootDir, _ := repo.ObjectDirPath(root.ID)
-	if !strings.Contains(string(logs[filepath.Join(rootDir, activity.LogName)]), "image.dependency.activity") {
+	if !strings.Contains(string(logs[filepath.Join(logDir, root.ID+".log")]), "image.dependency.activity") {
 		t.Fatal("child initialization did not propagate")
 	}
 	if _, stderr, _, err := runCmd(t, imageGCArgs(lib, "--expire=0")...); err != nil || strings.Contains(stderr, "initialized") {

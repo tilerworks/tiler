@@ -34,7 +34,7 @@ func TestLinkExternalSuccess(t *testing.T) {
 	images := t.TempDir()
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("vendor-payload"))
-	if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -75,7 +75,7 @@ func TestLinkExternalDuplicateContentKeepsOriginalSource(t *testing.T) {
 	images := t.TempDir()
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("indexed-payload"))
-	if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -87,7 +87,7 @@ func TestLinkExternalDuplicateContentKeepsOriginalSource(t *testing.T) {
 	if err := os.WriteFile(duplicate, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkExternal(images, "alice/app", duplicate, "other-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", duplicate, "other-builder"); err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := LoadVersionManifest(repo)
@@ -105,7 +105,7 @@ func TestLinkExternalIdempotent(t *testing.T) {
 	images := t.TempDir()
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("same-bytes"))
-	if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -116,7 +116,7 @@ func TestLinkExternalIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkExternal(images, "alice/app", src, "other-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "other-builder"); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(repo.MetaPath())
@@ -133,7 +133,7 @@ func TestLinkExternalAddsIndependentFullVersions(t *testing.T) {
 	images := t.TempDir()
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("chained-bytes"))
-	if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -141,7 +141,7 @@ func TestLinkExternalAddsIndependentFullVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := writeFakeSquashfs(t, nas, []byte("other-bytes"))
-	if err := LinkExternal(images, "alice/app", other, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", other, "test"); err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := LoadVersionManifest(repo)
@@ -156,10 +156,10 @@ func TestLinkExternalConflictDifferentTarget(t *testing.T) {
 	nas := t.TempDir()
 	first := writeFakeSquashfs(t, nas, []byte("first"))
 	second := writeFakeSquashfs(t, nas, []byte("second"))
-	if err := LinkExternal(images, "alice/app", first, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", first, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkExternal(images, "alice/app", second, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", second, "test"); err != nil {
 		t.Fatal(err)
 	}
 	repo, _ := OpenRepo(images, "alice/app")
@@ -177,7 +177,7 @@ func TestLinkExternalRefusesReservedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	inside := writeFakeSquashfs(t, images, []byte("inside-library"))
-	err := LinkExternal(images, "alice/app", inside, "test")
+	err := LinkExternal(images, logsFor(images), "alice/app", inside, "test")
 	if err == nil || !errors.Is(err, config.ErrReservedPath) {
 		t.Fatalf("error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestLinkExternalRefusesForeignFormat(t *testing.T) {
 	withLinuxLinkPolicy(t)
 	nas := t.TempDir()
 	src := writeFakeDMG(t, nas, []byte("disk-image"))
-	err := LinkExternal(t.TempDir(), "alice/app", src, "test")
+	err := LinkExternal(t.TempDir(), logsFor(t.TempDir()), "alice/app", src, "test")
 	if err == nil || !strings.Contains(err.Error(), "dmg is not available") {
 		t.Fatalf("error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestLinkExternalRefusesSquashfsOnDarwin(t *testing.T) {
 
 	nas := t.TempDir()
 	src := writeFakeSquashfs(t, nas, []byte("linux-image"))
-	err := LinkExternal(t.TempDir(), "alice/app", src, "test")
+	err := LinkExternal(t.TempDir(), logsFor(t.TempDir()), "alice/app", src, "test")
 	if err == nil || !strings.Contains(err.Error(), "not available on macOS") {
 		t.Fatalf("error = %v", err)
 	}
@@ -246,7 +246,7 @@ func TestLinkExternalFixedNow(t *testing.T) {
 
 	images := t.TempDir()
 	src := writeFakeSquashfs(t, t.TempDir(), []byte("x"))
-	if err := LinkExternal(images, "bob/tool", src, "dev"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "bob/tool", src, "dev"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "bob/tool")

@@ -16,7 +16,7 @@ import (
 
 func newReferenceCoordinator(t *testing.T) ReferenceCoordinator {
 	t.Helper()
-	c := ReferenceCoordinator{Store: Store{Dir: t.TempDir()}, ImagesDir: t.TempDir(), Timeout: -1}
+	c := ReferenceCoordinator{Store: Store{Dir: t.TempDir(), LogsDir: t.TempDir()}, ImagesDir: t.TempDir(), Timeout: -1}
 	if err := c.SaveReferenceState(ReferenceState{Version: ReferenceControlVersion, CatalogComplete: true}); err != nil {
 		t.Fatal(err)
 	}

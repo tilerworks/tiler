@@ -32,7 +32,7 @@ func TestResolveVersionMountSplitAndColonPath(t *testing.T) {
 	repo := testRepo(t)
 	stage, node := stagedSplitVersion(t, "split-payload", 4)
 	node.Format = Format{Type: FormatSquashfs, Compression: CompressionZstd}
-	if _, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false); err != nil {
+	if _, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{ImagesDir: linkImagesRoot(repo)}
@@ -60,14 +60,14 @@ func publishResolveVersion(t *testing.T, repo Repo, body string, parent ImageMet
 	node.Format = Format{Type: typ, Compression: CompressionZstd}
 	stage := writeSource(t, t.TempDir(), []byte(body))
 	if parent.ID == "" {
-		got, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false)
+		got, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return got
 	}
 	node.Kind, node.Parent = KindIncremental, parent.ID
-	got, err := PublishIncrementalVersion(linkImagesRoot(repo), repo.Name(), stage, node, parent, false)
+	got, err := PublishIncrementalVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, parent, false)
 	if err != nil {
 		t.Fatal(err)
 	}

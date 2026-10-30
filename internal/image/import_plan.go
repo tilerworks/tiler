@@ -43,10 +43,13 @@ const (
 type ImportRequest struct {
 	Mode      ImportMode
 	ImagesDir string
-	Name      string
-	Source    string
-	Hash      string
-	Warn      func(string)
+	// LogsDir is the activity log root recorded on the destination
+	// repository. Publication that writes activity uses it.
+	LogsDir string
+	Name    string
+	Source  string
+	Hash    string
+	Warn    func(string)
 }
 
 // SourcePlan is a read-only description of one source. Given is the
@@ -98,7 +101,7 @@ func readImportSource(req ImportRequest) (importRead, error) {
 	if strings.TrimSpace(req.Source) == "" {
 		return importRead{}, importFail(req, errors.New("source path is required"))
 	}
-	repo, err := OpenRepo(req.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.ImagesDir, req.LogsDir, req.Name)
 	if err != nil {
 		return importRead{}, importFail(req, err)
 	}

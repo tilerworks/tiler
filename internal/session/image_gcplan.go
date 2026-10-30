@@ -31,6 +31,7 @@ func (c ReferenceCoordinator) PlanImages(cutoff time.Time, clock activity.Clock)
 			return err
 		}
 		for _, repo := range repos {
+			repo.LogsDir = c.LogsDir
 			plan, err := image.PlanVersionGCLocked(repo, refs[repo.Name()], cutoff, clock)
 			if err != nil {
 				return fmt.Errorf("image gc: %s: %w", repo.Name(), err)

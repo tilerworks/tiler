@@ -19,7 +19,7 @@ func TestAppendRefusesUnlockedPlatform(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenLog(root, dir, fixedClock(testTime))
+	w, err := OpenLog(root, dir, LogName, "", fixedClock(testTime))
 	if err != nil {
 		t.Fatalf("OpenLog: %v", err)
 	}

@@ -15,7 +15,7 @@ func TestDMGVersionBakeConvertsLinkedPayload(t *testing.T) {
 	cfg := buildConfig(t)
 	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
 	external := writeFakeDMG(t, t.TempDir(), []byte("linked"))
-	if err := LinkExternal(cfg.ImagesDir, repo.Name(), external, "test"); err != nil {
+	if err := LinkExternal(cfg.ImagesDir, logsFor(cfg.ImagesDir), repo.Name(), external, "test"); err != nil {
 		t.Fatal(err)
 	}
 	manifest, _, err := loadVersionMeta(repo)
@@ -96,7 +96,7 @@ func TestDMGVersionBakePinsBaseAndReusesPostConvertContent(t *testing.T) {
 	base, newer := versionNode("base"), versionNode("newer")
 	base.Format, newer.Format = Format{Type: FormatDMG, Compression: "ulfo"}, Format{Type: FormatDMG, Compression: "ulmo"}
 	for _, node := range []ImageMeta{base, newer} {
-		if _, err := PublishFullVersion(cfg.ImagesDir, repo.Name(), writeSource(t, t.TempDir(), []byte(node.Description)), node, true); err != nil {
+		if _, err := PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), repo.Name(), writeSource(t, t.TempDir(), []byte(node.Description)), node, true); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -51,7 +51,7 @@ func BuildDMG(req DMGRequest) (FullResult, error) {
 	if err != nil {
 		return FullResult{}, err
 	}
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return FullResult{}, err
 	}

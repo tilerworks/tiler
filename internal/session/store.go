@@ -46,8 +46,12 @@ type Store struct {
 	// Dir is the sessions root; each session owns one subdirectory
 	// <name>/ holding its session.json record, session.lock, and
 	// runtime subtree.
-	Dir   string
-	scope *referenceSessionScope
+	Dir string
+	// LogsDir is the activity log root. An empty value fails an
+	// activity open instead of writing actions.log in the session
+	// directory.
+	LogsDir string
+	scope   *referenceSessionScope
 }
 
 // sessionDir validates the name and returns the session's own

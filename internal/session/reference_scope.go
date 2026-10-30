@@ -58,7 +58,7 @@ func (c ReferenceCoordinator) withSessionScope(name string, images []string, run
 			}
 			scope := &referenceSessionScope{coordinator: c, name: name, state: state, current: cloneReferenceRecord(current)}
 			defer func() { err = errors.Join(err, scope.close()) }()
-			return run(Store{Dir: c.Dir, scope: scope})
+			return run(Store{Dir: c.Dir, LogsDir: c.LogsDir, scope: scope})
 		})
 	}
 	if libraryHeld {

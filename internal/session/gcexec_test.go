@@ -154,7 +154,7 @@ func TestExecSessionsKeepsAChangedSession(t *testing.T) {
 		e := planEngine(t, nil, old)
 		seedMounted(t, e, "dev", "/ws/view")
 		plan := mustPlan(t, e, testNow)
-		if err := os.Remove(filepath.Join(e.Dir, "dev", activity.LogName)); err != nil {
+		if err := os.Remove(filepath.Join(e.LogsDir, "sessions", "dev.log")); err != nil {
 			t.Fatal(err)
 		}
 		assertExecKept(t, e, plan, GCSkipChanged)

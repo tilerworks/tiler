@@ -13,7 +13,7 @@ import (
 
 // BuildIncrVersion packs a new layer independently of its pinned parent's format.
 func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return node, err
 	}
@@ -85,7 +85,7 @@ func BuildIncrVersion(req IncrRequest) (node ImageMeta, err error) {
 		}
 		node.Blocks, tmp = split.blocks, dir
 	}
-	return PublishIncrementalVersion(req.Config.ImagesDir, repo.Name(), tmp, node, parent, req.DescriptionSet)
+	return PublishIncrementalVersion(req.Config.ImagesDir, req.Config.LogsDir, repo.Name(), tmp, node, parent, req.DescriptionSet)
 }
 
 func incrVersionParent(repo Repo, req IncrRequest) (ImageMeta, error) {

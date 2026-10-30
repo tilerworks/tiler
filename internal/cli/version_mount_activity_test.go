@@ -36,15 +36,8 @@ type mountActivityLine struct {
 // log reads as no records.
 func readMountActivity(t *testing.T, cfg config.Config, name, id string) []mountActivityLine {
 	t.Helper()
-	repo, err := image.OpenRepo(cfg.ImagesDir, name)
-	if err != nil {
-		t.Fatalf("open repo: %v", err)
-	}
-	dir, err := repo.ObjectDirPath(id)
-	if err != nil {
-		t.Fatalf("object dir of %s: %v", id, err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, activity.LogName))
+	dir := filepath.Join(cfg.LogsDir, "images", filepath.FromSlash(name))
+	data, err := os.ReadFile(filepath.Join(dir, id+".log"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -134,7 +127,7 @@ func mountActivityAction(root, tip string) session.Action {
 // records anything.
 func TestVersionMountActivityRecordsTheResolvedStack(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	fake := withMountSeams(t, nil)
 	hold, err := image.LockImage(cfg.ImagesDir, "alice/app", image.DefaultLibraryLockTimeout)
@@ -155,13 +148,26 @@ func TestVersionMountActivityRecordsTheResolvedStack(t *testing.T) {
 	requireMountActivity(t, cfg, "alice/app", base, tip.ID, "/view", phases)
 	requireNoMountActivity(t, cfg, "alice/app", sibling.ID)
 	requireNoMountActivity(t, cfg, "alice/app", descendant.ID)
+	repo, err := image.OpenRepo(cfg.ImagesDir, "alice/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []image.ImageMeta{base, mid, tip} {
+		object, err := repo.ObjectDirPath(node.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(object, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("object directory of %s has %s: %v", node.Description, activity.LogName, err)
+		}
+	}
 }
 
 // TestVersionMountActivityRecordsAFailedMount keeps the attempt and its
 // failure in the logs when the engine refuses to mount.
 func TestVersionMountActivityRecordsAFailedMount(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	fake := withMountSeams(t, nil)
 	fake.mountErr = errors.New("fuse refused")
@@ -187,7 +193,7 @@ func TestVersionMountActivityRecordsAFailedMount(t *testing.T) {
 // versions above it stay untouched.
 func TestSessionReplayActivityFollowsTheRecordedTip(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	withMountSeams(t, nil)
 	hold, err := image.LockImage(cfg.ImagesDir, "alice/app", image.DefaultLibraryLockTimeout)
@@ -213,7 +219,7 @@ func TestSessionReplayActivityFollowsTheRecordedTip(t *testing.T) {
 // reused upper against those lowers.
 func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, _, servedTip, desiredTip, _ := mountActivityLibrary(t, cfg.ImagesDir)
 	writeVersionPayload(t, cfg.ImagesDir, "alice/app", desiredTip, desiredTip.Description)
 	fake := withMountSeams(t, nil)
@@ -251,7 +257,7 @@ func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 func TestHealthyOpenRenewsTheMountActivity(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images"),
-		SessionsDir: filepath.Join(root, "sessions")}
+		LogsDir: filepath.Join(root, "logs"), SessionsDir: filepath.Join(root, "sessions")}
 	base, mid, tip, sibling, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	writeVersionSession(t, cfg.SessionsDir, "dev", "alice/app", base.ID, tip.ID)
 	engine := sessionEngine(cfg)
@@ -296,7 +302,7 @@ func TestHealthyOpenRenewsTheMountActivity(t *testing.T) {
 func TestHealthyOpenRecordsServedStackWhenDesiredDiffers(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images"),
-		SessionsDir: filepath.Join(root, "sessions")}
+		LogsDir: filepath.Join(root, "logs"), SessionsDir: filepath.Join(root, "sessions")}
 	base, mid, servedTip, desiredTip, descendant := mountActivityLibrary(t, cfg.ImagesDir)
 	rec, err := session.NewVersionRecord("dev", time.Now())
 	if err != nil {
@@ -338,7 +344,7 @@ func TestHealthyOpenRecordsServedStackWhenDesiredDiffers(t *testing.T) {
 // of a mount failure, so the session layer keeps a mounted action.
 func TestVersionMountActivityReportsALostOutcomeRecord(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, mid, tip, _, _ := mountActivityLibrary(t, cfg.ImagesDir)
 	repo, err := image.OpenRepo(cfg.ImagesDir, "alice/app")
 	if err != nil {
@@ -381,7 +387,7 @@ func TestVersionMountActivityReportsALostOutcomeRecord(t *testing.T) {
 func TestHealthyOpenSkipsFileMounts(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images"),
-		SessionsDir: filepath.Join(root, "sessions")}
+		LogsDir: filepath.Join(root, "logs"), SessionsDir: filepath.Join(root, "sessions")}
 	rec, err := session.NewVersionRecord("dev", time.Now())
 	if err != nil {
 		t.Fatalf("new record: %v", err)

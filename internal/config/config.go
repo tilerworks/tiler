@@ -40,8 +40,7 @@ type Config struct {
 	// CacheDir is the directory a later step copies images into when
 	// NAS cache is enabled. Blocks builds also stage pack scratch here.
 	CacheDir string
-	// LogsDir holds activity logs. This step only records the path;
-	// activity files stay beside their objects until a later step.
+	// LogsDir holds session and image-version activity logs.
 	LogsDir string
 	// KeepVersions is how many image versions to retain. Zero means
 	// the count is unlimited.

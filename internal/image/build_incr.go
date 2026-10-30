@@ -149,7 +149,7 @@ func buildIncr(req IncrRequest, seam hooks) (res IncrResult, err error) {
 }
 
 func validateIncr(req IncrRequest) (Repo, Manifest, error) {
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return Repo{}, Manifest{}, err
 	}

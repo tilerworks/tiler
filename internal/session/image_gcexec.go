@@ -26,6 +26,7 @@ func (c ReferenceCoordinator) ExecuteImages(plans []image.VersionGCPlan, clock a
 			if runErr != nil {
 				return errors.Join(failures, runErr)
 			}
+			repo.LogsDir = c.LogsDir
 			events, runErr := image.ExecuteVersionGCLocked(repo, plan, refs[plan.Name], clock)
 			outcomes = append(outcomes, events...)
 			if runErr != nil {

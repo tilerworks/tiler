@@ -35,7 +35,7 @@ func TestHelperAppendProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helper spec = %q: %v", spec, err)
 	}
-	w, err := OpenLog(root, dir, time.Now)
+	w, err := OpenLog(root, dir, LogName, "", time.Now)
 	if err != nil {
 		t.Fatalf("open log: %v", err)
 	}

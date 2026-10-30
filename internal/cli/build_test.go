@@ -36,6 +36,10 @@ func sessionsDir(home string) string {
 	return filepath.Join(home, "lib", "sessions")
 }
 
+// logsFor is the activity root paired with one images directory in tests
+// that publish without a loaded configuration.
+func logsFor(imagesDir string) string { return imagesDir + ".logs" }
+
 // withBuildSeams installs the injected mount table, a fake packer
 // that needs no mksquashfs, and a passing mount smoke gate.
 func withBuildSeams(t *testing.T, table []mountinfo.Mount) {

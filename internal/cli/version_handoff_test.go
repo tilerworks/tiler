@@ -44,7 +44,7 @@ func TestPublishVersionAndRebaseExcludesReferenceMutation(t *testing.T) {
 	got, err := publishVersionAndRebase(cfg, mountpoint, "alice/app", func() (image.ImageMeta, error) {
 		close(entered)
 		<-proceed
-		return image.PublishFullVersionLocked(cfg.ImagesDir, "alice/app", stage, node, false)
+		return image.PublishFullVersionLocked(cfg.ImagesDir, logsFor(cfg.ImagesDir), "alice/app", stage, node, false)
 	}, func(meta image.ImageMeta) string { return meta.ID })
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestPublishVersionAndRebaseExcludesReferenceMutation(t *testing.T) {
 func TestResolveVersionAndPinRollsBackFailedCallback(t *testing.T) {
 	cfg, engine := handoffTestEngine(t)
 	node, stage := handoffVersionNode(t, "resolved")
-	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", stage, node, false); err != nil {
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), "alice/app", stage, node, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +111,7 @@ func TestResolveVersionAndPinRollsBackFailedCallback(t *testing.T) {
 func TestResolveValidatedVersionAndPinChecksNewLatest(t *testing.T) {
 	cfg, _ := handoffTestEngine(t)
 	old, oldStage := handoffVersionNode(t, "old latest")
-	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", oldStage, old, false); err != nil {
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), "alice/app", oldStage, old, false); err != nil {
 		t.Fatal(err)
 	}
 	preflight, err := image.ResolveVersionMount(cfg, "alice/app")
@@ -123,7 +123,7 @@ func TestResolveValidatedVersionAndPinChecksNewLatest(t *testing.T) {
 	}
 
 	latest, latestStage := handoffVersionNode(t, "new latest")
-	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", latestStage, latest, false); err != nil {
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), "alice/app", latestStage, latest, false); err != nil {
 		t.Fatal(err)
 	}
 	pinned, err := image.ResolveVersionMount(cfg, "alice/app")
@@ -217,8 +217,9 @@ func TestRuntimeMountRejectsLegacyRepository(t *testing.T) {
 func handoffTestEngine(t *testing.T) (config.Config, *session.Engine) {
 	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), SessionsDir: filepath.Join(root, "sessions")}
-	engine := &session.Engine{Store: session.Store{Dir: cfg.SessionsDir}, ImagesDir: cfg.ImagesDir,
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), SessionsDir: filepath.Join(root, "sessions"),
+		LogsDir: filepath.Join(root, "logs")}
+	engine := &session.Engine{Store: session.Store{Dir: cfg.SessionsDir, LogsDir: cfg.LogsDir}, ImagesDir: cfg.ImagesDir,
 		SessionsDir: cfg.SessionsDir, LockTimeout: -1, Versioned: true}
 	original := sessionEngine
 	sessionEngine = func(config.Config) *session.Engine { return engine }

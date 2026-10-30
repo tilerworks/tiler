@@ -56,6 +56,9 @@ var ErrInvalidPath = errors.New("invalid library path")
 type Repo struct {
 	Segments []string
 	Dir      string
+	// LogsDir is the activity log root. An empty value fails an
+	// activity open instead of writing beside the object.
+	LogsDir string
 }
 
 // Name returns the canonical slash-joined library name.
@@ -78,6 +81,18 @@ func OpenRepo(imagesDir, name string) (Repo, error) {
 		Segments: segments,
 		Dir:      filepath.Join(parts...),
 	}, nil
+}
+
+// openLoggedRepo opens name and records the activity log root. An
+// empty logsDir is kept: the activity open fails instead of falling
+// back to the object directory.
+func openLoggedRepo(imagesDir, logsDir, name string) (Repo, error) {
+	repo, err := OpenRepo(imagesDir, name)
+	if err != nil {
+		return Repo{}, err
+	}
+	repo.LogsDir = logsDir
+	return repo, nil
 }
 
 // ImagePath is the active squashfs file.

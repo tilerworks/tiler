@@ -98,7 +98,7 @@ func BuildFull(req FullRequest) (FullResult, error) {
 	if err != nil {
 		return FullResult{}, err
 	}
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return FullResult{}, err
 	}
@@ -127,7 +127,7 @@ func buildNow(req FullRequest) func() time.Time {
 }
 
 func validateFull(req *FullRequest) (Repo, error) {
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return Repo{}, err
 	}

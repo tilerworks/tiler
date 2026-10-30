@@ -22,7 +22,7 @@ func seedImageGCLogs(t *testing.T, c ReferenceCoordinator, nodes []image.ImageMe
 	}
 	for _, node := range nodes {
 		dir, _ := repo.ObjectDirPath(node.ID)
-		w, err := activity.OpenLog(c.ImagesDir, dir, func() time.Time { return at })
+		w, err := activity.OpenLog(c.ImagesDir, dir, activity.LogName, "", func() time.Time { return at })
 		if err == nil {
 			_, err = w.Append(activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded})
 		}

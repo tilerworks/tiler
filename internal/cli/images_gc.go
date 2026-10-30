@@ -44,7 +44,7 @@ func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes bool) error {
 		return errors.New("images gc: configuration is not loaded")
 	}
 	now := time.Now().UTC()
-	coordinator := session.ReferenceCoordinator{Store: session.Store{Dir: cfg.SessionsDir}, ImagesDir: cfg.ImagesDir}
+	coordinator := session.ReferenceCoordinator{Store: session.Store{Dir: cfg.SessionsDir, LogsDir: cfg.LogsDir}, ImagesDir: cfg.ImagesDir}
 	plan, err := coordinator.PlanImageGC(now.Add(-window), nil)
 	if err != nil {
 		return fmt.Errorf("images gc: %w", err)

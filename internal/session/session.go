@@ -119,7 +119,7 @@ type Engine struct {
 	// not the subject.
 	Lock func(name string, timeout time.Duration) (func(), error)
 	// Activity overrides the activity log of one session. Nil opens
-	// <sessions root>/<name>/actions.log and records nothing when no
+	// <logs dir>/sessions/<name>.log and records nothing when no
 	// sessions root is set. It is called while the session's
 	// exclusive lock is held, so tests inject write failures here.
 	Activity func(name string) (*activity.Writer, error)

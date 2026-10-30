@@ -20,7 +20,8 @@ import (
 
 func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), CacheDir: filepath.Join(root, "cache")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), CacheDir: filepath.Join(root, "cache"),
+		LogsDir: filepath.Join(root, "logs")}
 	base := versionNode("a", image.KindFull, "", time.Now().UTC())
 	child := versionNode("b", image.KindIncremental, base.ID, base.CreatedAt.Add(time.Minute))
 	base.Format.Type, child.Format.Type = image.FormatSquashfs, image.FormatErofs
@@ -138,7 +139,7 @@ func TestVersionDMGMountNeedsOnlyHdiutil(t *testing.T) {
 	cfg, _ := handoffTestEngine(t)
 	node, stage := handoffVersionNode(t, "dmg payload")
 	node.Format = image.Format{Type: image.FormatDMG, Compression: "ulfo"}
-	if _, err := image.PublishFullVersion(cfg.ImagesDir, "alice/app", stage, node, false); err != nil {
+	if _, err := image.PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), "alice/app", stage, node, false); err != nil {
 		t.Fatal(err)
 	}
 	originalLook, originalFormat, originalEngine, originalTable := toolLookPath, toolFormatLookup, mountEngine, loadMountTable

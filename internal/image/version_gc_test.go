@@ -13,11 +13,7 @@ import (
 
 func seedGCActivity(t *testing.T, repo Repo, node ImageMeta, at time.Time) {
 	t.Helper()
-	dir, err := repo.ObjectDirPath(node.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, err := activity.OpenLog(libraryRoot(repo), dir, func() time.Time { return at })
+	w, err := openVersionLog(repo, node.ID, func() time.Time { return at })
 	if err == nil {
 		_, err = w.Append(activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded})
 	}
@@ -158,8 +154,7 @@ func TestVersionGCRetainsPartiallyInitializedChainAndIndependentCandidates(t *te
 			if id == mid.ID && opens[id] > 1 {
 				return nil, errors.New("injected mid-chain write failure")
 			}
-			dir, _ := repo.ObjectDirPath(id)
-			return activity.OpenLog(libraryRoot(repo), dir, clock)
+			return openVersionLog(repo, id, clock)
 		}}
 	p := versionGCPlanner{repo: repo, cutoff: testActivityNow.Add(time.Nanosecond), clock: activityClock,
 		ensure: func(id string) ([]string, error) {

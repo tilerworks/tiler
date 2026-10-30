@@ -64,7 +64,7 @@ func TestPublishRecoversRemovalBeforeReusingID(t *testing.T) {
 		t.Fatal(err)
 	}
 	node := removalTestNode(body, "", KindFull, 4)
-	if _, err := PublishFullVersion(imagesDir, repo.Name(), stage, node, false); err != nil {
+	if _, err := PublishFullVersion(imagesDir, logsFor(imagesDir), repo.Name(), stage, node, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
@@ -157,6 +157,7 @@ func removalFixture(t *testing.T) (string, Repo, []ImageMeta) {
 	t.Helper()
 	imagesDir := t.TempDir()
 	repo, _ := OpenRepo(imagesDir, "alice/app")
+	repo.LogsDir = logsFor(imagesDir)
 	bodies := [][]byte{[]byte("root"), []byte("child"), []byte("tip")}
 	nodes := []ImageMeta{removalTestNode(bodies[0], "", KindFull, 1)}
 	nodes = append(nodes, removalTestNode(bodies[1], nodes[0].ID, KindIncremental, 2))
