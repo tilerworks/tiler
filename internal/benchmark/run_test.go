@@ -28,6 +28,7 @@ func TestRunKeepLeavesBenchDir(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "yes" },
 		Stdout:  &out,
@@ -60,6 +61,7 @@ func TestRunRemovesUserRuntimeDir(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "no" },
 		Stdout:  &out,
@@ -94,6 +96,7 @@ func TestRunCreatesMissingPathWithWarning(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "no" },
 		Stdout:  &out,
@@ -132,6 +135,7 @@ func TestRunPayloadUnderRuntimeNotBench(t *testing.T) {
 	d.Mode = "write"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "no" },
 		Stdout:  &out,
@@ -173,6 +177,7 @@ func TestRunReadonlyCreatesNothingUnderPath(t *testing.T) {
 		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(string, []string, ...string) ([]byte, error) {
 			t.Fatal("readonly run must not pack")
 			return nil, nil
@@ -207,6 +212,7 @@ func TestRunTarHasNoAttachRow(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "yes" },
 		Stdout:  &out,
@@ -237,6 +243,7 @@ func TestRunJSONIncludesStepsAndProbe(t *testing.T) {
 	d.Format = FormatJSON
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "yes" },
 		Stdout:  &out,
@@ -302,6 +309,7 @@ func TestRunJSONOmitsOutputOnFailure(t *testing.T) {
 		Format:     FormatJSON,
 	}
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(string, []string, ...string) ([]byte, error) {
 			return nil, errors.New("attach failed")
 		},
@@ -350,6 +358,7 @@ func TestRunFailedAttachStillCleansUp(t *testing.T) {
 		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(string, []string, ...string) ([]byte, error) {
 			return nil, errors.New("attach failed")
 		},
@@ -400,6 +409,7 @@ func TestRunFailedAttachCleansOwnedBench(t *testing.T) {
 		Format:     FormatTSV,
 	}
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(name string, _ []string, args ...string) ([]byte, error) {
 			if isPackTool(name, args) {
 				path := packOutputPath(name, args)
@@ -620,6 +630,7 @@ func TestRunPackLogCapturesToolOutput(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(name string, _ []string, args ...string) ([]byte, error) {
 			if name != "tar" || len(args) < 5 || args[0] != "-czf" {
 				return []byte("unexpected\n"), errors.New("unexpected argv")
@@ -680,6 +691,7 @@ func TestRunPurgeFailureDoesNotFail(t *testing.T) {
 	d.Mode = "both"
 
 	err := Run(d, Env{
+		Sync:    func() {},
 		Command: tarPackCommand(t),
 		Purge:   func() string { return "no" },
 		Stdout:  &out,
@@ -708,6 +720,7 @@ func TestRunCreateUsesInputBytesForRate(t *testing.T) {
 	d.Format = FormatJSON
 
 	err := Run(d, Env{
+		Sync: func() {},
 		Command: func(name string, _ []string, args ...string) ([]byte, error) {
 			if name != "tar" {
 				return nil, errors.New("unexpected " + name)

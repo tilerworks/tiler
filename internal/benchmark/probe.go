@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 const (
@@ -131,7 +133,7 @@ func fillProbe(f *os.File, blocks int) error {
 			return fmt.Errorf("benchmark: probe write: %w", err)
 		}
 	}
-	if err := f.Sync(); err != nil {
+	if err := durable.Sync(f); err != nil {
 		return fmt.Errorf("benchmark: probe fsync: %w", err)
 	}
 	return nil
@@ -204,7 +206,7 @@ func probeWrite(f probeIO, payload []byte, off int64) error {
 	if n != probeBlock {
 		return errors.New("benchmark: probe short write")
 	}
-	if err := f.Sync(); err != nil {
+	if err := durable.Sync(f); err != nil {
 		return fmt.Errorf("benchmark: probe fsync: %w", err)
 	}
 	return nil

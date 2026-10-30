@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // AssembleBlocks materializes the logical whole image of a blocks
@@ -81,7 +83,7 @@ func streamBlocks(out *os.File, blocks []BlockFile, wantSHA string, wantSize int
 		}
 		total += n
 	}
-	if err := joinWriteErr(out.Sync(), out.Close()); err != nil {
+	if err := joinWriteErr(durable.Sync(out), out.Close()); err != nil {
 		return failCacheWrite(out.Name(), err)
 	}
 	if got := hex.EncodeToString(whole.Sum(nil)); got != wantSHA {

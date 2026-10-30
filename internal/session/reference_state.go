@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // ReferenceControlVersion identifies reference bookkeeping and journal schemas.
@@ -156,7 +158,7 @@ func (s Store) syncReferenceParents(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := errors.Join(file.Sync(), file.Close()); err != nil {
+		if err := errors.Join(durable.Sync(file), file.Close()); err != nil {
 			return err
 		}
 		if parent := filepath.Dir(dir); dir != stop && parent != dir {

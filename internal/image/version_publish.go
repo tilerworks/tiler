@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jiangxin/tiler/internal/durable"
+
 	"github.com/jiangxin/tiler/internal/config"
 )
 
@@ -167,7 +169,7 @@ func copyVersionFile(src, dst string) error {
 		_, err = io.Copy(out, in)
 		err = errors.Join(err, in.Close())
 	}
-	err = errors.Join(err, out.Sync(), out.Close())
+	err = errors.Join(err, durable.Sync(out), out.Close())
 	if err != nil {
 		err = errors.Join(err, os.Remove(dst))
 	}

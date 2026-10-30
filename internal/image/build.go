@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/durable"
+
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
 )
@@ -336,7 +338,7 @@ func syncFile(path string) error {
 	if err != nil {
 		return err
 	}
-	serr := file.Sync()
+	serr := durable.Sync(file)
 	cerr := file.Close()
 	return joinWriteErr(serr, cerr)
 }

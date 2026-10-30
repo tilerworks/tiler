@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // Bounds of one activity log. A log that would grow past MaxLogBytes
@@ -141,7 +143,7 @@ func (w *Writer) replace(suffix []byte) error {
 		_ = tmp.Close()
 		return fmt.Errorf("activity: compact %s: %w", w.logPath, err)
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := durable.Sync(tmp); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("activity: compact %s: %w", w.logPath, err)
 	}
@@ -162,6 +164,6 @@ func syncDirectory(dir string) {
 	if err != nil {
 		return
 	}
-	_ = file.Sync()
+	_ = durable.Sync(file)
 	_ = file.Close()
 }

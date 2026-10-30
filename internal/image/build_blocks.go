@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // ensureBlocksSpace requires room for the staging file and for the
@@ -162,7 +164,7 @@ func writeBlock(
 	}
 	block := sha256.New()
 	n, copyErr := io.CopyN(io.MultiWriter(file, block, whole), src, blockSize)
-	serr := file.Sync()
+	serr := durable.Sync(file)
 	cerr := file.Close()
 	if copyErr != nil && !errors.Is(copyErr, io.EOF) {
 		return BlockEntry{}, n, failWrite(path, copyErr)

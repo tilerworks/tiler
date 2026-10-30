@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 type hooks struct {
@@ -55,7 +57,7 @@ func writeSynced(name string, data []byte) error {
 		return err
 	}
 	_, writeErr := file.Write(data)
-	syncErr := file.Sync()
+	syncErr := durable.Sync(file)
 	closeErr := file.Close()
 	return joinWriteErr(writeErr, syncErr, closeErr)
 }
@@ -146,7 +148,7 @@ func syncDir(dir string, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	return joinWriteErr(file.Sync(), file.Close())
+	return joinWriteErr(durable.Sync(file), file.Close())
 }
 
 func removeFile(name string) {

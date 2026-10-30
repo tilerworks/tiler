@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/durable"
+
 	"github.com/jiangxin/tiler/internal/filelock"
 )
 
@@ -188,7 +190,7 @@ func (w *Writer) write(line []byte) error {
 		_ = file.Close()
 		return fmt.Errorf("activity: append %s: %w", w.logPath, err)
 	}
-	if err := file.Sync(); err != nil {
+	if err := durable.Sync(file); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("activity: sync %s: %w", w.logPath, err)
 	}

@@ -111,6 +111,13 @@ Use Conventional Commits. Add a `Signed-off-by` trailer with
 
 ## Completion gates
 
+On macOS, filesystem tests import `internal/testutil` to use ordinary
+`fsync` for temporary fixtures instead of flushing hardware caches on
+every metadata write. Production keeps `os.File.Sync` and its full
+durability guarantee. Sync failures and injected file implementations
+remain observable in tests. Set `TILER_TEST_FULL_SYNC=1` with `-count=1`
+when explicitly checking the full hardware synchronization path.
+
 A change is complete when these commands are green:
 
 - `make fmt`

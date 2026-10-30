@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // EnsureCached returns the local copy of src named by its content
@@ -109,7 +111,7 @@ func copySynced(tmp *os.File, src string) error {
 	if err := joinWriteErr(copyErr, closeErr); err != nil {
 		return err
 	}
-	syncErr := tmp.Sync()
+	syncErr := durable.Sync(tmp)
 	closeTmp := tmp.Close()
 	return joinWriteErr(syncErr, closeTmp)
 }

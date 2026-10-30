@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // Sentinel errors shared by the store and its callers.
@@ -319,7 +321,7 @@ func writeSyncClose(file *os.File, data []byte) error {
 		_ = file.Close()
 		return err
 	}
-	if err := file.Sync(); err != nil {
+	if err := durable.Sync(file); err != nil {
 		_ = file.Close()
 		return err
 	}
@@ -333,6 +335,6 @@ func syncDir(dir string) {
 	if err != nil {
 		return
 	}
-	_ = file.Sync()
+	_ = durable.Sync(file)
 	_ = file.Close()
 }

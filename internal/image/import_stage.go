@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/jiangxin/tiler/internal/durable"
 )
 
 // importStageDir holds unpublished copy payloads inside the target
@@ -193,7 +195,7 @@ func syncStaged(file *os.File, seam stageCopyHooks) error {
 	if seam.sync != nil {
 		return seam.sync(file)
 	}
-	return file.Sync()
+	return durable.Sync(file)
 }
 
 func encodeCopyDigest(sum []byte, seam stageCopyHooks) string {
