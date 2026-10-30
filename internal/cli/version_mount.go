@@ -10,10 +10,14 @@ import (
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
-// versionMountRequest prepares a v3 mount or replay request from the exact
-// immutable identity recorded in the session action. The validated stack
-// travels back with the request, so the caller records activity for the same
-// chain the engine serves instead of resolving the forest a second time.
+// versionMountRequest prepares a v3 mount or replay request from the
+// desired identity recorded on the session action (full id and tip id).
+// A served override names the stack a still-healthy view provides; a
+// replay mounts the desired stack, so a rebased lower is what the engine
+// attaches. The validated desired stack travels back with the request, and
+// a real remount records activity for that same chain. A healthy open that
+// does not remount records the served stack through
+// recordHealthyMountActivity.
 func versionMountRequest(
 	cfg config.Config,
 	action session.Action,
@@ -21,7 +25,7 @@ func versionMountRequest(
 	flags mountFlags,
 	runtimeDir string,
 ) (workspace.Request, []session.VersionMember, error) {
-	stack, err := action.VersionStack(cfg.ImagesDir, true)
+	stack, err := action.VersionStack(cfg.ImagesDir, false)
 	if err != nil {
 		return workspace.Request{}, nil, err
 	}
