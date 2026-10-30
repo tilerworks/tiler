@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -190,4 +191,61 @@ func ensureObjectVersionFile(repo Repo, node ImageMeta) error {
 		return err
 	}
 	return writeObjectVersionFile(repo, node, hooks{})
+}
+
+// versionFileBeside is the metadata file that pairs with an image
+// path: image.sqsh and image.dmg both select image.yaml.
+func versionFileBeside(imagePath string) string {
+	ext := filepath.Ext(imagePath)
+	if ext == "" {
+		return imagePath + ".yaml"
+	}
+	return strings.TrimSuffix(imagePath, ext) + ".yaml"
+}
+
+// readObjectVersionDigest reads sha256 from the version file at path.
+// A missing file reports found=false. The path is not resolved first,
+// so a symlink selects the file beside the path the caller passed.
+func readObjectVersionDigest(path string) (string, bool, error) {
+	data, found, err := readRegularLimited(path, maxObjectVersionFile)
+	if err != nil || !found {
+		return "", found, err
+	}
+	file, err := DecodeObjectVersionFile(data)
+	if err != nil {
+		return "", true, fmt.Errorf("version metadata %s: %w", path, err)
+	}
+	return file.Image.SHA256, true, nil
+}
+
+func readRegularLimited(path string, limit int) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		info, err = os.Stat(path)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, true, fmt.Errorf("%w: %s", ErrVersionFile, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, true, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	closeErr := file.Close()
+	if err := joinWriteErr(readErr, closeErr); err != nil {
+		return nil, true, err
+	}
+	if len(data) > limit {
+		return nil, true, fmt.Errorf("%w: exceeds %d bytes", ErrVersionFile, limit)
+	}
+	return data, true, nil
 }

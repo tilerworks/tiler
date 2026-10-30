@@ -2,6 +2,7 @@ package image
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,8 +18,8 @@ type ImportMode string
 const (
 	// ImportLink plans a read-only position import.
 	ImportLink ImportMode = "link"
-	// ImportCopy plans a later streamed copy. The digest stays empty
-	// until that pass hashes the bytes it writes.
+	// ImportCopy plans a later streamed copy. A metadata digest is
+	// recorded here; without one, that pass hashes the bytes it writes.
 	ImportCopy ImportMode = "copy"
 )
 
@@ -37,31 +38,37 @@ const (
 // empty is the latest node, "all" is the whole forest, and any other
 // value is a version prefix. A file source rejects a non-empty hash.
 // Planning does not create the target repository.
+// Warn, when set, receives a missing-metadata notice before the
+// payload is read to compute sha256.
 type ImportRequest struct {
 	Mode      ImportMode
 	ImagesDir string
 	Name      string
 	Source    string
 	Hash      string
+	Warn      func(string)
 }
 
 // SourcePlan is a read-only description of one source. Given is the
 // absolute caller path and is the sidecar key. Location is that path
 // with symlinks resolved, used for identity and overlap checks. For a
-// directory, Size and MtimeUnix describe meta.yaml. Link file plans
-// set SHA256 from the sidecar, or UnknownSHA256 when it is absent,
-// and do not hash the payload.
+// directory, Size and MtimeUnix describe meta.yaml. File plans set
+// SHA256 from image.yaml, then from the .sha256 sidecar. An explicit
+// all-zero digest stays unknown and is not hashed. DigestFromFile is
+// set when neither file exists: link plans then hash the payload, and
+// copy plans leave SHA256 empty until the copy hashes the bytes.
 type SourcePlan struct {
-	Mode      ImportMode
-	Kind      SourceKind
-	Name      string
-	Repo      Repo
-	Given     string
-	Location  string
-	Format    Format
-	Size      int64
-	MtimeUnix int64
-	SHA256    string
+	Mode           ImportMode
+	Kind           SourceKind
+	Name           string
+	Repo           Repo
+	Given          string
+	Location       string
+	Format         Format
+	Size           int64
+	MtimeUnix      int64
+	SHA256         string
+	DigestFromFile bool
 }
 
 // importRead is one canonical source plus the directory metadata read
@@ -73,8 +80,9 @@ type importRead struct {
 }
 
 // PlanImportSource classifies and canonicalizes req.Source. It reads
-// metadata, sidecars, and bounded container probes only. It does not
-// lock or write the source, write an index, or hash link payloads.
+// metadata, sidecars, and bounded container probes. It hashes a file
+// link only when both metadata files are missing. It does not lock or
+// write the source, or write an index.
 func PlanImportSource(req ImportRequest) (SourcePlan, error) {
 	got, err := readImportSource(req)
 	if err != nil {
@@ -198,15 +206,60 @@ func planFile(req ImportRequest, plan SourcePlan) (SourcePlan, error) {
 	plan.Format = format
 	plan.Size = info.Size()
 	plan.MtimeUnix = info.ModTime().Unix()
-	if req.Mode != ImportLink {
-		return plan, nil
-	}
-	sum, err := ReadChecksumSidecar(plan.Given)
+	sum, found, err := lookupImportDigest(plan.Given)
 	if err != nil {
 		return SourcePlan{}, importFail(req, err)
 	}
+	if !found {
+		warnMissingImportDigest(req, plan.Given)
+		plan.DigestFromFile = true
+		if req.Mode != ImportLink {
+			return plan, nil
+		}
+		digest, err := fileSHA256(plan.Location)
+		if err != nil {
+			return SourcePlan{}, importFail(req, err)
+		}
+		sum = hex.EncodeToString(digest[:])
+		if IsUnknownSHA256(sum) {
+			return SourcePlan{}, importFail(req, errors.New("digest is the reserved unknown marker"))
+		}
+	}
 	plan.SHA256 = sum
 	return plan, nil
+}
+
+func lookupImportDigest(given string) (string, bool, error) {
+	sum, found, err := readObjectVersionDigest(versionFileBeside(given))
+	if err != nil || found {
+		return sum, found, err
+	}
+	shaPath := given + ".sha256"
+	info, err := os.Lstat(shaPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if _, err = os.Stat(shaPath); err != nil {
+			return "", false, err
+		}
+	}
+	sum, err = ReadChecksumSidecar(given)
+	if err != nil {
+		return "", false, err
+	}
+	return sum, true, nil
+}
+
+func warnMissingImportDigest(req ImportRequest, given string) {
+	if req.Warn == nil {
+		return
+	}
+	req.Warn(fmt.Sprintf("%s: no metadata file (%s or %s); reading the image to compute sha256",
+		given, filepath.Base(versionFileBeside(given)), filepath.Base(given)+".sha256"))
 }
 
 func canonicalFile(path string) (string, os.FileInfo, error) {

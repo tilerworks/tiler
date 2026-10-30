@@ -48,7 +48,8 @@ type stageCopyHooks struct {
 // StageImportFile copies one regular file into target-local staging.
 // The source is opened once and hashed while it is written. Format
 // detection then seeks the staged file, so the remote payload is not
-// read in full again. A checksum sidecar is ignored. A short read, a
+// read in full again. A metadata digest must match those bytes. A
+// missing metadata pair records the digest of the copy. A short read, a
 // changed source, or a close or sync error removes the staging file.
 func StageImportFile(req ImportRequest) (StagedCopy, error) {
 	return stageImportFile(req, stageCopyHooks{})
@@ -73,6 +74,9 @@ func stageImportFile(req ImportRequest, seam stageCopyHooks) (StagedCopy, error)
 }
 
 func copyImportFile(req ImportRequest, plan SourcePlan, seam stageCopyHooks) (StagedCopy, error) {
+	if IsUnknownSHA256(plan.SHA256) {
+		return StagedCopy{}, errors.New("digest is the reserved unknown marker")
+	}
 	before, err := os.Stat(plan.Location)
 	if err != nil {
 		return StagedCopy{}, err
@@ -94,6 +98,9 @@ func copyImportFile(req ImportRequest, plan SourcePlan, seam stageCopyHooks) (St
 	staged, err := observeImportCopy(plan.Location, dst.Name(), before, n, sum, req.ImagesDir, seam)
 	if err != nil {
 		return failStage(dst.Name(), req.ImagesDir, err)
+	}
+	if plan.SHA256 != "" && staged.SHA256 != plan.SHA256 {
+		return failStage(dst.Name(), req.ImagesDir, errors.New("metadata digest does not match payload"))
 	}
 	return staged, nil
 }

@@ -37,6 +37,7 @@ func TestImportedVersionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	knownSum := fileSHA256(t, knownSrc)
+	writeTestFile(t, unknownSrc+".sha256", image.UnknownSHA256+"\n")
 	writeTestFile(t, knownSrc+".sha256", knownSum+"\n")
 	importOK(t, lib, "link alice/app "+image.UnknownSHA256+"\n",
 		"build", "--link", unknownSrc, "--image", "alice/app")

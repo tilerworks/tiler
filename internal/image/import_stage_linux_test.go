@@ -19,9 +19,6 @@ func TestStageImportFileDoesNotRereadSource(t *testing.T) {
 	if err := os.WriteFile(src, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(src+".sha256", []byte(UnknownSHA256+"  large.sqsh\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	before := selfRChar(t)
 	staged := stageImportOK(t, copyReq(images, src), stageCopyHooks{})
 	t.Cleanup(staged.Remove)

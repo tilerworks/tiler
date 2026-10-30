@@ -73,10 +73,11 @@ requirement.
 
 The reserved digest of sixty-four zeros means the content hash is
 unknown. Mount and bake share one probe for it: size and mtime, no
-content hash. A known digest still requires the full hash. A new
-caller that hashes the reserved marker fails macOS `--link` imports,
-which omit the sidecar, while Linux links that stored a real digest
-stay green.
+content hash. A known digest still requires the full hash. A file
+import records that marker only when `<stem>.yaml` or the `.sha256`
+sidecar says so. When both files are missing, `--link` and `--copy`
+warn and hash the payload; they do not invent the marker. Hashing
+the marker itself is still a failure.
 
 Compare paths only after the same canonicalization the product uses.
 `canonicalPath` resolves symlinks. On macOS, `/var` and `/tmp` point

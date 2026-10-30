@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/config"
-	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
@@ -24,12 +23,15 @@ func TestBuildImportFourForms(t *testing.T) {
 	sum := fileSHA256(t, src)
 	dir := filepath.Join(images, "vendor", "app")
 
-	importOK(t, lib, "link vendor/app "+image.UnknownSHA256+"\n",
-		"build", "--link", src, "--image", "vendor/app")
+	stdout, stderr, err := runImport(t, lib, "build", "--link", src, "--image", "vendor/app")
+	if err != nil || stdout != "link vendor/app "+sum+"\n" || !strings.Contains(stderr, "warning:") ||
+		!strings.Contains(stderr, "no metadata file") {
+		t.Fatalf("link without metadata: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
 	importOK(t, lib, "copy vendor/copy "+sum+"\n",
 		"build", "--copy", src, "--image", "vendor/copy")
-	importOK(t, lib, "link vendor/linked "+image.UnknownSHA256+"\n",
-		"build", "--link", dir, "--hash", image.UnknownSHA256[:8], "--image", "vendor/linked")
+	importOK(t, lib, "link vendor/linked "+sum+"\n",
+		"build", "--link", dir, "--hash", sum[:8], "--image", "vendor/linked")
 	importOK(t, lib, "copy vendor/copied "+sum+"\n",
 		"build", "--copy", dir, "--hash", "all", "--image", "vendor/copied")
 	assertNoSession(t, home)
@@ -82,7 +84,7 @@ func TestBuildImportDirectoryErrors(t *testing.T) {
 
 	src := filepath.Join(work, "app.sqsh")
 	writeImportPayload(t, src)
-	importOK(t, lib, "link vendor/app "+image.UnknownSHA256+"\n",
+	importOK(t, lib, "link vendor/app "+fileSHA256(t, src)+"\n",
 		"build", "--link", src, "--image", "vendor/app")
 	dir := filepath.Join(images, "vendor", "app")
 	_, stderr, err = runImport(t, lib, "build", "--link", dir, "--hash", "ALL", "--image", "vendor/other")

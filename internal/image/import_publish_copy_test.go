@@ -21,15 +21,11 @@ func TestPublishCopiedImportPublishesFileAndNoopsLocal(t *testing.T) {
 	if err := os.Chtimes(src, when, when); err != nil {
 		t.Fatal(err)
 	}
-	sidecar := strings.Repeat("ab", 32)
-	if err := os.WriteFile(src+".sha256", []byte(sidecar+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	before := importStamp(t, nas)
 	req := ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: src}
 	got := mustPublishCopy(t, req)
 	sum := fileDigest(t, src)
-	if len(got.Items) != 1 || got.Items[0].Action != MergeAdd || got.Items[0].Node.ID != sum || got.Items[0].Node.ID == sidecar {
+	if len(got.Items) != 1 || got.Items[0].Action != MergeAdd || got.Items[0].Node.ID != sum {
 		t.Fatalf("publish = %+v", got.Items)
 	}
 	if got.Items[0].Node.MtimeUnix != when.Unix() || got.Items[0].Node.Builder != importBuilder {
@@ -413,9 +409,15 @@ func TestPublishCopiedImportRekeysSameSourceZeroFile(t *testing.T) {
 	if err := os.Chtimes(src, when, when); err != nil {
 		t.Fatal(err)
 	}
-	before := importStamp(t, nas)
+	if err := os.WriteFile(src+".sha256", []byte(UnknownSHA256+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	req := ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: src}
 	linked := mustPublishLink(t, req)
+	if err := os.Remove(src + ".sha256"); err != nil {
+		t.Fatal(err)
+	}
+	before := importStamp(t, nas)
 	if linked.Items[0].Action != MergeAdd || linked.Items[0].Node.ID != UnknownSHA256 {
 		t.Fatalf("link = %+v", linked.Items)
 	}

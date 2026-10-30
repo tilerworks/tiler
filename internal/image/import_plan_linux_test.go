@@ -34,8 +34,8 @@ func TestPlanImportSourceLinkReadIsBounded(t *testing.T) {
 	copied := planWithinReadBound(t, ImportRequest{
 		Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: src,
 	}, payloadSize)
-	if copied.SHA256 != "" {
-		t.Fatalf("copy plan hashed payload: %s", copied.SHA256)
+	if copied.SHA256 != sum || copied.DigestFromFile {
+		t.Fatalf("copy plan = %+v", copied)
 	}
 	dir := filepath.Join(nas, "library")
 	if err := os.Mkdir(dir, 0o755); err != nil {

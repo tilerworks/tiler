@@ -273,7 +273,9 @@ selection, the unknown digest, source conflicts, and conversion.
 directory, and do not pack or mount. Omit `--hash` for the latest
 directory version and its ancestors. `--hash <prefix>` selects one
 4-to-64 hex prefix plus ancestors. `--hash all` imports the whole
-forest. A missing `<file>.sha256` sidecar records 64 zeros.
+forest. A file import reads `<stem>.yaml` first, then `<file>.sha256`.
+When both are missing it warns and hashes the image. An explicit
+digest of 64 zeros stays unknown.
 `mount --verify` skips sha256 for that unknown version and still
 checks reachability, format, size, and mtime. The same id aimed at
 a different final path is a source conflict. `--copy` of a known

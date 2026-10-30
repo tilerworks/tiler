@@ -22,8 +22,9 @@ func TestStageImportFileCopiesSourceOnce(t *testing.T) {
 	if err := os.WriteFile(src, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sidecar := strings.Repeat("ab", 32) + "  trick.dmg\n"
-	if err := os.WriteFile(src+".sha256", []byte(sidecar), 0o644); err != nil {
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+	if err := os.WriteFile(src+".sha256", []byte(want+"  trick.dmg\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	before := importStamp(t, nas)
@@ -48,9 +49,7 @@ func TestStageImportFileCopiesSourceOnce(t *testing.T) {
 		return boundedCopy{t, file}, nil
 	}})
 	t.Cleanup(staged.Remove)
-	sum := sha256.Sum256(body)
-	want := hex.EncodeToString(sum[:])
-	if opens != 1 || staged.SHA256 != want || staged.SHA256 == strings.Repeat("ab", 32) {
+	if opens != 1 || staged.SHA256 != want {
 		t.Fatalf("opens %d digest %s", opens, staged.SHA256)
 	}
 	if staged.Format.Type != FormatSquashfs || staged.Format.Compression != CompressionZstd {
@@ -77,6 +76,26 @@ func TestStageImportFileCopiesSourceOnce(t *testing.T) {
 	staged.Remove()
 	if _, statErr := os.Stat(staged.Path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("cleanup left %s: %v", staged.Path, statErr)
+	}
+}
+
+func TestStageImportFileRejectsMismatchedMetadata(t *testing.T) {
+	withLinuxLinkPolicy(t)
+	images := t.TempDir()
+	nas := t.TempDir()
+	src := writeFakeSquashfs(t, nas, []byte("mismatch"))
+	if err := os.WriteFile(src+".sha256", []byte(strings.Repeat("ab", 32)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := StageImportFile(copyReq(images, src))
+	if err == nil || !strings.Contains(err.Error(), "metadata digest does not match") {
+		t.Fatalf("mismatch: %v", err)
+	}
+	if err := os.WriteFile(src+".sha256", []byte(UnknownSHA256+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = StageImportFile(copyReq(images, src)); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("explicit zero copy: %v", err)
 	}
 }
 

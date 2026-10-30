@@ -97,6 +97,9 @@ func TestPublishLinkedImportCommitsFilePositionsOnce(t *testing.T) {
 	if err := os.Chtimes(zeroSrc, when, when); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(zeroSrc+".sha256", []byte(UnknownSHA256+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	unknown := mustPublishLink(t, ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/zero", Source: zeroSrc})
 	if !IsUnknownSHA256(unknown.Items[0].Node.ID) {
 		t.Fatalf("unknown = %s", unknown.Items[0].Node.ID)

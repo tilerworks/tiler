@@ -34,7 +34,10 @@ func TestPlanImportSourceAliasesAndSidecar(t *testing.T) {
 	if err := os.WriteFile(link+".sha256", []byte(strings.ToUpper(sum)+" *alias.sqsh\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	direct := planImportOK(t, ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: lexical})
+	var notes []string
+	directReq := ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: lexical,
+		Warn: func(msg string) { notes = append(notes, msg) }}
+	direct := planImportOK(t, directReq)
 	viaLink := planImportOK(t, ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: link})
 	copied := planImportOK(t, ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: link})
 	wantLoc, err := filepath.EvalSymlinks(src)
@@ -45,13 +48,15 @@ func TestPlanImportSourceAliasesAndSidecar(t *testing.T) {
 		t.Fatalf("locations = %s %s %s, want %s", direct.Location, viaLink.Location, copied.Location, wantLoc)
 	}
 	content := sha256.Sum256(mustRead(t, src))
-	if !IsUnknownSHA256(direct.SHA256) || hex.EncodeToString(content[:]) == direct.SHA256 {
-		t.Fatalf("missing sidecar digest = %s", direct.SHA256)
+	contentSum := hex.EncodeToString(content[:])
+	if !direct.DigestFromFile || direct.SHA256 != contentSum || len(notes) != 1 ||
+		!strings.Contains(notes[0], "no metadata file") || !strings.Contains(notes[0], ".yaml") {
+		t.Fatalf("missing metadata digest = %s notes = %q", direct.SHA256, notes)
 	}
-	if viaLink.Given == viaLink.Location || viaLink.SHA256 != sum || IsUnknownSHA256(viaLink.SHA256) {
+	if viaLink.Given == viaLink.Location || viaLink.SHA256 != sum || viaLink.DigestFromFile || IsUnknownSHA256(viaLink.SHA256) {
 		t.Fatalf("symlink sidecar plan = %+v", viaLink)
 	}
-	if copied.SHA256 != "" || copied.Format != viaLink.Format || copied.Size != viaLink.Size {
+	if copied.SHA256 != sum || copied.DigestFromFile || copied.Format != viaLink.Format || copied.Size != viaLink.Size {
 		t.Fatalf("copy plan = %+v", copied)
 	}
 	info, err := os.Stat(wantLoc)
@@ -72,8 +77,44 @@ func TestPlanImportSourceAliasesAndSidecar(t *testing.T) {
 		t.Fatal(err)
 	}
 	marked := planImportOK(t, ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: zeros})
-	if !IsUnknownSHA256(marked.SHA256) {
-		t.Fatalf("explicit zero = %s", marked.SHA256)
+	if !IsUnknownSHA256(marked.SHA256) || marked.DigestFromFile {
+		t.Fatalf("explicit zero = %+v", marked)
+	}
+}
+
+func TestPlanImportSourcePrefersVersionFile(t *testing.T) {
+	withLinuxLinkPolicy(t)
+	images := t.TempDir()
+	nas := t.TempDir()
+	src := writeFakeSquashfs(t, nas, []byte("version-file"))
+	yamlSum := strings.Repeat("ab", 32)
+	sideSum := strings.Repeat("cd", 32)
+	node := versionNode("sidecar")
+	node.ID, node.SHA256 = yamlSum, yamlSum
+	body, err := EncodeObjectVersionFile(ObjectVersionFile{
+		Version: VersionManifestVersion, Name: "vendor/app", Image: node,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(versionFileBeside(src), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src+".sha256", []byte(sideSum+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := planImportOK(t, ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: src})
+	copied := planImportOK(t, ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: src})
+	content := sha256.Sum256(mustRead(t, src))
+	if linked.SHA256 != yamlSum || linked.DigestFromFile || copied.SHA256 != yamlSum ||
+		linked.SHA256 == sideSum || linked.SHA256 == hex.EncodeToString(content[:]) {
+		t.Fatalf("yaml lost to sidecar or content: link %+v copy %+v", linked, copied)
+	}
+	if err := os.WriteFile(versionFileBeside(src), []byte("version: 1\nimage: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanImportSource(ImportRequest{Mode: ImportLink, ImagesDir: images, Name: "vendor/app", Source: src}); err == nil {
+		t.Fatal("invalid version file was accepted")
 	}
 }
 
@@ -224,9 +265,8 @@ func TestPlanImportSourceRejectsInvalidSources(t *testing.T) {
 	if _, err := PlanImportSource(req(good)); !errors.Is(err, ErrChecksumSidecar) {
 		t.Fatalf("link sidecar: %v", err)
 	}
-	copied := planImportOK(t, ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: good})
-	if copied.SHA256 != "" {
-		t.Fatalf("copy hashed or read sidecar: %s", copied.SHA256)
+	if _, err := PlanImportSource(ImportRequest{Mode: ImportCopy, ImagesDir: images, Name: "vendor/app", Source: good}); !errors.Is(err, ErrChecksumSidecar) {
+		t.Fatalf("copy sidecar: %v", err)
 	}
 }
 

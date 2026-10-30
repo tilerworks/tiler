@@ -109,13 +109,19 @@ func newBuildCmd() *cobra.Command {
 			"image. Omit --hash to import the latest directory version and\n" +
 			"its ancestors; --hash takes one 4-to-64 hex prefix plus\n" +
 			"ancestors, or all for the whole forest. --link writes a\n" +
-			"position file and does not hash the payload. A missing sidecar\n" +
-			"records the unknown digest of 64 zeros. mount --verify skips\n" +
-			"sha256 for that version and still checks reachability, format,\n" +
-			"size, and mtime. The same id with a different final source is\n" +
-			"a source conflict. --copy of a known link keeps that id;\n" +
-			"--copy of an unknown link publishes the real digest and keeps\n" +
-			"the old zero version.",
+			"position file. It reads <stem>.yaml first, then\n" +
+			"<image-file>.sha256, and does not hash the payload when one\n" +
+			"of them supplies the digest. When both are missing it warns\n" +
+			"and reads the image to compute sha256. An explicit record of\n" +
+			"the unknown digest of 64 zeros stays unknown. mount --verify\n" +
+			"skips sha256 for that version and still checks reachability,\n" +
+			"format, size, and mtime. The same id with a different final\n" +
+			"source is a source conflict. --copy reads the same metadata\n" +
+			"files. The copied bytes must match that digest; an explicit\n" +
+			"unknown digest is an error. When both files are missing,\n" +
+			"--copy warns and records the digest of the copied bytes.\n" +
+			"--copy of a known link keeps that id; --copy of an unknown\n" +
+			"link publishes the real digest and keeps the old zero version.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBuild(cmd, args, full, incr, imageName, split, format, compression, messages, files, link, copySrc, hash)

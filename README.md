@@ -468,19 +468,27 @@ Directory selection:
   Shared ancestors are planned once. The word is exactly `all`.
 
 `--link` writes a position file whose only content is the absolute
-source path and a newline. It does not copy the payload and does not
-hash it. For one file it reads `<image-file>.sha256` when that
-sidecar exists. A missing sidecar records the unknown digest: 64
-zero hex digits. That marker is not a content address. It is not
-used to deduplicate repositories or to share a content cache. One
-image name has at most one all-zero version. The same source with
-the same format, size, and mtime is a no-op. A different source, or
-a changed size or mtime, is a conflict. An unknown digest does not
-prove the bytes are unchanged.
+source path and a newline. It does not copy the payload. For one
+file it reads `<stem>.yaml` first (`app.sqsh` selects `app.yaml`),
+then `<image-file>.sha256`. Either file supplies the digest, and
+the payload is not hashed. When both are missing, the import warns
+and reads the image to compute sha256. An explicit digest of 64
+zero hex digits stays the unknown marker. That marker is not a
+content address. It is not used to deduplicate repositories or to
+share a content cache. One image name has at most one all-zero
+version. The same source with the same format, size, and mtime is
+a no-op. A different source, or a changed size or mtime, is a
+conflict. An unknown digest does not prove the bytes are unchanged.
 
-`--copy` ignores the sidecar, streams the payload into the target
-repository, and records the SHA-256 of the copied bytes. A known
-digest that equals the all-zero marker is an error.
+Each published version also stores `image.yaml` beside its payload
+under `_objects/<id>/`. The file repeats that version's `meta.yaml`
+node, including sha256, so an exported image can keep its digest
+when `meta.yaml` is not copied with it.
+
+`--copy` reads the same two metadata files. The streamed bytes must
+match a digest they supply. When both are missing, the import warns
+and records the SHA-256 of the copied bytes. An explicit digest of
+64 zeros is an error.
 
 `mount` of a library name still does the quick size and mtime check.
 `mount --verify` re-hashes recorded digests. For an unknown version
