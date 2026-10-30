@@ -44,8 +44,15 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 		}
 	}
 	var table []mountinfo.Mount
+	var diskImages []DiskImage
 	scan := *e
-	if !e.useDiskImages() {
+	if e.useDiskImages() {
+		diskImages, err = e.diskImages()
+		if err != nil {
+			return Overview{}, err
+		}
+		scan.LoadDiskImages = func() ([]DiskImage, error) { return diskImages, nil }
+	} else {
 		table, err = e.loadTable()
 		if err != nil {
 			return Overview{}, err
@@ -92,6 +99,9 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 		}
 		if matchesQuery(view, directory, filter, e.ImagesDir, &overview.Diagnostics) {
 			view.Mounts = e.mountDetails(view, table)
+			if e.useDiskImages() {
+				e.annotateDiskDetails(view.Name, view.Mounts, diskImages)
+			}
 			selected = append(selected, view)
 		}
 	}

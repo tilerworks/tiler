@@ -13,6 +13,7 @@ type MountView struct {
 	Layers        []LayerView
 	OverlayUpper  string
 	OverlayLowers []string
+	DiskImage     string
 	Shadow        string
 	Diagnostics   []string
 }
