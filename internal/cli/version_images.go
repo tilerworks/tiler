@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
@@ -25,7 +26,21 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 		_, err := fmt.Fprintln(w, "No images found.")
 		return err
 	}
+	rows := make([][][]string, len(views))
+	header := []string{"ID", "SIZE", "CREATED", "DESCRIPTION"}
+	widths := lengths(header)
 	collides := false
+	for i, view := range views {
+		var collision bool
+		rows[i], collision = versionImageRows(view)
+		collides = collides || collision
+		for _, row := range rows[i] {
+			for j := 0; j < len(row)-1; j++ {
+				widths[j] = max(widths[j], utf8.RuneCountInString(row[j]))
+			}
+		}
+	}
+
 	for i, view := range views {
 		if i > 0 {
 			if _, err := fmt.Fprintln(w); err != nil {
@@ -42,27 +57,11 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 			view.Name, listID(view.Latest.ID), versionCreatedAt(view.Latest.CreatedAt)); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(w, "  ID          KIND         CREATED               DESCRIPTION"); err != nil {
+		if err := writeVersionImageRow(w, header, widths); err != nil {
 			return err
 		}
-		depths := make(map[string]int, len(view.Images))
-		shortIDs := make(map[string]bool, len(view.Images))
-		for _, node := range view.Images {
-			short := listID(node.ID)
-			collides = collides || shortIDs[short]
-			shortIDs[short] = true
-			depth := 0
-			if node.Parent != "" {
-				depth = depths[node.Parent] + 1
-			}
-			depths[node.ID] = depth
-			description := terminalText(image.DescriptionSummary(node.Description))
-			if description == "" {
-				description = "-"
-			}
-			if _, err := fmt.Fprintf(w, "%s%s  %-11s  %s  %s\n",
-				strings.Repeat("  ", depth+1), listID(node.ID), node.Kind,
-				versionCreatedAt(node.CreatedAt), description); err != nil {
+		for _, row := range rows[i] {
+			if err := writeVersionImageRow(w, row, widths); err != nil {
 				return err
 			}
 		}
@@ -72,6 +71,51 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 		return err
 	}
 	return nil
+}
+
+// versionImageRows confines dependency indentation to the ID cell.
+func versionImageRows(view versionImageView) ([][]string, bool) {
+	rows := make([][]string, 0, len(view.Images))
+	depths := make(map[string]int, len(view.Images))
+	shortIDs := make(map[string]bool, len(view.Images))
+	collides := false
+	for _, node := range view.Images {
+		short := listID(node.ID)
+		collides = collides || shortIDs[short]
+		shortIDs[short] = true
+		depth := 0
+		if node.Parent != "" {
+			depth = depths[node.Parent] + 1
+		}
+		depths[node.ID] = depth
+		id := short
+		if depth > 0 {
+			id = strings.Repeat("  ", depth) + "↳ " + short
+		}
+		description := terminalText(image.DescriptionSummary(node.Description))
+		if description == "" {
+			description = "-"
+		}
+		rows = append(rows, []string{id, formatSize(node.Size), versionCreatedAt(node.CreatedAt), description})
+	}
+	return rows, collides
+}
+
+func writeVersionImageRow(w io.Writer, row []string, widths []int) error {
+	var line strings.Builder
+	line.WriteString("  ")
+	for i, cell := range row {
+		if i > 0 {
+			line.WriteString("  ")
+		}
+		line.WriteString(cell)
+		if i < len(row)-1 {
+			// ID contains only ASCII and the single-cell dependency arrow.
+			line.WriteString(strings.Repeat(" ", max(0, widths[i]-utf8.RuneCountInString(cell))))
+		}
+	}
+	_, err := fmt.Fprintln(w, line.String())
+	return err
 }
 
 func terminalText(text string) string {

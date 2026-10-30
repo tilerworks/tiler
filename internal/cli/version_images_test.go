@@ -154,11 +154,11 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "alice/app  latest=dddddddddd  created=2026-10-28T04:00:00Z\n" +
-		"  ID          KIND         CREATED               DESCRIPTION\n" +
-		"  aaaaaaaaaa  full         2026-10-28T01:00:00Z  Base runtime\n" +
-		"    bbbbbbbbbb  incremental  2026-10-28T02:00:00Z  Add tools\n" +
-		"    cccccccccc  incremental  2026-10-28T03:00:00Z  -\n" +
-		"  dddddddddd  full         2026-10-28T04:00:00Z  New base\n"
+		"  ID              SIZE  CREATED               DESCRIPTION\n" +
+		"  aaaaaaaaaa      1 B   2026-10-28T01:00:00Z  Base runtime\n" +
+		"    ↳ bbbbbbbbbb  1 B   2026-10-28T02:00:00Z  Add tools\n" +
+		"    ↳ cccccccccc  1 B   2026-10-28T03:00:00Z  -\n" +
+		"  dddddddddd      1 B   2026-10-28T04:00:00Z  New base\n"
 	if out.String() != want {
 		t.Fatalf("table = %q, want %q", out.String(), want)
 	}
@@ -385,4 +385,56 @@ func TestVersionImageEmptyLibraryGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_empty_json", out.Bytes())
+}
+
+func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
+	at := time.Date(2026, 10, 28, 1, 0, 0, 123456789, time.UTC)
+	root := versionNode("a", image.KindFull, "", at)
+	root.Size = 1024 * 1024
+	child := versionNode("b", image.KindIncremental, root.ID, at.Truncate(time.Second))
+	child.Size = 1024
+	grandchild := versionNode("c", image.KindIncremental, child.ID, at)
+	grandchild.Size = 0
+	grandchild.Blocks = []image.BlockEntry{{}}
+	other := versionNode("d", image.KindFull, "", at)
+	other.Size = 42
+	views := []versionImageView{
+		{Name: "one", Latest: &grandchild, Images: []image.ImageMeta{root, child, grandchild}},
+		{Name: "empty"},
+		{Name: "two", Latest: &other, Images: []image.ImageMeta{other}},
+	}
+	var out bytes.Buffer
+	if err := writeVersionImageTable(&out, views); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\t") || !strings.Contains(out.String(), "empty  latest=-\n  No image versions.\n") {
+		t.Fatalf("unexpected table: %q", out.String())
+	}
+	var starts []int
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "  ") || strings.Contains(line, "No image") {
+			continue
+		}
+		line = strings.ReplaceAll(line, "↳", "x")
+		if strings.HasSuffix(line, " ") {
+			t.Fatalf("trailing padding: %q", line)
+		}
+		var columns []int
+		if strings.Contains(line, "DESCRIPTION") {
+			columns = []int{strings.Index(line, "SIZE"), strings.Index(line, "CREATED"), strings.Index(line, "DESCRIPTION")}
+		} else {
+			var size string
+			for _, candidate := range []string{"1 MiB", "1 KiB", "0 B", "42 B"} {
+				if strings.Contains(line, candidate) {
+					size = candidate
+				}
+			}
+			columns = []int{strings.Index(line, size), strings.Index(line, "2026-"), strings.Index(line, "description")}
+		}
+		if starts == nil {
+			starts = columns
+		} else if !reflect.DeepEqual(starts, columns) {
+			t.Fatalf("columns %v differ from %v in %q", columns, starts, line)
+		}
+	}
 }
