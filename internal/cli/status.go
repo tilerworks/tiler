@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
@@ -14,16 +13,17 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	var asJSON bool
+	var selectedSession, selectedImage string
 	cmd := &cobra.Command{
-		Use:     "status [path]",
+		Use:     "status [directory]",
 		Aliases: []string{"st"},
 		Short:   "Reconcile sessions with the real mount state",
-		Long: "Without a path, list every session record with the health of\n" +
-			"its live mounts, mark the session named by TILER_SESSION_ID as\n" +
-			"current, and report mounted tiler views no active record claims\n" +
-			"as orphans. With a path, report the session whose recorded view\n" +
-			"covers it; a path no session covers is an error. --json renders\n" +
-			"one machine-readable document instead of the human listing.",
+		Long: "List sessions and their layered mounts, marking the current session\n" +
+			"and reporting unclaimed views as orphans. A directory selects all\n" +
+			"sessions with mounts above or below it. Use --session for an exact\n" +
+			"session or --image name[:version] for any layer of an image.\n" +
+			"Filters intersect; selected sessions retain all their mounts.\n" +
+			"--json always renders an overview document with a sessions array.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, ok := loadedConfig(cmd)
@@ -31,34 +31,39 @@ func newStatusCmd() *cobra.Command {
 				return errors.New("status: configuration is not loaded")
 			}
 			engine := sessionEngine(cfg)
-			// A platform with no host mount table has no tiler mount
-			// to reconcile. An empty table lets an empty store and an
-			// uncovered path report themselves instead of failing
-			// before any output.
 			engine.LoadTable = emptyWhenMountTableUnavailable(engine.LoadTable)
-			out := cmd.OutOrStdout()
+			query := session.Query{Session: selectedSession, Image: selectedImage}
 			if len(args) == 1 {
-				found, err := engine.SessionForPath(args[0])
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					return writeJSON(out, newStatusPathDocument(found))
-				}
-				return writeStatusPath(out, found)
+				query.Directory = args[0]
 			}
-			overview, err := engine.Overview(os.Getenv(sessionEnvVar))
+			if selectedSession != "" {
+				if err := session.ValidateName(selectedSession); err != nil {
+					return usageError{err}
+				}
+			}
+			overview, err := engine.Query(os.Getenv(sessionEnvVar), query)
 			if err != nil {
 				return err
 			}
+			for _, diagnostic := range overview.Diagnostics {
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), terminalText(diagnostic)); err != nil {
+					return err
+				}
+			}
 			loadStatusActivity(engine, &overview, cmd.ErrOrStderr())
 			if asJSON {
-				return writeJSON(out, newStatusDocument(overview))
+				return writeJSON(cmd.OutOrStdout(), newStatusDocument(overview))
 			}
-			return writeStatusOverview(out, overview)
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return writeStatusDetails(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the status as a JSON document")
+	cmd.Flags().StringVarP(&selectedSession, "session", "s", "", "select an exact session name")
+	cmd.Flags().StringVarP(&selectedImage, "image", "i", "", "select any layer of name[:version]")
 	return cmd
 }
 
@@ -79,91 +84,6 @@ func emptyWhenMountTableUnavailable(
 	}
 }
 
-// writeStatusOverview renders one block per session followed by the
-// orphan view lines. An overview without any record or orphan says
-// so explicitly.
-func writeStatusOverview(w io.Writer, overview session.Overview) error {
-	if len(overview.Sessions) == 0 && len(overview.Orphans) == 0 {
-		_, err := fmt.Fprintln(w, "no sessions recorded")
-		return err
-	}
-	for _, view := range overview.Sessions {
-		if err := writeSessionBlock(w, view); err != nil {
-			return err
-		}
-	}
-	for _, orphan := range overview.Orphans {
-		if _, err := fmt.Fprintf(w, "orphan %s %s %s\n",
-			orphan.Point, orphan.FSType, orphan.RuntimeDir); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeSessionBlock renders the session header and its annotated
-// action lines. A locked record reports its name alone.
-func writeSessionBlock(w io.Writer, view session.View) error {
-	header := view.Name
-	if view.State != "" {
-		header += " " + view.State
-	}
-	if !view.Created.IsZero() {
-		header += " created=" + formatTextTime(view.Created)
-	}
-	if view.Current {
-		header += " current"
-	}
-	if view.Locked {
-		header += " locked"
-	}
-	if _, err := fmt.Fprintln(w, header); err != nil {
-		return err
-	}
-	for _, action := range view.Actions {
-		if err := writeStatusAction(w, action); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeStatusAction renders one action line; the health mark only
-// appears on annotated actions.
-func writeStatusAction(w io.Writer, view session.ActionView) error {
-	line := fmt.Sprintf("  %d %s %s %s mode=%s status=%s",
-		view.Seq, view.Type, view.Image, view.Mountpoint, view.Mode, view.Status)
-	if view.Health != "" {
-		line += " health=" + view.Health
-	}
-	_, err := fmt.Fprintln(w, line)
-	return err
-}
-
-// writeStatusPath renders the covering session of one path: the
-// record header with the covering mountpoint and its stale mark,
-// then the matching action line.
-func writeStatusPath(w io.Writer, found session.PathSession) error {
-	header := fmt.Sprintf("%s %s mountpoint=%s",
-		found.Record.Name, found.Record.State, found.Mountpoint)
-	if found.Stale {
-		header += " stale"
-	}
-	if _, err := fmt.Fprintln(w, header); err != nil {
-		return err
-	}
-	match := -1
-	for i, action := range found.Record.Actions {
-		if action.Type == session.TypeMount && action.Mountpoint == found.Mountpoint {
-			match = i
-		}
-	}
-	if match < 0 {
-		return nil
-	}
-	return writeStatusAction(w, session.ActionView{Action: found.Record.Actions[match]})
-}
-
 // statusDocument is the status --json overview envelope. The schema
 // is add-only; golden files pin the shape.
 type statusDocument struct {
@@ -182,6 +102,7 @@ type statusSessionJSON struct {
 	Current   bool               `json:"current"`
 	Locked    bool               `json:"locked"`
 	Actions   []statusActionJSON `json:"actions"`
+	Mounts    []statusMountJSON  `json:"mounts"`
 }
 
 // statusActionJSON is one recorded action with its health mark.
@@ -204,16 +125,6 @@ type statusOrphanJSON struct {
 	Point      string `json:"point"`
 	FSType     string `json:"fstype"`
 	RuntimeDir string `json:"runtime_dir"`
-}
-
-// statusPathDocument is the status <path> --json envelope.
-type statusPathDocument struct {
-	Path       string            `json:"path"`
-	Session    string            `json:"session"`
-	State      string            `json:"state"`
-	Mountpoint string            `json:"mountpoint"`
-	Stale      bool              `json:"stale"`
-	Action     *statusActionJSON `json:"action"`
 }
 
 func newStatusDocument(overview session.Overview) statusDocument {
@@ -245,9 +156,13 @@ func newStatusSession(view session.View) statusSessionJSON {
 		Current:             view.Current,
 		Locked:              view.Locked,
 		Actions:             make([]statusActionJSON, 0, len(view.Actions)),
+		Mounts:              make([]statusMountJSON, 0, len(view.Mounts)),
 	}
 	for _, action := range view.Actions {
 		entry.Actions = append(entry.Actions, newStatusAction(action.Action, action.Health))
+	}
+	for _, mount := range view.Mounts {
+		entry.Mounts = append(entry.Mounts, newStatusMount(mount))
 	}
 	return entry
 }
@@ -266,27 +181,38 @@ func newStatusAction(action session.Action, health string) statusActionJSON {
 	}
 }
 
-// newStatusPathDocument converts one reverse-lookup hit. The
-// matching action carries the covering view's health, which is the
-// same fact the stale flag reports; the last recorded mount of the
-// point wins, matching the human form.
-func newStatusPathDocument(found session.PathSession) statusPathDocument {
-	doc := statusPathDocument{
-		Path:       found.Path,
-		Session:    found.Record.Name,
-		State:      found.Record.State,
-		Mountpoint: found.Mountpoint,
-		Stale:      found.Stale,
+type statusMountJSON struct {
+	statusActionJSON
+	FullID        string            `json:"full_id"`
+	TipID         string            `json:"tip_id"`
+	ServedID      string            `json:"served_id"`
+	ServedTip     string            `json:"served_tip"`
+	Layers        []statusLayerJSON `json:"layers"`
+	OverlayUpper  string            `json:"overlay_upper"`
+	OverlayLowers []string          `json:"overlay_lowers"`
+	DiskImage     string            `json:"disk_image"`
+	Shadow        string            `json:"shadow"`
+	Diagnostics   []string          `json:"diagnostics"`
+}
+
+type statusLayerJSON struct {
+	Image      string `json:"image"`
+	Version    string `json:"version"`
+	Kind       string `json:"kind"`
+	Mountpoint string `json:"mountpoint"`
+	Available  bool   `json:"available"`
+}
+
+func newStatusMount(mount session.MountView) statusMountJSON {
+	entry := statusMountJSON{
+		statusActionJSON: newStatusAction(mount.Action, mount.Health),
+		FullID:           mount.FullID, TipID: mount.TipID, ServedID: mount.ServedID, ServedTip: mount.ServedTip,
+		Layers: make([]statusLayerJSON, 0, len(mount.Layers)), OverlayUpper: mount.OverlayUpper,
+		OverlayLowers: append([]string{}, mount.OverlayLowers...), DiskImage: mount.DiskImage,
+		Shadow: mount.Shadow, Diagnostics: append([]string{}, mount.Diagnostics...),
 	}
-	health := session.HealthHealthy
-	if found.Stale {
-		health = session.HealthStale
+	for _, layer := range mount.Layers {
+		entry.Layers = append(entry.Layers, statusLayerJSON(layer))
 	}
-	for _, action := range found.Record.Actions {
-		if action.Type == session.TypeMount && action.Mountpoint == found.Mountpoint {
-			matched := newStatusAction(action, health)
-			doc.Action = &matched
-		}
-	}
-	return doc
+	return entry
 }

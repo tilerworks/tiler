@@ -31,7 +31,7 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 	// Both views serve: the overview shows the active session with
 	// two healthy mounts and no orphans.
 	stdout := mustCmd(t, append(lib, "status")...)
-	assertStatusOverview(t, stdout, "dev active", 2, "health=healthy", 0)
+	assertStatusOverview(t, stdout, "dev · active", 2, "mounted · healthy", 0)
 	if !strings.Contains(stdout, " current") {
 		t.Fatalf("stdout = %q, want the environment session marked current", stdout)
 	}
@@ -52,37 +52,28 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 		}
 	}
 
-	// A deep path inside the merged view and the runtime upper both
-	// resolve back to the same session.
-	deep := filepath.Join(view1, "sub", "deep", "x.txt")
+	// A directory inside the merged view selects the complete session;
+	// internal runtime paths do not select its mount directory.
+	deep := filepath.Join(view1, "sub", "deep")
 	stdout = mustCmd(t, append(lib, "status", deep)...)
-	if !strings.HasPrefix(stdout, "dev active mountpoint="+view1+"\n") {
+	if !strings.HasPrefix(stdout, "dev · active") {
 		t.Fatalf("deep path status = %q", stdout)
 	}
-	pathDoc := statusPathJSON(t, lib, deep)
-	if pathDoc.Path != deep || pathDoc.Session != "dev" ||
-		pathDoc.Mountpoint != view1 || pathDoc.Stale {
-		t.Fatalf("path doc = %+v", pathDoc)
-	}
-	if pathDoc.Action == nil || pathDoc.Action.Seq != 1 ||
-		pathDoc.Action.Health != session.HealthHealthy {
-		t.Fatalf("path action = %+v", pathDoc.Action)
+	pathDoc := statusDirectoryJSON(t, lib, deep)
+	if len(pathDoc.Sessions) != 1 || pathDoc.Sessions[0].Name != "dev" || len(pathDoc.Sessions[0].Mounts) != 2 {
+		t.Fatalf("directory doc = %+v", pathDoc)
 	}
 	entry, ok := entryAt(realTable(t), view1)
 	if !ok || entry.Upper == "" {
 		t.Fatalf("no writable overlay entry at %s: %+v", view1, entry)
 	}
 	stdout = mustCmd(t, append(lib, "status", entry.Upper)...)
-	if !strings.HasPrefix(stdout, "dev active mountpoint="+view1+"\n") {
-		t.Fatalf("runtime upper status = %q", stdout)
+	if stdout != "no sessions recorded\n" {
+		t.Fatalf("runtime upper is not a mount directory: %q", stdout)
 	}
-	resolved, err := filepath.EvalSymlinks(entry.Upper)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pathDoc = statusPathJSON(t, lib, entry.Upper)
-	if pathDoc.Path != resolved || pathDoc.Session != "dev" {
-		t.Fatalf("runtime path doc = %+v, want the normalized query", pathDoc)
+	pathDoc = statusDirectoryJSON(t, lib, entry.Upper)
+	if len(pathDoc.Sessions) != 0 {
+		t.Fatalf("runtime directory doc = %+v", pathDoc)
 	}
 
 	// Kill the second daemon: the overview and the path form both
@@ -90,16 +81,15 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 	killDaemon(t, findDaemon(t, "fuse-overlayfs", view2))
 	waitOverlayDead(t, view2)
 	stdout = mustCmd(t, append(lib, "status")...)
-	assertStatusOverview(t, stdout, "dev active", 2, "", 0)
-	if !strings.Contains(stdout, "health=healthy") {
+	assertStatusOverview(t, stdout, "dev · active", 2, "", 0)
+	if !strings.Contains(stdout, "mounted · healthy") {
 		t.Fatalf("stdout = %q, want the surviving view healthy", stdout)
 	}
-	if !strings.Contains(stdout, "health=stale") {
+	if !strings.Contains(stdout, "mounted · stale") {
 		t.Fatalf("stdout = %q, want the killed view marked stale", stdout)
 	}
-	pathDoc = statusPathJSON(t, lib, view2)
-	if !pathDoc.Stale || pathDoc.Action == nil ||
-		pathDoc.Action.Health != session.HealthStale {
+	pathDoc = statusDirectoryJSON(t, lib, view2)
+	if len(pathDoc.Sessions) != 1 || pathDoc.Sessions[0].Actions[1].Health != session.HealthStale {
 		t.Fatalf("stale path doc = %+v", pathDoc)
 	}
 
@@ -118,29 +108,26 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 		}
 	}
 	stdout = mustCmd(t, append(lib, "status")...)
-	assertStatusOverview(t, stdout, "dev closed", 0, "", 0)
+	assertStatusOverview(t, stdout, "dev · closed", 2, "", 0)
 	doc = statusOverviewJSON(t, lib)
 	if len(doc.Sessions) != 1 || doc.Sessions[0].State != session.StateClosed ||
-		len(doc.Sessions[0].Actions) != 0 || len(doc.OrphanViews) != 0 {
+		len(doc.Sessions[0].Actions) != 2 || len(doc.OrphanViews) != 0 {
 		t.Fatalf("closed doc = %+v, want the closed record without orphans", doc)
 	}
 }
 
-func TestStatusUncoveredRealPathExitsOne(t *testing.T) {
+func TestStatusUncoveredRealDirectoryReturnsEmpty(t *testing.T) {
 	requireMountTestEnv(t)
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	_, stderr, _, err := runCmd(t, append(lib, "status", work, "--json")...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("ExitCode(%v) = %d, want 1\n%s", err, ExitCode(err), stderr)
-	}
-	if !strings.Contains(stderr, "no session covers") {
-		t.Fatalf("stderr = %q, want the covering-session error", stderr)
+	stdout, stderr, _, err := runCmd(t, append(lib, "status", work, "--json")...)
+	if err != nil || !strings.Contains(stdout, `"sessions": []`) {
+		t.Fatalf("empty result = %s %v %s", stdout, err, stderr)
 	}
 }
 
 // assertStatusOverview checks the block structure of the human
-// overview: the session header, the number of action lines with
+// overview: the session header, the number of mount lines with
 // their health marks, and the orphan line count.
 func assertStatusOverview(t *testing.T, stdout, header string, actions int, health string, orphans int) {
 	t.Helper()
@@ -152,17 +139,17 @@ func assertStatusOverview(t *testing.T, stdout, header string, actions int, heal
 	seenOrphans := 0
 	for _, line := range lines[1:] {
 		switch {
-		case strings.HasPrefix(line, "  "):
+		case strings.HasPrefix(line, "  📁 "):
 			seenActions++
 			if health != "" && !strings.Contains(line, health) {
-				t.Fatalf("action line = %q, want it to contain %q", line, health)
+				t.Fatalf("mount line = %q, want it to contain %q", line, health)
 			}
 		case strings.HasPrefix(line, "orphan "):
 			seenOrphans++
 		}
 	}
 	if seenActions != actions {
-		t.Fatalf("action lines = %d, want %d\n%s", seenActions, actions, stdout)
+		t.Fatalf("mount lines = %d, want %d\n%s", seenActions, actions, stdout)
 	}
 	if seenOrphans != orphans {
 		t.Fatalf("orphan lines = %d, want %d\n%s", seenOrphans, orphans, stdout)
@@ -181,14 +168,14 @@ func statusOverviewJSON(t *testing.T, lib []string) statusDocument {
 	return doc
 }
 
-// statusPathJSON runs the real status <path> --json and parses the
+// statusDirectoryJSON runs status <directory> --json and parses the
 // document.
-func statusPathJSON(t *testing.T, lib []string, path string) statusPathDocument {
+func statusDirectoryJSON(t *testing.T, lib []string, path string) statusDocument {
 	t.Helper()
 	stdout := mustCmd(t, append(lib, "status", path, "--json")...)
-	var doc statusPathDocument
+	var doc statusDocument
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("status path --json is not parseable: %v\n%s", err, stdout)
+		t.Fatalf("status directory --json is not parseable: %v\n%s", err, stdout)
 	}
 	return doc
 }

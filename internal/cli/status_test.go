@@ -62,39 +62,24 @@ func TestStatusTreatsUnavailableMountTableAsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, stderr, _, err = runCmd(t, append(lib, "status", plain)...)
-	if ExitCode(err) != 1 || !strings.Contains(stderr, "no session covers") {
+	if err != nil {
 		t.Fatalf("uncovered: ExitCode(%v) = %d\n%s", err, ExitCode(err), stderr)
 	}
 }
 
 func TestStatusOverviewRendering(t *testing.T) {
 	home, _ := withWorkspace(t)
-	lib, sessions := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
+	lib, _ := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
 	t.Setenv("TILER_SESSION_ID", "dev")
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "status")...)
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, stderr)
 	}
-	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("stdout = %q, want dev block, old header, and the orphan line", stdout)
-	}
-	if !strings.HasPrefix(lines[0], "dev active created=") ||
-		!strings.HasSuffix(lines[0], " current") {
-		t.Fatalf("dev header = %q, want the current marker", lines[0])
-	}
-	want := "  1 mount alice/app /ws/dev mode=rw status=mounted health=healthy"
-	if lines[1] != want {
-		t.Fatalf("action line = %q, want %q", lines[1], want)
-	}
-	if !strings.HasPrefix(lines[2], "old closed created=") {
-		t.Fatalf("old header = %q, want the closed summary", lines[2])
-	}
-	want = "orphan /ws/orphan fuse.fuse-overlayfs " +
-		filepath.Join(sessions, "orphan", "runtime", "m1")
-	if lines[3] != want {
-		t.Fatalf("orphan line = %q, want %q", lines[3], want)
+	for _, want := range []string{"dev · active · current", "[rw · mounted · healthy]", "old · closed", "orphan /ws/orphan"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("missing %q in %s", want, stdout)
+		}
 	}
 }
 
@@ -106,7 +91,7 @@ func TestStatusOverviewMarksStaleMounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "status=mounted health=stale") {
+	if !strings.Contains(stdout, "mounted · stale") {
 		t.Fatalf("stdout = %q, want the stale annotation", stdout)
 	}
 	// The dead view of a live record stays claimed: only the
@@ -133,36 +118,36 @@ func TestStatusOverviewWithoutRecords(t *testing.T) {
 	}
 }
 
-func TestStatusPathRendering(t *testing.T) {
+func TestStatusDirectoryAndEntrypoints(t *testing.T) {
 	home, work := withWorkspace(t)
 	lib, sessions := withStatusSeeds(t, home, map[string]bool{"/ws/dev": true})
-
-	_, stderr, _, err := runCmd(t, append(lib, "status", filepath.Join(work, "elsewhere"))...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("ExitCode(%v) = %d, want 1\n%s", err, ExitCode(err), stderr)
+	for _, format := range [][]string{nil, {"--json"}} {
+		var expected string
+		for _, entry := range [][]string{{"status"}, {"st"}, {"session", "status"}} {
+			args := append(append(entry, "/ws/dev/src", "-s", "dev", "-i", "alice/app"), format...)
+			out, stderr, _, err := runCmd(t, append(lib, args...)...)
+			if err != nil || !strings.Contains(out, "dev") {
+				t.Fatalf("%v: %s %v %s", entry, out, err, stderr)
+			}
+			if expected != "" && expected != out {
+				t.Fatalf("entrypoint differs: %s", out)
+			}
+			expected = out
+		}
 	}
-	if !strings.Contains(stderr, "no session covers") {
-		t.Fatalf("stderr = %q, want the covering-session error", stderr)
+	for _, path := range []string{filepath.Join(work, "elsewhere"), filepath.Join(sessions, "dev", "runtime", "m1", "upper")} {
+		out, stderr, _, err := runCmd(t, append(lib, "status", path)...)
+		if err != nil || out != "no sessions recorded\n" {
+			t.Fatalf("unrelated directory: %q %v %s", out, err, stderr)
+		}
 	}
-
-	stdout, stderr, _, err := runCmd(t, append(lib, "status", "/ws/dev/src/main.go")...)
-	if err != nil {
-		t.Fatalf("status path: %v\n%s", err, stderr)
+	file := filepath.Join(work, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	want := "dev active mountpoint=/ws/dev\n" +
-		"  1 mount alice/app /ws/dev mode=rw status=mounted\n"
-	if stdout != want {
-		t.Fatalf("stdout = %q, want %q", stdout, want)
-	}
-
-	// A runtime directory path resolves back to the same session.
-	stdout, stderr, _, err = runCmd(t, append(lib, "status",
-		filepath.Join(sessions, "dev", "runtime", "m1", "upper"))...)
-	if err != nil {
-		t.Fatalf("status runtime path: %v\n%s", err, stderr)
-	}
-	if !strings.HasPrefix(stdout, "dev active mountpoint=/ws/dev") {
-		t.Fatalf("stdout = %q, want the covering session", stdout)
+	_, stderr, _, err := runCmd(t, append(lib, "status", file)...)
+	if err == nil || !strings.Contains(stderr, "directory required") {
+		t.Fatalf("file query: %v %s", err, stderr)
 	}
 }
 
@@ -174,7 +159,7 @@ func TestStatusPathStaleMark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status path: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, "dev active mountpoint=/ws/dev stale\n") {
+	if !strings.Contains(stdout, "mounted · stale") {
 		t.Fatalf("stdout = %q, want the stale mark", stdout)
 	}
 }
@@ -188,7 +173,7 @@ func TestStatusExitClassification(t *testing.T) {
 		t.Fatalf("two arguments: ExitCode(%v) = %d, want 2", err, ExitCode(err))
 	}
 	_, _, _, err = runCmd(t, append(lib, "status", "/nowhere")...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("uncovered path: ExitCode(%v) = %d, want 1", err, ExitCode(err))
+	if err != nil {
+		t.Fatalf("uncovered directory: %v", err)
 	}
 }
