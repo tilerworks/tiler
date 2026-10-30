@@ -77,7 +77,7 @@ func newImagesListCmd() *cobra.Command {
 			if !ok {
 				return errors.New("images list: configuration is not loaded")
 			}
-			return listAllImages(cmd.OutOrStdout(), cfg, false, asJSON)
+			return listAllImages(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON)
 		}}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
 	return cmd
@@ -98,13 +98,16 @@ func newImagesShowCmd() *cobra.Command {
 	return cmd
 }
 
-func listAllImages(w io.Writer, cfg config.Config, _ bool, asJSON bool) error {
+func listAllImages(w, warnings io.Writer, cfg config.Config, asJSON bool) error {
 	views, err := collectVersionImages(cfg.ImagesDir)
 	if err != nil {
 		return err
 	}
 	if asJSON {
 		return writeVersionImagesJSON(w, views)
+	}
+	if err := collectVersionActivity(views, cfg, warnings); err != nil {
+		return err
 	}
 	return writeVersionImageTable(w, views)
 }

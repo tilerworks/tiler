@@ -19,6 +19,7 @@ type versionImageView struct {
 	Images   []image.ImageMeta
 	Selected *image.ImageMeta
 	Stack    []image.ImageMeta
+	Activity map[string]string
 }
 
 func writeVersionImageTable(w io.Writer, views []versionImageView) error {
@@ -27,7 +28,7 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 		return err
 	}
 	rows := make([][][]string, len(views))
-	header := []string{"ID", "SIZE", "CREATED", "DESCRIPTION"}
+	header := []string{"ID", "SIZE", "CREATED", "LAST ACTIVITY", "DESCRIPTION"}
 	widths := lengths(header)
 	collides := false
 	for i, view := range views {
@@ -96,7 +97,11 @@ func versionImageRows(view versionImageView) ([][]string, bool) {
 		if description == "" {
 			description = "-"
 		}
-		rows = append(rows, []string{id, formatSize(node.Size), versionCreatedAt(node.CreatedAt), description})
+		last := view.Activity[node.ID]
+		if last == "" {
+			last = "-"
+		}
+		rows = append(rows, []string{id, formatSize(node.Size), versionCreatedAt(node.CreatedAt), last, description})
 	}
 	return rows, collides
 }

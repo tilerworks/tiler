@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -154,11 +155,11 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "alice/app  latest=dddddddddd  created=2026-10-28T04:00:00Z\n" +
-		"  ID              SIZE  CREATED               DESCRIPTION\n" +
-		"  aaaaaaaaaa      1 B   2026-10-28T01:00:00Z  Base runtime\n" +
-		"    ↳ bbbbbbbbbb  1 B   2026-10-28T02:00:00Z  Add tools\n" +
-		"    ↳ cccccccccc  1 B   2026-10-28T03:00:00Z  -\n" +
-		"  dddddddddd      1 B   2026-10-28T04:00:00Z  New base\n"
+		"  ID              SIZE  CREATED               LAST ACTIVITY  DESCRIPTION\n" +
+		"  aaaaaaaaaa      1 B   2026-10-28T01:00:00Z  -              Base runtime\n" +
+		"    ↳ bbbbbbbbbb  1 B   2026-10-28T02:00:00Z  -              Add tools\n" +
+		"    ↳ cccccccccc  1 B   2026-10-28T03:00:00Z  -              -\n" +
+		"  dddddddddd      1 B   2026-10-28T04:00:00Z  -              New base\n"
 	if out.String() != want {
 		t.Fatalf("table = %q, want %q", out.String(), want)
 	}
@@ -303,7 +304,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	cfg := config.Config{ImagesDir: dir}
 
 	var out bytes.Buffer
-	if err := listAllImages(&out, cfg, false, false); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if text := out.String(); !strings.Contains(text, "alice/app") || !strings.Contains(text, child.ID[:10]) {
@@ -317,7 +318,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 		t.Fatalf("show output = %q", out.String())
 	}
 	out.Reset()
-	if err := listAllImages(&out, cfg, false, true); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, true); err != nil {
 		t.Fatal(err)
 	}
 	var doc struct {
@@ -330,7 +331,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "alice", "app", image.ImageFile), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := listAllImages(&out, cfg, false, false); err == nil || !strings.Contains(err.Error(), "legacy layout") {
+	if err := listAllImages(&out, io.Discard, cfg, false); err == nil || !strings.Contains(err.Error(), "legacy layout") {
 		t.Fatalf("mixed layout error = %v", err)
 	}
 }
@@ -403,6 +404,12 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 		{Name: "empty"},
 		{Name: "two", Latest: &other, Images: []image.ImageMeta{other}},
 	}
+	for i := range views {
+		views[i].Activity = make(map[string]string)
+		for j, node := range views[i].Images {
+			views[i].Activity[node.ID] = versionCreatedAt(at.Add(time.Duration(j)))
+		}
+	}
 	var out bytes.Buffer
 	if err := writeVersionImageTable(&out, views); err != nil {
 		t.Fatal(err)
@@ -421,7 +428,7 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 		}
 		var columns []int
 		if strings.Contains(line, "DESCRIPTION") {
-			columns = []int{strings.Index(line, "SIZE"), strings.Index(line, "CREATED"), strings.Index(line, "DESCRIPTION")}
+			columns = []int{strings.Index(line, "SIZE"), strings.Index(line, "CREATED"), strings.Index(line, "LAST ACTIVITY"), strings.Index(line, "DESCRIPTION")}
 		} else {
 			var size string
 			for _, candidate := range []string{"1 MiB", "1 KiB", "0 B", "42 B"} {
@@ -429,7 +436,7 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 					size = candidate
 				}
 			}
-			columns = []int{strings.Index(line, size), strings.Index(line, "2026-"), strings.Index(line, "description")}
+			columns = []int{strings.Index(line, size), strings.Index(line, "2026-"), strings.LastIndex(line, "2026-"), strings.Index(line, "description")}
 		}
 		if starts == nil {
 			starts = columns
