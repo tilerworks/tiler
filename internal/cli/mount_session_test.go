@@ -276,6 +276,9 @@ func TestMountWriteAheadOrdering(t *testing.T) {
 			t.Errorf("mountpoint during mount = %q", rec.Actions[0].Mountpoint)
 		}
 		checked = true
+		if req.Progress != mountNotice {
+			t.Fatal("mount progress writer is not mountNotice")
+		}
 		return f.mount(req)
 	}
 	mountOK(t, lib, "mounted "+view+"\n", "mount", "--session", "dev", img, view)

@@ -586,6 +586,7 @@ func blocksRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
+		Progress:        mountNotice,
 	}, nil
 }
 
@@ -613,10 +614,20 @@ func runEngine(req workspace.Request) (session.Result, error) {
 		return session.Result{}, engineUnavailable(err)
 	}
 	return session.Result{
-		Mountpoint: ws.MergedDir,
-		Upper:      ws.UpperDir,
-		Reused:     ws.Reused,
+		Mountpoint:      ws.MergedDir,
+		Upper:           ws.UpperDir,
+		Reused:          ws.Reused,
+		PruneIncomplete: incompleteUpperPrune(req, ws),
 	}, nil
+}
+
+// incompleteUpperPrune reports a requested prune of a non-empty
+// upper whose window did not succeed. PruneFailed is set only when
+// that window was entered, so an empty upper, a request that did
+// not ask to prune, and a window that finished stay false and the
+// replay clears the served pins.
+func incompleteUpperPrune(req workspace.Request, ws *workspace.Workspace) bool {
+	return req.PruneUpper && ws.PruneFailed
 }
 
 // engineUnavailable points an unavailable mount environment at the
@@ -774,6 +785,7 @@ func mountRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
+		Progress:        mountNotice,
 	}
 	if keepIdentity {
 		req.FullFSName = original[0]

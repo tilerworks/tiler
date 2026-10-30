@@ -432,6 +432,39 @@ func TestOpenReplayKeepsServedOnReusedView(t *testing.T) {
 	}
 }
 
+// TestOpenReplayKeepsServedWhenPruneIncomplete pins the fail-safe:
+// a real remount whose prune window did not finish still mounts, and
+// the served pins stay so the next open can prune the same upper.
+// A finished window leaves PruneIncomplete false and still clears.
+func TestOpenReplayKeepsServedWhenPruneIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	view := filepath.Join(dir, "view")
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	seedServedMounted(t, e, "dev", view)
+	e.Health = func(string) bool { return false }
+	e.Clean = func(string) error { return nil }
+	mount := func(a Action) (Result, error) {
+		return Result{Mountpoint: a.Mountpoint, PruneIncomplete: true}, nil
+	}
+	if err := e.Open("dev", mount); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.Load("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := rec.Actions[0]
+	if action.Status != StatusMounted {
+		t.Fatalf("action = %+v, want mounted", action)
+	}
+	if action.ServedID != fixtureServedID || action.ServedTip != fixtureServedTip {
+		t.Errorf("an unfinished prune cleared the served stack: %+v", action)
+	}
+}
+
 // TestOpenReconcileOfProvenMountClearsServed pins the heal of the
 // mount-succeeded-but-not-yet-written window: a crash after a real
 // remount left the action pending or failed while its served ids

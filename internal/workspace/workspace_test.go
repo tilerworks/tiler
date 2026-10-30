@@ -1528,6 +1528,11 @@ func TestMountPruneWindowMergesLowersReadonlyFirst(t *testing.T) {
 	if w.Prune == nil {
 		t.Error("the prune report was not recorded")
 	}
+	// The fake lowercheck directory has no entries, so the real
+	// prune refuses the window. The mount still finishes.
+	if !w.PruneFailed {
+		t.Error("an empty lowercheck left PruneFailed clear")
+	}
 }
 
 func TestMountPruneWindowOnlyForReusedWritableUpper(t *testing.T) {
@@ -1577,6 +1582,9 @@ func TestMountPruneWindowOnlyForReusedWritableUpper(t *testing.T) {
 			if w.Prune != nil {
 				t.Errorf("prune ran: %+v", w.Prune)
 			}
+			if w.PruneFailed {
+				t.Error("a skipped window reported an incomplete prune")
+			}
 		})
 	}
 }
@@ -1608,6 +1616,9 @@ func TestMountReusedViewNeverPrunes(t *testing.T) {
 	if w.Prune != nil {
 		t.Errorf("reuse pruned a live upper: %+v", w.Prune)
 	}
+	if w.PruneFailed {
+		t.Error("reuse reported an incomplete prune")
+	}
 	assertBytesFile(t, filepath.Join(runtime, "upper", "keep.txt"), []byte("user data"))
 }
 
@@ -1635,6 +1646,9 @@ func TestMountPruneFailureWarnsAndContinues(t *testing.T) {
 	}
 	if w.Prune == nil || w.Prune.Kept != 7 {
 		t.Errorf("report = %+v, want the counts back", w.Prune)
+	}
+	if !w.PruneFailed {
+		t.Error("a failed prune left PruneFailed clear")
 	}
 	// The temporary point is torn down even though the prune failed.
 	unmounts := k.find("fusermount3")
@@ -1667,6 +1681,9 @@ func TestMountPruneTeardownFailureWarnsButMounts(t *testing.T) {
 	}
 	if w.Prune == nil {
 		t.Error("the prune report was not recorded")
+	}
+	if !w.PruneFailed {
+		t.Error("a failed teardown left PruneFailed clear")
 	}
 	// The residue stays live but out of the terminal accounting; the
 	// next mount's plan phase tears it down.
@@ -1754,6 +1771,9 @@ func TestMountPruneWindowCameUpFailureWarnsButMounts(t *testing.T) {
 			}
 			if w.Prune != nil {
 				t.Errorf("prune report recorded for a window failure: %+v", w.Prune)
+			}
+			if !w.PruneFailed {
+				t.Error("a window that never came up left PruneFailed clear")
 			}
 			if len(*warns) != 1 || !strings.Contains((*warns)[0], tc.wantWarn) {
 				t.Errorf("warnings = %v, want one warning containing %q", *warns, tc.wantWarn)

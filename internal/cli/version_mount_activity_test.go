@@ -207,6 +207,45 @@ func TestSessionReplayActivityFollowsTheRecordedTip(t *testing.T) {
 	requireNoMountActivity(t, cfg, "alice/app", descendant.ID)
 }
 
+// TestSessionReplayMountsDesiredStackWhenServedDiffers covers a rebased
+// record whose served member list is not the desired one. The replay
+// request mounts the desired stack and asks the engine to prune the
+// reused upper against those lowers.
+func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images")}
+	base, _, servedTip, desiredTip, _ := mountActivityLibrary(t, cfg.ImagesDir)
+	writeVersionPayload(t, cfg.ImagesDir, "alice/app", desiredTip, desiredTip.Description)
+	fake := withMountSeams(t, nil)
+	hold, err := image.LockImage(cfg.ImagesDir, "alice/app", image.DefaultLibraryLockTimeout)
+	if err != nil {
+		t.Fatalf("lock image: %v", err)
+	}
+	defer hold.Release()
+	action := mountActivityAction(base.ID, desiredTip.ID)
+	action.ServedID, action.ServedTip = base.ID, servedTip.ID
+	if _, err := sessionMount(cfg, "dev", io.Discard)(action); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(fake.mountReqs) != 1 {
+		t.Fatalf("mount requests = %d, want one", len(fake.mountReqs))
+	}
+	req := fake.mountReqs[0]
+	if !req.PruneUpper {
+		t.Fatal("PruneUpper = false, want the changed lower stack to prune")
+	}
+	if len(req.Members) != 2 ||
+		!strings.Contains(req.Members[0].FSName, base.ID) ||
+		!strings.Contains(req.Members[1].FSName, desiredTip.ID) {
+		t.Fatalf("members = %#v, want the desired stack", req.Members)
+	}
+	for _, member := range req.Members {
+		if strings.Contains(member.FSName, servedTip.ID) {
+			t.Fatalf("member = %#v, want the desired stack, not the served tip", member)
+		}
+	}
+}
+
 // TestHealthyOpenRenewsTheMountActivity records the stack of a view the
 // replay adopts instead of remounting, through the production wiring.
 func TestHealthyOpenRenewsTheMountActivity(t *testing.T) {
@@ -247,6 +286,49 @@ func TestHealthyOpenRenewsTheMountActivity(t *testing.T) {
 		}
 	}
 	requireNoMountActivity(t, cfg, "alice/app", sibling.ID)
+	requireNoMountActivity(t, cfg, "alice/app", descendant.ID)
+}
+
+// TestHealthyOpenRecordsServedStackWhenDesiredDiffers keeps the activity
+// of an adopted view on the stack that view still serves. The desired
+// pin names a different lower stack, and a healthy open does not remount
+// it, so that desired tip stays out of the image logs.
+func TestHealthyOpenRecordsServedStackWhenDesiredDiffers(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"),
+		SessionsDir: filepath.Join(root, "sessions")}
+	base, mid, servedTip, desiredTip, descendant := mountActivityLibrary(t, cfg.ImagesDir)
+	rec, err := session.NewVersionRecord("dev", time.Now())
+	if err != nil {
+		t.Fatalf("new record: %v", err)
+	}
+	action := mountActivityAction(base.ID, desiredTip.ID)
+	action.ServedID, action.ServedTip = base.ID, servedTip.ID
+	action.Status = session.StatusMounted
+	action.Timestamp = time.Now()
+	rec.Actions = []session.Action{action}
+	if err := (session.Store{Dir: cfg.SessionsDir}).SaveVersion(rec); err != nil {
+		t.Fatalf("save record: %v", err)
+	}
+	engine := sessionEngine(cfg)
+	engine.Health = func(string) bool { return true }
+	engine.LoadTable = func() ([]mountinfo.Mount, error) { return nil, nil }
+	called := false
+	err = engine.Open("dev", func(session.Action) (session.Result, error) {
+		called = true
+		return session.Result{}, nil
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if called {
+		t.Fatal("open remounted a healthy view")
+	}
+	phases := []string{activity.PhaseSucceeded}
+	requireMountActivity(t, cfg, "alice/app", servedTip, "", "/view", phases)
+	requireMountActivity(t, cfg, "alice/app", mid, servedTip.ID, "/view", phases)
+	requireMountActivity(t, cfg, "alice/app", base, servedTip.ID, "/view", phases)
+	requireNoMountActivity(t, cfg, "alice/app", desiredTip.ID)
 	requireNoMountActivity(t, cfg, "alice/app", descendant.ID)
 }
 

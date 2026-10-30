@@ -53,6 +53,9 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	if req.Members[0].Path != req.Members[0].FSName || req.Members[1].Path != external {
 		t.Fatalf("registered payload paths = %#v", req.Members)
 	}
+	if req.Progress != mountNotice {
+		t.Fatal("version mount progress writer is not mountNotice")
+	}
 
 	originalEngine := mountEngine
 	originalTable := loadMountTable
@@ -70,6 +73,9 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	if len(replayed.Members) != 2 ||
 		!strings.Contains(replayed.Members[1].FSName, child.ID) {
 		t.Fatalf("historical replay = %#v", replayed.Members)
+	}
+	if replayed.Progress != mountNotice {
+		t.Fatal("replayed progress writer is not mountNotice")
 	}
 }
 
