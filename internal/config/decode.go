@@ -18,6 +18,7 @@ type rawPatch struct {
 	ImagesDir             *string            `yaml:"images_dir"`
 	SessionsDir           *string            `yaml:"sessions_dir"`
 	CacheDir              *string            `yaml:"cache_dir"`
+	LogsDir               *string            `yaml:"logs_dir"`
 	KeepVersions          *keepVersionsValue `yaml:"keep_versions"`
 	MaxAge                *maxAgeText        `yaml:"max_age"`
 	SessionMaxAge         *sessionMaxAgeText `yaml:"session_max_age"`
@@ -146,6 +147,7 @@ func (raw rawPatch) patch() (Patch, error) {
 		ImagesDir:             raw.ImagesDir,
 		SessionsDir:           raw.SessionsDir,
 		CacheDir:              raw.CacheDir,
+		LogsDir:               raw.LogsDir,
 		KeepVersions:          keepVersionsPtr(raw.KeepVersions),
 		MaxAge:                maxAge,
 		SessionMaxAge:         sessionMaxAge,

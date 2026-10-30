@@ -25,6 +25,7 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		"images_dir: .tiler/images",
 		"sessions_dir: .tiler/sessions",
 		"cache_dir: .tiler/cache",
+		"logs_dir: .tiler/logs",
 		"log_level: info",
 		"merged root",
 		"# image_format: squashfs",
@@ -85,6 +86,9 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if cfg.CacheDir != filepath.Join(home, ".tiler", "cache") {
 		t.Fatalf("cache = %q, want the config directory", cfg.CacheDir)
+	}
+	if cfg.LogsDir != filepath.Join(home, ".tiler", "logs") {
+		t.Fatalf("logs = %q, want the config directory", cfg.LogsDir)
 	}
 }
 

@@ -224,6 +224,7 @@ func TestDoctorReportsConfigSection(t *testing.T) {
 		"images_dir    " + filepath.Join(home, ".tiler", "images"),
 		"sessions_dir  " + filepath.Join(home, ".tiler", "sessions"),
 		"cache_dir     " + filepath.Join(home, ".tiler", "cache"),
+		"logs_dir      " + filepath.Join(home, ".tiler", "logs"),
 		"log_level     info",
 	} {
 		if !strings.Contains(flat, want) {
@@ -265,6 +266,9 @@ func TestDoctorJSONIncludesConfig(t *testing.T) {
 	}
 	if doc.Config.ImagesDir != filepath.Join(home, ".tiler", "images") {
 		t.Fatalf("config.images_dir = %q", doc.Config.ImagesDir)
+	}
+	if doc.Config.LogsDir != filepath.Join(home, ".tiler", "logs") {
+		t.Fatalf("config.logs_dir = %q", doc.Config.LogsDir)
 	}
 	if doc.Config.LogLevel != "info" {
 		t.Fatalf("config.log_level = %q", doc.Config.LogLevel)

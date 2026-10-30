@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+func TestLoadMissingLogsDirUsesDefault(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "version: 1\nlog_level: info\n")
+	got, err := Load(home, home, home, "", Patch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LogsDir != filepath.Join(home, ".tiler", "logs") {
+		t.Fatalf("logs = %q, want the built-in default", got.LogsDir)
+	}
+}
+
 func TestLoadDefaultsWithoutFiles(t *testing.T) {
 	home := t.TempDir()
 	start := t.TempDir()
@@ -32,12 +44,14 @@ func TestLoadFieldPriority(t *testing.T) {
 		"log_level: warn",
 		"keep_versions: 2",
 		"cache_dir: user-cache",
+		"logs_dir: user-logs",
 		"images_dir: user-images",
 	}, "\n"))
 	writeConfig(t, proj, strings.Join([]string{
 		"images_dir: far-images",
 		"log_level: debug",
 		"cache_dir: proj-cache",
+		"logs_dir: proj-logs",
 		"sessions_dir: far-sessions",
 	}, "\n"))
 	writeConfig(t, app, "images_dir: near-images\n")
@@ -55,6 +69,9 @@ func TestLoadFieldPriority(t *testing.T) {
 	}
 	if got.CacheDir != filepath.Join(proj, "proj-cache") {
 		t.Fatalf("cache = %q", got.CacheDir)
+	}
+	if got.LogsDir != filepath.Join(proj, "proj-logs") {
+		t.Fatalf("logs = %q", got.LogsDir)
 	}
 	if got.LogLevel != "error" {
 		t.Fatalf("log level = %q", got.LogLevel)
@@ -156,6 +173,7 @@ func TestLoadRelativePaths(t *testing.T) {
 	writeConfig(t, near, strings.Join([]string{
 		"sessions_dir: ~/sessions",
 		"cache_dir: /var/tiler/foo/../cache",
+		"logs_dir: ~/logs",
 	}, "\n"))
 	t.Chdir(cwd)
 
@@ -174,14 +192,21 @@ func TestLoadRelativePaths(t *testing.T) {
 	if got.CacheDir != wantCache || strings.Contains(got.CacheDir, near) || strings.Contains(got.CacheDir, cwd) {
 		t.Fatalf("cache = %q, want cleaned absolute %q", got.CacheDir, wantCache)
 	}
+	if got.LogsDir != filepath.Join(home, "logs") {
+		t.Fatalf("logs = %q", got.LogsDir)
+	}
 
 	sessions := "cli-sessions"
-	got, err = Load(near, home, base, "", Patch{SessionsDir: &sessions})
+	logs := "cli-logs"
+	got, err = Load(near, home, base, "", Patch{SessionsDir: &sessions, LogsDir: &logs})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.SessionsDir != filepath.Join(cwd, "cli-sessions") {
 		t.Fatalf("sessions = %q", got.SessionsDir)
+	}
+	if got.LogsDir != filepath.Join(cwd, "cli-logs") {
+		t.Fatalf("logs = %q", got.LogsDir)
 	}
 	if got.CacheDir != wantCache {
 		t.Fatalf("command line rewrote absolute cache to %q", got.CacheDir)
