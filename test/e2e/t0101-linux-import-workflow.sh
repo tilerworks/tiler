@@ -256,4 +256,122 @@ do
 	'
 done
 
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,WORKFLOW_GIT 'take the source offline after every imported view is destroyed' '
+	for tiler_point in "$local"/mnt-*
+	do
+		find "$tiler_point" -mindepth 1 >offline-unmounted &&
+		test_must_be_empty offline-unmounted || return 1
+	done &&
+	find "$local/.tiler/sessions" -name session.json >offline-records &&
+	test_must_be_empty offline-records &&
+	find "$local/.tiler/sessions" -name runtime >offline-runtime &&
+	test_must_be_empty offline-runtime &&
+	cp "$prepare/README.txt" offline-readme &&
+	cp "$prepare/docs/guide.txt" offline-guide &&
+	rm -rf "$local/.tiler/cache" &&
+	test_path_is_missing "$local/.tiler/cache" &&
+	test_atexit '\''
+		if test -d "$imports/remote-offline"
+		then
+			mv "$imports/remote-offline" "$remote"
+		fi
+	'\'' &&
+	mv "$remote" "$imports/remote-offline" &&
+	test_path_is_missing "$remote"
+'
+
+for tiler_import_name in linked/file linked/chain copied/file copied/chain
+do
+	test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,WORKFLOW_GIT "$tiler_import_name has the expected source availability requirement" '
+		tiler_shape=${tiler_import_name#*/} &&
+		if test "${tiler_import_name%%/*}" = linked
+		then
+			point=$local/mnt-link-$tiler_shape &&
+			(
+				cd "$local" &&
+				test_expect_code 1 "$tiler_bin" mount --rm "$tiler_import_name" "$point" >"$HOME/offline-link.out" 2>"$HOME/offline-link.err"
+			) &&
+			test_must_be_empty offline-link.out &&
+			test_grep -F "$source" offline-link.err &&
+			find "$local/.tiler/sessions" -name session.json >offline-failed-records &&
+			test_must_be_empty offline-failed-records
+		else
+			point=$local/mnt-copy-$tiler_shape &&
+			(
+				cd "$local" &&
+				"$tiler_bin" mount --rm "$tiler_import_name" "$point" 2>"$HOME/offline-copy.err"
+			) >offline-copy.out &&
+			fresh_session=$(sed -n "s/^new session created: //p" offline-copy.out) &&
+			test -n "$fresh_session" &&
+			test_cmp offline-readme "$point/README.txt" &&
+			test_cmp offline-guide "$point/docs/guide.txt" &&
+			test_path_is_missing "$point/local-only.txt" &&
+			if test "$tiler_shape" = chain
+			then
+				test_cmp expect-delta "$point/delta.txt" &&
+				git -C "$point" rev-parse "v2^{commit}" >offline-tag &&
+				test_cmp source-delta-tag offline-tag
+			else
+				test_path_is_missing "$point/delta.txt" &&
+				git -C "$point" rev-parse "v1^{commit}" >offline-tag &&
+				test_cmp source-tag offline-tag
+			fi &&
+			(
+				cd "$local" &&
+				"$tiler_bin" umount "$point"
+			) >offline-copy-unmount.out &&
+			test_path_is_missing "$local/.tiler/sessions/$fresh_session"
+		fi &&
+		find "$point" -mindepth 1 >offline-empty &&
+		test_must_be_empty offline-empty
+	'
+done
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,WORKFLOW_GIT 'restore the external source without changing its metadata or payloads' '
+	mv "$imports/remote-offline" "$remote" &&
+	source_snapshot "$HOME/source.restored" &&
+	test_cmp source.before source.restored
+'
+
+for tiler_import_name in linked/file linked/chain copied/file copied/chain
+do
+	test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,WORKFLOW_GIT "$tiler_import_name mounts after source recovery and removes without touching the source" '
+		tiler_shape=${tiler_import_name#*/} &&
+		if test "${tiler_import_name%%/*}" = linked
+		then
+			point=$local/mnt-link-$tiler_shape
+		else
+			point=$local/mnt-copy-$tiler_shape
+		fi &&
+		(
+			cd "$local" &&
+			"$tiler_bin" mount --rm "$tiler_import_name" "$point" 2>"$HOME/recovery-mount.err"
+		) >recovery-mount.out &&
+		fresh_session=$(sed -n "s/^new session created: //p" recovery-mount.out) &&
+		test -n "$fresh_session" &&
+		test_cmp offline-readme "$point/README.txt" &&
+		test_cmp offline-guide "$point/docs/guide.txt" &&
+		test_path_is_missing "$point/local-only.txt" &&
+		if test "$tiler_shape" = chain
+		then
+			test_cmp expect-delta "$point/delta.txt"
+		else
+			test_path_is_missing "$point/delta.txt"
+		fi &&
+		(
+			cd "$local" &&
+			"$tiler_bin" umount "$point" &&
+			"$tiler_bin" images remove "$tiler_import_name"
+		) >recovery-remove.out &&
+		test_grep -F "Removed image repository $tiler_import_name" recovery-remove.out &&
+		test_path_is_missing "$local/.tiler/sessions/$fresh_session" &&
+		test_path_is_missing "$local/.tiler/images/$tiler_import_name" &&
+		test_path_is_missing "$local/.tiler/logs/images/$tiler_import_name" &&
+		find "$point" -mindepth 1 >recovery-empty &&
+		test_must_be_empty recovery-empty &&
+		source_snapshot "$HOME/source.after-remove" &&
+		test_cmp source.before source.after-remove
+	'
+done
+
 test_done
