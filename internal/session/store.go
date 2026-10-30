@@ -48,7 +48,7 @@ type Store struct {
 	// runtime subtree.
 	Dir string
 	// LogsDir is the activity log root. An empty value fails an
-	// activity open instead of writing actions.log in the session
+	// activity open instead of writing a log into the session
 	// directory.
 	LogsDir string
 	scope   *referenceSessionScope

@@ -21,6 +21,11 @@ var testTime = time.Date(2026, 10, 28, 9, 15, 30, 123456789, time.UTC)
 // errBoom marks an injected failure.
 var errBoom = errors.New("boom")
 
+const (
+	testLogName  = "activity.log"
+	testLockName = testLogName + ".lock"
+)
+
 // fixedClock returns one instant regardless of the wall clock.
 func fixedClock(at time.Time) Clock {
 	return func() time.Time { return at }
@@ -35,7 +40,7 @@ func openTestWriter(t *testing.T, clock Clock) (*Writer, string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenLog(root, dir, LogName, "", clock)
+	w, err := OpenLog(root, dir, testLogName, clock)
 	if err != nil {
 		t.Fatalf("OpenLog: %v", err)
 	}
@@ -85,7 +90,7 @@ func TestAppendWritesOneUTCRecord(t *testing.T) {
 	if !got.Equal(at) {
 		t.Fatalf("recorded time = %v, want %v", got, at)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != 1 {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
@@ -109,7 +114,7 @@ func TestAppendWritesOneUTCRecord(t *testing.T) {
 	if _, ok := rec["image_version"]; ok {
 		t.Fatalf("empty image id was written: %v", rec)
 	}
-	for _, name := range []string{LogName, LockName} {
+	for _, name := range []string{testLogName, testLockName} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -165,7 +170,7 @@ func TestAppendKeepsLegacyPrefixAndWritesVersionOne(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	content, err := os.ReadFile(filepath.Join(dir, LogName))
+	content, err := os.ReadFile(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +200,7 @@ func TestAppendEscapesTextIntoSingleLine(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != 1 {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
@@ -254,7 +259,7 @@ func TestAppendRejectsInvalidEvent(t *testing.T) {
 			t.Fatalf("%s: err = %v, want ErrInvalidEvent", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log exists after rejected events: %v", err)
 	}
 }
@@ -263,7 +268,7 @@ func TestAppendRejectsInvalidEvent(t *testing.T) {
 // copied in with a wider mode becomes owner-only on the next append.
 func TestAppendTightensInheritedFileModes(t *testing.T) {
 	w, dir := openTestWriter(t, fixedClock(testTime))
-	for _, name := range []string{LogName, LockName} {
+	for _, name := range []string{testLogName, testLockName} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -274,7 +279,7 @@ func TestAppendTightensInheritedFileModes(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	for _, name := range []string{LogName, LockName} {
+	for _, name := range []string{testLogName, testLockName} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -292,7 +297,7 @@ func TestOpenLogRequiresClock(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenLog(root, dir, LogName, "", nil); err == nil || !strings.Contains(err.Error(), "clock") {
+	if _, err := OpenLog(root, dir, testLogName, nil); err == nil || !strings.Contains(err.Error(), "clock") {
 		t.Fatalf("err = %v, want a missing clock error", err)
 	}
 }
@@ -302,7 +307,7 @@ func TestOpenLogRequiresClock(t *testing.T) {
 func TestOpenLogNeverRecreatesDirectory(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "sessions", "gone")
-	if _, err := OpenLog(root, dir, LogName, "", fixedClock(testTime)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := OpenLog(root, dir, testLogName, fixedClock(testTime)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want a missing directory error", err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -335,7 +340,7 @@ func TestOpenLogRejectsPathsOutsideRoot(t *testing.T) {
 		"relative":     filepath.Join("sessions", "dev"),
 	}
 	for name, dir := range cases {
-		if _, err := OpenLog(root, dir, LogName, "", fixedClock(testTime)); !errors.Is(err, ErrInvalidPath) {
+		if _, err := OpenLog(root, dir, testLogName, fixedClock(testTime)); !errors.Is(err, ErrInvalidPath) {
 			t.Fatalf("%s: err = %v, want ErrInvalidPath", name, err)
 		}
 	}
@@ -353,7 +358,7 @@ func TestOpenLogRejectsSymlinkDirectory(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenLog(root, link, LogName, "", fixedClock(testTime)); !errors.Is(err, ErrUnsafeFile) {
+	if _, err := OpenLog(root, link, testLogName, fixedClock(testTime)); !errors.Is(err, ErrUnsafeFile) {
 		t.Fatalf("err = %v, want ErrUnsafeFile", err)
 	}
 }
@@ -366,7 +371,7 @@ func TestAppendRejectsSymlinkLog(t *testing.T) {
 	if err := os.WriteFile(target, []byte("keep\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(dir, LogName)); err != nil {
+	if err := os.Symlink(target, filepath.Join(dir, testLogName)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); !errors.Is(err, ErrUnsafeFile) {
@@ -384,7 +389,7 @@ func TestAppendRejectsSymlinkLog(t *testing.T) {
 // TestAppendRejectsNonRegularFiles refuses a log or lock that is a
 // directory instead of a regular file.
 func TestAppendRejectsNonRegularFiles(t *testing.T) {
-	for _, name := range []string{LogName, LockName} {
+	for _, name := range []string{testLogName, testLockName} {
 		t.Run(name, func(t *testing.T) {
 			w, dir := openTestWriter(t, fixedClock(testTime))
 			if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
@@ -437,7 +442,7 @@ func TestAppendReportsIncompleteWrites(t *testing.T) {
 			}
 		})
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log exists after failed writes: %v", err)
 	}
 }
@@ -450,7 +455,7 @@ func TestAppendReportsOpenFailure(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v, want the injected failure", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log exists after a failed open: %v", err)
 	}
 }
@@ -459,7 +464,7 @@ func TestAppendReportsOpenFailure(t *testing.T) {
 // and resumes once it is released.
 func TestAppendReportsLockContention(t *testing.T) {
 	w, dir := openTestWriter(t, fixedClock(testTime))
-	file, err := os.OpenFile(filepath.Join(dir, LockName), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(filepath.Join(dir, testLockName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +480,7 @@ func TestAppendReportsLockContention(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); !errors.Is(err, filelock.ErrHeld) {
 		t.Fatalf("err = %v, want a held lock", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log exists although the lock was never held: %v", err)
 	}
 	if err := filelock.Release(file); err != nil {
@@ -493,7 +498,7 @@ func TestAppendKeepsOneLockInode(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(filepath.Join(dir, LockName))
+	before, err := os.Stat(filepath.Join(dir, testLockName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,14 +507,14 @@ func TestAppendKeepsOneLockInode(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	after, err := os.Stat(filepath.Join(dir, LockName))
+	after, err := os.Stat(filepath.Join(dir, testLockName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !os.SameFile(before, after) {
 		t.Fatal("the lock file was replaced")
 	}
-	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 4 {
+	if lines := readLines(t, filepath.Join(dir, testLogName)); len(lines) != 4 {
 		t.Fatalf("records = %d, want 4", len(lines))
 	}
 }
@@ -544,7 +549,7 @@ func TestAppendConcurrentGoroutinesKeepRecordsWhole(t *testing.T) {
 	for err := range failures {
 		t.Fatalf("append: %v", err)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != workers*each {
 		t.Fatalf("records = %d, want %d", len(lines), workers*each)
 	}

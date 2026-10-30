@@ -203,7 +203,7 @@ func fmtDigest(body []byte) string {
 
 func writeVersionLog(t *testing.T, repo Repo, id string) string {
 	t.Helper()
-	dir, name, _, err := repo.activityLogFile(id)
+	dir, name, err := repo.activityLogFile(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestOldJournalLeavesTheLogsTreeAlone(t *testing.T) {
 
 func TestReplayRefusesASymlinkVersionLog(t *testing.T) {
 	imagesDir, repo, nodes := removalFixture(t)
-	dir, name, _, err := repo.activityLogFile(nodes[2].ID)
+	dir, name, err := repo.activityLogFile(nodes[2].ID)
 	if err != nil {
 		t.Fatal(err)
 	}

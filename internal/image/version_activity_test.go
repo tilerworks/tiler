@@ -80,7 +80,7 @@ type versionActivityLine struct {
 // activityLogPath locates the activity log of one version.
 func activityLogPath(t *testing.T, repo Repo, id string) string {
 	t.Helper()
-	dir, name, _, err := repo.activityLogFile(id)
+	dir, name, err := repo.activityLogFile(id)
 	if err != nil {
 		t.Fatalf("activity log of %s: %v", id, err)
 	}
@@ -91,14 +91,14 @@ func activityLogPath(t *testing.T, repo Repo, id string) string {
 // directory. Tests that replace the batch opener use it so they write
 // the same path production reads.
 func openVersionLog(repo Repo, id string, clock activity.Clock) (*activity.Writer, error) {
-	dir, name, legacy, err := repo.activityLogFile(id)
+	dir, name, err := repo.activityLogFile(id)
 	if err != nil {
 		return nil, err
 	}
 	if err := activity.PrepareDir(repo.LogsDir, dir); err != nil {
 		return nil, err
 	}
-	return activity.OpenLog(repo.LogsDir, dir, name, legacy, clock)
+	return activity.OpenLog(repo.LogsDir, dir, name, clock)
 }
 
 func writeActivityBytes(t *testing.T, repo Repo, id string, data []byte) error {
@@ -470,9 +470,6 @@ func TestEnsureVersionActivityCreatesTheLogDirectoryNotTheObject(t *testing.T) {
 		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("object dir of %s was recreated: %v", node.Description, err)
 		}
-		if _, err := os.Stat(filepath.Join(dir, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("object dir of %s has an activity log: %v", node.Description, err)
-		}
 	}
 }
 
@@ -752,13 +749,6 @@ func TestPublishActivityRecordsAFullCreation(t *testing.T) {
 	base := versionNode("base")
 	publishNode(t, repo, base, nil)
 	requireCreated(t, repo, base.ID, activity.EventImageCreateFull)
-	object, err := repo.ObjectDirPath(base.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(object, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("object directory has %s: %v", activity.LogName, err)
-	}
 }
 
 // TestPublishActivityPropagatesIncrementalCreation attributes the phase
@@ -1056,35 +1046,4 @@ func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
 			t.Fatalf("parent dependency = %+v, want the published tip", last)
 		}
 	})
-}
-
-// TestLegacyObjectLogIsRenamedIntoLogsDir moves an object-directory
-// actions.log onto the version log and keeps its last activity time.
-func TestLegacyObjectLogIsRenamedIntoLogsDir(t *testing.T) {
-	repo := testRepo(t)
-	node := versionNode("base")
-	seedVersions(t, repo, node)
-	object, err := repo.ObjectDirPath(node.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := testActivityNow.Add(-time.Hour)
-	w, err := activity.OpenLog(libraryRoot(repo), object, activity.LogName, "", func() time.Time { return at })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Append(activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded}); err != nil {
-		t.Fatal(err)
-	}
-	opened, err := openVersionLog(repo, node.ID, activityClock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	last, err := opened.LastActivity()
-	if err != nil || !last.Equal(at) {
-		t.Fatalf("last activity = %v, %v, want %v", last, err, at)
-	}
-	if _, err := os.Stat(filepath.Join(object, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy log remains: %v", err)
-	}
 }

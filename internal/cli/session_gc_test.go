@@ -351,7 +351,7 @@ func TestSessionGCReportsRemovedAndKeptOutcomes(t *testing.T) {
 		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
 			t.Fatal(mkErr)
 		}
-		w, err := activity.OpenLog(logs, dir, "aged-b.log", "",
+		w, err := activity.OpenLog(logs, dir, "aged-b.log",
 			func() time.Time { return time.Now().UTC() })
 		if err != nil {
 			t.Fatal(err)

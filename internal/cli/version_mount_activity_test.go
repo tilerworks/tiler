@@ -148,19 +148,6 @@ func TestVersionMountActivityRecordsTheResolvedStack(t *testing.T) {
 	requireMountActivity(t, cfg, "alice/app", base, tip.ID, "/view", phases)
 	requireNoMountActivity(t, cfg, "alice/app", sibling.ID)
 	requireNoMountActivity(t, cfg, "alice/app", descendant.ID)
-	repo, err := image.OpenRepo(cfg.ImagesDir, "alice/app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, node := range []image.ImageMeta{base, mid, tip} {
-		object, err := repo.ObjectDirPath(node.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(filepath.Join(object, activity.LogName)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("object directory of %s has %s: %v", node.Description, activity.LogName, err)
-		}
-	}
 }
 
 // TestVersionMountActivityRecordsAFailedMount keeps the attempt and its
@@ -346,24 +333,17 @@ func TestVersionMountActivityReportsALostOutcomeRecord(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
 	base, mid, tip, _, _ := mountActivityLibrary(t, cfg.ImagesDir)
-	repo, err := image.OpenRepo(cfg.ImagesDir, "alice/app")
-	if err != nil {
-		t.Fatalf("open repo: %v", err)
-	}
-	dir, err := repo.ObjectDirPath(tip.ID)
-	if err != nil {
-		t.Fatalf("object dir of %s: %v", tip.ID, err)
-	}
+	logPath := filepath.Join(cfg.LogsDir, "images", "alice", "app", tip.ID+".log")
 	fake := withMountSeams(t, nil)
-	// The started phase created the object directory. Replacing it with a
-	// file lets the mount serve while the outcome batch can no longer
-	// address the tip, which is the one failure the sentinel exists for.
+	// The started phase created the tip log. Replacing that file with a
+	// directory lets the mount serve while the outcome batch can no
+	// longer read the tip, which is the one failure the sentinel exists for.
 	fake.mountHook = func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Fatalf("drop object dir: %v", err)
+		if err := os.Remove(logPath); err != nil {
+			t.Fatalf("drop tip log: %v", err)
 		}
-		if err := os.WriteFile(dir, []byte("blocked"), 0o644); err != nil {
-			t.Fatalf("block object dir: %v", err)
+		if err := os.Mkdir(logPath, 0o755); err != nil {
+			t.Fatalf("block tip log: %v", err)
 		}
 	}
 	result, err := runVersionMountEngine(cfg, "dev", mountActivityAction(base.ID, tip.ID),
@@ -408,11 +388,11 @@ func TestHealthyOpenSkipsFileMounts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	err = filepath.WalkDir(cfg.ImagesDir, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(filepath.Join(cfg.LogsDir, "images"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.Name() == activity.LogName {
+		if entry.Type().IsRegular() {
 			t.Fatalf("file view recorded %s", path)
 		}
 		return nil

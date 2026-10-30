@@ -14,15 +14,18 @@ import (
 	"github.com/jiangxin/tiler/internal/image"
 )
 
+func imageGCLogDir(c ReferenceCoordinator) string {
+	return filepath.Join(c.LogsDir, "images", "alice", "app")
+}
+
 func seedImageGCLogs(t *testing.T, c ReferenceCoordinator, nodes []image.ImageMeta, at time.Time) {
 	t.Helper()
-	repo, err := image.OpenRepo(c.ImagesDir, "alice/app")
-	if err != nil {
+	dir := imageGCLogDir(c)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, node := range nodes {
-		dir, _ := repo.ObjectDirPath(node.ID)
-		w, err := activity.OpenLog(c.ImagesDir, dir, activity.LogName, "", func() time.Time { return at })
+		w, err := activity.OpenLog(c.LogsDir, dir, node.ID+".log", func() time.Time { return at })
 		if err == nil {
 			_, err = w.Append(activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded})
 		}
@@ -127,10 +130,9 @@ func TestImageGCRefusesUnsafeReferenceAndRecoveryStatesWithoutMutation(t *testin
 			if string(before) != string(after) || os.IsNotExist(beforeErr) != os.IsNotExist(afterErr) {
 				t.Fatal("preview changed the authoritative session source")
 			}
-			repo, _ := image.OpenRepo(c.ImagesDir, "alice/app")
 			for _, node := range nodes {
-				dir, _ := repo.ObjectDirPath(node.ID)
-				if _, err := os.Stat(filepath.Join(dir, activity.LogName)); !os.IsNotExist(err) {
+				path := filepath.Join(imageGCLogDir(c), node.ID+".log")
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
 					t.Fatalf("failed scan changed image activity: %v", err)
 				}
 			}
@@ -208,8 +210,7 @@ func TestImageGCRejectsInconsistentRecordedRootsBeforeInitialization(t *testing.
 					before[path] = string(data)
 				}
 				for _, node := range nodes {
-					dir, _ := repo.ObjectDirPath(node.ID)
-					path := filepath.Join(dir, activity.LogName)
+					path := filepath.Join(imageGCLogDir(c), node.ID+".log")
 					data, err := os.ReadFile(path)
 					if seeded && err != nil {
 						t.Fatal(err)
@@ -222,7 +223,7 @@ func TestImageGCRejectsInconsistentRecordedRootsBeforeInitialization(t *testing.
 				}
 				for path, want := range before {
 					data, err := os.ReadFile(path)
-					missingLog := !seeded && filepath.Base(path) == activity.LogName
+					missingLog := !seeded && strings.HasSuffix(path, ".log")
 					if missingLog {
 						if !os.IsNotExist(err) {
 							t.Fatalf("failed scan initialized %s: %v", path, err)

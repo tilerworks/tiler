@@ -44,7 +44,7 @@ func seedImageGCActivity(t *testing.T, imagesDir string, repo image.Repo, id str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w, err := activity.OpenLog(logs, dir, id+".log", "", func() time.Time { return at })
+	w, err := activity.OpenLog(logs, dir, id+".log", func() time.Time { return at })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestImagesGCNeverTouchesSessionRecordsOrRuntime(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, "runtime", "m1", "upper", "work")); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(dir, activity.LogName)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(home, ".tiler", "logs", "sessions", filepath.Base(dir)+".log")); !os.IsNotExist(err) {
 			t.Fatalf("image GC initialized session activity: %v", err)
 		}
 	}

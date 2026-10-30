@@ -31,15 +31,14 @@ func (e *Engine) activityLog(name string) (*activity.Writer, error) {
 	if strings.TrimSpace(e.LogsDir) == "" {
 		return nil, errors.New("session: activity log directory is not configured")
 	}
-	sessionDir, err := e.sessionDir(name)
-	if err != nil {
+	if _, err := e.sessionDir(name); err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(e.LogsDir, "sessions")
 	if err := activity.PrepareDir(e.LogsDir, dir); err != nil {
 		return nil, err
 	}
-	return activity.OpenLog(e.LogsDir, dir, name+".log", filepath.Join(sessionDir, activity.LogName), e.now)
+	return activity.OpenLog(e.LogsDir, dir, name+".log", e.now)
 }
 
 // beginActivity writes the started record of one session-level

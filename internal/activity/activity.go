@@ -16,11 +16,6 @@ import (
 )
 
 const (
-	// LogName is the legacy activity log name. New logs use a caller
-	// supplied file name; this name only identifies a log to migrate.
-	LogName = "actions.log"
-	// LockName is the advisory lock that guarded a legacy log.
-	LockName = LogName + ".lock"
 	// MaxLineBytes bounds one encoded record, newline included.
 	MaxLineBytes = 4096
 	// DefaultLockTimeout bounds the wait for one log lock.
@@ -82,9 +77,8 @@ type Writer struct {
 // OpenLog binds a writer to dir/name inside root. dir must already
 // exist; a missing directory reports the underlying error instead of
 // recreating a tree that a deletion removed. name is one file
-// component. legacy, when set, is an old actions.log to move into
-// place when dir/name does not exist yet.
-func OpenLog(root, dir, name, legacy string, clock Clock) (*Writer, error) {
+// component.
+func OpenLog(root, dir, name string, clock Clock) (*Writer, error) {
 	if clock == nil {
 		return nil, errors.New("activity: nil clock")
 	}
@@ -95,9 +89,6 @@ func OpenLog(root, dir, name, legacy string, clock Clock) (*Writer, error) {
 		return nil, err
 	}
 	logPath := filepath.Join(filepath.Clean(dir), name)
-	if err := migrateLegacy(logPath, legacy); err != nil {
-		return nil, err
-	}
 	w := &Writer{
 		root:        filepath.Clean(root),
 		dir:         filepath.Clean(dir),

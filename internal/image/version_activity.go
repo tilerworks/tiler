@@ -333,11 +333,11 @@ func (b versionActivityBatch) writer(id string, clock activity.Clock) (*activity
 	if b.open != nil {
 		return b.open(b.repo, id, clock)
 	}
-	dir, name, legacy, err := b.repo.activityLogFile(id)
+	dir, name, err := b.repo.activityLogFile(id)
 	if err != nil {
 		return nil, err
 	}
-	return activity.OpenLog(b.repo.LogsDir, dir, name, legacy, clock)
+	return activity.OpenLog(b.repo.LogsDir, dir, name, clock)
 }
 
 // versionActivityRecord renders the record one version receives.
@@ -361,21 +361,16 @@ func (repo Repo) activityLogDir() (string, error) {
 	return imageActivityDir(repo.LogsDir, repo.Segments)
 }
 
-// activityLogFile is <id>.log in the image log directory. legacy is
-// the object-directory actions.log a first open may migrate.
-func (repo Repo) activityLogFile(id string) (dir, name, legacy string, err error) {
+// activityLogFile is <id>.log in the image log directory.
+func (repo Repo) activityLogFile(id string) (dir, name string, err error) {
 	if err = checkID(id); err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	dir, err = repo.activityLogDir()
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
-	objectDir, err := repo.ObjectDirPath(id)
-	if err != nil {
-		return "", "", "", err
-	}
-	return dir, id + ".log", filepath.Join(objectDir, activity.LogName), nil
+	return dir, id + ".log", nil
 }
 
 // libraryRoot returns the images root that holds repo.
