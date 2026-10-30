@@ -1,6 +1,7 @@
 package image
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -23,6 +24,7 @@ func TestUpdateVersionDescriptionUsesAtomicComparison(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, before) {
 		t.Fatalf("identity changed: %#v, %v", manifest.Images[0], err)
 	}
+	assertObjectVersionFile(t, repo, manifest.Images[0])
 	if changed, err = UpdateVersionDescription(filepathDir(repo), repo.Name(), node.ID,
 		"updated\n\nDetails", "updated\n\nDetails"); err != nil || changed {
 		t.Fatalf("unchanged = %v, %v", changed, err)
@@ -35,6 +37,22 @@ func TestUpdateVersionDescriptionUsesAtomicComparison(t *testing.T) {
 		"updated\n\nDetails", ""); err != nil || !changed {
 		t.Fatalf("clear = %v, %v", changed, err)
 	}
+	manifest, _, err = loadVersionMeta(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertObjectVersionFile(t, repo, manifest.Images[0])
+	path, err := repo.objectVersionFilePath(node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err = UpdateVersionDescription(filepathDir(repo), repo.Name(), node.ID, "", ""); err != nil || changed {
+		t.Fatalf("repair = %v, %v", changed, err)
+	}
+	assertObjectVersionFile(t, repo, manifest.Images[0])
 }
 
 func filepathDir(repo Repo) string {

@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+func assertObjectVersionFile(t *testing.T, repo Repo, node ImageMeta) {
+	t.Helper()
+	path, err := repo.objectVersionFilePath(node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := DecodeObjectVersionFile(mustRead(t, path))
+	if err != nil || file.Version != VersionManifestVersion || file.Name != repo.Name() || !reflect.DeepEqual(file.Image, node) {
+		t.Fatalf("version file = %#v, node %#v, %v", file, node, err)
+	}
+}
+
 func versionNode(text string) ImageMeta {
 	m := manifestFor([]byte(text))
 	node := rootOf(m)
@@ -41,6 +53,20 @@ func TestVersionMetadataAppendPreservesHistoryAndIdentity(t *testing.T) {
 	if err != nil || len(m.Images) != 2 || !reflect.DeepEqual(m.Images[0], old) {
 		t.Fatalf("history changed: %#v, %v", m, err)
 	}
+	for _, node := range m.Images {
+		assertObjectVersionFile(t, repo, node)
+	}
+	removed, err := repo.objectVersionFilePath(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(removed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFullVersion(repo, old, false, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	assertObjectVersionFile(t, repo, old)
 }
 
 func TestVersionMetadataFailureRestoresPreviousDocument(t *testing.T) {
@@ -64,6 +90,21 @@ func TestVersionMetadataFailureRestoresPreviousDocument(t *testing.T) {
 			after, _ := os.ReadFile(repo.MetaPath())
 			if string(before) != string(after) {
 				t.Fatal("failed publish changed previous metadata")
+			}
+			fresh := versionNode("new")
+			freshPath, pathErr := repo.objectVersionFilePath(fresh.ID)
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			if _, statErr := os.Stat(freshPath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("failed publish left %s: %v", freshPath, statErr)
+			}
+			if existing {
+				manifest, _, loadErr := loadVersionMeta(repo)
+				if loadErr != nil || len(manifest.Images) != 1 {
+					t.Fatalf("previous version file: %#v, %v", manifest, loadErr)
+				}
+				assertObjectVersionFile(t, repo, manifest.Images[0])
 			}
 		}
 	}

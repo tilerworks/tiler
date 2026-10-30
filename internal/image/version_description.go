@@ -36,12 +36,12 @@ func UpdateVersionDescription(imagesDir, name, id, old, next string) (bool, erro
 		}
 		if node.Description != old {
 			if node.Description == normalized {
-				return false, nil
+				return false, ensureObjectVersionFile(repo, *node)
 			}
 			return false, errors.New("image description changed concurrently")
 		}
 		if old == normalized {
-			return false, nil
+			return false, ensureObjectVersionFile(repo, *node)
 		}
 		node.Description = normalized
 		body, err := EncodeVersionManifest(manifest)

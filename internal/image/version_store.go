@@ -59,6 +59,9 @@ func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (
 		if err := recordVersionReuse(repo, old); err != nil {
 			return ImageMeta{}, err
 		}
+		if err := ensureObjectVersionFile(repo, old); err != nil {
+			return ImageMeta{}, err
+		}
 		return old, nil
 	}
 	if node.Kind == KindIncremental {
@@ -142,16 +145,32 @@ func loadVersionMeta(repo Repo) (VersionManifest, []byte, error) {
 }
 
 func replaceVersionMeta(repo Repo, previous, body []byte, seam hooks) error {
-	tmp, err := writeTemp(repo.Dir, fileMeta, body, hooks{})
+	next, err := DecodeVersionManifest(body)
 	if err != nil {
 		return err
 	}
+	var prior *VersionManifest
+	if previous != nil {
+		decoded, decErr := DecodeVersionManifest(previous)
+		if decErr != nil {
+			return decErr
+		}
+		prior = &decoded
+	}
+	if err := syncObjectVersionFiles(repo, next, seam); err != nil {
+		return errors.Join(err, restoreObjectVersionFiles(repo, prior, next))
+	}
+	tmp, err := writeTemp(repo.Dir, fileMeta, body, hooks{})
+	if err != nil {
+		return errors.Join(err, restoreObjectVersionFiles(repo, prior, next))
+	}
 	defer removeFile(tmp)
 	if err := seam.do(tmp, repo.MetaPath()); err != nil {
+		var restoreMeta error
 		if _, statErr := os.Lstat(tmp); errors.Is(statErr, os.ErrNotExist) {
-			return errors.Join(err, restoreVersionMeta(repo, previous))
+			restoreMeta = restoreVersionMeta(repo, previous)
 		}
-		return err
+		return errors.Join(err, restoreMeta, restoreObjectVersionFiles(repo, prior, next))
 	}
 	return nil
 }
