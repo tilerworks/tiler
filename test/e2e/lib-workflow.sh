@@ -27,3 +27,30 @@ workflow_git_init () {
 	git -C "$1" config commit.gpgsign false &&
 	git -C "$1" config tag.gpgsign false
 }
+
+# Read the block records emitted by tiler's object metadata serializer.
+workflow_block_manifest () {
+	awk '
+	function emit() {
+		if (name != sprintf("blk.%03d", count) || sizes != 1 || sums != 1 ||
+		    size !~ /^[0-9]+$/ || length(sum) != 64 || sum ~ /[^0-9a-f]/) {
+			bad = 1
+			return
+		}
+		print name, size, sum
+		count++
+	}
+	$1 == "blocks:" { sections++; blocks = 1; next }
+	blocks && $1 == "-" && $2 == "name:" {
+		if (seen++) emit()
+		name = $3; size = sum = ""; sizes = sums = 0
+		next
+	}
+	blocks && $1 == "size:" { size = $2; sizes++; next }
+	blocks && $1 == "sha256:" { sum = $2; sums++; next }
+	END {
+		if (seen) emit()
+		exit (bad || sections != 1 || count < 2)
+	}
+	' "$1"
+}
