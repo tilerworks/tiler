@@ -108,6 +108,10 @@ func (w *Writer) readLastLocked() (Revision, error) {
 		return Revision{}, err
 	}
 	defer func() { _ = file.Close() }()
+	return readTail(file, w.logPath)
+}
+
+func readTail(file *os.File, path string) (Revision, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return Revision{}, fmt.Errorf("activity: %w", err)
@@ -122,7 +126,7 @@ func (w *Writer) readLastLocked() (Revision, error) {
 	}
 	buf := make([]byte, window)
 	if _, err := file.ReadAt(buf, size-window); err != nil && !errors.Is(err, io.EOF) {
-		return Revision{}, fmt.Errorf("activity: read %s: %w", w.logPath, err)
+		return Revision{}, fmt.Errorf("activity: read %s: %w", path, err)
 	}
 	line, err := lastLine(buf)
 	if err != nil {
