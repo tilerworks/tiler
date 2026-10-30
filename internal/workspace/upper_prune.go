@@ -107,14 +107,29 @@ func PruneUpper(upperDir, lowerView string) (PruneReport, error) {
 	return pruneUpper(upperDir, lowerView, pruneHooks{})
 }
 
-// pruneUpper runs the walk with the given platform seams.
+// pruneUpper runs the walk with the given platform seams and no
+// progress output.
 func pruneUpper(upperDir, lowerView string, seam pruneHooks) (PruneReport, error) {
-	p := pruner{seam: seam}
+	return pruneWithProgress(upperDir, lowerView, seam, nil)
+}
+
+// pruneWithProgress runs the walk and, when progress is set, counts
+// decided entries against the pre-walk upper total. A nil progress
+// value does not count or write.
+func pruneWithProgress(
+	upperDir, lowerView string,
+	seam pruneHooks,
+	progress *pruneProgress,
+) (PruneReport, error) {
+	p := pruner{seam: seam, progress: progress}
 	if err := checkPruneRoots(upperDir, lowerView); err != nil {
 		return p.report, err
 	}
 	if err := requireLowerView(lowerView); err != nil {
 		return p.report, err
+	}
+	if p.progress != nil {
+		p.progress.setTotal(countTreeEntries(upperDir))
 	}
 	if err := p.pruneRoot(upperDir, lowerView); err != nil {
 		return p.report, err
@@ -246,8 +261,48 @@ func (h pruneHooks) statOf(path string, info os.FileInfo) (platformStat, error) 
 // pruner walks one upper tree against its lower comparison view and
 // collects the report.
 type pruner struct {
-	seam   pruneHooks
-	report PruneReport
+	seam     pruneHooks
+	report   PruneReport
+	progress *pruneProgress
+}
+
+// note advances the progress numerator by n decided entries. A nil
+// progress writer stays silent, and n is zero when nothing new was
+// decided.
+func (p *pruner) note(n int) {
+	if p.progress == nil {
+		return
+	}
+	p.progress.advance(n)
+}
+
+// skipRedirect keeps a redirect directory and, in one step, counts
+// the directory itself (when it is an upper entry) plus every
+// unvisited descendant. The report still counts only the directory.
+func (p *pruner) skipRedirect(dir string, includeSelf bool) {
+	p.report.SkippedRedirect++
+	if p.progress == nil {
+		return
+	}
+	n := countTreeEntries(dir)
+	if includeSelf {
+		n++
+	}
+	p.note(n)
+}
+
+// countTreeEntries counts descendants of dir, not dir itself. The
+// walk stats names only; it does not read regular-file contents.
+func countTreeEntries(dir string) int {
+	n := 0
+	_ = filepath.WalkDir(dir, func(path string, _ os.DirEntry, err error) error {
+		if err != nil || path == dir {
+			return nil
+		}
+		n++
+		return nil
+	})
+	return n
 }
 
 // pruneRoot gives the upper root the same marker handling every
@@ -264,7 +319,7 @@ func (p *pruner) pruneRoot(upperDir, lowerView string) error {
 		return nil
 	}
 	if _, ok := xattrs[xattrRedirect]; ok {
-		p.report.SkippedRedirect++
+		p.skipRedirect(upperDir, false)
 		return nil
 	}
 	if _, ok := xattrs[xattrOpaque]; ok {
@@ -337,6 +392,7 @@ func (p *pruner) pruneEntry(path, lowerPath string) {
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			p.report.Errors++
+			p.note(1)
 		}
 		return
 	}
@@ -344,6 +400,7 @@ func (p *pruner) pruneEntry(path, lowerPath string) {
 		p.pruneDir(path, lowerPath, info)
 		return
 	}
+	defer p.note(1)
 	st, err := p.seam.statOf(path, info)
 	if err != nil {
 		p.report.Errors++
@@ -374,12 +431,14 @@ func (p *pruner) pruneDir(path, lowerPath string, info os.FileInfo) {
 	xattrs, err := p.seam.xattrsOf(path)
 	if err != nil {
 		p.report.Errors++
+		p.note(1)
 		return
 	}
 	if _, ok := xattrs[xattrRedirect]; ok {
-		p.report.SkippedRedirect++
+		p.skipRedirect(path, true)
 		return
 	}
+	defer p.note(1)
 	if _, ok := xattrs[xattrOpaque]; ok {
 		p.pruneOpaqueDir(path, lowerPath)
 		return

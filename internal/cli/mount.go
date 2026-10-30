@@ -586,6 +586,7 @@ func blocksRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
+		Progress:        mountNotice,
 	}, nil
 }
 
@@ -774,6 +775,7 @@ func mountRequest(
 		RuntimeDir:      runtimeDir,
 		MergedDir:       dir,
 		Run:             mountRun,
+		Progress:        mountNotice,
 	}
 	if keepIdentity {
 		req.FullFSName = original[0]

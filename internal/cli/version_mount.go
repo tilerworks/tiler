@@ -48,6 +48,7 @@ func versionMountRequest(
 		Subdir: flags.subdir, Table: toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions, FuseOptions: cfg.FuseOptions,
 		RuntimeDir: runtimeDir, MergedDir: dir, Run: mountRun,
+		Progress: mountNotice,
 	}, stack, nil
 }
 

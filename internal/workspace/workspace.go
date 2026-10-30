@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -93,6 +94,15 @@ type Request struct {
 	// prune failure only warns on stderr and never blocks the
 	// mount. Read-only requests ignore it.
 	PruneUpper bool
+	// Progress receives the upper-prune lines. Nil writes nothing,
+	// so callers that do not care stay quiet. The text is
+	// "pruning upper ...", then "pruning upper ... N%" while the
+	// integer percent climbs through 1..99, then "pruning upper ...
+	// done" after the window succeeds. A character-device file is
+	// rewritten in place; every other writer gets one line per
+	// update. A failed window keeps the stderr warning and omits
+	// done.
+	Progress io.Writer
 	// Subdir is an image-relative prefix exposed as the mount
 	// root. Empty mounts whole images.
 	Subdir string
@@ -989,16 +999,24 @@ func dirHasContent(dir string) bool {
 // never joins the w.mounts terminal accounting; a residue is torn
 // down by the next mount's plan phase.
 func (w *Workspace) pruneWindow(req Request, lowers []string, seam hooks) {
-	report, err := w.runPruneWindow(req, lowers, seam)
+	// The start line precedes the lowercheck mount and every
+	// deletion. done is written only after the window returns
+	// success, which is still before mountMerged.
+	prog := newPruneProgress(req.Progress)
+	prog.start()
+	report, err := w.runPruneWindow(req, lowers, seam, prog)
 	if report != nil {
 		w.Prune = report
 	}
 	if err != nil {
+		prog.abandon()
 		// Every window failure already carries its own context and
 		// the "workspace: " package tag; warnf only adds the
 		// warning prefix, so nothing is prefixed twice.
 		warnf("%v", err)
+		return
 	}
+	prog.succeed()
 }
 
 // runPruneWindow mounts the read-only lowerdir-only merge at the
@@ -1013,6 +1031,7 @@ func (w *Workspace) runPruneWindow(
 	req Request,
 	lowers []string,
 	seam hooks,
+	prog *pruneProgress,
 ) (*PruneReport, error) {
 	point := lowerCheckPoint(w.runtimeDir)
 	if err := w.mkdirNew(point); err != nil {
@@ -1034,16 +1053,20 @@ func (w *Workspace) runPruneWindow(
 		// The daemon may still come up; never leave the point behind.
 		return nil, errors.Join(err, cleanPoint(point, w.run, seam))
 	}
-	report, pruneErr := pruneOf(seam)(w.UpperDir, point)
+	report, pruneErr := pruneOf(seam, prog)(w.UpperDir, point)
 	return &report, errors.Join(pruneErr, cleanPoint(point, w.run, seam))
 }
 
 // pruneOf returns the prune seam, defaulting to the real PruneUpper.
-func pruneOf(seam hooks) func(upperDir, lowerView string) (PruneReport, error) {
+// The default walk reports entry progress; a test seam replaces the
+// whole walk and therefore owns its own progress.
+func pruneOf(seam hooks, prog *pruneProgress) func(upperDir, lowerView string) (PruneReport, error) {
 	if seam.prune != nil {
 		return seam.prune
 	}
-	return PruneUpper
+	return func(upperDir, lowerView string) (PruneReport, error) {
+		return pruneWithProgress(upperDir, lowerView, pruneHooks{}, prog)
+	}
 }
 
 // warnf reports one non-fatal problem on stderr with the same bare
