@@ -9,10 +9,9 @@
 #
 # The case checks the preview contract, one-time initialization, legacy
 # session_max_age parsing, and removal of a session's upper data. Parent
-# activity uses an isolated squashfs graph below; ancestor retention
-# remains in t0004 until its fixture is migrated too.
+# activity and ancestor retention use an isolated squashfs graph below.
 
-test_description='tiler GC preserves independent non-mount coverage and ancestor activity'
+test_description='tiler GC initializes activity once and retains referenced ancestors'
 
 . "$(dirname "$0")/lib-tiler.sh"
 . "$TEST_DIRECTORY/lib-workflow.sh"
@@ -193,6 +192,67 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental activity reaches its
 	test_cmp graph-sibling.before "$sib_log" &&
 	test_grep ! "\"source_version\":\"$graph_second\"" "$sib_log" &&
 	test_grep "\"event\":\"image.create.full\"" "$root_log"
+'
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC initializes a missing child log once without refreshing its sibling' '
+	rm "$graph_logs/$graph_second.log" &&
+	(
+		cd "$graph" &&
+		"$tiler_bin" images gc --expire 0 2>"$HOME/graph-init1.err"
+	) >graph-init1.out &&
+	test_grep "kept $graph_image:$graph_second: initialized" graph-init1.err &&
+	test_grep "kept $graph_image:$graph_base: initialized" graph-init1.err &&
+	test_grep ! "kept $graph_image:$graph_first: initialized" graph-init1.err &&
+	sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"activity.initialize\".*/\\1/p" "$graph_logs/$graph_second.log" >graph-init-time &&
+	test_line_count = 1 graph-init-time &&
+	init_time=$(cat graph-init-time) &&
+	test -n "$init_time" &&
+	test_grep "\"time\":\"$init_time\".*\"source_version\":\"$graph_second\".*\"source_event\":\"activity.initialize\"" "$graph_logs/$graph_base.log" &&
+	test_cmp graph-sibling.before "$graph_logs/$graph_first.log" &&
+	test_grep ! "activity.initialize" "$graph_logs/$graph_first.log" &&
+	cp "$graph_logs/$graph_base.log" graph-base.before &&
+	cp "$graph_logs/$graph_second.log" graph-second.before &&
+	(
+		cd "$graph" &&
+		"$tiler_bin" images gc --expire 0 2>"$HOME/graph-init2.err"
+	) >graph-init2.out &&
+	test_grep ! initialized graph-init2.err &&
+	test_cmp graph-base.before "$graph_logs/$graph_base.log" &&
+	test_cmp graph-second.before "$graph_logs/$graph_second.log"
+'
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC retains ancestors of a recent child and removes expired branches' '
+	(
+		cd "$graph" &&
+		"$tiler_bin" session close activity-edit >"$HOME/graph-close.out" 2>"$HOME/graph-close.err" &&
+		"$tiler_bin" session remove activity-edit >"$HOME/graph-remove.out" 2>"$HOME/graph-remove.err"
+	) &&
+	test_path_is_missing "$graph/.tiler/sessions/activity-edit" &&
+	find "$graph/mnt-edit" -mindepth 1 >graph-unmounted &&
+	test_must_be_empty graph-unmounted &&
+	test_grep ! "image.dependency.activity" "$graph_logs/$graph_full.log" &&
+	for tiler_old in "$graph_base" "$graph_first" "$graph_full"
+	do
+		rewrite_activity "$graph_logs/$tiler_old.log" "2020-01-01T00:00:00.000000000Z" || return 1
+	done &&
+	rewrite_activity "$graph_logs/$graph_second.log" "2099-01-01T00:00:00.000000000Z" &&
+	(
+		cd "$graph" &&
+		"$tiler_bin" images gc --expire 0 --yes 2>"$HOME/graph-anc.err"
+	) >graph-anc.out &&
+	for tiler_old in "$graph_first" "$graph_full"
+	do
+		test_grep "^removed $graph_image:$tiler_old$" graph-anc.out &&
+		test_path_is_missing "$graph_objects/$tiler_old" &&
+		test_path_is_missing "$graph_logs/$tiler_old.log" &&
+		test_path_is_missing "$graph_logs/$tiler_old.log.lock" || return 1
+	done &&
+	for tiler_kept in "$graph_base" "$graph_second"
+	do
+		test_grep ! "removed $graph_image:$tiler_kept" graph-anc.out &&
+		test_path_is_dir "$graph_objects/$tiler_kept" &&
+		test_path_is_file "$graph_logs/$tiler_kept.log" || return 1
+	done
 '
 
 test_done
