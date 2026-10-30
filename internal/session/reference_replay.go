@@ -68,6 +68,14 @@ func (s Store) replayReferenceJournal(state ReferenceState, journal ReferenceJou
 	if err := referenceCheckpoint("clean", s.SaveReferenceState(state), checkpoint); err != nil {
 		return err
 	}
+	if err := s.finishReferenceReplay(checkpoint); err != nil {
+		return err
+	}
+	return s.retireReplayedShards(updates)
+}
+
+// finishReferenceReplay drops the journal only after the clean state is durable.
+func (s Store) finishReferenceReplay(checkpoint func(string) error) error {
 	path, err := s.referencePath("journal.json")
 	if err != nil {
 		return err

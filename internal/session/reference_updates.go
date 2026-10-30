@@ -13,7 +13,8 @@ type referenceKey struct{ name, tip string }
 // ReferenceUpdates plans complete shard replacements without writing any data.
 // Callers must hold the library lock and establish index trust independently.
 // Missing old shards require rebuilding; new shards may start empty only within
-// that trusted transaction. Persist empty replacements so replay remains safe.
+// that trusted transaction. Empty replacements stay on disk until the journal
+// is gone, then the empty shard file and catalog entry are deleted.
 func (s Store) ReferenceUpdates(journal ReferenceJournal) ([]ReferenceBucket, error) {
 	return s.referenceUpdates(journal, s.LoadReferenceBucket)
 }

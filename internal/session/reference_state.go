@@ -28,8 +28,9 @@ type ReferenceState struct {
 	Dirty           bool                         `json:"dirty"`
 	Inventory       map[string]ReferenceRevision `json:"inventory"`
 	CatalogComplete bool                         `json:"catalog_complete"`
-	// ShardDigests includes retained empty shards. Only a complete, verified
-	// catalog can distinguish an absent key from a lost reference shard.
+	// ShardDigests names shards that still have owners. A complete catalog
+	// treats an absent key as no owners. Empty shards are deleted; a cataloged
+	// shard whose file is missing was lost and forces a rebuild.
 	ShardDigests map[string]string `json:"shard_digests"`
 }
 

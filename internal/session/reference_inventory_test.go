@@ -191,9 +191,15 @@ func TestReferenceInventoryReconstructsUncertainEmptyState(t *testing.T) {
 		if err != nil || state.Dirty || !state.CatalogComplete || len(state.Inventory) != 0 {
 			t.Fatalf("%s rebuild = %#v, %v", mode, state, err)
 		}
+		if _, err := os.Stat(filepath.Join(c.Dir, referenceDir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s left an idle reference store: %v", mode, err)
+		}
 		forced, err := c.RebuildInventory()
-		if err != nil || forced.Generation != state.Generation+1 || !forced.CatalogComplete {
+		if err != nil || forced.Generation != 1 || !forced.CatalogComplete || len(forced.Inventory) != 0 {
 			t.Fatalf("forced rebuild = %#v, %v", forced, err)
+		}
+		if _, err := os.Stat(filepath.Join(c.Dir, referenceDir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("forced rebuild left an idle reference store: %v", err)
 		}
 	}
 }

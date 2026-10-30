@@ -61,8 +61,9 @@ func (c ReferenceCoordinator) applyReferenceLocked(state ReferenceState, before,
 	return c.replayReferenceJournal(state, journal, nil)
 }
 
-// Recover completes a pending journal under its own session lock. Missing state,
-// damaged journals and dirty state without an intent are errors, never trust.
+// Recover completes a pending journal under its own session lock. An idle store
+// has no journal and either no state file or a clean one. Damaged journals and
+// dirty state without an intent are errors, never trust.
 func (c ReferenceCoordinator) Recover() error {
 	journal, err := c.LoadReferenceJournal()
 	if errors.Is(err, os.ErrNotExist) {
@@ -89,6 +90,12 @@ func (c ReferenceCoordinator) Recover() error {
 
 func (c ReferenceCoordinator) recoverLocked() error {
 	state, err := c.LoadReferenceState()
+	if errors.Is(err, os.ErrNotExist) {
+		if _, journalErr := c.LoadReferenceJournal(); errors.Is(journalErr, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -97,7 +104,7 @@ func (c ReferenceCoordinator) recoverLocked() error {
 		if state.Dirty {
 			return errors.New("session: dirty reference state has no journal")
 		}
-		return nil
+		return c.retireEmptyReferenceShards()
 	}
 	if err != nil {
 		return err

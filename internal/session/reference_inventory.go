@@ -43,7 +43,7 @@ func (c ReferenceCoordinator) ensureInventoryLocked(force bool, checkpoint func(
 		return ReferenceState{}, err
 	}
 	if !force && stateErr == nil && !state.Dirty && state.CatalogComplete && inventoryMatches(state, sources) {
-		return state, nil
+		return c.finishReferenceState(state)
 	}
 	if stateErr != nil {
 		state = ReferenceState{Version: ReferenceControlVersion}
@@ -168,5 +168,5 @@ func (c ReferenceCoordinator) rebuildInventoryLocked(previous ReferenceState, so
 	if err := referenceCheckpoint("rebuild clean", c.SaveReferenceState(state), checkpoint); err != nil {
 		return ReferenceState{}, err
 	}
-	return state, nil
+	return c.finishReferenceState(state)
 }

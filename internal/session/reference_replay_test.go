@@ -71,6 +71,10 @@ func TestReferenceReplaySurvivesEveryDurableTransition(t *testing.T) {
 					t.Fatalf("interruption = %v after %d stages", err, stages)
 				}
 				state, err = store.LoadReferenceState()
+				if errors.Is(err, os.ErrNotExist) {
+					assertReferenceReplayComplete(t, store, journal)
+					return
+				}
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -80,8 +84,13 @@ func TestReferenceReplaySurvivesEveryDurableTransition(t *testing.T) {
 					}
 				} else if !errors.Is(err, os.ErrNotExist) {
 					t.Fatal(err)
+				} else if err := store.retireEmptyReferenceShards(); err != nil {
+					t.Fatal(err)
 				}
 				assertReferenceReplayComplete(t, store, journal)
+				if _, err := os.Stat(filepath.Join(store.Dir, referenceDir)); errors.Is(err, os.ErrNotExist) {
+					return
+				}
 				if !mustReferenceState(t, store).CatalogComplete {
 					t.Fatal("complete catalog lost during recovery")
 				}
@@ -104,7 +113,22 @@ func mustReferenceState(t *testing.T, store Store) ReferenceState {
 
 func assertReferenceReplayComplete(t *testing.T, store Store, journal ReferenceJournal) {
 	t.Helper()
-	state := mustReferenceState(t, store)
+	state, err := store.LoadReferenceState()
+	if errors.Is(err, os.ErrNotExist) {
+		if journal.After != nil {
+			t.Fatal("reference state missing while the session remains")
+		}
+		if _, statErr := os.Stat(filepath.Join(store.Dir, referenceDir)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("idle reference directory remains: %v", statErr)
+		}
+		if _, err := store.LoadVersion("dev"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("deleted source remains: %v", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	if state.Dirty || state.Generation != journal.Generation {
 		t.Fatalf("unfinished state: %#v", state)
 	}
@@ -122,17 +146,33 @@ func assertReferenceReplayComplete(t *testing.T, store Store, journal ReferenceJ
 			t.Fatalf("source/inventory mismatch: %#v, %v, %v", rec, err, statErr)
 		}
 	}
-	updates, err := store.ReferenceUpdates(journal)
+	updates, err := store.referenceUpdates(journal, func(name, tip string) (ReferenceBucket, error) {
+		bucket, loadErr := store.LoadReferenceBucket(name, tip)
+		if errors.Is(loadErr, os.ErrNotExist) {
+			return ReferenceBucket{Name: name, Tip: tip}, nil
+		}
+		return bucket, loadErr
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range updates {
+		key := referenceCatalogKey(want.Name, want.Tip)
+		if len(want.Owners) == 0 {
+			if _, err := store.LoadReferenceBucket(want.Name, want.Tip); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("empty shard retained: %v", err)
+			}
+			if _, found := state.ShardDigests[key]; found {
+				t.Fatalf("empty shard remains catalogued: %s", key)
+			}
+			continue
+		}
 		got, err := store.LoadReferenceBucket(want.Name, want.Tip)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("incomplete reference bucket: %#v, %v", got, err)
 		}
 		digest, err := store.referenceShardDigest(want.Name, want.Tip)
-		if err != nil || state.ShardDigests[referenceCatalogKey(want.Name, want.Tip)] != digest {
+		if err != nil || state.ShardDigests[key] != digest {
 			t.Fatalf("incomplete shard catalog: %s:%s, %v", want.Name, want.Tip, err)
 		}
 	}

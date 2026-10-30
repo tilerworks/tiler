@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 
@@ -154,11 +155,25 @@ func (scope *referenceSessionScope) mutate(name string, after *Record) (err erro
 		return err
 	}
 	scope.current = after
-	scope.state, err = c.LoadReferenceState()
-	if err == nil && after == nil {
-		err = c.deleteRecordFiles(name)
+	// Retirement of the last session removes the reference store, including
+	// state.json. The committed generation is still the one this apply wrote.
+	generation := scope.state.Generation + 1
+	loaded, err := c.LoadReferenceState()
+	if errors.Is(err, os.ErrNotExist) {
+		loaded = ReferenceState{
+			Version: ReferenceControlVersion, Generation: generation, CatalogComplete: true,
+			Inventory: map[string]ReferenceRevision{}, ShardDigests: map[string]string{},
+		}
+		err = nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	scope.state = loaded
+	if after == nil {
+		return c.deleteRecordFiles(name)
+	}
+	return nil
 }
 
 func (scope *referenceSessionScope) close() error {

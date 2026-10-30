@@ -46,6 +46,53 @@ func TestReferenceCoordinatorCreatesUpdatesAndRemoves(t *testing.T) {
 	assertReferenceReplayComplete(t, c.Store, ReferenceJournal{Version: ReferenceControlVersion, Generation: 3, Before: &after})
 }
 
+func TestRemovingSessionsRemovesEmptyReferenceShards(t *testing.T) {
+	c := newReferenceCoordinator(t)
+	first, second := versionRecord(t), versionRecord(t)
+	second.Name = "work"
+	if err := errors.Join(c.Apply(nil, &first), c.Apply(nil, &second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Apply(&first, nil); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(c.Dir, referenceDir)
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("shared references removed: %v", err)
+	}
+	got, err := c.References(referenceTargets(&first)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range got {
+		if len(bucket.Owners) != 1 || bucket.Owners[0].Session != second.Name {
+			t.Fatalf("survivor lost: %#v", bucket)
+		}
+	}
+	if err := c.Apply(&second, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("idle reference store remains: %v", err)
+	}
+	if err := c.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = c.References(referenceTargets(&first)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range got {
+		if len(bucket.Owners) != 0 {
+			t.Fatalf("removed session still referenced: %#v", bucket)
+		}
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("query recreated an idle reference store: %v", err)
+	}
+}
+
 func TestReferenceCoordinatorRecoversPendingSessionBeforeNewRequest(t *testing.T) {
 	c := newReferenceCoordinator(t)
 	pending := versionRecord(t)

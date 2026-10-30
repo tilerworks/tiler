@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 )
 
@@ -18,14 +17,16 @@ func (s Store) referenceReplayUpdates(state ReferenceState, journal ReferenceJou
 	var sources map[referenceKey]ReferenceBucket
 	return s.referenceUpdates(journal, func(name, tip string) (ReferenceBucket, error) {
 		if sources == nil && state.CatalogComplete {
+			// A missing catalog key used to mean "no shard yet". Retirement
+			// also removes emptied shards, and a resumed replay must rebuild
+			// those from sources instead of treating the absence as proof.
 			expected, found := state.ShardDigests[referenceCatalogKey(name, tip)]
-			if !found {
-				return ReferenceBucket{}, os.ErrNotExist
-			}
-			bucket, data, err := s.loadReferenceBucket(name, tip)
-			digest := sha256.Sum256(data)
-			if err == nil && hex.EncodeToString(digest[:]) == expected {
-				return bucket, nil
+			if found {
+				bucket, data, err := s.loadReferenceBucket(name, tip)
+				digest := sha256.Sum256(data)
+				if err == nil && hex.EncodeToString(digest[:]) == expected {
+					return bucket, nil
+				}
 			}
 		}
 		if sources == nil {
