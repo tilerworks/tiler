@@ -64,7 +64,8 @@ test_expect_success TILER,MACOS 'a writable session mounts and status is healthy
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino" &&
 	"$tiler_bin" status >live.out 2>live.err &&
-	grep -F "$work_dir" live.out | grep -q "health=healthy"
+	test_grep "\[rw · mounted · healthy\]" live.out &&
+	test_grep "shadow.*upper.shadow" live.out
 '
 
 test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow stays' '
@@ -79,7 +80,7 @@ test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow s
 	test_path_is_file "$shadow" &&
 	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
 	"$tiler_bin" status >stale.out 2>stale.err &&
-	grep -F "$work_dir" stale.out | grep -q "health=stale"
+	test_grep "\[rw · mounted · stale\]" stale.out
 '
 
 test_expect_success TILER,MACOS 'session open reattaches the same shadow' '
@@ -93,7 +94,7 @@ test_expect_success TILER,MACOS 'session open reattaches the same shadow' '
 
 test_expect_success TILER,MACOS 'status is healthy when mountpoint, image, and shadow match' '
 	"$tiler_bin" status >healthy.out 2>healthy.err &&
-	grep -F "$work_dir" healthy.out | grep -q "health=healthy" &&
+	test_grep "\[rw · mounted · healthy\]" healthy.out &&
 	"$hdiutil_bin" info -plist >info.plist 2>info.err &&
 	test_grep -F "$shadow" info.plist &&
 	image_phys=$(cd "$(dirname "$image")" && pwd -P)/image.dmg &&

@@ -126,12 +126,12 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session list and show render the
 	"$tiler_bin" session list >list3.out 2>list3.err &&
 	test_grep -E "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list3.out &&
 	"$tiler_bin" session show dev >show3.out 2>show3.err &&
-	test_grep -E "^dev$" show3.out &&
-	test_grep -E "^  state +active$" show3.out &&
-	test_grep -E "^  created +" show3.out &&
-	test_grep -E "^    1  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
-	test_grep -E "^    2  mount  bob/tools  .*  mode=ro  status=mounted" show3.out &&
-	test_grep -E "^    3  mount  alice/app  .*  mode=rw  status=mounted" show3.out &&
+	test_grep -E "^dev · active" show3.out &&
+	test_grep -E "Last activity:" show3.out &&
+	test_grep -E "^  Created:" show3.out &&
+	test_grep -E "📁 alice/app:.*\[rw · mounted · healthy\]" show3.out &&
+	test_grep -E "📁 bob/tools:.*\[ro · mounted · healthy\]" show3.out &&
+	test_grep -E "highest priority first" show3.out &&
 	"$tiler_bin" session show dev --json >showj.out 2>showj.err &&
 	test_grep "\"actions\"" showj.out &&
 	test_grep "dev" showj.out &&

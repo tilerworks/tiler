@@ -121,8 +121,9 @@ failures.
 ## Usage
 
 Text timestamps in image and session commands, status, and GC previews
-use the runtime local time zone with second precision
-(`YYYY-MM-DD HH:MM:SS`), except the compact image listing described below.
+use the runtime local time zone. Image lists, session lists and layered
+status details use compact image-list formatting; other timestamps use
+second precision (`YYYY-MM-DD HH:MM:SS`).
 JSON, activity logs, and stored metadata retain
 their existing timestamp formats and precision.
 
@@ -143,7 +144,7 @@ session, and show status. A quick start covers the workflow:
 tiler build --image alice/app dir   # pack a prepared directory
 tiler mount alice/app work          # writable view over the image
 # develop inside work; changes land in the upper layer
-tiler status work                   # the covering session and its health
+tiler status work                   # related sessions and their mount health
 tiler umount work                   # upper and work data survives
 ```
 
@@ -340,23 +341,34 @@ Available now:
   directory of every view is purged, upper data included, and the
   command prints `removed` rather than `closed`. `session remove <name>`
   deletes a closed record and refuses an active one. `session
-  list [--json]` prints one aligned row per record (name, state,
-  mount count, created and closed times, and an RM marker for
-  `--rm` sessions). `session show <name> [--json]` prints a
-  multi-line record — identity fields, then one line per action
-  — and the `--json` form of show is the record object itself. A
-  generated name and an explicit name accept the same commands;
-  only `--rm` changes close into a delete.
-- `tiler status [<path>] [--json]` reconciles the session records
-  with the real mount state. Without a path it prints one block
-  per record — every live mount action marked `healthy` or
-  `stale` — flags the session named by `TILER_SESSION_ID` as
-  `current`, and lists mounted tiler views that no active record
-  claims as `orphan` lines. With a path it reports the session
-  whose recorded view covers it: a deep path inside a merged view
-  and a path inside the runtime tree (an upper or a lower transit
-  point) both resolve back to the covering session, and a path no
-  session covers is an error.
+  list [-v|--verbose] [--json]` prints one aligned row per record:
+  SESSION, STATE, MOUNTS, CREATED, CLOSED, LAST ACTIVITY, and RM.
+  Recent activity comes from the newest session-log event, including failed
+  operations; missing activity is `-`, and unreadable activity is `unknown`.
+  Listing never renews activity. `-v` prints each session's layered mount tree.
+  `session show <name>` shares the detailed output of `status -s <name>`;
+  its `--json` form preserves the record object and action history.
+  List, show, and status JSON add `last_activity_at` (UTC RFC3339 or null)
+  and `last_activity_unknown`. `-v` affects text only: list JSON is identical
+  with and without it. A generated name accepts the same commands as an
+  explicit name; only `--rm` changes close into a delete.
+- `tiler status [directory] [-s session] [-i name[:version]] [--json]`
+  and `tiler session status` are equivalent. A directory selects every
+  session whose mount contains it or is contained by it. File arguments
+  are rejected; an unrelated directory returns an empty list. `-s` selects
+  an exact session name. `-i` matches full or incremental layers; omitting
+  the version matches all versions of that image. Filters intersect on
+  the same mount, and selected sessions retain all their mounts.
+  Detailed text shows session times, current/locked markers, and one 📁
+  mount tree with image versions, paths, rw/ro access and live health.
+  Layers run from full to tip; overlay lowers are shown highest priority
+  first, with the writable upper separately. macOS shows the attached
+  shadow instead. Paths use the shorter relative/absolute spelling, or
+  trailing components within 63 display columns. JSON keeps complete IDs
+  and paths. Unclaimed mounts remain visible as orphans in status.
+  Status JSON always uses the `current_session`, `sessions`, `orphan_views`
+  overview envelope. This replaces the former single-path JSON document;
+  consumers must read the `sessions` array, which can contain many results.
 
 ### Activity and garbage collection
 

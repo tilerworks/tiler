@@ -95,9 +95,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new --rm: close deletes 
 	"$tiler_bin" session new --rm dev >new1.out 2>new1.err &&
 	test_grep -E "^created dev$" new1.out &&
 	"$tiler_bin" session show dev >show1.out 2>show1.err &&
-	test_grep -E "^dev$" show1.out &&
-	test_grep -E "^  state +active$" show1.out &&
-	test_grep -E "^  rm +true$" show1.out &&
+	test_grep -E "^dev · active" show1.out &&
+	test_grep -E "^  Created:" show1.out &&
+	test_grep -E "remove on close" show1.out &&
 	mkdir -p "$named_dir" &&
 	"$tiler_bin" mount --session dev tmp/auto "$named_dir" >m1.out 2>m1.err &&
 	test_grep -E "^mounted " m1.out &&
@@ -127,9 +127,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm: umounting the last v
 	test_path_is_dir "$sessions_root/$auto_rm/runtime/m1" &&
 	test_path_is_file "$sessions_root/$auto_rm/runtime/m1/upper/SCRATCH.txt" &&
 	"$tiler_bin" session show "$auto_rm" >show2.out 2>show2.err &&
-	test_grep -E "^$auto_rm$" show2.out &&
-	test_grep -E "^  state +active$" show2.out &&
-	test_grep -E "^  rm +true$" show2.out &&
+	test_grep -E "^$auto_rm · active" show2.out &&
+	test_grep -E "^  Created:" show2.out &&
+	test_grep -E "remove on close" show2.out &&
 	"$tiler_bin" umount "$impl_dir" >um2.out 2>um2.err &&
 	test_grep -E "^unmounted " um2.out &&
 	test_path_is_missing "$sessions_root/$auto_rm" &&
@@ -150,10 +150,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount --rm refuses a session nam
 	test_grep "session new --rm" u2.err &&
 	test_path_is_missing "$usage_dir/README.txt" &&
 	"$tiler_bin" session show target >show3.out 2>show3.err &&
-	test_grep -E "^target$" show3.out &&
-	test_grep -E "^  state +active$" show3.out &&
-	test_grep ! -E "^  rm " show3.out &&
-	test_grep ! -E "^    1  mount" show3.out
+	test_grep -E "^target · active" show3.out &&
+	test_grep -E "^  Created:" show3.out &&
+	test_grep ! -E "remove on close" show3.out &&
+	test_grep ! -E "📁" show3.out
 '
 
 # The contrast that proves --rm is opt-in: a plain session close keeps
@@ -167,9 +167,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a plain session close keeps the 
 	echo "keep me" >"$ctrl_dir/KEEP.txt" &&
 	test_path_is_file "$sessions_root/ctrl/runtime/m1/upper/KEEP.txt" &&
 	"$tiler_bin" session show ctrl >show4.out 2>show4.err &&
-	test_grep -E "^ctrl$" show4.out &&
-	test_grep -E "^  state +active$" show4.out &&
-	test_grep ! -E "^  rm " show4.out &&
+	test_grep -E "^ctrl · active" show4.out &&
+	test_grep -E "^  Created:" show4.out &&
+	test_grep ! -E "remove on close" show4.out &&
 	"$tiler_bin" session close ctrl >close4.out 2>close4.err &&
 	test_grep -E "^closed ctrl$" close4.out &&
 	"$tiler_bin" session list >list4.out 2>list4.err &&
