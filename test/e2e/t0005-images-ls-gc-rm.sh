@@ -25,16 +25,7 @@
 
 test_description='tiler images ls, gc, and rm manage the library lifecycle'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -81,7 +72,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the 
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
 	echo edit >"$work_dir/NEW.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
+	(
+		cd "$work_dir" &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr.err"
+	) >incr.out &&
 	test_grep -E "^incr alice/app [0-9a-f]+" incr.out &&
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	test_grep "alice/app" lsall.out &&

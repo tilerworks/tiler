@@ -1,12 +1,7 @@
 #!/bin/sh
 # Status queries reconcile records with real Linux mounts.
 test_description='tiler status filters and renders layered sessions'
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 src_dir=$HOME/src/app
 s_dir=$HOME/work/status
 s2_dir=$HOME/work/status2
@@ -95,7 +90,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'layered image filters find full 
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a killed view is stale while its peer stays healthy' '
-	kill_view "$s2_dir" && sleep 1 &&
+	kill_view "$s2_dir" &&
+	wait_for_stale_view dev stale.json &&
 	"$tiler_bin" status -s dev >stale.out &&
 	test_grep "\[rw · mounted · healthy\]" stale.out &&
 	test_grep "\[rw · mounted · stale\]" stale.out &&

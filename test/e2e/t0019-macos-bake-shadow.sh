@@ -8,26 +8,14 @@
 # mount of that published image. images show reports one single-file
 # payload with no parent.
 #
-# The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without hdiutil_bin skips the file instead of failing.
+# The MACOS and HDIUTIL prerequisites skip these tests on hosts without
+# the macOS disk-image toolchain.
 
 test_description='macOS bake keeps the live shadow and publishes one dmg'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
-
-if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
-then
-	skip_all="skipping macOS bake; $hdiutil_bin is missing"
-	test_done
-fi
 
 src_dir=$HOME/src/app
 work_dir=$HOME/work/bake
@@ -47,7 +35,7 @@ then
 	'
 fi
 
-test_expect_success TILER,MACOS 'a writable view is ready to bake' '
+test_expect_success TILER,MACOS,HDIUTIL 'a writable view is ready to bake' '
 	mkdir -p "$src_dir" "$work_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -70,12 +58,12 @@ test_expect_success TILER,MACOS 'a writable view is ready to bake' '
 	test_grep -F "$shadow" before.plist
 '
 
-test_expect_success TILER,MACOS 'baking publishes a new image and leaves the shadow' '
+test_expect_success TILER,MACOS,HDIUTIL 'baking publishes a new image and leaves the shadow' '
 	echo immediate >"$work_dir/NOW.txt" &&
 	(
 		cd "$work_dir" &&
-		"$tiler_bin" build --image alice/app
-	) >bake.out 2>bake.err &&
+		"$tiler_bin" build --image alice/app 2>"$HOME/bake.err"
+	) >bake.out &&
 	test_grep -F "dmg has no incremental layer" bake.err &&
 	test_grep -E "^full alice/app [0-9a-f]+" bake.out &&
 	new_id=$(cut -d" " -f3 bake.out) &&
@@ -86,10 +74,11 @@ test_expect_success TILER,MACOS 'baking publishes a new image and leaves the sha
 	test_path_is_file "$image" &&
 	test_path_is_missing "${image%.dmg}.sqsh" &&
 	test_path_is_file "$shadow" &&
-	test "$(stat -f %i "$shadow")" = "$shadow_ino"
+	current_shadow_ino=$(stat -f %i "$shadow") &&
+	test "$current_shadow_ino" = "$shadow_ino"
 '
 
-test_expect_success TILER,MACOS 'the published image contains the write from just before bake' '
+test_expect_success TILER,MACOS,HDIUTIL 'the published image contains the write from just before bake' '
 	mkdir -p "$pub_dir" &&
 	"$tiler_bin" session new reader >reader-new.out 2>reader-new.err &&
 	test_grep -E "^created reader$" reader-new.out &&
@@ -100,7 +89,7 @@ test_expect_success TILER,MACOS 'the published image contains the write from jus
 	test_path_is_missing "$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow"
 '
 
-test_expect_success TILER,MACOS 'the live attach stays on the original shadow' '
+test_expect_success TILER,MACOS,HDIUTIL 'the live attach stays on the original shadow' '
 	test_grep "hello tiler" "$work_dir/README.txt" &&
 	test_grep baked "$work_dir/KEEP.txt" &&
 	"$tiler_bin" session show dev --json >after.json 2>after.err &&
@@ -109,10 +98,10 @@ test_expect_success TILER,MACOS 'the live attach stays on the original shadow' '
 	"$hdiutil_bin" info -plist >after.plist 2>after-info.err &&
 	test_grep -F "$shadow" after.plist &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&
-	{ grep -F "$work_dir" after.plist || grep -F "$work_phys" after.plist; }
+	test_grep -F -e "$work_dir" -e "$work_phys" after.plist
 '
 
-test_expect_success TILER,MACOS 'images show reports a single payload with no parent' '
+test_expect_success TILER,MACOS,HDIUTIL 'images show reports a single payload with no parent' '
 	"$tiler_bin" images show alice/app >show.out 2>show.err &&
 	test_grep -F "$new_id" show.out &&
 	test_grep -F "  payload     single" show.out &&

@@ -7,11 +7,13 @@
 #   fusermount3_bin    fusermount3 on PATH, the FUSE unmount helper
 #   TILER              set when tiler_bin is non-empty
 #   LINUX              uname -s is Linux (current mount stack)
-#   MACOS              uname -s is Darwin (future macOS mount stack)
+#   MACOS              uname -s is Darwin
+#   HDIUTIL            macOS with hdiutil on PATH
 #   FUSE_TOOLCHAIN     Linux + /dev/fuse + squashfs/overlay tools (+ git)
 #   EROFS_TOOLCHAIN    Linux + /dev/fuse + erofs/overlay tools (+ git)
 #   KILL_VIEW          Linux pgrep + /proc for kill_view
 #   kill_view <mp>     SIGKILL FUSE daemons serving one mountpoint
+#   wait_for_stale_view <session> <out>  wait for stale status JSON
 
 # Prefer the repository build; fall back to a tiler found on PATH.
 # TEST_DIRECTORY is pinned to test/e2e/ by each case before sourcing.
@@ -30,14 +32,17 @@ fi
 # PATH. Cases call this variable instead of spelling a path.
 hdiutil_bin=hdiutil
 
+test_lazy_prereq HDIUTIL '
+	test_have_prereq MACOS &&
+	command -v "$hdiutil_bin" >/dev/null 2>&1
+'
+
 # fusermount3_bin is the program name of the FUSE unmount helper.
 # Cases call it when tiler umount cannot detach a view. PATH resolves
 # the name at the call.
 fusermount3_bin=fusermount3
 
-# OS gates for the current Linux mount stack and the coming macOS
-# image-format mounts. Cases that need a real mount list LINUX (or
-# later MACOS) so make e2e skips the wrong host instead of failing.
+# Host gates keep platform-specific cases off unsupported hosts.
 case "$(uname -s)" in
 Linux)
 	test_set_prereq LINUX
@@ -113,4 +118,21 @@ kill_view() {
 		kill -9 "$_pid" 2>/dev/null && _found=1
 	done
 	test "$_found" -eq 1
+}
+
+# Poll the observable stale-view condition, with a bounded wait instead of
+# assuming that SIGKILL has reached the daemon after a fixed sleep.
+wait_for_stale_view () {
+	tiler_wait_attempt=0
+	while test "$tiler_wait_attempt" -lt 10
+	do
+		"$tiler_bin" status -s "$1" --json >"$2" || return 1
+		if grep -F "\"health\": \"stale\"" "$2" >/dev/null
+		then
+			return 0
+		fi
+		tiler_wait_attempt=$((tiler_wait_attempt + 1))
+		sleep 1
+	done
+	test_grep -F "\"health\": \"stale\"" "$2"
 }

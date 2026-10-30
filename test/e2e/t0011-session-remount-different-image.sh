@@ -9,7 +9,7 @@
 #
 #   1. mount alice/one at $HOME/work/view, write marker.txt into the
 #      upper, and record the first generated session name,
-#   2. umount closes that implicit session,
+#   2. umount retains that session and its upper data,
 #   3. mount alice/two at the same workdir creates a second generated
 #      session whose upper does not contain marker.txt,
 #   4. both sessions keep independent sessions/<name>/runtime/m1/
@@ -22,16 +22,7 @@
 
 test_description='tiler remounts a different image at the same workdir with isolated sessions'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -63,7 +54,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image one, write a marker,
 	mkdir -p "$workdir" &&
 	"$tiler_bin" mount alice/one "$workdir" >m1.out 2>m1.err &&
 	test_grep -E "^mounted " m1.out &&
-	test_grep one "$workdir/who.txt" &&
+	test_cmp "$src1_dir/who.txt" "$workdir/who.txt" &&
 	echo one >"$workdir/marker.txt" &&
 	test_path_is_file "$workdir/marker.txt" &&
 	auto1=$(sed -n "s/^new session created: //p" m1.out) &&
@@ -71,15 +62,14 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image one, write a marker,
 	test_path_is_dir "$sessions_root/$auto1/runtime/m1" &&
 	"$tiler_bin" umount "$workdir" >u1.out 2>u1.err &&
 	test_grep -E "^unmounted " u1.out &&
-	# Persist the first session name for the isolation assertions.
-	echo "$auto1" >auto1.name
+	test_path_is_missing "$workdir/marker.txt" &&
+	test_cmp "$src1_dir/who.txt" "$sessions_root/$auto1/runtime/m1/upper/marker.txt"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image two at the same workdir with a fresh upper' '
-	auto1=$(cat auto1.name) &&
 	"$tiler_bin" mount alice/two "$workdir" >m2.out 2>m2.err &&
 	test_grep -E "^mounted " m2.out &&
-	test_grep two "$workdir/who.txt" &&
+	test_cmp "$src2_dir/who.txt" "$workdir/who.txt" &&
 	test_path_is_missing "$workdir/marker.txt" &&
 	auto2=$(sed -n "s/^new session created: //p" m2.out) &&
 	test -n "$auto2" &&
@@ -89,7 +79,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount image two at the same work
 	test_grep "^$auto2 " list2.out &&
 	test_path_is_dir "$sessions_root/$auto1/runtime/m1" &&
 	test_path_is_dir "$sessions_root/$auto2/runtime/m1" &&
-	test "$sessions_root/$auto1/runtime/m1" != "$sessions_root/$auto2/runtime/m1" &&
+	test_cmp "$src1_dir/who.txt" "$sessions_root/$auto1/runtime/m1/upper/marker.txt" &&
+	test_path_is_missing "$sessions_root/$auto2/runtime/m1/upper/marker.txt" &&
 	"$tiler_bin" umount "$workdir" >u2.out 2>u2.err &&
 	test_grep -E "^unmounted " u2.out
 '

@@ -145,3 +145,8 @@ formatting without rewriting files, and runs `go test ./... -race
 The privileged integration-smoke job is added only after mount code
 exists, on a self-hosted runner with the squashfs and FUSE toolchain.
 Do not add that job before mount code exists.
+
+## Shell end-to-end tests
+
+Follow [test/AGENTS.md](test/AGENTS.md) for the Git test framework,
+assertions, prerequisites, fixture isolation, cleanup, and e2e validation.

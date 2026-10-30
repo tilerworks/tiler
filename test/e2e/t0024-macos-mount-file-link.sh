@@ -10,26 +10,14 @@
 #   4. full bake materializes image.dmg while the NAS file stays put,
 #   5. build --link with squashfs magic is refused (exit 1).
 #
-# The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without hdiutil_bin skips the file instead of failing.
+# The MACOS and HDIUTIL prerequisites skip these tests on hosts without
+# the macOS disk-image toolchain.
 
 test_description='macOS build --link imports an external dmg and refuses squashfs'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
-
-if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
-then
-	skip_all="skipping macOS build --link; $hdiutil_bin is missing"
-	test_done
-fi
 
 # HOME is the per-run trash directory, so the default layout under
 # $HOME/.tiler is already sandboxed. The external dmg lives under
@@ -61,7 +49,7 @@ fi
 # git-test-lib eval's each body in the current shell, so base_id and
 # shadow_ino captured below persist across the later blocks.
 
-test_expect_success TILER,MACOS 'build a dmg outside images_dir' '
+test_expect_success TILER,MACOS,HDIUTIL 'build a dmg outside images_dir' '
 	mkdir -p "$src_dir" "$nas_dir" &&
 	echo "hello vendor" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image scratch/vendor "$src_dir" >build.out 2>build.err &&
@@ -82,7 +70,7 @@ test_expect_success TILER,MACOS 'build a dmg outside images_dir' '
 	esac
 '
 
-test_expect_success TILER,MACOS 'build --link records a position file and mounts with shadow' '
+test_expect_success TILER,MACOS,HDIUTIL 'build --link records a position file and mounts with shadow' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	test_grep -E "^created dev$" new.out &&
@@ -93,11 +81,13 @@ test_expect_success TILER,MACOS 'build --link records a position file and mounts
 	"$tiler_bin" mount --session dev "$lib_name" "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
 	test_path_is_file "$meta_file" &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
+	grep "^[[:space:]]*- id:" "$meta_file" >matching-lines &&
+	test_line_count = 1 matching-lines &&
 	payload=$img_dir/_objects/$base_id/image.dmg &&
 	test_path_is_file "$payload" &&
 	! test -L "$payload" &&
-	test "$(cat "$payload")" = "$dmg" &&
+	printf "%s\n" "$dmg" >expect-position &&
+	test_cmp expect-position "$payload" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	echo linked >"$work_dir/LINK.txt" &&
 	test_path_is_file "$shadow" &&
@@ -108,28 +98,30 @@ test_expect_success TILER,MACOS 'build --link records a position file and mounts
 	test_grep -F "\"full_id\": \"$base_id\"" showj.out
 '
 
-test_expect_success TILER,MACOS 'full bake materializes the active dmg' '
+test_expect_success TILER,MACOS,HDIUTIL 'full bake materializes the active dmg' '
 	echo baked >"$work_dir/BAKE.txt" &&
 	(
 		cd "$work_dir" &&
-		"$tiler_bin" build --image "$lib_name"
-	) >bake.out 2>bake.err &&
+		"$tiler_bin" build --image "$lib_name" 2>"$HOME/bake.err"
+	) >bake.out &&
 	test_grep -F "dmg has no incremental layer" bake.err &&
 	test_grep -E "^full $lib_name [0-9a-f]+" bake.out &&
 	new_id=$(cut -d" " -f3 bake.out) &&
 	test -n "$new_id" &&
 	test "$new_id" != "$base_id" &&
 	test_path_is_file "$payload" &&
-	test "$(cat "$payload")" = "$dmg" &&
+	printf "%s\n" "$dmg" >expect-position &&
+	test_cmp expect-position "$payload" &&
 	payload=$img_dir/_objects/$new_id/image.dmg &&
 	test_path_is_file "$payload" &&
 	test ! -L "$payload" &&
 	test_path_is_file "$shadow" &&
-	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
+	current_shadow_ino=$(stat -f %i "$shadow") &&
+	test "$current_shadow_ino" = "$shadow_ino" &&
 	test_path_is_file "$dmg"
 '
 
-test_expect_success TILER,MACOS 'read-only mount of baked image has the writes' '
+test_expect_success TILER,MACOS,HDIUTIL 'read-only mount of baked image has the writes' '
 	mkdir -p "$pub_dir" &&
 	"$tiler_bin" session new reader >reader-new.out 2>reader-new.err &&
 	test_grep -E "^created reader$" reader-new.out &&
@@ -140,7 +132,7 @@ test_expect_success TILER,MACOS 'read-only mount of baked image has the writes' 
 	test_path_is_missing "$HOME/.tiler/sessions/reader/runtime/m1/upper.shadow"
 '
 
-test_expect_success TILER,MACOS 'build --link refuses squashfs on macOS' '
+test_expect_success TILER,MACOS,HDIUTIL 'build --link refuses squashfs on macOS' '
 	sqsh=$nas_dir/vendor.sqsh &&
 	printf hsqs-fake >"$sqsh" &&
 	mkdir -p "$sqsh_try_dir" &&
@@ -149,7 +141,7 @@ test_expect_success TILER,MACOS 'build --link refuses squashfs on macOS' '
 	test_path_is_missing "$images_dir/nas/sqsh"
 '
 
-test_expect_success TILER,MACOS 'umount tears the writable view down' '
+test_expect_success TILER,MACOS,HDIUTIL 'umount tears the writable view down' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	test_grep -E "^unmounted " umount.out
 '

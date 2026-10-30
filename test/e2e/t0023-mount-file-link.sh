@@ -24,16 +24,7 @@
 
 test_description='build --link imports a NAS squashfs and ordinary mount supports incr'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -91,11 +82,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --link records a position 
 	test_grep -E "^new session created: [a-z]+-[a-z]+[0-9]?$" mount.out &&
 	test_grep -E "^mounted " mount.out &&
 	test_path_is_file "$meta_file" &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 1 &&
+	grep "^[[:space:]]*- id:" "$meta_file" >matching-lines &&
+	test_line_count = 1 matching-lines &&
 	payload=$img_dir/_objects/$base_id/image.sqsh &&
 	test_path_is_file "$payload" &&
 	! test -L "$payload" &&
-	test "$(cat "$payload")" = "$img" &&
+	printf "%s\n" "$img" >expect-position &&
+	test_cmp expect-position "$payload" &&
 	test_grep "hello vendor" "$work_dir/README.txt" &&
 	test_path_is_file "$work_dir/docs/guide.md" &&
 	auto=$(sed -n "s/^new session created: //p" mount.out) &&
@@ -119,7 +112,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat build --link leaves meta 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable edit and build --incremental grow the chain' '
 	echo from-incr >"$work_dir/extra.txt" &&
 	test_path_is_file "$work_dir/extra.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
+	(
+		cd "$work_dir" &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr.err"
+	) >incr.out &&
 	test_grep -E "^incr $lib_name [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&

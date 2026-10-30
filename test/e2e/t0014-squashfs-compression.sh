@@ -21,16 +21,7 @@
 
 test_description='tiler builds and mounts non-default squashfs compression'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -94,7 +85,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'writable mount and same-format i
 	test_grep "hello gzip" "$work_dir/README.txt" &&
 	echo from-incr >"$work_dir/extra.txt" &&
 	test_path_is_file "$work_dir/extra.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
+	(
+		cd "$work_dir" &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr.err"
+	) >incr.out &&
 	test_grep -E "^incr alice/gzip [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&

@@ -18,16 +18,7 @@
 
 test_description='tiler config bootstrap, upgrade, and doctor config report'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin and TILER come from sharness.d/tiler.sh.
 
@@ -48,25 +39,28 @@ test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
 
 test_expect_success TILER 'a later run leaves an edited config untouched' '
 	echo "# user edit" >>"$HOME/.tiler.yaml" &&
+	cp "$HOME/.tiler.yaml" config.before &&
 	"$tiler_bin" version &&
-	test_grep "^# user edit$" "$HOME/.tiler.yaml"
+	test_cmp config.before "$HOME/.tiler.yaml"
 '
 
 # Reset the sandboxed home config so the upgrade path starts from a
 # deliberate legacy document rather than the template written above.
 test_expect_success TILER 'legacy user config without version is upgraded' '
-	printf "%s\n" \
-		"images_dir: ~/.tiler/images" \
-		"runtime_dir: ~/.tiler/runtime" \
-		"sessions_dir: ~/.tiler/sessions" \
-		"cache_dir: ~/.tiler/cache" \
-		"log_level: info" >"$HOME/.tiler.yaml" &&
+	cat >"$HOME/.tiler.yaml" <<-\EOF &&
+	images_dir: ~/.tiler/images
+	runtime_dir: ~/.tiler/runtime
+	sessions_dir: ~/.tiler/sessions
+	cache_dir: ~/.tiler/cache
+	log_level: info
+	EOF
+	cp "$HOME/.tiler.yaml" legacy.before &&
 	rm -f "$HOME/.tiler.yaml.bak" &&
 	"$tiler_bin" version &&
 	test_grep "^version: 1$" "$HOME/.tiler.yaml" &&
 	test_grep ! "runtime_dir" "$HOME/.tiler.yaml" &&
 	test_path_is_file "$HOME/.tiler.yaml.bak" &&
-	test_grep "runtime_dir: ~/.tiler/runtime" "$HOME/.tiler.yaml.bak"
+	test_cmp legacy.before "$HOME/.tiler.yaml.bak"
 '
 
 # `tiler doctor` exits 1 when a FUSE probe fails on an unequipped host,

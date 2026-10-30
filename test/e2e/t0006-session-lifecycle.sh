@@ -1,50 +1,11 @@
 #!/bin/sh
-#
-# tiler end-to-end test: named session lifecycle and error branches.
-#
-# Companion to t0005-images-ls-gc-rm.sh. Where t0005 exercises the
-# library-management subcommands, this case drives the `session`
-# command end to end over real mounts:
-#
-#   1. session new creates an active record; a duplicate is refused
-#      and an invalid name is a usage error,
-#   2. mount --session and TILER_SESSION_ID group several views,
-#   3. session list and session show render the record (and --json),
-#   4. session show/open refuse a missing record,
-#   5. session remove refuses an active record,
-#   6. umount of one view does not auto-close a named session,
-#   7. session close tears the views down, keeps the record, and is
-#      idempotent,
-#   8. mount into a closed session is refused,
-#   9. session remove deletes a closed record and refuses a missing one.
-#
-# It mirrors the named-session scenarios of the out-of-repo tiler-demo
-# smoke harness (run_tests.sh S09/S10) and the tiler-e2e s04-s06 steps,
-# re-expressed in the vendored git-test-lib framework so `make e2e`
-# runs it.
-#
-# A real mount needs a writable /dev/fuse plus the squashfs and overlay
-# toolchain that `tiler doctor` treats as fail-level. FUSE_TOOLCHAIN from
-# sharness.d/tiler.sh models exactly that, so the case skips cleanly -- rather
-# than false-fails -- on a host without the toolchain.
-#
-# Scope guard: this case asserts the named-session lifecycle and its
-# error branches only. It does not cover crash recovery (t0007), the
-# generated sessions (t0008), git-backed images, split storage,
-# or cache/subdir mount variants.
+# Named-session metadata and validation work without a mount toolchain.
+# The mounted lifecycle shares dev across several views and checks that
+# close, reopen refusal, and removal preserve the expected record state.
 
 test_description='tiler session new/list/show/close/remove drive a named lifecycle'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -77,22 +38,36 @@ then
 fi
 
 # git-test-lib eval's each body in the current shell, so the `dev` record
-# created below persists across the later test_expect_success blocks (and
-# the .out/.err files persist in the trash working dir too). The nine
-# blocks walk one session from creation to removal.
+# created below persists across the mounted lifecycle blocks. Independent
+# rejection tests use separate records or names that never existed.
 
-# A fresh named session starts active with no mounts. A second `new` of
-# the same name is a runtime error (exit 1); an invalid name containing a
-# path separator is a usage error (exit 2).
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session new creates an active record and rejects duplicates' '
+# A fresh named session starts active with no mounts. It will be shared
+# by the later mounted lifecycle tests.
+test_expect_success TILER 'session new creates an active record' '
 	"$tiler_bin" session new dev >new.out 2>new.err &&
 	test_grep -E "^created dev$" new.out &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
-	test_grep -E "^dev[[:space:]]+active[[:space:]]+0[[:space:]]" list1.out &&
-	test_must_fail "$tiler_bin" session new dev >dup.out 2>dup.err &&
+	test_grep -E "^dev[[:space:]]+active[[:space:]]+0[[:space:]]" list1.out
+'
+
+# This fixture belongs only to the rejection test and is cleaned even if
+# an assertion fails; it does not depend on the mounted lifecycle below.
+test_expect_success TILER 'duplicate creation preserves the existing record' '
+	test_when_finished "\"$tiler_bin\" session close duplicate &&
+		\"$tiler_bin\" session remove duplicate" &&
+	"$tiler_bin" session new duplicate >duplicate.out 2>duplicate.err &&
+	cp "$HOME/.tiler/sessions/duplicate/session.json" duplicate.before &&
+	test_expect_code 1 "$tiler_bin" session new duplicate >dup.out 2>dup.err &&
+	test_must_be_empty dup.out &&
 	test_grep "already exists" dup.err &&
+	test_cmp duplicate.before "$HOME/.tiler/sessions/duplicate/session.json"
+'
+
+test_expect_success TILER 'session new rejects a name containing a path separator' '
 	test_expect_code 2 "$tiler_bin" session new a/b >bad.out 2>bad.err &&
-	test_grep "invalid session name" bad.err
+	test_must_be_empty bad.out &&
+	test_grep "invalid session name" bad.err &&
+	test_path_is_missing "$HOME/.tiler/sessions/a"
 '
 
 # mount --session groups views under one named record, and the
@@ -140,20 +115,25 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session list and show render the
 	test_grep -E "\"mounts\": 3" listj.out
 '
 
-# A record that never existed is refused by both show and open with a
-# non-zero exit naming the miss.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show and open refuse a missing record' '
-	test_must_fail "$tiler_bin" session show nosuch >showns.out 2>showns.err &&
-	test_grep "not found" showns.err &&
-	test_must_fail "$tiler_bin" session open nosuch >openns.out 2>openns.err &&
-	test_grep "not found" openns.err
-'
+# Missing-record errors do not need the shared image or any real mounts.
+for tiler_session_operation in show open remove
+do
+	test_expect_success TILER "session $tiler_session_operation refuses a missing record" '
+		test_expect_code 1 "$tiler_bin" session "$tiler_session_operation" nosuch >missing.out 2>missing.err &&
+		test_must_be_empty missing.out &&
+		test_grep "not found" missing.err &&
+		test_path_is_missing "$HOME/.tiler/sessions/nosuch/session.json"
+	'
+done
 
 # An active record still holds mounts, so remove refuses it and the
 # record survives unchanged.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session remove refuses an active record' '
-	test_must_fail "$tiler_bin" session remove dev >rmact.out 2>rmact.err &&
+	cp "$HOME/.tiler/sessions/dev/session.json" active.before &&
+	test_expect_code 1 "$tiler_bin" session remove dev >rmact.out 2>rmact.err &&
+	test_must_be_empty rmact.out &&
 	test_grep "close it before removing" rmact.err &&
+	test_cmp active.before "$HOME/.tiler/sessions/dev/session.json" &&
 	"$tiler_bin" session list >list5.out 2>list5.err &&
 	test_grep -E "^dev[[:space:]]+active[[:space:]]+3[[:space:]]" list5.out
 '
@@ -200,8 +180,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session gc previews a closed ses
 # A closed record never accepts a new mount; the caller must create a
 # fresh session. The record is left untouched.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount into a closed session is refused' '
-	test_must_fail "$tiler_bin" mount --session dev alice/app "$s1_dir" >mclosed.out 2>mclosed.err &&
+	cp "$HOME/.tiler/sessions/dev/session.json" closed.before &&
+	test_expect_code 1 "$tiler_bin" mount --session dev alice/app "$s1_dir" >mclosed.out 2>mclosed.err &&
+	test_must_be_empty mclosed.out &&
 	test_grep "is closed" mclosed.err &&
+	test_cmp closed.before "$HOME/.tiler/sessions/dev/session.json" &&
 	"$tiler_bin" session list >list8.out 2>list8.err &&
 	test_grep -E "^dev[[:space:]]+closed[[:space:]]+0[[:space:]]" list8.out
 '

@@ -8,26 +8,14 @@
 # attach the original upper.shadow again. status is healthy only when
 # the mountpoint, the image path, and the shadow path agree.
 #
-# The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without hdiutil_bin skips the file instead of failing.
+# The MACOS and HDIUTIL prerequisites skip these tests on hosts without
+# the macOS disk-image toolchain.
 
 test_description='macOS session open reattaches a shadow and status is healthy'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
-
-if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
-then
-	skip_all="skipping macOS session status; $hdiutil_bin is missing"
-	test_done
-fi
 
 src_dir=$HOME/src/app
 work_dir=$HOME/work/rec
@@ -46,7 +34,7 @@ then
 	'
 fi
 
-test_expect_success TILER,MACOS 'a writable session mounts and status is healthy' '
+test_expect_success TILER,MACOS,HDIUTIL 'a writable session mounts and status is healthy' '
 	mkdir -p "$src_dir" "$work_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -68,7 +56,7 @@ test_expect_success TILER,MACOS 'a writable session mounts and status is healthy
 	test_grep "shadow.*upper.shadow" live.out
 '
 
-test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow stays' '
+test_expect_success TILER,MACOS,HDIUTIL 'the mountpoint can disappear while the shadow stays' '
 	if ! "$hdiutil_bin" detach "$work_dir" >detach.out 2>detach.err
 	then
 		phys=$(cd "$work_dir" && pwd -P) &&
@@ -78,29 +66,31 @@ test_expect_success TILER,MACOS 'the mountpoint can disappear while the shadow s
 	test_path_is_missing "$work_dir/KEEP.txt" &&
 	test_path_is_missing "$work_dir/README.txt" &&
 	test_path_is_file "$shadow" &&
-	test "$(stat -f %i "$shadow")" = "$shadow_ino" &&
+	current_shadow_ino=$(stat -f %i "$shadow") &&
+	test "$current_shadow_ino" = "$shadow_ino" &&
 	"$tiler_bin" status >stale.out 2>stale.err &&
 	test_grep "\[rw · mounted · stale\]" stale.out
 '
 
-test_expect_success TILER,MACOS 'session open reattaches the same shadow' '
+test_expect_success TILER,MACOS,HDIUTIL 'session open reattaches the same shadow' '
 	"$tiler_bin" session open rec >open.out 2>open.err &&
 	test_grep -E "^opened rec$" open.out &&
 	test_grep "hello tiler" "$work_dir/README.txt" &&
 	test_grep kept "$work_dir/KEEP.txt" &&
 	test_path_is_file "$shadow" &&
-	test "$(stat -f %i "$shadow")" = "$shadow_ino"
+	current_shadow_ino=$(stat -f %i "$shadow") &&
+	test "$current_shadow_ino" = "$shadow_ino"
 '
 
-test_expect_success TILER,MACOS 'status is healthy when mountpoint, image, and shadow match' '
+test_expect_success TILER,MACOS,HDIUTIL 'status is healthy when mountpoint, image, and shadow match' '
 	"$tiler_bin" status >healthy.out 2>healthy.err &&
 	test_grep "\[rw · mounted · healthy\]" healthy.out &&
 	"$hdiutil_bin" info -plist >info.plist 2>info.err &&
 	test_grep -F "$shadow" info.plist &&
 	image_phys=$(cd "$(dirname "$image")" && pwd -P)/image.dmg &&
-	{ grep -F "$image" info.plist || grep -F "$image_phys" info.plist; } &&
+	test_grep -F -e "$image" -e "$image_phys" info.plist &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&
-	{ grep -F "$work_dir" info.plist || grep -F "$work_phys" info.plist; }
+	test_grep -F -e "$work_dir" -e "$work_phys" info.plist
 '
 
 test_done

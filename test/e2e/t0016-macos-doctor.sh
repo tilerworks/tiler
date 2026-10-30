@@ -8,43 +8,38 @@
 # shadow cannot attach an APFS image still passes, and the toolchain
 # detail names HFS+ for that reason.
 #
-# The case lists only TILER,MACOS. Linux make e2e skips it. A Darwin
-# host without hdiutil_bin skips the file instead of failing.
+# The MACOS and HDIUTIL prerequisites skip these tests on hosts without
+# the macOS disk-image toolchain.
 
 test_description='macOS doctor passes on hdiutil and ignores missing FUSE tools'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, hdiutil_bin, TILER, and MACOS come from sharness.d/tiler.sh.
 
-if test "$(uname -s)" = Darwin && ! command -v "$hdiutil_bin" >/dev/null 2>&1
-then
-	skip_all="skipping macOS doctor; $hdiutil_bin is missing"
-	test_done
-fi
+# Keep each probe assertion separate so TAP identifies the failing probe.
+# Doctor emits each name immediately before its status in the JSON report.
+test_expect_success TILER,MACOS,HDIUTIL 'doctor exits 0' '
+	"$tiler_bin" doctor --json >doctor.json 2>doctor.err
+'
 
-# JSON rows are name then status. A missing name is not a failure.
-# An HFS+ detail is the supported host difference; otherwise the
-# toolchain detail is the plain dmg pass.
-test_expect_success TILER,MACOS 'doctor exits 0 and does not fail on fuse tools' '
-	"$tiler_bin" doctor --json >doctor.json 2>doctor.err &&
-	grep -A1 "\"name\": \"image_toolchain\"" doctor.json |
-		grep -q "\"status\": \"pass\"" &&
-	! grep -A1 "\"name\": \"fuse_device\"" doctor.json |
-		grep -q "\"status\": \"fail\"" &&
-	! grep -A1 "\"name\": \"fuse_overlayfs\"" doctor.json |
-		grep -q "\"status\": \"fail\"" &&
-	! grep -A1 "\"name\": \"fusermount3\"" doctor.json |
-		grep -q "\"status\": \"fail\"" &&
-	! grep -A1 "\"name\": \"squashfuse_subdir\"" doctor.json |
-		grep -q "\"status\": \"fail\"" &&
-	if grep -q "HFS+" doctor.json
+test_expect_success TILER,MACOS,HDIUTIL 'the image toolchain passes' '
+	sed -n "/\"name\": \"image_toolchain\"/{n;p;}" doctor.json >toolchain-status &&
+	test_line_count = 1 toolchain-status &&
+	test_grep -F "\"status\": \"pass\"" toolchain-status
+'
+
+for probe in fuse_device fuse_overlayfs fusermount3 squashfuse_subdir
+do
+	test_expect_success TILER,MACOS,HDIUTIL "$probe does not fail on macOS" '
+		sed -n "/\"name\": \"$probe\"/{n;p;}" doctor.json >probe-status &&
+		# An omitted Linux-only probe is valid on macOS.
+		test_grep ! -F "\"status\": \"fail\"" probe-status
+	'
+done
+
+test_expect_success TILER,MACOS,HDIUTIL 'the disk-image filesystem detail describes the host' '
+	if grep -F "HFS+" doctor.json
 	then
 		test_grep -F "filesystem HFS+ because attach -shadow cannot use an APFS image" doctor.json
 	else

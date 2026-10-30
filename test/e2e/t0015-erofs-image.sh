@@ -12,7 +12,7 @@
 #      full image as image.sqsh. The compression is zstd when
 #      mkfs.erofs provides it, otherwise lz4, then gzip,
 #   3. a writable mount and an incremental build with no format flags
-#      inherit that pair; a fresh remount serves the upper file,
+#      append squashfs/zstd; a fresh remount serves the mixed chain,
 #   4. the same project config with --split 64k publishes blocks and
 #      still mounts,
 #   5. --subdir exposes one image directory as the mount root,
@@ -26,34 +26,9 @@
 
 test_description='tiler builds, mounts, and checks an erofs image'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and EROFS_TOOLCHAIN come from sharness.d/tiler.sh.
-
-# An omitted erofs compression prefers zstd, then lz4, then gzip,
-# matching the compressors this mkfs.erofs was built with.
-erofs_comp=zstd
-erofs_help=$(mkfs.erofs --help 2>&1 || true)
-erofs_has() {
-	printf '%s\n' "$erofs_help" | tr ',:' '  ' |
-		grep -Eq "(^|[[:space:]])$1([[:space:]]|$)"
-}
-if erofs_has zstd; then
-	erofs_comp=zstd
-elif erofs_has lz4; then
-	erofs_comp=lz4
-elif erofs_has deflate || erofs_has libdeflate; then
-	erofs_comp=gzip
-fi
 
 # HOME is the per-run trash directory, so tiler's default layout
 # ($HOME/.tiler/{images,sessions,cache}) is already sandboxed.
@@ -86,7 +61,8 @@ then
 fi
 
 # xz is a squashfs compressor and is rejected for erofs before any
-# image is published. The check is a usage error (exit 2).
+# image is published. The check is a usage error (exit 2), but build
+# checks for a complete toolchain before validating compression.
 test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'erofs with xz is a usage error' '
 	mkdir -p "$HOME/src/bad" &&
 	echo nope >"$HOME/src/bad/README.txt" &&
@@ -99,14 +75,31 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'erofs with xz is a usage error'
 # --compression, so the image is erofs at the format default (zstd).
 # The active file name stays image.sqsh.
 test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs packs a full image' '
+	# mkfs.erofs may return nonzero for --help; only its advertised
+	# compressors are relevant here, after EROFS_TOOLCHAIN was checked.
+	{ erofs_help=$(mkfs.erofs --help 2>&1) || :; } &&
+	printf "%s\n" "$erofs_help" >erofs-help.raw &&
+	tr ",:" "  " <erofs-help.raw >erofs-help &&
+	if grep -E "(^|[[:space:]])zstd([[:space:]]|$)" erofs-help
+	then
+		erofs_comp=zstd
+	elif grep -E "(^|[[:space:]])lz4([[:space:]]|$)" erofs-help
+	then
+		erofs_comp=lz4
+	elif grep -E "(^|[[:space:]])(deflate|libdeflate)([[:space:]]|$)" erofs-help
+	then
+		erofs_comp=gzip
+	else
+		erofs_comp=zstd
+	fi &&
 	mkdir -p "$src_dir/sub" &&
 	printf "%s\n" "image_format: erofs" >"$proj/.tiler.yaml" &&
 	echo "hello erofs" >"$src_dir/README.txt" &&
 	echo inner >"$src_dir/sub/inner.txt" &&
 	(
 		cd "$proj" &&
-		"$tiler_bin" build --image alice/erofs src
-	) >build.out 2>build.err &&
+		"$tiler_bin" build --image alice/erofs src 2>"$HOME/build.err"
+	) >build.out &&
 	test_grep -E "^full alice/erofs [0-9a-f]+" build.out &&
 	id1=$(cut -d" " -f3 build.out) &&
 	test -n "$id1" &&
@@ -120,14 +113,17 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs pack
 	test_grep -E "^  payload +single$" show.out
 '
 
-test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit the erofs compression' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN,SQUASHFS_PACK 'a default squashfs increment can follow an erofs full' '
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/erofs "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
 	test_grep "hello erofs" "$work_dir/README.txt" &&
 	test_path_is_file "$work_dir/sub/inner.txt" &&
 	echo from-incr >"$work_dir/extra.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build --incremental ) >incr.out 2>incr.err &&
+	(
+		cd "$work_dir" &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr.err"
+	) >incr.out &&
 	test_grep -E "^incr alice/erofs [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
@@ -140,7 +136,7 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'writable mount and incr inherit
 	test_grep -E "^  parent +$id1$" show-incr.out
 '
 
-test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'a fresh remount serves the erofs incr' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN,SQUASHFS_PACK 'a fresh remount serves the mixed-format chain' '
 	"$tiler_bin" umount "$work_dir" >umount.out 2>umount.err &&
 	test_grep -E "^unmounted " umount.out &&
 	mkdir -p "$verify_dir" &&
@@ -162,8 +158,8 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --sp
 	dd if=/dev/urandom of="$blk_src/bulk.bin" bs=1024 count=300 status=none &&
 	(
 		cd "$proj" &&
-		"$tiler_bin" build --split 64k --image alice/blocks "$blk_src"
-	) >blk.out 2>blk.err &&
+		"$tiler_bin" build --split 64k --image alice/blocks "$blk_src" 2>"$HOME/blk.err"
+	) >blk.out &&
 	test_grep -E "^full alice/blocks [0-9a-f]+" blk.out &&
 	blk_id=$(cut -d" " -f3 blk.out) &&
 	test -n "$blk_id" &&
@@ -188,13 +184,13 @@ test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'project image_format erofs --sp
 
 # --subdir makes sub/ the mount root. The image-root README must not
 # leak through, and a read-only view rejects an upper write.
-test_expect_success TILER,LINUX,EROFS_TOOLCHAIN 'subdir mount exposes only that directory' '
+test_expect_success TILER,LINUX,EROFS_TOOLCHAIN,SQUASHFS_PACK 'subdir mount exposes only that directory' '
 	mkdir -p "$sub_dir" &&
 	"$tiler_bin" mount --read-only --subdir sub alice/erofs "$sub_dir" >sub.out 2>sub.err &&
 	test_grep -E "^mounted " sub.out &&
 	test_grep inner "$sub_dir/inner.txt" &&
 	test_path_is_missing "$sub_dir/README.txt" &&
-	test_must_fail sh -c "echo nope >\"\$1\"" sh "$sub_dir/nope.txt" &&
+	! (echo nope >"$sub_dir/nope.txt") &&
 	test_path_is_missing "$sub_dir/nope.txt" &&
 	"$tiler_bin" umount "$sub_dir" >sub-umount.out 2>sub-umount.err &&
 	test_grep -E "^unmounted " sub-umount.out

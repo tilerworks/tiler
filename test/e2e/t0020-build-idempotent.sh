@@ -14,13 +14,7 @@
 
 test_description='tiler build is idempotent for full, incr, and diverted subdir'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 src_dir=$HOME/src/app
 work_dir=$HOME/work/app
@@ -36,7 +30,7 @@ then
 	'
 fi
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build publishes alice/app' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK 'plain directory build publishes alice/app' '
 	mkdir -p "$src_dir/docs" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	echo "# Guide" >"$src_dir/docs/guide.md" &&
@@ -48,7 +42,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build publishes 
 	cp "$alice_meta" full1.meta
 '
 
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'plain directory build is idempotent' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK 'plain directory build is idempotent' '
 	id1=$(cut -d" " -f3 full1.out) &&
 	test -n "$id1" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >full2.out 2>full2.err &&
@@ -65,16 +59,16 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental build of an unchange
 	echo layer >"$work_dir/NEW.txt" &&
 	(
 		cd "$work_dir" &&
-		"$tiler_bin" build --incremental
-	) >incr1.out 2>incr1.err &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr1.err"
+	) >incr1.out &&
 	test_grep -E "^incr alice/app [0-9a-f]+" incr1.out &&
 	layer=$(cut -d" " -f3 incr1.out) &&
 	test -n "$layer" &&
 	cp "$alice_meta" incr1.meta &&
 	(
 		cd "$work_dir" &&
-		"$tiler_bin" build --incremental
-	) >incr2.out 2>incr2.err &&
+		"$tiler_bin" build --incremental 2>"$HOME/incr2.err"
+	) >incr2.out &&
 	test_grep -E "^incr alice/app [0-9a-f]+" incr2.out &&
 	layer2=$(cut -d" " -f3 incr2.out) &&
 	test "$layer" = "$layer2" &&

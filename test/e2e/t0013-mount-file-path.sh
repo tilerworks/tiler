@@ -25,16 +25,7 @@
 
 test_description='tiler mounts a bare squashfs path outside images_dir'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -78,7 +69,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'pack a bare squashfs outside ima
 	esac &&
 	test_path_is_missing "$nas_dir/meta.yaml" &&
 	test_path_is_missing "$images_dir/meta.yaml" &&
-	! find "$nas_dir" -name meta.yaml | grep -q .
+	find "$nas_dir" -name meta.yaml >nas-meta.out &&
+	test_must_be_empty nas-meta.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the absolute path and serve the content' '

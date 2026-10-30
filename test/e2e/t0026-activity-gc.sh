@@ -14,13 +14,7 @@
 
 test_description='tiler GC previews and removes expired objects without a mount'
 
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and SQUASHFS_PACK come from sharness.d/tiler.sh.
 
@@ -36,10 +30,11 @@ images=$HOME/.tiler/images
 src_dir=$HOME/src/app
 
 test_expect_success TILER 'legacy session age settings stay parseable and do not drive GC' '
-	printf "%s\n" \
-		"version: 1" \
-		"session_max_age: 0s" \
-		"session_autoclose_stale: true" >"$HOME/.tiler.yaml" &&
+	cat >"$HOME/.tiler.yaml" <<-\EOF &&
+	version: 1
+	session_max_age: 0s
+	session_autoclose_stale: true
+	EOF
 	"$tiler_bin" version >ver.out 2>ver.err &&
 	test_grep "^tiler " ver.out &&
 	test_grep "session_max_age: 0s" "$HOME/.tiler.yaml" &&

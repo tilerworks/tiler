@@ -30,16 +30,7 @@
 
 test_description='tiler session open recovers a view after a daemon crash'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, FUSE_TOOLCHAIN, KILL_VIEW, and kill_view
 # come from sharness.d/tiler.sh.
@@ -89,7 +80,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'the record survives a 
 	test_grep hello "$rec_dir/README.txt" &&
 	echo survived >"$rec_dir/KEEP.txt" &&
 	kill_view "$rec_dir" &&
-	sleep 1 &&
+	wait_for_stale_view rec stale.json &&
 	! ls "$rec_dir" >/dev/null 2>&1 &&
 	"$tiler_bin" session list >list1.out 2>list1.err &&
 	test_grep -E "^rec[[:space:]]+active[[:space:]]+1[[:space:]]" list1.out

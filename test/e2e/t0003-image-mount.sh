@@ -1,51 +1,16 @@
 #!/bin/sh
-#
-# tiler end-to-end test: image create, mount, and repeat mount.
-#
-# Companion to t0000-doctor.sh. Where the config cases (t0001/t0002)
-# stay mount-free, this one drives the real storage and mount path end
-# to end:
-#
-#   1. build a full image from a plain source tree,
-#   2. mount it read-write and write into the upper layer,
-#   3. mount the same view again and confirm it is idempotent,
-#   4. build a second image and confirm it gets a distinct id,
-#   5. mount the second image at its own target,
-#   6. refuse a different image mounted onto a live view (conflict),
-#   7. umount both views.
-#
-# It mirrors the build/mount/remount and different-identity-conflict
-# scenarios of the out-of-repo tiler-demo smoke harness (run_tests.sh
-# and verify_gaps.sh G06), re-expressed in the vendored git-test-lib
-# framework so `make e2e` runs it.
-#
-# A real mount needs a writable /dev/fuse plus the squashfs and overlay
-# toolchain that `tiler doctor` treats as fail-level. FUSE_TOOLCHAIN from
-# sharness.d/tiler.sh models exactly that, so the case skips cleanly --
-# rather than false-fails -- on a host without the toolchain.
-#
-# Scope guard: this case asserts build + mount + idempotent remount +
-# distinct-image conflict + umount only. It does not cover sessions,
-# crash recovery, incremental builds, split storage, or
-# read-only/subdir/cache mount variants.
+# Verify mounted source contents and persistent upper writes, then refuse
+# a conflicting image without changing the live view. Real mounts need
+# the Linux FUSE toolchain.
 
 test_description='tiler builds, mounts, remounts, and refuses a conflicting image'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
-# ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
+# ($HOME/.tiler/{images,sessions,cache}) is already sandboxed and
 # needs no --*-dir flags. The mount target must sit OUTSIDE the runtime
 # tree and the reserved directories, so keep it under $HOME/work.
 src_dir=$HOME/src/app
@@ -84,15 +49,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount the image read-write with 
 	mkdir -p "$work_dir" &&
 	"$tiler_bin" mount alice/app "$work_dir" >mount.out 2>mount.err &&
 	test_grep -E "^mounted " mount.out &&
-	test_grep "hello tiler" "$work_dir/README.txt" &&
-	test_path_is_file "$work_dir/docs/guide.md" &&
+	test_cmp "$src_dir/README.txt" "$work_dir/README.txt" &&
+	test_cmp "$src_dir/docs/guide.md" "$work_dir/docs/guide.md" &&
 	echo edited >"$work_dir/NEW.txt" &&
 	test_path_is_file "$work_dir/NEW.txt"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'repeat mount of the same view is idempotent' '
 	"$tiler_bin" mount alice/app "$work_dir" >remount.out 2>remount.err &&
-	test_grep -E "^already mounted " remount.out
+	test_grep -E "^already mounted " remount.out &&
+	test_cmp "$src_dir/README.txt" "$work_dir/README.txt" &&
+	echo edited >expect-upper &&
+	test_cmp expect-upper "$work_dir/NEW.txt"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a second image builds with a distinct id' '
@@ -119,16 +87,21 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'the second image mounts at its o
 # is non-zero, the error names the refusal, and the live view still
 # serves alice/app (README.txt present, run.sh absent).
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a different image on a live view is refused' '
-	test_must_fail "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err &&
+	test_expect_code 1 "$tiler_bin" mount bob/tools "$work_dir" >conflict.out 2>conflict.err &&
+	test_must_be_empty conflict.out &&
 	test_grep "already mounts a different view" conflict.err &&
 	test_grep "refusing to restack it silently" conflict.err &&
-	test_grep "hello tiler" "$work_dir/README.txt" &&
+	test_cmp "$src_dir/README.txt" "$work_dir/README.txt" &&
+	test_cmp expect-upper "$work_dir/NEW.txt" &&
 	test_path_is_missing "$work_dir/run.sh"
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'umount tears both views down' '
 	"$tiler_bin" umount "$work_dir" &&
-	"$tiler_bin" umount "$work2_dir"
+	"$tiler_bin" umount "$work2_dir" &&
+	test_path_is_missing "$work_dir/README.txt" &&
+	test_path_is_missing "$work_dir/NEW.txt" &&
+	test_path_is_missing "$work2_dir/run.sh"
 '
 
 test_done

@@ -22,16 +22,7 @@
 
 test_description='tiler build --split size cuts full and incr into blocks'
 
-# Resolve paths against this script's location BEFORE sourcing the
-# framework: test-lib.sh moves the working directory into a per-run
-# trash directory and repoints HOME there.
-tiler_case_dir=$(cd "$(dirname "$0")" && pwd)
-TEST_LIB_DIRECTORY=$(cd "$tiler_case_dir/../git-test-lib" && pwd)
-export TEST_LIB_DIRECTORY
-TEST_DIRECTORY=$tiler_case_dir
-export TEST_DIRECTORY
-
-. "$TEST_LIB_DIRECTORY/test-lib.sh"
+. "$(dirname "$0")/lib-tiler.sh"
 
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
@@ -99,7 +90,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount, edit the upper, and incr 
 	test_path_is_file "$work_dir/docs/guide.md" &&
 	test_path_is_file "$work_dir/bulk.bin" &&
 	echo from-incr >"$work_dir/extra.txt" &&
-	( cd "$work_dir" && "$tiler_bin" build -i -s 64k ) >incr.out 2>incr.err &&
+	(
+		cd "$work_dir" &&
+		"$tiler_bin" build -i -s 64k 2>"$HOME/incr.err"
+	) >incr.out &&
 	test_grep -E "^incr alice/split [0-9a-f]+" incr.out &&
 	layer=$(cut -d" " -f3 incr.out) &&
 	test -n "$layer" &&
@@ -145,7 +139,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full preserves the pinned 
 	test "$id2" != "$id1" &&
 	test "$id2" != "$layer" &&
 	test_grep -E "^[[:space:]]*- id: $id2$" "$meta_file" &&
-	test "$(grep -c "^[[:space:]]*- id:" "$meta_file")" = 3 &&
+	grep "^[[:space:]]*- id:" "$meta_file" >matching-lines &&
+	test_line_count = 3 matching-lines &&
 	test_path_is_file "$img_dir/_objects/$id2/blk.000" &&
 	test_path_is_file "$img_dir/_objects/$id1/blk.000" &&
 	"$tiler_bin" images show alice/split >ls-new.out 2>ls-new.err &&
@@ -178,8 +173,8 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'project split_size 0 stays a sin
 	echo zero >"$zero_root/src/README.txt" &&
 	(
 		cd "$zero_root" &&
-		"$tiler_bin" build --image carol/zero src
-	) >zero.out 2>zero.err &&
+		"$tiler_bin" build --image carol/zero src 2>"$HOME/zero.err"
+	) >zero.out &&
 	test_grep -E "^full carol/zero [0-9a-f]+" zero.out &&
 	zero_id=$(cut -d" " -f3 zero.out) &&
 	test_path_is_file "$zero_dir/_objects/$zero_id/image.sqsh" &&
