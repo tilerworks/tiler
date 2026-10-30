@@ -198,7 +198,19 @@ Available now:
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
 - `tiler images list [--json]` prints each name's latest version and
-  complete parent-first tree, using 10-hex IDs and creation times.
+  complete parent-first tree, using 10-hex IDs. Dependencies have a
+  `↳` arrow and two spaces of indentation per level within the ID
+  column; the remaining columns stay aligned with spaces. `SIZE`
+  is the node's own image payload size, including all blocks for a
+  split payload, without adding ancestor sizes. `CREATED` and
+  `LAST ACTIVITY` use UTC timestamps. Activity includes creation,
+  failed actions, initialization, and descendant dependency events
+  propagated through every ancestor to the full image. It is not
+  limited to successful use. Missing or empty logs display `-`;
+  unreadable or damaged logs display `unknown` with a warning on
+  stderr, while the listing continues. Listing does not renew
+  activity. `--json` preserves full IDs and the existing metadata
+  fields without reading activity logs.
   `images show <name[:hash]>` accepts a scoped 4-to-64-hex prefix.
 - `tiler mount <name[:hash]> <dir>` mounts that immutable tip and its
   ancestors; a bare name selects the newest node on any branch.
