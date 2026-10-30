@@ -283,7 +283,7 @@ func TestWriteRendersWarnAndInfoStatuses(t *testing.T) {
 		{Name: "file_limit_images", Status: statusWarn, Detail: "limit found"},
 		{Name: "storage_perf_cache", Status: statusInfo, Detail: "seq 100 MiB/s"},
 	}
-	if err := Write(&buf, results); err != nil {
+	if err := Write(&buf, results, 120); err != nil {
 		t.Fatal(err)
 	}
 	want := "🔧 Checks\n" +
@@ -299,7 +299,7 @@ func TestWriteWrapsLongDetailUnderTheValueColumn(t *testing.T) {
 	var buf bytes.Buffer
 	detail := "optional tool; sources ship in the contrib/ directory " +
 		"of the tiler source tree with origin, license, and build notes"
-	if err := Write(&buf, []Result{{Name: "contrib_concatfs", Status: statusWarn, Detail: detail}}); err != nil {
+	if err := Write(&buf, []Result{{Name: "contrib_concatfs", Status: statusWarn, Detail: detail}}, 120); err != nil {
 		t.Fatal(err)
 	}
 	text := buf.String()
@@ -340,7 +340,7 @@ func TestDefaultSeamsListsEveryProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := Write(&buf, results); err != nil {
+	if err := Write(&buf, results, 120); err != nil {
 		t.Fatal(err)
 	}
 	assertProbeNames(t, results, buf.String(), seams.listedProbeCount())

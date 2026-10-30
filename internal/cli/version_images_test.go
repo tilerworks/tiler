@@ -151,7 +151,7 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 		Images: []image.ImageMeta{root, child, branch, newRoot}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_forest", out.Bytes())
@@ -165,7 +165,7 @@ func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
 	var out bytes.Buffer
 	view := versionImageView{Name: "alice/app", Latest: &two,
 		Images: []image.ImageMeta{one, two}}
-	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(out.String(),
@@ -296,7 +296,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	cfg := config.Config{ImagesDir: dir}
 
 	var out bytes.Buffer
-	if err := listAllImages(&out, io.Discard, cfg, false); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, false, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	if text := out.String(); !strings.Contains(text, "alice/app") || !strings.Contains(text, child.ID[:10]) {
@@ -310,7 +310,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 		t.Fatalf("show output = %q", out.String())
 	}
 	out.Reset()
-	if err := listAllImages(&out, io.Discard, cfg, true); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, true, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	var doc struct {
@@ -323,7 +323,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "alice", "app", image.ImageFile), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := listAllImages(&out, io.Discard, cfg, false); err == nil || !strings.Contains(err.Error(), "legacy layout") {
+	if err := listAllImages(&out, io.Discard, cfg, false, defaultOutputWidth); err == nil || !strings.Contains(err.Error(), "legacy layout") {
 		t.Fatalf("mixed layout error = %v", err)
 	}
 }
@@ -348,7 +348,7 @@ func TestVersionImageOutputGoldens(t *testing.T) {
 		Images: []image.ImageMeta{root, child, grandchild, branch, collision}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_list", out.Bytes())
@@ -369,7 +369,7 @@ func TestVersionImageOutputGoldens(t *testing.T) {
 
 func TestVersionImageEmptyLibraryGoldens(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, nil); err != nil {
+	if err := writeVersionImageTable(&out, nil, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_empty", out.Bytes())
@@ -403,7 +403,7 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if err := writeVersionImageTableAt(&out, views, at.Add(24*time.Hour)); err != nil {
+	if err := writeVersionImageTableAt(&out, views, at.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "\t") || !strings.Contains(out.String(), "📦 empty · 0 versions · latest: -\n  No image versions.\n") {

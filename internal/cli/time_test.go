@@ -33,7 +33,7 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 	node := versionNode("a", image.KindFull, "", at)
 	view := versionImageView{Name: "app", Latest: &node, Images: []image.ImageMeta{node}, Selected: &node, Stack: []image.ImageMeta{node}}
 	renders := map[string]func(io.Writer) error{
-		"images list": func(w io.Writer) error { return writeVersionImageTableAt(w, []versionImageView{view}, at) },
+		"images list": func(w io.Writer) error { return writeVersionImageTableAt(w, []versionImageView{view}, at, 80) },
 		"images show": func(w io.Writer) error { return writeVersionImageDetail(w, view) },
 		"session list": func(w io.Writer) error {
 			return writeSessionList(w, []session.Summary{{Name: "dev", Created: at}})

@@ -126,6 +126,9 @@ use the runtime local time zone with second precision
 JSON, activity logs, and stored metadata retain
 their existing timestamp formats and precision.
 
+`images list` and `doctor` accept `-w/--width` for formatted text output
+(default 120 columns, minimum 80). Width does not change JSON output.
+
 The target workflow is: build an image, mount it, develop, finish the
 session, and show status. A quick start covers the workflow:
 
@@ -151,7 +154,7 @@ tiler session close feature                # reverse unmount, record kept
 Available now:
 
 - `tiler version` prints one version line.
-- `tiler doctor [--json]` probes `/dev/fuse`, the shared external
+- `tiler doctor [-w <columns>] [--json]` probes `/dev/fuse`, the shared external
   tools, the image toolchain (one complete squashfs or erofs stack
   is enough; a missing stack warns), and the squashfuse subdir
   baseline, then inspects the storage: a
@@ -203,9 +206,11 @@ Available now:
   one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [--json]` prints each repository with a package
-  icon, version count, and latest ID. The table stays within 80 terminal
+- `tiler images list [-w <columns>] [--json]` prints each repository with a package
+  icon, version count, and latest ID. The table defaults to 120 terminal
   display columns, including CJK text and common emoji sequences.
+  Use `-w/--width` to change the limit, for example `-w 80` or
+  `--width 160`. The minimum width is 80; JSON ignores the width.
   `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
   the latest version with `★`. Deep ancestor guides and long repository
   names are elided when needed, preserving IDs and the latest marker.

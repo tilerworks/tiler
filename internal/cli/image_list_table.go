@@ -9,13 +9,11 @@ import (
 	"github.com/jiangxin/tiler/internal/image"
 )
 
-const imageListWidth = 80
-
-func writeVersionImageTable(w io.Writer, views []versionImageView) error {
-	return writeVersionImageTableAt(w, views, time.Now())
+func writeVersionImageTable(w io.Writer, views []versionImageView, width int) error {
+	return writeVersionImageTableAt(w, views, time.Now(), width)
 }
 
-func writeVersionImageTableAt(w io.Writer, views []versionImageView, now time.Time) error {
+func writeVersionImageTableAt(w io.Writer, views []versionImageView, now time.Time, width int) error {
 	if len(views) == 0 {
 		_, err := fmt.Fprintln(w, "No images found.")
 		return err
@@ -35,15 +33,15 @@ func writeVersionImageTableAt(w io.Writer, views []versionImageView, now time.Ti
 		}
 	}
 	// Reserve the description header's width even for unusually deep trees.
-	widths[0] = min(widths[0], imageListWidth-10-widths[1]-widths[2]-widths[3]-widths[4])
-	widths[4] = imageListWidth - 10 - widths[0] - widths[1] - widths[2] - widths[3]
+	widths[0] = min(widths[0], width-10-widths[1]-widths[2]-widths[3]-widths[4])
+	widths[4] = width - 10 - widths[0] - widths[1] - widths[2] - widths[3]
 	for i, view := range views {
 		if i > 0 {
 			if _, err := fmt.Fprintln(w); err != nil {
 				return err
 			}
 		}
-		if _, err := fmt.Fprintln(w, imageListTitle(view)); err != nil {
+		if _, err := fmt.Fprintln(w, imageListTitle(view, width)); err != nil {
 			return err
 		}
 		if view.Latest == nil {
@@ -69,13 +67,13 @@ func writeVersionImageTableAt(w io.Writer, views []versionImageView, now time.Ti
 	return nil
 }
 
-func imageListTitle(view versionImageView) string {
+func imageListTitle(view versionImageView, width int) string {
 	latest := "-"
 	if view.Latest != nil {
 		latest = listID(view.Latest.ID)
 	}
 	suffix := fmt.Sprintf(" · %d versions · latest: %s", len(view.Images), latest)
-	name := truncateDisplay(terminalText(view.Name), imageListWidth-3-displayWidth(suffix))
+	name := truncateDisplay(terminalText(view.Name), width-3-displayWidth(suffix))
 	return "📦 " + name + suffix
 }
 

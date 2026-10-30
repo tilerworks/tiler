@@ -11,8 +11,6 @@ const (
 	headingConfig = "📋 Config"
 	// headingChecks labels the probe section.
 	headingChecks = "🔧 Checks"
-	// reportWidth is the soft line length. Detail past this wraps.
-	reportWidth = 96
 	// columnGap separates aligned columns. Spaces only: a tab shifts
 	// with the terminal's tab stop and the columns stop lining up.
 	columnGap = "  "
@@ -25,9 +23,9 @@ const (
 
 // Write renders the probe section: an emoji heading, then one
 // space-aligned row per probe (name, status, detail). A detail that
-// does not fit reportWidth wraps on spaces, and each continuation
+// does not fit width wraps on spaces, and each continuation
 // line is indented to the detail column.
-func Write(w io.Writer, results []Result) error {
+func Write(w io.Writer, results []Result, width int) error {
 	if _, err := fmt.Fprintf(w, "%s\n\n", headingChecks); err != nil {
 		return err
 	}
@@ -35,7 +33,7 @@ func Write(w io.Writer, results []Result) error {
 	for i, result := range results {
 		rows[i] = []string{result.Name, result.Status, cleanDetail(result.Detail)}
 	}
-	return writeAligned(w, rows)
+	return writeAligned(w, rows, width)
 }
 
 // ConfigSummary describes the resolved tiler configuration that doctor
@@ -55,7 +53,7 @@ type ConfigSummary struct {
 // space-aligned key/value row per field, then a blank line before the
 // probe section. It precedes the probes so the effective configuration
 // is always visible, and never affects the doctor verdict.
-func WriteConfig(w io.Writer, s ConfigSummary) error {
+func WriteConfig(w io.Writer, s ConfigSummary, width int) error {
 	if _, err := fmt.Fprintf(w, "%s\n\n", headingConfig); err != nil {
 		return err
 	}
@@ -67,7 +65,7 @@ func WriteConfig(w io.Writer, s ConfigSummary) error {
 		{"logs_dir", cleanDetail(s.LogsDir)},
 		{"log_level", cleanDetail(s.LogLevel)},
 	}
-	if err := writeAligned(w, rows); err != nil {
+	if err := writeAligned(w, rows, width); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(w)
@@ -76,8 +74,8 @@ func WriteConfig(w io.Writer, s ConfigSummary) error {
 
 // writeAligned prints rows using spaces. Every column but the last is
 // padded to the widest value in that column; the last column is the
-// body and wraps to stay within reportWidth.
-func writeAligned(w io.Writer, rows [][]string) error {
+// body and wraps to stay within the requested width.
+func writeAligned(w io.Writer, rows [][]string, width int) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -109,7 +107,7 @@ func writeAligned(w io.Writer, rows [][]string) error {
 		if cols-1 < len(row) {
 			detail = row[cols-1]
 		}
-		budget := reportWidth - len(head)
+		budget := width - len(head)
 		if budget < wrapFloor {
 			budget = wrapFloor
 		}

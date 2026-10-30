@@ -42,7 +42,7 @@ func TestImageListShowsPropagatedActivityWithoutRenewingLogs(t *testing.T) {
 		}
 	}
 	var out, warnings bytes.Buffer
-	if err := listAllImages(&out, &warnings, cfg, false); err != nil {
+	if err := listAllImages(&out, &warnings, cfg, false, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	if warnings.Len() != 0 || strings.Count(out.String(), formatImageListTime(at, time.Now())) != 3 {
@@ -110,17 +110,17 @@ func TestImageListIsolatesActivityFailuresAndMissingLogs(t *testing.T) {
 				}
 			}
 			failure := errors.New("broken output")
-			if err := listAllImages(failWriter{failure}, io.Discard, cfg, false); !errors.Is(err, failure) {
+			if err := listAllImages(failWriter{failure}, io.Discard, cfg, false, defaultOutputWidth); !errors.Is(err, failure) {
 				t.Fatalf("output error = %v", err)
 			}
 			if bad {
-				if err := listAllImages(io.Discard, failWriter{failure}, cfg, false); !errors.Is(err, failure) {
+				if err := listAllImages(io.Discard, failWriter{failure}, cfg, false, defaultOutputWidth); !errors.Is(err, failure) {
 					t.Fatalf("warning error = %v", err)
 				}
 			}
 			out.Reset()
 			warnings.Reset()
-			if err := listAllImages(&out, &warnings, cfg, true); err != nil || warnings.Len() != 0 || strings.Contains(out.String(), "last_activity") {
+			if err := listAllImages(&out, &warnings, cfg, true, defaultOutputWidth); err != nil || warnings.Len() != 0 || strings.Contains(out.String(), "last_activity") {
 				t.Fatalf("JSON changed: %q, %q, %v", out.String(), warnings.String(), err)
 			}
 			if err := showOneImage(io.Discard, cfg, "alice/app", false); err != nil {

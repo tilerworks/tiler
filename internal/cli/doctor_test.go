@@ -182,7 +182,7 @@ func TestDoctorContribWarningsKeepExitZero(t *testing.T) {
 		}
 	}
 	if !strings.Contains(stdout, "contrib/ directory") ||
-		!strings.Contains(stdout, "never installs it automatically") {
+		!strings.Contains(strings.Join(strings.Fields(stdout), " "), "never installs it automatically") {
 		t.Fatalf("stdout missing the guidance wording\n%s", stdout)
 	}
 

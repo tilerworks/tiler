@@ -54,7 +54,7 @@ func TestImageListWrapsDescriptionsWithinEightyDisplayColumns(t *testing.T) {
 		node.Description = description
 		view := versionImageView{Name: strings.Repeat("镜像📦", 40), Latest: &node, Images: []image.ImageMeta{node}}
 		var out bytes.Buffer
-		if err := writeVersionImageTableAt(&out, []versionImageView{view}, at); err != nil {
+		if err := writeVersionImageTableAt(&out, []versionImageView{view}, at, 80); err != nil {
 			t.Fatal(err)
 		}
 		lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -89,7 +89,7 @@ func TestImageListBoundsDeepTreesWithoutLosingIDs(t *testing.T) {
 	}
 	view := versionImageView{Name: "deep", Latest: &nodes[len(nodes)-1], Images: nodes}
 	var out bytes.Buffer
-	if err := writeVersionImageTableAt(&out, []versionImageView{view}, at); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, at, 80); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "… ") || !strings.Contains(out.String(), listID(parent)+" ★") {
