@@ -236,6 +236,9 @@ func TestMountPruneProgressOrdersStartLowercheckPruneDoneAndMerge(t *testing.T) 
 	if req.Progress.(*progressEvents).String() != "pruning upper ...\npruning upper ... done\n" {
 		t.Fatalf("progress = %q", req.Progress.(*progressEvents).String())
 	}
+	if w.PruneFailed {
+		t.Fatal("a finished window reported an incomplete prune")
+	}
 }
 
 func TestMountPruneProgressFailureOmitsDone(t *testing.T) {
@@ -248,7 +251,8 @@ func TestMountPruneProgressFailureOmitsDone(t *testing.T) {
 	seam.prune = func(string, string) (PruneReport, error) {
 		return PruneReport{}, errors.New("prune: forced failure")
 	}
-	if _, err := mountTest(t, req, k.run, seam); err != nil {
+	w, err := mountTest(t, req, k.run, seam)
+	if err != nil {
 		t.Fatalf("prune failure blocked the mount: %v", err)
 	}
 	if buf.String() != "pruning upper ...\n" {
@@ -259,5 +263,34 @@ func TestMountPruneProgressFailureOmitsDone(t *testing.T) {
 	}
 	if len(*warns) != 1 || !strings.Contains((*warns)[0], "forced failure") {
 		t.Fatalf("warnings = %v", *warns)
+	}
+	if !w.PruneFailed {
+		t.Fatal("a failed window left PruneFailed clear")
+	}
+}
+
+func TestMountPruneProgressNilStaysSilentOnFailure(t *testing.T) {
+	req := pruneRequest(t)
+	if req.Progress != nil {
+		t.Fatal("the fixture set a progress writer")
+	}
+	warns := captureWarnings(t)
+	k := newFakeKernel()
+	seam := k.seam()
+	seam.prune = func(string, string) (PruneReport, error) {
+		return PruneReport{}, errors.New("prune: forced failure")
+	}
+	w, err := mountTest(t, req, k.run, seam)
+	if err != nil {
+		t.Fatalf("prune failure blocked the mount: %v", err)
+	}
+	if !w.PruneFailed {
+		t.Fatal("a failed window left PruneFailed clear")
+	}
+	if len(*warns) != 1 || !strings.Contains((*warns)[0], "forced failure") {
+		t.Fatalf("warnings = %v, want the prune warning", *warns)
+	}
+	if strings.Contains((*warns)[0], "pruning upper") || strings.HasSuffix((*warns)[0], "done") {
+		t.Fatalf("nil progress wrote a prune line: %q", (*warns)[0])
 	}
 }

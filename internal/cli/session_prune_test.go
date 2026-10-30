@@ -254,3 +254,107 @@ func TestSessionReplayUnresolvableTiplessServedStackWarnsCleanly(t *testing.T) {
 			" dangling tip segment", stderr)
 	}
 }
+
+// TestRunEnginePruneIncompleteFollowsTheWindow pins the reduction
+// from a workspace window onto the session result. PruneFailed is
+// set only for a non-empty upper, so a finished window and an empty
+// upper both leave the flag clear and the replay drops the served
+// pins. A failure reported without a prune request does not count.
+func TestRunEnginePruneIncompleteFollowsTheWindow(t *testing.T) {
+	orig := mountEngine
+	t.Cleanup(func() { mountEngine = orig })
+	tests := []struct {
+		name   string
+		prune  bool
+		failed bool
+		want   bool
+	}{
+		{name: "failed window", prune: true, failed: true, want: true},
+		{name: "finished or empty upper", prune: true, failed: false, want: false},
+		{name: "prune not requested", prune: false, failed: true, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mountEngine = func(req workspace.Request) (*workspace.Workspace, error) {
+				return &workspace.Workspace{
+					MergedDir:   req.MergedDir,
+					PruneFailed: tc.failed,
+				}, nil
+			}
+			got, err := runEngine(workspace.Request{PruneUpper: tc.prune, MergedDir: "/view"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Mountpoint != "/view" {
+				t.Fatalf("mountpoint = %q, want the view to stay mounted", got.Mountpoint)
+			}
+			if got.PruneIncomplete != tc.want {
+				t.Fatalf("PruneIncomplete = %v, want %v", got.PruneIncomplete, tc.want)
+			}
+		})
+	}
+}
+
+// TestSessionReplayServedPinsFollowPruneWindow carries a window
+// failure into the record. A failed window still opens the session
+// and leaves served_id and served_tip in place. A finished window,
+// an empty upper, and a replay that did not ask to prune all clear
+// those pins. The warning and the omitted done line belong to the
+// workspace window.
+func TestSessionReplayServedPinsFollowPruneWindow(t *testing.T) {
+	differ := map[stackPin][]string{
+		{"full-a", "tip-b"}:  {"full-a", "tip-b"},
+		{"full-a", "full-a"}: {"full-a"},
+	}
+	same := map[stackPin][]string{
+		{"full-a", "tip-b"}: {"full-a", "tip-b"},
+	}
+	tests := []struct {
+		name      string
+		servedTip string
+		stacks    map[stackPin][]string
+		failed    bool
+		reused    bool
+		prune     bool
+		keep      bool
+	}{
+		{name: "failed window", servedTip: "full-a", stacks: differ, failed: true, prune: true, keep: true},
+		{name: "finished or empty upper", servedTip: "full-a", stacks: differ, prune: true, keep: false},
+		{name: "prune not requested", servedTip: "tip-b", stacks: same, failed: true, keep: false},
+		{name: "reused view", servedTip: "full-a", stacks: differ, reused: true, prune: true, keep: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home, work := withWorkspace(t)
+			_, lib := libFlags(home)
+			f := withMountSeams(t, nil)
+			f.pruneFailed = tc.failed
+			f.reused = tc.reused
+			pinPortableHealth(t, f)
+			fakeStackResolver(t, image.FormatSquashfs, tc.stacks)
+			writePruneRecord(t, home, work, "full-a", "tip-b", "full-a", tc.servedTip)
+
+			stdout, stderr, _, err := runCmd(t, append(lib, "session", "open", "dev")...)
+			if err != nil {
+				t.Fatalf("session open: %v\n%s", err, stderr)
+			}
+			if stdout != "opened dev\n" {
+				t.Fatalf("stdout = %q, want the session to open", stdout)
+			}
+			if strings.Contains(stderr, "pruning upper ... done") {
+				t.Fatalf("stderr = %q, want no done line", stderr)
+			}
+			if len(f.mountReqs) != 1 || f.mountReqs[0].PruneUpper != tc.prune {
+				t.Fatalf("PruneUpper = %v, want %v", f.mountReqs[0].PruneUpper, tc.prune)
+			}
+			action := loadSessionRecord(t, sessionsDir(home), "dev").Actions[0]
+			if action.Status != session.StatusMounted {
+				t.Fatalf("action = %+v, want mounted", action)
+			}
+			kept := action.ServedID == "full-a" && action.ServedTip == tc.servedTip
+			if kept != tc.keep {
+				t.Fatalf("served pins = (%q, %q), keep = %v", action.ServedID, action.ServedTip, tc.keep)
+			}
+		})
+	}
+}

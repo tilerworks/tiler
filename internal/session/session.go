@@ -31,6 +31,12 @@ type Result struct {
 	// Reused reports that an existing healthy view was adopted and
 	// nothing new was created.
 	Reused bool
+	// PruneIncomplete reports that the mount asked to prune a
+	// non-empty upper and the window did not succeed. The view is
+	// mounted. Replay keeps the served stack ids so a later open
+	// can prune again. A finished window, an empty upper, and a
+	// mount that did not ask to prune leave it false.
+	PruneIncomplete bool
 }
 
 // UmountFunc tears the view at one mountpoint down. The cascade
@@ -388,10 +394,16 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 		return logErr
 	}
 	// An adopted (Reused) view still serves the stack its served
-	// ids name, so only a real remount clears them. A rebuilt view
-	// with a lost record keeps the mounted write-back too: only its
-	// activity entry is missing, and the error still reports that.
-	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, !result.Reused); wbErr != nil {
+	// ids name, so only a real remount clears them. A remount whose
+	// prune window did not finish keeps them too: the upper still
+	// belongs to that served stack, and the next open must be able
+	// to prune it. A finished window, an empty upper, and a replay
+	// that did not ask to prune all leave PruneIncomplete false.
+	// A rebuilt view with a lost record keeps the mounted
+	// write-back too: only its activity entry is missing, and the
+	// error still reports that.
+	clearServed := !result.Reused && !result.PruneIncomplete
+	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, clearServed); wbErr != nil {
 		return wbErr
 	}
 	return logErr

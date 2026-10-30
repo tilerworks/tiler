@@ -172,6 +172,12 @@ type Workspace struct {
 	// mount, PruneUpper unset, a fresh or empty upper, or a prune
 	// window whose temporary merge never came up.
 	Prune *PruneReport
+	// PruneFailed reports that the prune window was entered for a
+	// non-empty upper and did not succeed. The view still mounts.
+	// The existing stderr warning is the failure signal, and a nil
+	// Progress writer stays silent. An empty upper, a request that
+	// did not ask to prune, and a window that finished leave it false.
+	PruneFailed bool
 
 	runtimeDir string
 	mounts     []string
@@ -1009,6 +1015,9 @@ func (w *Workspace) pruneWindow(req Request, lowers []string, seam hooks) {
 		w.Prune = report
 	}
 	if err != nil {
+		// The mount continues. Callers that asked to prune a
+		// non-empty upper keep the served pins when this is set.
+		w.PruneFailed = true
 		prog.abandon()
 		// Every window failure already carries its own context and
 		// the "workspace: " package tag; warnf only adds the
