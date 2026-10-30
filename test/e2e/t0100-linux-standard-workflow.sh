@@ -2,6 +2,8 @@
 
 test_description='Linux standard workflow publishes and edits a Git-backed image'
 
+# Git allocator instrumentation can abort the external squashfuse daemon.
+TEST_NO_MALLOC_CHECK=1
 . "$(dirname "$0")/lib-tiler.sh"
 . "$TEST_DIRECTORY/lib-workflow.sh"
 
@@ -243,6 +245,114 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'appro
 	test_path_is_missing "$gc_log.lock" &&
 	find "$gc_point" -mindepth 1 -print >gc-deleted-remaining &&
 	test_must_be_empty gc-deleted-remaining
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an increment advances the desired pin while preserving the live upper' '
+	edit_point=$standard/mnt-edit &&
+	mkdir -p "$edit_point" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" mount "standard/app:$base_id" "$edit_point" 2>"$HOME/edit-mount.err"
+	) >edit-mount.out &&
+	edit_session=$(sed -n "s/^new session created: //p" edit-mount.out) &&
+	test -n "$edit_session" &&
+	edit_record=$sessions/$edit_session/session.json &&
+	edit_upper=$sessions/$edit_session/runtime/m1/upper &&
+	printf "published README revision\n" >delta-readme &&
+	printf "published addition\n" >delta-addition &&
+	cp delta-readme "$edit_point/README.txt" &&
+	cp delta-addition "$edit_point/published.txt" &&
+	rm "$edit_point/obsolete.txt" &&
+	git -C "$edit_point" add . &&
+	git -C "$edit_point" commit -m "Publish the first increment" &&
+	git -C "$edit_point" tag -a -m "Incremental version" v2 &&
+	git -C "$edit_point" rev-parse HEAD >delta-commit &&
+	git -C "$edit_point" rev-parse "v2^{commit}" >delta-tag &&
+	test_cmp delta-commit delta-tag &&
+	git -C "$edit_point" cat-file -t v2 >delta-tag-type &&
+	test_cmp expect-tag-type delta-tag-type &&
+	(
+		cd "$edit_point" &&
+		"$tiler_bin" build -i --format squashfs 2>"$HOME/delta-build.err"
+	) >delta-build.out &&
+	test_grep -E "^incr standard/app [0-9a-f]{64}$" delta-build.out &&
+	delta_id=$(cut -d" " -f3 delta-build.out) &&
+	test "$delta_id" != "$base_id" &&
+	test_grep -F "\"full_id\": \"$base_id\"" "$edit_record" &&
+	test_grep -F "\"tip_id\": \"$delta_id\"" "$edit_record" &&
+	test_grep -F "\"served_id\": \"$base_id\"" "$edit_record" &&
+	test_grep -F "\"served_tip\": \"$base_id\"" "$edit_record" &&
+	test_grep -E "^[[:space:]]*parent: $base_id$" "$images/_objects/$delta_id/image.yaml" &&
+	printf "a longer README revision after publication\n" >post-build-readme &&
+	printf "work not included in the increment\n" >post-build-addition &&
+	cp post-build-readme "$edit_point/README.txt" &&
+	cp post-build-addition "$edit_point/pending.txt" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" umount "$edit_point" 2>"$HOME/edit-umount.err"
+	) >edit-umount.out &&
+	find "$edit_point" -mindepth 1 -print >edit-unmounted &&
+	test_must_be_empty edit-unmounted &&
+	test_cmp delta-addition "$edit_upper/published.txt" &&
+	test_cmp post-build-readme "$edit_upper/README.txt" &&
+	test_cmp post-build-addition "$edit_upper/pending.txt" &&
+	test_grep -F "\"tip_id\": \"$delta_id\"" "$edit_record" &&
+	test_grep -F "\"served_id\": \"$base_id\"" "$edit_record" &&
+	test_grep -F "\"served_tip\": \"$base_id\"" "$edit_record"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'replaying the edited session prunes published files and keeps subsequent work' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" session open "$edit_session" 2>"$HOME/edit-open.err"
+	) >edit-open.out &&
+	test_grep "^opened $edit_session$" edit-open.out &&
+	test_grep -F "\"full_id\": \"$base_id\"" "$edit_record" &&
+	test_grep -F "\"tip_id\": \"$delta_id\"" "$edit_record" &&
+	test_grep ! -F "\"served_id\":" "$edit_record" &&
+	test_grep ! -F "\"served_tip\":" "$edit_record" &&
+	test_path_is_missing "$edit_upper/published.txt" &&
+	test_cmp delta-addition "$edit_point/published.txt" &&
+	test_cmp post-build-readme "$edit_point/README.txt" &&
+	test_cmp post-build-readme "$edit_upper/README.txt" &&
+	test_cmp post-build-addition "$edit_point/pending.txt" &&
+	test_cmp post-build-addition "$edit_upper/pending.txt" &&
+	test_cmp "$prepare/docs/guide.txt" "$edit_point/docs/guide.txt" &&
+	test_path_is_missing "$edit_point/obsolete.txt" &&
+	git -C "$edit_point" rev-parse HEAD >replayed-commit &&
+	git -C "$edit_point" rev-parse "v2^{commit}" >replayed-tag &&
+	test_cmp delta-commit replayed-commit &&
+	test_cmp delta-tag replayed-tag
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fresh incremental view serves the publication without subsequent work' '
+	verify_point=$standard/mnt-verify &&
+	mkdir -p "$verify_point" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" mount --rm "standard/app:$delta_id" "$verify_point" 2>"$HOME/delta-verify.err"
+	) >delta-verify.out &&
+	verify_session=$(sed -n "s/^new session created: //p" delta-verify.out) &&
+	test -n "$verify_session" &&
+	test "$verify_session" != "$edit_session" &&
+	test_cmp delta-readme "$verify_point/README.txt" &&
+	test_cmp delta-addition "$verify_point/published.txt" &&
+	test_cmp "$prepare/docs/guide.txt" "$verify_point/docs/guide.txt" &&
+	test_path_is_missing "$verify_point/obsolete.txt" &&
+	test_path_is_missing "$verify_point/pending.txt" &&
+	git -C "$verify_point" rev-parse HEAD >published-commit &&
+	git -C "$verify_point" rev-parse "v2^{commit}" >published-tag &&
+	test_cmp delta-commit published-commit &&
+	test_cmp delta-tag published-tag &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" umount "$verify_point" 2>"$HOME/delta-verify-umount.err"
+	) >delta-verify-umount.out &&
+	find "$verify_point" -mindepth 1 -print >delta-verify-unmounted &&
+	test_must_be_empty delta-verify-unmounted &&
+	test_path_is_missing "$sessions/$verify_session" &&
+	test_path_is_missing "$logs/sessions/$verify_session.log" &&
+	test_path_is_missing "$logs/sessions/$verify_session.log.lock"
 '
 
 test_done
