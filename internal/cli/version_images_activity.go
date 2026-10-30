@@ -23,7 +23,7 @@ func collectVersionActivity(views []versionImageView, cfg config.Config, warning
 			at, err := image.ReadVersionLastActivity(repo, node.ID)
 			switch {
 			case err == nil:
-				views[i].Activity[node.ID] = versionCreatedAt(at)
+				views[i].Activity[node.ID] = formatTextTime(at)
 			case errors.Is(err, activity.ErrNoActivity):
 				views[i].Activity[node.ID] = "-"
 			default:

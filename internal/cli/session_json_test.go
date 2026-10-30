@@ -46,9 +46,9 @@ func TestSessionListJSONMatchesGolden(t *testing.T) {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
 	want := "" +
-		"NAME  STATE   MOUNTS  CREATED     CLOSED      RM\n" +
-		"dev   active  1       2026-10-17  -           -\n" +
-		"old   closed  0       2026-10-16  2026-10-16  -\n"
+		"NAME  STATE   MOUNTS  CREATED              CLOSED               RM\n" +
+		"dev   active  1       2026-10-17 03:15:00  -                    -\n" +
+		"old   closed  0       2026-10-16 03:15:00  2026-10-16 07:15:00  -\n"
 	if human != want {
 		t.Fatalf("human list =\n%s\nwant:\n%s", human, want)
 	}
@@ -86,13 +86,13 @@ func TestSessionShowJSONMatchesGolden(t *testing.T) {
 	}
 	want := "dev\n" +
 		"  state       active\n" +
-		"  created     2026-10-17T03:15:00Z\n" +
+		"  created     2026-10-17 03:15:00\n" +
 		"  closed      -\n" +
 		"  mounts      1\n" +
 		"  actions     3\n" +
-		"    1  mount   alice/app          /ws/dev/app   mode=rw  status=mounted  at=2026-10-17T03:15:00Z\n" +
-		"    2  mount   /images/tool.sqsh  /ws/dev/tool  mode=ro  status=unmounted  at=2026-10-17T03:16:00Z  subdir=docs\n" +
-		"    3  umount  /images/tool.sqsh  /ws/dev/tool  mode=-  status=unmounted  at=2026-10-17T03:17:00Z\n"
+		"    1  mount   alice/app          /ws/dev/app   mode=rw  status=mounted  at=2026-10-17 03:15:00\n" +
+		"    2  mount   /images/tool.sqsh  /ws/dev/tool  mode=ro  status=unmounted  at=2026-10-17 03:16:00  subdir=docs\n" +
+		"    3  umount  /images/tool.sqsh  /ws/dev/tool  mode=-  status=unmounted  at=2026-10-17 03:17:00\n"
 	if human != want {
 		t.Fatalf("human show =\n%s\nwant:\n%s", human, want)
 	}

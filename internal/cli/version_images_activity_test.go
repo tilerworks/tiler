@@ -45,11 +45,11 @@ func TestImageListShowsPropagatedActivityWithoutRenewingLogs(t *testing.T) {
 	if err := listAllImages(&out, &warnings, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if warnings.Len() != 0 || strings.Count(out.String(), versionCreatedAt(at)) != 3 {
+	if warnings.Len() != 0 || strings.Count(out.String(), formatTextTime(at)) != 3 {
 		t.Fatalf("output = %q, warnings = %q", out.String(), warnings.String())
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
-		if strings.Contains(line, sibling.ID[:10]) && strings.Contains(line, versionCreatedAt(at)) {
+		if strings.Contains(line, sibling.ID[:10]) && strings.Contains(line, formatTextTime(at)) {
 			t.Fatalf("sibling received activity: %q", line)
 		}
 	}

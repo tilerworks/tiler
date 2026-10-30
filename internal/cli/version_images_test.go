@@ -154,12 +154,12 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
 		t.Fatal(err)
 	}
-	want := "alice/app  latest=dddddddddd  created=2026-10-28T04:00:00Z\n" +
-		"  ID              SIZE  CREATED               LAST ACTIVITY  DESCRIPTION\n" +
-		"  aaaaaaaaaa      1 B   2026-10-28T01:00:00Z  -              Base runtime\n" +
-		"    ↳ bbbbbbbbbb  1 B   2026-10-28T02:00:00Z  -              Add tools\n" +
-		"    ↳ cccccccccc  1 B   2026-10-28T03:00:00Z  -              -\n" +
-		"  dddddddddd      1 B   2026-10-28T04:00:00Z  -              New base\n"
+	want := "alice/app  latest=dddddddddd  created=2026-10-28 04:00:00\n" +
+		"  ID              SIZE  CREATED              LAST ACTIVITY  DESCRIPTION\n" +
+		"  aaaaaaaaaa      1 B   2026-10-28 01:00:00  -              Base runtime\n" +
+		"    ↳ bbbbbbbbbb  1 B   2026-10-28 02:00:00  -              Add tools\n" +
+		"    ↳ cccccccccc  1 B   2026-10-28 03:00:00  -              -\n" +
+		"  dddddddddd      1 B   2026-10-28 04:00:00  -              New base\n"
 	if out.String() != want {
 		t.Fatalf("table = %q, want %q", out.String(), want)
 	}
@@ -407,7 +407,7 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 	for i := range views {
 		views[i].Activity = make(map[string]string)
 		for j, node := range views[i].Images {
-			views[i].Activity[node.ID] = versionCreatedAt(at.Add(time.Duration(j)))
+			views[i].Activity[node.ID] = formatTextTime(at.Add(time.Duration(j)))
 		}
 	}
 	var out bytes.Buffer

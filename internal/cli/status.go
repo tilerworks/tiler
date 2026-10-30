@@ -108,7 +108,7 @@ func writeSessionBlock(w io.Writer, view session.View) error {
 		header += " " + view.State
 	}
 	if !view.Created.IsZero() {
-		header += " created=" + view.Created.Format(time.RFC3339)
+		header += " created=" + formatTextTime(view.Created)
 	}
 	if view.Current {
 		header += " current"

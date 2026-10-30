@@ -1,7 +1,7 @@
 alice/app
   id          cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   parent      bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  created     2026-10-28T03:00:00Z
+  created     2026-10-28 03:00:00
   format      squashfs/zstd
   size        1 (1 B)
   payload     blocks

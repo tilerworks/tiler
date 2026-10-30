@@ -55,7 +55,7 @@ func writeVersionImageTable(w io.Writer, views []versionImageView) error {
 			continue
 		}
 		if _, err := fmt.Fprintf(w, "%s  latest=%s  created=%s\n",
-			view.Name, listID(view.Latest.ID), versionCreatedAt(view.Latest.CreatedAt)); err != nil {
+			view.Name, listID(view.Latest.ID), formatTextTime(view.Latest.CreatedAt)); err != nil {
 			return err
 		}
 		if err := writeVersionImageRow(w, header, widths); err != nil {
@@ -101,7 +101,7 @@ func versionImageRows(view versionImageView) ([][]string, bool) {
 		if last == "" {
 			last = "-"
 		}
-		rows = append(rows, []string{id, formatSize(node.Size), versionCreatedAt(node.CreatedAt), last, description})
+		rows = append(rows, []string{id, formatSize(node.Size), formatTextTime(node.CreatedAt), last, description})
 	}
 	return rows, collides
 }
@@ -135,7 +135,7 @@ func terminalText(text string) string {
 	return out.String()
 }
 
-func versionCreatedAt(created time.Time) string {
+func versionCreatedAtJSON(created time.Time) string {
 	return created.UTC().Format(time.RFC3339Nano)
 }
 
@@ -152,7 +152,7 @@ func writeVersionImageDetail(w io.Writer, view versionImageView) error {
 		parent = "-"
 	}
 	fields := [][2]string{{"id", node.ID}, {"parent", parent},
-		{"created", versionCreatedAt(node.CreatedAt)}, {"format", formatDetail(node.Format)},
+		{"created", formatTextTime(node.CreatedAt)}, {"format", formatDetail(node.Format)},
 		{"size", fmt.Sprintf("%d (%s)", node.Size, formatSize(node.Size))},
 		{"payload", versionPayloadKind(*node)}, {"description", node.Description}}
 	for _, field := range fields {
@@ -209,7 +209,7 @@ func newVersionImageJSON(view versionImageView) versionImageJSON {
 			parent = &value
 		}
 		out.Images = append(out.Images, versionNodeJSON{ID: node.ID, Parent: parent,
-			Kind: node.Kind, CreatedAt: versionCreatedAt(node.CreatedAt),
+			Kind: node.Kind, CreatedAt: versionCreatedAtJSON(node.CreatedAt),
 			Format: versionFormatJSON{Type: node.Format.Type, Compression: node.Format.Compression},
 			Size:   node.Size, PayloadKind: versionPayloadKind(node), Description: node.Description,
 			Summary: image.DescriptionSummary(node.Description)})

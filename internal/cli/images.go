@@ -71,7 +71,7 @@ func readDescribeDescription(cmd *cobra.Command, messages, files []string, curre
 func newImagesListCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List image versions",
-		Long: "Print each repository's latest version and parent-before-child tree. Dependencies use a ↳ arrow and two spaces per level within the ID column; all columns align with spaces. SIZE is each node's own image payload size, excluding ancestors. CREATED and LAST ACTIVITY use UTC timestamps. Activity includes creation, failed actions, initialization, and descendant events propagated to ancestors, not only successful use. Missing or empty logs show -; unreadable or damaged logs show unknown with a warning on stderr. Listing does not renew activity. --json preserves full IDs and metadata without reading activity logs.",
+		Long: "Print each repository's latest version and parent-before-child tree. Dependencies use a ↳ arrow and two spaces per level within the ID column; all columns align with spaces. SIZE is each node's own image payload size, excluding ancestors. CREATED and LAST ACTIVITY use local time in YYYY-MM-DD HH:MM:SS format. Activity includes creation, failed actions, initialization, and descendant events propagated to ancestors, not only successful use. Missing or empty logs show -; unreadable or damaged logs show unknown with a warning on stderr. Listing does not renew activity. --json preserves full IDs and metadata without reading activity logs.",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, ok := loadedConfig(cmd)
 			if !ok {

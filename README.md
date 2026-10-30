@@ -120,6 +120,11 @@ failures.
 
 ## Usage
 
+Text timestamps in image and session commands, status, and GC previews
+use the runtime local time zone with second precision
+(`YYYY-MM-DD HH:MM:SS`). JSON, activity logs, and stored metadata retain
+their existing timestamp formats and precision.
+
 The target workflow is: build an image, mount it, develop, finish the
 session, and show status. A quick start covers the workflow:
 
@@ -203,8 +208,9 @@ Available now:
   column; the remaining columns stay aligned with spaces. `SIZE`
   is the node's own image payload size, including all blocks for a
   split payload, without adding ancestor sizes. `CREATED` and
-  `LAST ACTIVITY` use UTC timestamps. Activity includes creation,
-  failed actions, initialization, and descendant dependency events
+  `LAST ACTIVITY` use local time in `YYYY-MM-DD HH:MM:SS` format.
+  Activity includes creation, failed actions, initialization, and
+  descendant dependency events
   propagated through every ancestor to the full image. It is not
   limited to successful use. Missing or empty logs display `-`;
   unreadable or damaged logs display `unknown` with a warning on
@@ -314,7 +320,7 @@ Available now:
   command prints `removed` rather than `closed`. `session remove <name>`
   deletes a closed record and refuses an active one. `session
   list [--json]` prints one aligned row per record (name, state,
-  mount count, created and closed dates, and an RM marker for
+  mount count, created and closed times, and an RM marker for
   `--rm` sessions). `session show <name> [--json]` prints a
   multi-line record — identity fields, then one line per action
   — and the `--json` form of show is the record object itself. A
