@@ -72,13 +72,13 @@ func TestImagesGCHelpAndUsage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("help: %v\n%s", err, stderr)
 		}
-		for _, text := range []string{"--expire", "default 30", "--yes", "orphan", "never removes"} {
+		for _, text := range []string{"--expire", "default 30", "--yes", "-n, --dry-run", "orphan", "never removes", "[image ...]", "glob"} {
 			if !strings.Contains(stdout, text) {
 				t.Fatalf("help omitted %q: %s", text, stdout)
 			}
 		}
 	}
-	for _, args := range [][]string{{"extra"}, {"--expire=-1"}, {"--expire=1.5"}, {"--expire=abc"},
+	for _, args := range [][]string{{"["}, {"--expire=-1"}, {"--expire=1.5"}, {"--expire=abc"},
 		{"--expire=" + strconv.FormatInt(maxExpireDays+1, 10)}} {
 		_, _, _, err := runCmd(t, append([]string{"images", "gc"}, args...)...)
 		if ExitCode(err) != 2 {
@@ -292,7 +292,17 @@ func TestImagesGCLabelsOrphansAndPendingCleanupWithoutPreviewDeletion(t *testing
 				writeTestFile(t, filepath.Join(target, "payload"), "orphan")
 			}
 			withTerminalSeam(t, false)
-			stdout := mustGC(t, lib)
+			if pending {
+				writeVersionForest(t, imagesDir, "bob/app", nodes...)
+				out, stderr, _, err := runCmd(t, imageGCArgs(lib, "--yes", "bob/app")...)
+				if err == nil || !strings.Contains(err.Error(), "pending cleanup") || strings.Contains(out, "removed ") || strings.Contains(stderr, "Type yes") {
+					t.Fatalf("unselected pending out=%q stderr=%q error=%v", out, stderr, err)
+				}
+				if _, err := os.Stat(target); err != nil {
+					t.Fatalf("unselected pending journal changed: %v", err)
+				}
+			}
+			stdout := mustGC(t, lib, "--dry-run", "--yes", repo.Name())
 			label := "orphan"
 			if pending {
 				label = "pending-cleanup"
@@ -300,13 +310,13 @@ func TestImagesGCLabelsOrphansAndPendingCleanupWithoutPreviewDeletion(t *testing
 					t.Fatalf("pending cleanup expanded expiration: %q", stdout)
 				}
 			}
-			if !strings.Contains(stdout, label+"  alice/app:") || strings.Contains(stdout, "removed") {
+			if !strings.Contains(stdout, label+"  alice/app:") || strings.Contains(stdout, "removed alice/app:") {
 				t.Fatalf("preview=%q", stdout)
 			}
 			if _, err := os.Stat(target); err != nil {
 				t.Fatalf("preview removed cleanup target: %v", err)
 			}
-			if out := mustGC(t, lib, "--yes"); !strings.Contains(out, "removed alice/app:") {
+			if out := mustGC(t, lib, "--yes", repo.Name()); !strings.Contains(out, "removed alice/app:") {
 				t.Fatalf("confirmed output=%q", out)
 			}
 			if _, err := os.Stat(target); !os.IsNotExist(err) {

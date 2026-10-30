@@ -118,7 +118,7 @@ func TestSessionGCHelpAdvertisesTheSharedFlags(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s gc --help: %v\n%s", command, err, stderr)
 		}
-		for _, want := range []string{"--expire", "default 30", "--yes", "runtime/"} {
+		for _, want := range []string{"--expire", "default 30", "--yes", "-n, --dry-run", "runtime/"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("%s gc help missing %q:\n%s", command, want, stdout)
 			}

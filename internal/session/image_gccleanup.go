@@ -18,25 +18,35 @@ type ImageGCPlan struct {
 
 // PlanImageGC never replays deletion or recovers session transactions. Missing
 // image activity may only be initialized when no pending cleanup exists.
-func (c ReferenceCoordinator) PlanImageGC(cutoff time.Time, clock activity.Clock) (plan ImageGCPlan, err error) {
+func (c ReferenceCoordinator) PlanImageGC(cutoff time.Time, clock activity.Clock) (ImageGCPlan, error) {
+	plan, _, err := c.PlanSelectedImageGC(cutoff, clock, image.NameSelector{})
+	return plan, err
+}
+
+// PlanSelectedImageGC scopes every cleanup and expiry candidate to fixed names.
+func (c ReferenceCoordinator) PlanSelectedImageGC(cutoff time.Time, clock activity.Clock, selector image.NameSelector) (plan ImageGCPlan, unmatched []string, err error) {
 	if cutoff.IsZero() {
-		return plan, errors.New("image gc: zero cutoff")
+		return plan, nil, errors.New("image gc: zero cutoff")
 	}
 	err = c.withLibrary(func() error {
 		var inspectErr error
-		plan.Cleanup, inspectErr = image.InspectCleanupLocked(c.ImagesDir)
+		var names []string
+		plan.Cleanup, names, unmatched, inspectErr = image.InspectSelectedCleanupLocked(c.ImagesDir, selector)
 		if inspectErr != nil {
 			return inspectErr
 		}
-		return c.checkCleanupReferencesLocked(plan.Cleanup)
+		if err := c.checkCleanupReferencesLocked(plan.Cleanup); err != nil {
+			return err
+		}
+		if !plan.Cleanup.Pending && len(names) > 0 {
+			plan.Versions, inspectErr = c.planImageNamesLocked(cutoff, clock, names)
+		}
+		return inspectErr
 	})
-	if err == nil && !plan.Cleanup.Pending {
-		plan.Versions, err = c.PlanImages(cutoff, clock)
-	}
 	if err != nil {
-		return ImageGCPlan{}, err
+		return ImageGCPlan{}, unmatched, err
 	}
-	return plan, nil
+	return plan, unmatched, nil
 }
 
 // ExecuteImageGC executes only the displayed sets, each revalidated under its
