@@ -86,23 +86,6 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,EROFS_TOOLCHAIN 'mount and append
 	test "$layerA" != "$layerB"
 '
 
-# Both increments parent to the full root, so they are siblings. One
-# publication stamps the root with the tip's time and leaves the other
-# branch untouched. The root records that dependency once.
-test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,EROFS_TOOLCHAIN 'incremental activity reaches the parent and skips the sibling' '
-	tip_log=$img_logs/$layerB.log &&
-	root_log=$img_logs/$id1.log &&
-	sib_log=$img_logs/$layerA.log &&
-	test_path_is_file "$tip_log" &&
-	tip_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"image.create.incremental\".*\"phase\":\"succeeded\".*/\\1/p" "$tip_log" | tail -n 1) &&
-	test -n "$tip_time" &&
-	test_grep "\"time\":\"$tip_time\".*\"source_version\":\"$layerB\".*\"source_event\":\"image.create.incremental\"" "$root_log" &&
-	grep "\"source_version\":\"$layerB\"" "$root_log" >matching-lines &&
-	test_line_count = 1 matching-lines &&
-	test_grep ! "\"source_version\":\"$layerB\"" "$sib_log" &&
-	test_grep "\"event\":\"image.create.full\"" "$root_log"
-'
-
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,EROFS_TOOLCHAIN 'the chain cascades in ls and meta.yaml' '
 	"$tiler_bin" images list >ls.out 2>ls.err &&
 	test_grep "${layerA%${layerA#??????????}}" ls.out &&

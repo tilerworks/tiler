@@ -1,20 +1,21 @@
 #!/bin/sh
 #
-# tiler end-to-end test: activity-aware GC without a mount.
+# tiler end-to-end test: activity-aware GC and ancestor activity.
 #
 # Session GC runs with only the tiler binary. Image GC publishes one
 # full version with mksquashfs and skips that half when the packer is
-# missing. Neither half mounts, so a host without /dev/fuse still runs
-# the cases it can.
+# missing. These original cases do not mount, so a host without
+# /dev/fuse still runs them; only the graph below needs FUSE.
 #
 # The case checks the preview contract, one-time initialization, legacy
 # session_max_age parsing, and removal of a session's upper data. Parent
-# chain propagation and ancestor retention stay in t0004, which has a
-# real incremental stack.
+# activity uses an isolated squashfs graph below; ancestor retention
+# remains in t0004 until its fixture is migrated too.
 
-test_description='tiler GC previews and removes expired objects without a mount'
+test_description='tiler GC preserves independent non-mount coverage and ancestor activity'
 
 . "$(dirname "$0")/lib-tiler.sh"
+. "$TEST_DIRECTORY/lib-workflow.sh"
 
 # tiler_bin, TILER, LINUX, and SQUASHFS_PACK come from sharness.d/tiler.sh.
 
@@ -88,7 +89,7 @@ test_expect_success TILER 'image GC with an empty library only previews' '
 	test_grep ! "Type yes" empty.err
 '
 
-test_expect_success TILER,LINUX,SQUASHFS_PACK 'image GC previews a full version, initializes once, and then deletes it' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_SQUASHFS_CLIENT 'image GC previews a full version, initializes once, and then deletes it' '
 	mkdir -p "$src_dir" &&
 	echo "hello tiler" >"$src_dir/README.txt" &&
 	"$tiler_bin" build --image alice/app "$src_dir" >build.out 2>build.err &&
@@ -121,6 +122,77 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK 'image GC previews a full version,
 	test_grep "^removed alice/app:$id$" del.out &&
 	test_grep "removed 1 of 1 approved image objects, skipped 0" del.out &&
 	test_path_is_missing "$images/alice/app"
+'
+
+# This graph owns its project configuration and does not consume the
+# mount-free cases above. Its live view produces sibling increments.
+graph=$HOME/chain-gc
+graph_image=gc/chain
+graph_logs=$graph/.tiler/logs/images/$graph_image
+graph_objects=$graph/.tiler/images/$graph_image/_objects
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'prepare an independent squashfs graph for activity and GC' '
+	workflow_config "$graph" &&
+	mkdir -p "$graph/prepare" "$graph/mnt-edit" &&
+	printf "graph base\n" >"$graph/prepare/README.txt" &&
+	test_atexit '\''
+		(
+			cd "$graph" || exit
+			"$tiler_bin" umount "$graph/mnt-edit" >/dev/null 2>&1 ||
+			"$fusermount3_bin" -uz "$graph/mnt-edit" >/dev/null 2>&1 || true
+		)
+	'\'' &&
+	(
+		cd "$graph" &&
+		"$tiler_bin" build -I "$graph_image" -f --format squashfs prepare >"$HOME/graph-base.out" 2>"$HOME/graph-base.err" &&
+		"$tiler_bin" session new activity-edit >"$HOME/graph-session.out" 2>"$HOME/graph-session.err" &&
+		"$tiler_bin" mount -s activity-edit "$graph_image" mnt-edit >"$HOME/graph-mount.out" 2>"$HOME/graph-mount.err" &&
+		printf "first sibling\n" >mnt-edit/first.txt &&
+		(
+			cd mnt-edit &&
+			"$tiler_bin" build -i --format squashfs >"$HOME/graph-first.out" 2>"$HOME/graph-first.err"
+		) &&
+		graph_first=$(cut -d" " -f3 "$HOME/graph-first.out") &&
+		cp "$graph_logs/$graph_first.log" "$HOME/graph-sibling.before" &&
+		printf "second sibling\n" >mnt-edit/second.txt &&
+		(
+			cd mnt-edit &&
+			"$tiler_bin" build -i --format squashfs >"$HOME/graph-second.out" 2>"$HOME/graph-second.err"
+		) &&
+		printf "independent full\n" >prepare/README.txt &&
+		"$tiler_bin" build -I "$graph_image" -f --format squashfs prepare >"$HOME/graph-full.out" 2>"$HOME/graph-full.err"
+	) &&
+	test_grep -E "^full $graph_image [0-9a-f]{64}$" graph-base.out &&
+	test_grep -E "^incr $graph_image [0-9a-f]{64}$" graph-first.out &&
+	test_grep -E "^incr $graph_image [0-9a-f]{64}$" graph-second.out &&
+	test_grep -E "^full $graph_image [0-9a-f]{64}$" graph-full.out &&
+	graph_base=$(cut -d" " -f3 graph-base.out) &&
+	graph_first=$(cut -d" " -f3 graph-first.out) &&
+	graph_second=$(cut -d" " -f3 graph-second.out) &&
+	graph_full=$(cut -d" " -f3 graph-full.out) &&
+	test "$graph_first" != "$graph_second" &&
+	test "$graph_full" != "$graph_base" &&
+	for tiler_child in "$graph_first" "$graph_second"
+	do
+		test_grep -E "^[[:space:]]*parent: $graph_base$" "$graph_objects/$tiler_child/image.yaml" || return 1
+	done
+'
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental activity reaches its parent exactly once and preserves its sibling' '
+	tip_log=$graph_logs/$graph_second.log &&
+	root_log=$graph_logs/$graph_base.log &&
+	sib_log=$graph_logs/$graph_first.log &&
+	test_path_is_file "$tip_log" &&
+	sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"image.create.incremental\".*\"phase\":\"succeeded\".*/\\1/p" "$tip_log" >graph-tip-time &&
+	test_line_count = 1 graph-tip-time &&
+	tip_time=$(cat graph-tip-time) &&
+	test -n "$tip_time" &&
+	test_grep "\"time\":\"$tip_time\".*\"source_version\":\"$graph_second\".*\"source_event\":\"image.create.incremental\"" "$root_log" &&
+	grep "\"source_version\":\"$graph_second\"" "$root_log" >graph-source-events &&
+	test_line_count = 1 graph-source-events &&
+	test_cmp graph-sibling.before "$sib_log" &&
+	test_grep ! "\"source_version\":\"$graph_second\"" "$sib_log" &&
+	test_grep "\"event\":\"image.create.full\"" "$root_log"
 '
 
 test_done
