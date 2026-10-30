@@ -16,6 +16,15 @@ const fuseOverlayType = "fuse.fuse-overlayfs"
 // procRoot is the process tree the overlay enrichment scans.
 const procRoot = "/proc"
 
+// overlayDaemon is the newest fuse-overlayfs process serving one
+// mount point. The highest pid wins when a lazily unmounted daemon
+// briefly shares the point with a fresh one.
+type overlayDaemon struct {
+	pid    int
+	upper  string
+	lowers []string
+}
+
 // enrichOverlays recovers the overlay layout of fuse-overlayfs
 // mounts. The daemon consumes its lowerdir, upperdir, and workdir
 // options, so the kernel mount table shows an anonymous entry, and
@@ -26,48 +35,100 @@ const procRoot = "/proc"
 // parser reads the directories back. An entry whose daemon is gone
 // stays anonymous on purpose: the mount is stale, and the callers
 // already treat a stale entry as teardown work instead of identity.
+//
+// The process tree is scanned once. Each anonymous mount used to
+// reread every command line, so one Load walked /proc once per mount.
 func enrichOverlays(mounts []Mount, proc string) {
+	if !needsOverlayEnrichment(mounts) {
+		return
+	}
+	byPoint := scanOverlayDaemons(proc)
 	for i := range mounts {
 		m := &mounts[i]
-		if m.FSType != fuseOverlayType || m.Upper != "" || m.Lowers != nil {
+		if !anonymousOverlay(m) {
 			continue
 		}
-		if upper, lowers, ok := daemonOverlayDirs(proc, m.Point); ok {
-			m.Upper, m.Lowers = upper, lowers
-		}
-	}
-}
-
-// daemonOverlayDirs extracts the overlay directories from the
-// fuse-overlayfs daemon serving point. The highest pid wins, which
-// picks the newest mount when a lazily unmounted daemon briefly
-// shares the point with a fresh one.
-func daemonOverlayDirs(proc, point string) (string, []string, bool) {
-	procs, err := os.ReadDir(proc)
-	if err != nil {
-		return "", nil, false
-	}
-	best := -1
-	options := ""
-	for _, dir := range procs {
-		pid, convErr := strconv.Atoi(dir.Name())
-		if convErr != nil || pid <= best {
-			continue
-		}
-		opts, ok := overlayDaemonOptions(readCmdline(proc, pid), point)
+		hit, ok := byPoint[m.Point]
 		if !ok {
 			continue
 		}
-		best, options = pid, opts
+		m.Upper, m.Lowers = hit.upper, hit.lowers
 	}
-	if best < 0 {
-		return "", nil, false
+}
+
+// needsOverlayEnrichment reports whether any mount still needs a
+// daemon lookup. Parsed entries and other filesystem types skip the
+// process scan entirely.
+func needsOverlayEnrichment(mounts []Mount) bool {
+	for i := range mounts {
+		if anonymousOverlay(&mounts[i]) {
+			return true
+		}
 	}
-	upper, lowers := dirOptions(options)
+	return false
+}
+
+// anonymousOverlay is a fuse-overlayfs entry whose directories the
+// kernel table did not carry.
+func anonymousOverlay(m *Mount) bool {
+	return m.FSType == fuseOverlayType && m.Upper == "" && m.Lowers == nil
+}
+
+// scanOverlayDaemons indexes fuse-overlayfs daemons by mount point.
+// A missing process tree yields an empty index, which leaves every
+// anonymous entry unchanged.
+func scanOverlayDaemons(proc string) map[string]overlayDaemon {
+	found := make(map[string]overlayDaemon)
+	procs, err := os.ReadDir(proc)
+	if err != nil {
+		return found
+	}
+	for _, dir := range procs {
+		pid, convErr := strconv.Atoi(dir.Name())
+		if convErr != nil {
+			continue
+		}
+		recordOverlayDaemon(found, proc, pid)
+	}
+	return found
+}
+
+// recordOverlayDaemon keeps the highest-pid daemon for one point.
+// The comm file filters out every other process before its command
+// line is read. A tree without comm files, which the unit fixtures
+// use, falls through to the command line.
+func recordOverlayDaemon(found map[string]overlayDaemon, proc string, pid int) {
+	if !commMatchesOverlay(proc, pid) {
+		return
+	}
+	argv := readCmdline(proc, pid)
+	if len(argv) == 0 {
+		return
+	}
+	point := argv[len(argv)-1]
+	opts, ok := overlayDaemonOptions(argv, point)
+	if !ok {
+		return
+	}
+	if prev, exists := found[point]; exists && prev.pid >= pid {
+		return
+	}
+	upper, lowers := dirOptions(opts)
 	if upper == "" && len(lowers) == 0 {
-		return "", nil, false
+		return
 	}
-	return upper, lowers, true
+	found[point] = overlayDaemon{pid: pid, upper: upper, lowers: lowers}
+}
+
+// commMatchesOverlay reports whether pid's kernel comm is
+// fuse-overlayfs. A missing comm file does not reject the process:
+// the command line is the fallback.
+func commMatchesOverlay(proc string, pid int) bool {
+	data, err := os.ReadFile(filepath.Join(proc, strconv.Itoa(pid), "comm"))
+	if err != nil {
+		return true
+	}
+	return strings.TrimRight(string(data), "\n") == "fuse-overlayfs"
 }
 
 // overlayDaemonOptions reports whether argv is a fuse-overlayfs

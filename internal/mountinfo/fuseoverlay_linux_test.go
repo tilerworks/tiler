@@ -120,6 +120,47 @@ func TestEnrichOverlaysKeepsParsedOptions(t *testing.T) {
 	}
 }
 
+func TestEnrichOverlaysRecoversSeveralPointsFromOneScan(t *testing.T) {
+	proc := t.TempDir()
+	writeFakeDaemon(t, proc, 11, "fuse-overlayfs", "-o",
+		"lowerdir=/a/lower,upperdir=/a/upper,workdir=/a/work", "/a")
+	writeFakeDaemon(t, proc, 12, "fuse-overlayfs", "-o",
+		"lowerdir=/b/lower-0:/b/lower-1", "/b")
+	writeFakeDaemon(t, proc, 13, "bash", "-c", "true")
+	mounts := []Mount{overlayMount("/b"), overlayMount("/missing"), overlayMount("/a")}
+
+	enrichOverlays(mounts, proc)
+
+	if mounts[0].Lowers == nil || mounts[0].Lowers[0] != "/b/lower-0" {
+		t.Errorf("/b Lowers = %v", mounts[0].Lowers)
+	}
+	if mounts[1].Upper != "" || mounts[1].Lowers != nil {
+		t.Errorf("missing daemon changed: %+v", mounts[1])
+	}
+	if mounts[2].Upper != "/a/upper" {
+		t.Errorf("/a Upper = %q", mounts[2].Upper)
+	}
+}
+
+func TestEnrichOverlaysIgnoresForeignComm(t *testing.T) {
+	proc := t.TempDir()
+	writeFakeDaemon(t, proc, 10, "fuse-overlayfs", "-o",
+		"lowerdir=/real/lower,upperdir=/real/upper,workdir=/real/work", "/view")
+	writeFakeDaemon(t, proc, 900, "fuse-overlayfs", "-o",
+		"lowerdir=/fake/lower,upperdir=/fake/upper,workdir=/fake/work", "/view")
+	comm := filepath.Join(proc, "900", "comm")
+	if err := os.WriteFile(comm, []byte("bash\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []Mount{overlayMount("/view")}
+
+	enrichOverlays(mounts, proc)
+
+	if mounts[0].Upper != "/real/upper" {
+		t.Errorf("Upper = %q, want the daemon whose comm matches", mounts[0].Upper)
+	}
+}
+
 func TestOverlayDaemonOptionsRejectsForeignShapes(t *testing.T) {
 	cases := []struct {
 		name string
