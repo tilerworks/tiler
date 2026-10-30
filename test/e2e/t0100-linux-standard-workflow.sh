@@ -76,4 +76,86 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT 'publish the initial 
 	test_grep "image.create.full" "$logs/images/standard/app/$base_id.log"
 '
 
+# Both close paths consume the full above and leave no session data behind.
+for tiler_rm_mode in auto named
+do
+	test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN "$tiler_rm_mode remove-on-close session purges its view and activity" '
+		if test "$tiler_rm_mode" = auto
+		then
+			rm_point=$standard/mnt-auto-rm
+		else
+			rm_point=$standard/mnt-named-rm
+		fi &&
+		mkdir -p "$rm_point" &&
+		(
+			cd "$standard" &&
+			if test "$tiler_rm_mode" = auto
+			then
+				"$tiler_bin" mount --rm standard/app "$rm_point" 2>"$HOME/rm-mount.err"
+			else
+				"$tiler_bin" session new --rm scratch-edit >"$HOME/rm-new.out" 2>"$HOME/rm-new.err" &&
+				"$tiler_bin" session show scratch-edit >"$HOME/rm-before.out" 2>"$HOME/rm-before.err" &&
+				"$tiler_bin" mount --session scratch-edit standard/app "$rm_point" 2>"$HOME/rm-mount.err"
+			fi
+		) >rm-mount.out &&
+		test_grep -F "mounted $rm_point" rm-mount.out &&
+		if test "$tiler_rm_mode" = auto
+		then
+			auto_rm_session=$(sed -n "s/^new session created: //p" rm-mount.out) &&
+			test -n "$auto_rm_session" &&
+			rm_session=$auto_rm_session
+		else
+			rm_session=scratch-edit &&
+			test_grep "^created scratch-edit$" rm-new.out &&
+			test_grep "^scratch-edit · active" rm-before.out &&
+			test_grep "remove on close" rm-before.out
+		fi &&
+		test_path_is_file "$sessions/$rm_session/session.json" &&
+		test_path_is_dir "$sessions/$rm_session/runtime/m1/upper" &&
+		test_path_is_file "$logs/sessions/$rm_session.log" &&
+		test_path_is_file "$logs/sessions/$rm_session.log.lock" &&
+		(
+			cd "$standard" &&
+			"$tiler_bin" status "$rm_point" 2>"$HOME/rm-status.err"
+		) >rm-status.out &&
+		test_grep "^$rm_session · active" rm-status.out &&
+		test_grep "standard/app:.*\[rw · mounted · healthy\]" rm-status.out &&
+		test_grep -F "→  ${rm_point##*/}  " rm-status.out &&
+		(
+			cd "$standard" &&
+			"$tiler_bin" session show "$rm_session" --json 2>"$HOME/rm-show.err"
+		) >rm-show.json &&
+		test_grep -F "\"name\": \"$rm_session\"" rm-show.json &&
+		test_grep -F "\"remove_on_close\": true" rm-show.json &&
+		test_grep -F "\"full_id\": \"$base_id\"" rm-show.json &&
+		test_grep -F "\"mountpoint\": \"$rm_point\"" rm-show.json &&
+		test_cmp "$prepare/README.txt" "$rm_point/README.txt" &&
+		printf "scratch edit\n" >rm-expect &&
+		cp rm-expect "$rm_point/scratch.txt" &&
+		test_cmp rm-expect "$sessions/$rm_session/runtime/m1/upper/scratch.txt" &&
+		(
+			cd "$standard" &&
+			if test "$tiler_rm_mode" = auto
+			then
+				"$tiler_bin" umount "$rm_point" 2>"$HOME/rm-close.err"
+			else
+				"$tiler_bin" session close "$rm_session" 2>"$HOME/rm-close.err"
+			fi
+		) >rm-close.out &&
+		test_path_is_dir "$rm_point" &&
+		find "$rm_point" -mindepth 1 -print >rm-remaining &&
+		test_must_be_empty rm-remaining &&
+		test_path_is_missing "$sessions/$rm_session" &&
+		test_path_is_missing "$logs/sessions/$rm_session.log" &&
+		test_path_is_missing "$logs/sessions/$rm_session.log.lock" &&
+		(
+			cd "$standard" &&
+			test_expect_code 1 "$tiler_bin" session show "$rm_session" 2>"$HOME/rm-missing.err"
+		) >rm-missing.out &&
+		test_must_be_empty rm-missing.out &&
+		test_grep "not found" rm-missing.err &&
+		test_path_is_missing "$sessions/$rm_session/session.json"
+	'
+done
+
 test_done
