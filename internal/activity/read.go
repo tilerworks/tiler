@@ -162,11 +162,14 @@ func lastLine(buf []byte) ([]byte, error) {
 
 // decodeLast parses one record and requires the fields that carry
 // activity: a valid RFC3339Nano time, an event name, and a known
-// phase.
+// phase. Format number 1 is the current line, and its image version
+// id is image_version. A missing version, or a string version, is a
+// legacy line, and that string is the image version id. Any other
+// number, or a value that is neither a number nor a string, is damage.
 func decodeLast(line []byte) (time.Time, error) {
-	var rec record
-	if err := json.Unmarshal(line, &rec); err != nil {
-		return time.Time{}, fmt.Errorf("%w: %v", ErrDamagedLog, err)
+	rec, err := decodeLine(line)
+	if err != nil {
+		return time.Time{}, err
 	}
 	at, err := time.Parse(time.RFC3339Nano, rec.Time)
 	if err != nil {
@@ -176,4 +179,82 @@ func decodeLast(line []byte) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: event %q phase %q", ErrDamagedLog, rec.Event, rec.Phase)
 	}
 	return at.UTC(), nil
+}
+
+// decodeLine reads one record. The version value selects the shape,
+// because a legacy line stores a string where a new line stores a
+// number. The returned record always uses ImageVersion for the id.
+func decodeLine(line []byte) (record, error) {
+	raw, err := rawVersion(line)
+	if err != nil {
+		return record{}, err
+	}
+	legacy, err := legacyVersion(raw)
+	if err != nil {
+		return record{}, err
+	}
+	if legacy {
+		return decodeLegacyLine(line)
+	}
+	var rec record
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return record{}, fmt.Errorf("%w: %v", ErrDamagedLog, err)
+	}
+	if rec.Version != recordVersion {
+		return record{}, fmt.Errorf("%w: version %d", ErrDamagedLog, rec.Version)
+	}
+	return rec, nil
+}
+
+// rawVersion returns the untyped version value. A missing key is an
+// empty message, which the caller treats as a legacy line.
+func rawVersion(line []byte) (json.RawMessage, error) {
+	var envelope struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDamagedLog, err)
+	}
+	return envelope.Version, nil
+}
+
+// legacyVersion reports whether raw is a legacy version value. Number
+// 1 is the current format. A missing value or a string is legacy.
+// Every other value is a damaged log.
+func legacyVersion(raw json.RawMessage) (bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return true, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return false, fmt.Errorf("%w: version: %v", ErrDamagedLog, err)
+	}
+	switch typed := value.(type) {
+	case string:
+		return true, nil
+	case json.Number:
+		number, err := typed.Int64()
+		if err != nil || number != recordVersion {
+			return false, fmt.Errorf("%w: version %s", ErrDamagedLog, typed)
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: version %s", ErrDamagedLog, raw)
+	}
+}
+
+// decodeLegacyLine reads a line whose version is missing or a string.
+// That string is the image version id.
+func decodeLegacyLine(line []byte) (record, error) {
+	var old struct {
+		payload
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(line, &old); err != nil {
+		return record{}, fmt.Errorf("%w: %v", ErrDamagedLog, err)
+	}
+	old.ImageVersion = old.Version
+	return record{payload: old.payload}, nil
 }

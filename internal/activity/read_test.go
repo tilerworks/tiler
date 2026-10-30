@@ -60,13 +60,18 @@ func TestLastActivityReportsMissingAndEmptyLog(t *testing.T) {
 func TestLastActivityRejectsDamagedTails(t *testing.T) {
 	valid := mustLine(t, testTime.Add(-time.Hour), 1)
 	cases := map[string]string{
-		"unterminated tail": valid + `{"time":"2026-10-28T09:15:30Z","event":"mount"`,
-		"not json":          valid + "{oops}\n",
-		"missing time":      valid + `{"event":"mount","phase":"started"}` + "\n",
-		"invalid time":      valid + `{"time":"yesterday","event":"mount","phase":"started"}` + "\n",
-		"missing event":     valid + `{"time":"2026-10-28T09:15:30Z","phase":"started"}` + "\n",
-		"unknown phase":     valid + `{"time":"2026-10-28T09:15:30Z","event":"mount","phase":"start"}` + "\n",
-		"empty line":        valid + "\n",
+		"unterminated tail":   valid + `{"time":"2026-10-28T09:15:30Z","event":"mount"`,
+		"not json":            valid + "{oops}\n",
+		"missing time":        valid + `{"event":"mount","phase":"started"}` + "\n",
+		"invalid time":        valid + `{"time":"yesterday","event":"mount","phase":"started"}` + "\n",
+		"missing event":       valid + `{"time":"2026-10-28T09:15:30Z","phase":"started"}` + "\n",
+		"unknown phase":       valid + `{"time":"2026-10-28T09:15:30Z","event":"mount","phase":"start"}` + "\n",
+		"format version 2":    valid + `{"version":2,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version 0":    valid + `{"version":0,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version 1.5":  valid + `{"version":1.5,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version bool": valid + `{"version":true,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version null": valid + `{"version":null,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"empty line":          valid + "\n",
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -84,6 +89,41 @@ func TestLastActivityRejectsDamagedTails(t *testing.T) {
 			}
 			if string(after) != data {
 				t.Fatal("a damaged tail was rewritten")
+			}
+		})
+	}
+}
+
+// TestLastActivityReadsLegacyTail keeps the time of an old line and
+// restores a string version as the image version id.
+func TestLastActivityReadsLegacyTail(t *testing.T) {
+	const id = "old-image-id"
+	at := testTime.Add(-2 * time.Hour)
+	cases := map[string]string{
+		"string version":  `{"time":"` + at.Format(time.RFC3339Nano) + `","event":"mount","phase":"succeeded","version":"` + id + `"}`,
+		"missing version": `{"time":"` + at.Format(time.RFC3339Nano) + `","event":"mount","phase":"succeeded"}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			w, dir := openTestWriter(t, fixedClock(testTime))
+			writeLog(t, dir, []byte(line+"\n"))
+			got, err := w.LastActivity()
+			if err != nil {
+				t.Fatalf("LastActivity: %v", err)
+			}
+			if !got.Equal(at) {
+				t.Fatalf("last activity = %v, want %v", got, at)
+			}
+			rec, err := decodeLine([]byte(line))
+			if err != nil {
+				t.Fatalf("decodeLine: %v", err)
+			}
+			wantID := ""
+			if name == "string version" {
+				wantID = id
+			}
+			if rec.ImageVersion != wantID {
+				t.Fatalf("image version = %q, want %q", rec.ImageVersion, wantID)
 			}
 		})
 	}

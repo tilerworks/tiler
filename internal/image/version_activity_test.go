@@ -67,7 +67,7 @@ type versionActivityLine struct {
 	Event         string `json:"event"`
 	Phase         string `json:"phase"`
 	Image         string `json:"image"`
-	Version       string `json:"version"`
+	Version       string `json:"image_version"`
 	Session       string `json:"session"`
 	InstanceID    string `json:"instance_id"`
 	Seq           int    `json:"seq"`

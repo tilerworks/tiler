@@ -26,7 +26,7 @@ type mountActivityLine struct {
 	Seq           int    `json:"seq"`
 	Mountpoint    string `json:"mountpoint"`
 	Image         string `json:"image"`
-	Version       string `json:"version"`
+	Version       string `json:"image_version"`
 	SourceVersion string `json:"source_version"`
 	SourceEvent   string `json:"source_event"`
 	Error         string `json:"error"`

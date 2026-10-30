@@ -103,6 +103,12 @@ func TestAppendWritesOneUTCRecord(t *testing.T) {
 	if rec["session"] != "dev" || rec["instance_id"] != "inst-1" {
 		t.Fatalf("record = %v", rec)
 	}
+	if !strings.HasPrefix(lines[0], `{"version":1,"time":`) || rec["version"] != float64(1) {
+		t.Fatalf("record = %s", lines[0])
+	}
+	if _, ok := rec["image_version"]; ok {
+		t.Fatalf("empty image id was written: %v", rec)
+	}
 	for _, name := range []string{LogName, LockName} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
@@ -111,6 +117,67 @@ func TestAppendWritesOneUTCRecord(t *testing.T) {
 		if perm := info.Mode().Perm(); perm != 0o600 {
 			t.Fatalf("%s mode = %o, want 600", name, perm)
 		}
+	}
+}
+
+// TestEncodeLineWritesRecordVersion puts the format number first and
+// the image version id in image_version.
+func TestEncodeLineWritesRecordVersion(t *testing.T) {
+	const id = "abc123"
+	line, err := encodeLine(Event{
+		Event:   EventMount,
+		Phase:   PhaseSucceeded,
+		Version: id,
+	}, testTime)
+	if err != nil {
+		t.Fatalf("encodeLine: %v", err)
+	}
+	text := string(bytes.TrimSuffix(line, []byte("\n")))
+	if !strings.HasPrefix(text, `{"version":1,"time":`) {
+		t.Fatalf("line = %q, want version 1 first", text)
+	}
+	if strings.Contains(text, `"version":"`) {
+		t.Fatalf("line = %q, want no string version key", text)
+	}
+	rec := decodeRecord(t, text)
+	if rec["version"] != float64(1) || rec["image_version"] != id {
+		t.Fatalf("record = %v", rec)
+	}
+	decoded, err := decodeLine(bytes.TrimSuffix(line, []byte("\n")))
+	if err != nil {
+		t.Fatalf("decodeLine: %v", err)
+	}
+	if decoded.Version != recordVersion || decoded.ImageVersion != id {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+}
+
+// TestAppendKeepsLegacyPrefixAndWritesVersionOne leaves an old line
+// byte for byte and appends a version-1 line after it.
+func TestAppendKeepsLegacyPrefixAndWritesVersionOne(t *testing.T) {
+	w, dir := openTestWriter(t, fixedClock(testTime))
+	legacy := []byte(`{"time":"2026-10-27T09:15:30.123456789Z","event":"mount","phase":"succeeded","version":"old-id"}` + "\n")
+	writeLog(t, dir, legacy)
+	if _, err := w.Append(Event{
+		Event:   EventUnmount,
+		Phase:   PhaseSucceeded,
+		Version: "new-id",
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, LogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(content, legacy) {
+		t.Fatalf("legacy prefix changed: %q", content)
+	}
+	fresh := string(content[len(legacy):])
+	if !strings.HasPrefix(fresh, `{"version":1,`) || !strings.Contains(fresh, `"image_version":"new-id"`) {
+		t.Fatalf("new line = %q", fresh)
+	}
+	if strings.Contains(fresh, `"version":"`) {
+		t.Fatalf("new line = %q, want no string version key", fresh)
 	}
 }
 

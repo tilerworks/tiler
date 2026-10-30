@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,6 +99,38 @@ func keptSeqs(t *testing.T, lines []string) []int {
 		seqs = append(seqs, rec.Seq)
 	}
 	return seqs
+}
+
+// TestCompactionPreservesLegacyLineBytes copies an old line unchanged
+// and appends a version-1 record after it.
+func TestCompactionPreservesLegacyLineBytes(t *testing.T) {
+	w, dir := openTestWriter(t, fixedClock(testTime))
+	w.maxBytes, w.keepBytes = 250, 150
+	first := paddedRecord(t, 120, 1)
+	second := paddedRecord(t, 120, 2)
+	if bytes.Contains(second, []byte(`"version"`)) {
+		t.Fatalf("fixture = %q, want a legacy line", second)
+	}
+	writeLog(t, dir, append(append([]byte{}, first...), second...))
+	if _, err := w.Append(Event{
+		Event:   EventMount,
+		Phase:   PhaseSucceeded,
+		Version: "abc",
+		Seq:     3,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, LogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(content, second) {
+		t.Fatalf("legacy bytes changed: %q", content)
+	}
+	fresh := string(content[len(second):])
+	if !strings.HasPrefix(fresh, `{"version":1,`) || !strings.Contains(fresh, `"image_version":"abc"`) {
+		t.Fatalf("new line = %q", fresh)
+	}
 }
 
 // TestAppendCompactsAtExactLimit starts from a log that is exactly
