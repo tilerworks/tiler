@@ -151,18 +151,10 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 		Images: []image.ImageMeta{root, child, branch, newRoot}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	want := "alice/app  latest=dddddddddd  created=2026-10-28 04:00:00\n" +
-		"  ID              SIZE  CREATED              LAST ACTIVITY  DESCRIPTION\n" +
-		"  aaaaaaaaaa      1 B   2026-10-28 01:00:00  -              Base runtime\n" +
-		"    ↳ bbbbbbbbbb  1 B   2026-10-28 02:00:00  -              Add tools\n" +
-		"    ↳ cccccccccc  1 B   2026-10-28 03:00:00  -              -\n" +
-		"  dddddddddd      1 B   2026-10-28 04:00:00  -              New base\n"
-	if out.String() != want {
-		t.Fatalf("table = %q, want %q", out.String(), want)
-	}
+	assertGolden(t, "version_images_forest", out.Bytes())
 }
 
 func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
@@ -173,7 +165,7 @@ func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
 	var out bytes.Buffer
 	view := versionImageView{Name: "alice/app", Latest: &two,
 		Images: []image.ImageMeta{one, two}}
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(out.String(),
@@ -356,7 +348,7 @@ func TestVersionImageOutputGoldens(t *testing.T) {
 		Images: []image.ImageMeta{root, child, grandchild, branch, collision}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_list", out.Bytes())
@@ -405,16 +397,16 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 		{Name: "two", Latest: &other, Images: []image.ImageMeta{other}},
 	}
 	for i := range views {
-		views[i].Activity = make(map[string]string)
+		views[i].Activity = make(map[string]imageListActivity)
 		for j, node := range views[i].Images {
-			views[i].Activity[node.ID] = formatTextTime(at.Add(time.Duration(j)))
+			views[i].Activity[node.ID] = imageListActivity{At: at.Add(time.Duration(j))}
 		}
 	}
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, views); err != nil {
+	if err := writeVersionImageTableAt(&out, views, at.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "\t") || !strings.Contains(out.String(), "empty  latest=-\n  No image versions.\n") {
+	if strings.Contains(out.String(), "\t") || !strings.Contains(out.String(), "📦 empty · 0 versions · latest: -\n  No image versions.\n") {
 		t.Fatalf("unexpected table: %q", out.String())
 	}
 	var starts []int
@@ -422,21 +414,19 @@ func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
 		if !strings.HasPrefix(line, "  ") || strings.Contains(line, "No image") {
 			continue
 		}
-		line = strings.ReplaceAll(line, "↳", "x")
-		if strings.HasSuffix(line, " ") {
-			t.Fatalf("trailing padding: %q", line)
+		if displayWidth(line) > 80 || strings.HasSuffix(line, " ") {
+			t.Fatalf("invalid line width or padding: %q", line)
 		}
 		var columns []int
 		if strings.Contains(line, "DESCRIPTION") {
-			columns = []int{strings.Index(line, "SIZE"), strings.Index(line, "CREATED"), strings.Index(line, "LAST ACTIVITY"), strings.Index(line, "DESCRIPTION")}
+			columns = []int{displayWidth(line[:strings.Index(line, "CREATED")]), displayWidth(line[:strings.Index(line, "LAST ACTIVITY")]), displayWidth(line[:strings.Index(line, "DESCRIPTION")])}
 		} else {
-			var size string
-			for _, candidate := range []string{"1 MiB", "1 KiB", "0 B", "42 B"} {
-				if strings.Contains(line, candidate) {
-					size = candidate
+			columns = []int{displayWidth(line[:strings.Index(line, "10-28")]), displayWidth(line[:strings.LastIndex(line, "10-28")]), displayWidth(line[:strings.Index(line, "description")])}
+			for _, size := range []string{"1 MiB", "1 KiB", "0 B", "42 B"} {
+				if index := strings.Index(line, size); index >= 0 && displayWidth(line[:index+len(size)]) != columns[0]-2 {
+					t.Fatalf("size not right-aligned: %q", line)
 				}
 			}
-			columns = []int{strings.Index(line, size), strings.Index(line, "2026-"), strings.LastIndex(line, "2026-"), strings.Index(line, "description")}
 		}
 		if starts == nil {
 			starts = columns

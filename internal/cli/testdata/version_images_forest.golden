@@ -1,0 +1,6 @@
+📦 alice/app · 4 versions · latest: dddddddddd
+  IMAGE             SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  ├─ aaaaaaaaaa      1 B  10-28 01:00  -              Base runtime
+  │  ├─ bbbbbbbbbb   1 B  10-28 02:00  -              Add tools
+  │  └─ cccccccccc   1 B  10-28 03:00  -              -
+  └─ dddddddddd ★    1 B  10-28 04:00  -              New base

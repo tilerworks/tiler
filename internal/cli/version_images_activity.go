@@ -18,16 +18,16 @@ func collectVersionActivity(views []versionImageView, cfg config.Config, warning
 			return err
 		}
 		repo.LogsDir = cfg.LogsDir
-		views[i].Activity = make(map[string]string, len(views[i].Images))
+		views[i].Activity = make(map[string]imageListActivity, len(views[i].Images))
 		for _, node := range views[i].Images {
 			at, err := image.ReadVersionLastActivity(repo, node.ID)
 			switch {
 			case err == nil:
-				views[i].Activity[node.ID] = formatTextTime(at)
+				views[i].Activity[node.ID] = imageListActivity{At: at}
 			case errors.Is(err, activity.ErrNoActivity):
-				views[i].Activity[node.ID] = "-"
+				views[i].Activity[node.ID] = imageListActivity{}
 			default:
-				views[i].Activity[node.ID] = "unknown"
+				views[i].Activity[node.ID] = imageListActivity{Unknown: true}
 				if _, writeErr := fmt.Fprintf(warnings, "Warning: images list: %s:%s: %v\n", views[i].Name, node.ID, err); writeErr != nil {
 					return writeErr
 				}

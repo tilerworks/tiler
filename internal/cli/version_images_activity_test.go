@@ -25,7 +25,7 @@ func TestImageListShowsPropagatedActivityWithoutRenewingLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo.LogsDir = cfg.LogsDir
-	at := time.Date(2026, 10, 29, 1, 0, 0, 123456789, time.UTC)
+	at := time.Now().Add(-time.Hour)
 	if err := image.WithListedImageLocks(cfg.ImagesDir, time.Second, func(image.Hold) error {
 		return image.AppendVersionActivityLocked(repo, tip.ID, activity.Event{
 			Event: activity.EventMount, Phase: activity.PhaseSucceeded,
@@ -45,11 +45,11 @@ func TestImageListShowsPropagatedActivityWithoutRenewingLogs(t *testing.T) {
 	if err := listAllImages(&out, &warnings, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if warnings.Len() != 0 || strings.Count(out.String(), formatTextTime(at)) != 3 {
+	if warnings.Len() != 0 || strings.Count(out.String(), formatImageListTime(at, time.Now())) != 3 {
 		t.Fatalf("output = %q, warnings = %q", out.String(), warnings.String())
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
-		if strings.Contains(line, sibling.ID[:10]) && strings.Contains(line, formatTextTime(at)) {
+		if strings.Contains(line, sibling.ID[:10]) && strings.Contains(line, formatImageListTime(at, time.Now())) {
 			t.Fatalf("sibling received activity: %q", line)
 		}
 	}

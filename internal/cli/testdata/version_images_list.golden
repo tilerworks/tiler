@@ -1,8 +1,8 @@
-alice/app  latest=dddddddddd  created=2026-10-28 05:00:00
-  ID                SIZE  CREATED              LAST ACTIVITY  DESCRIPTION
-  aaaaaaaaaa        1 B   2026-10-28 01:00:00  -              Original base
-    ↳ bbbbbbbbbb    1 B   2026-10-28 02:00:00  -              Install tools
-      ↳ cccccccccc  1 B   2026-10-28 03:00:00  -              Application layer
-    ↳ dddddddddd    1 B   2026-10-28 05:00:00  -              Newer historical branch
-  aaaaaaaaaa        1 B   2026-10-28 04:00:00  -              Colliding root
+📦 alice/app · 5 versions · latest: dddddddddd
+  IMAGE                SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  ├─ aaaaaaaaaa         1 B  10-28 01:00  -              Original base
+  │  ├─ bbbbbbbbbb      1 B  10-28 02:00  -              Install tools
+  │  │  └─ cccccccccc   1 B  10-28 03:00  -              Application layer
+  │  └─ dddddddddd ★    1 B  10-28 05:00  -              Newer historical branch
+  └─ aaaaaaaaaa         1 B  10-28 04:00  -              Colliding root
 Short IDs collide; use images list --json for full IDs.

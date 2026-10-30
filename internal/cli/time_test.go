@@ -33,7 +33,7 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 	node := versionNode("a", image.KindFull, "", at)
 	view := versionImageView{Name: "app", Latest: &node, Images: []image.ImageMeta{node}, Selected: &node, Stack: []image.ImageMeta{node}}
 	renders := map[string]func(io.Writer) error{
-		"images list": func(w io.Writer) error { return writeVersionImageTable(w, []versionImageView{view}) },
+		"images list": func(w io.Writer) error { return writeVersionImageTableAt(w, []versionImageView{view}, at) },
 		"images show": func(w io.Writer) error { return writeVersionImageDetail(w, view) },
 		"session list": func(w io.Writer) error {
 			return writeSessionList(w, []session.Summary{{Name: "dev", Created: at}})
@@ -51,7 +51,11 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 			if err := render(&out); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out.String(), want) || strings.Contains(out.String(), ".719842682") {
+			expected := want
+			if name == "images list" {
+				expected = "10-31 07:00"
+			}
+			if !strings.Contains(out.String(), expected) || strings.Contains(out.String(), ".719842682") {
 				t.Fatalf("unexpected text timestamp: %s", &out)
 			}
 		})
