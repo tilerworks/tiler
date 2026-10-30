@@ -92,7 +92,7 @@ func TestCleanupDeletesOnlyUnchangedApprovedOrphans(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			events, err := ExecuteCleanupLocked(root, plan)
+			events, err := ExecuteCleanupLocked(root, repo.LogsDir, plan)
 			removed := change == "none" || change == "new orphan"
 			if err != nil || len(events) != 1 || (events[0].Action == GCActionRemoved) != removed {
 				t.Fatalf("execution = %+v, %v", events, err)
@@ -132,7 +132,7 @@ func TestPendingCleanupRevalidatesTheJournalAndRepository(t *testing.T) {
 				nodes[0].Description = "changed"
 				storeVersionIndexFixture(t, repo, removalManifest(repo, nodes))
 			}
-			events, err := ExecuteCleanupLocked(root, plan)
+			events, err := ExecuteCleanupLocked(root, repo.LogsDir, plan)
 			if change == "metadata" {
 				if err == nil {
 					t.Fatal("conflicting metadata allowed recovery")
@@ -163,7 +163,7 @@ func TestPendingCleanupFailureCanBePreviewedAndResumed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := executeCleanupLocked(root, plan, hooks{before: func(path, dst string) error {
+	events, err := executeCleanupLocked(root, repo.LogsDir, plan, hooks{before: func(path, dst string) error {
 		if dst == "" && filepath.Base(path) == nodes[1].ID {
 			return errors.New("interrupted cleanup")
 		}
@@ -176,7 +176,7 @@ func TestPendingCleanupFailureCanBePreviewedAndResumed(t *testing.T) {
 	if err != nil || !plan.Pending {
 		t.Fatalf("resumed preview = %+v, %v", plan, err)
 	}
-	if _, err := ExecuteCleanupLocked(root, plan); err != nil {
+	if _, err := ExecuteCleanupLocked(root, repo.LogsDir, plan); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := controlFile(root, repo.Name(), versionRemovalJournal)
@@ -254,7 +254,7 @@ func TestPendingLeafCleanupListsExistingOrphansAndHandlesMissingMetadata(t *test
 	if err != nil || len(plan.Items) != len(nodes)+1 || plan.Items[len(nodes)].Kind != "orphan" {
 		t.Fatalf("missing-metadata cleanup plan = %+v, %v", plan, err)
 	}
-	if _, err := ExecuteCleanupLocked(root, plan); err != nil {
+	if _, err := ExecuteCleanupLocked(root, repo.LogsDir, plan); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
@@ -276,10 +276,35 @@ func TestOrphanCleanupDoesNotFollowExternalPayloadLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ExecuteCleanupLocked(root, plan); err != nil {
+	if _, err := ExecuteCleanupLocked(root, repo.LogsDir, plan); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(external); err != nil || string(data) != "keep" {
 		t.Fatalf("external payload changed: %q, %v", data, err)
+	}
+}
+
+func TestOrphanCleanupDeletesTheVersionLog(t *testing.T) {
+	root, repo, nodes := removalFixture(t)
+	id := strings.Repeat("f", 64)
+	cleanupOrphan(t, repo, id)
+	orphanLog := writeVersionLog(t, repo, id)
+	sibling := writeVersionLog(t, repo, nodes[0].ID)
+	plan, err := InspectCleanupLocked(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := ExecuteCleanupLocked(root, repo.LogsDir, plan)
+	if err != nil || len(events) != 1 || events[0].Action != GCActionRemoved {
+		t.Fatalf("execution = %+v, %v", events, err)
+	}
+	if _, err := os.Stat(orphanLog); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan log remains: %v", err)
+	}
+	if _, err := os.Stat(orphanLog + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan lock remains: %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling log missing: %v", err)
 	}
 }

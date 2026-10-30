@@ -26,7 +26,7 @@ func GC(cfg config.Config, _ Refs, _ time.Time) ([]GCEvent, error) {
 		if err != nil {
 			return err
 		}
-		outcomes, err := ExecuteCleanupLocked(cfg.ImagesDir, plan)
+		outcomes, err := ExecuteCleanupLocked(cfg.ImagesDir, cfg.LogsDir, plan)
 		events = make([]GCEvent, 0, len(outcomes))
 		for _, outcome := range outcomes {
 			if outcome.Action != GCActionRemoved {

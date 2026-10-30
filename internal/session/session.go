@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/activity"
@@ -907,9 +908,10 @@ func (e *Engine) Remove(name string) error {
 	return e.deleteRecordFiles(name)
 }
 
-// deleteRecordFiles removes the session's whole directory: its
-// record, lock, and any runtime subtree beneath it. The caller holds
-// the session's exclusive lock.
+// deleteRecordFiles removes the session's whole directory and then
+// its activity log and lock under LogsDir. A missing log is success.
+// A symlink or other non-regular log is an error and is not followed.
+// The caller holds the session's exclusive lock.
 func (s Store) deleteRecordFiles(name string) error {
 	if s.scope != nil {
 		return s.scope.remove(name)
@@ -919,6 +921,23 @@ func (s Store) deleteRecordFiles(name string) error {
 		return err
 	}
 	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	return s.removeSessionLog(name)
+}
+
+// removeSessionLog deletes logs_dir/sessions/<name>.log and its lock.
+// An empty logs root has nothing to remove: the record store tests
+// that omit LogsDir never wrote a log there.
+func (s Store) removeSessionLog(name string) error {
+	if strings.TrimSpace(s.LogsDir) == "" {
+		return nil
+	}
+	if err := ValidateName(name); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	path := filepath.Join(s.LogsDir, "sessions", name+".log")
+	if err := activity.RemoveLog(s.LogsDir, path); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
 	return nil

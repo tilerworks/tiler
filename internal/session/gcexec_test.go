@@ -79,6 +79,18 @@ func TestExecSessionsRemovesOnlyTheApprovedPlan(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.Dir, "young")); err != nil {
 		t.Fatalf("the young session was touched: %v", err)
 	}
+	for _, name := range report.Removed {
+		logPath := filepath.Join(e.LogsDir, "sessions", name+".log")
+		if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s log survived: %v", name, err)
+		}
+		if _, err := os.Stat(logPath + ".lock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s lock survived: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(e.LogsDir, "sessions", "young.log")); err != nil {
+		t.Fatalf("the young session log was removed: %v", err)
+	}
 }
 
 // TestExecSessionsDeletesAnActiveRecordAsItStands covers the record the

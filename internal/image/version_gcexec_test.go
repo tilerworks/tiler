@@ -118,7 +118,7 @@ func TestVersionGCDeletesFinalLeafButPreservesUnapprovedOrphans(t *testing.T) {
 
 func TestVersionGCReportsAlreadyRemovedVersionsWithoutRecreation(t *testing.T) {
 	repo, _, plan := gcExecutionFixture(t)
-	if _, err := RemoveVersionRepositoryLocked(libraryRoot(repo), repo.Name()); err != nil {
+	if _, err := RemoveVersionRepositoryLocked(libraryRoot(repo), repo.LogsDir, repo.Name()); err != nil {
 		t.Fatal(err)
 	}
 	events, err := ExecuteVersionGCLocked(repo, plan, nil, activityClock)

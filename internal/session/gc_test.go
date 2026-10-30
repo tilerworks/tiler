@@ -46,6 +46,16 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "aged", "session.lock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	agedLog := filepath.Join(e.LogsDir, "sessions", "aged.log")
+	freshLog := filepath.Join(e.LogsDir, "sessions", "fresh.log")
+	if err := os.MkdirAll(filepath.Dir(agedLog), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{agedLog, agedLog + ".lock", freshLog, freshLog + ".lock"} {
+		if err := os.WriteFile(path, []byte("log"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	events, err := e.Cleanup(720*time.Hour, false, testNow, func(string) error { return nil })
 	if err != nil {
@@ -56,6 +66,15 @@ func TestCleanupRemovesAgedClosedRecords(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "aged")); !os.IsNotExist(err) {
 		t.Errorf("aged session dir survived: %v", err)
+	}
+	if _, err := os.Stat(agedLog); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("aged session log survived: %v", err)
+	}
+	if _, err := os.Stat(agedLog + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("aged session lock survived: %v", err)
+	}
+	if _, err := os.Stat(freshLog); err != nil {
+		t.Errorf("fresh session log missing: %v", err)
 	}
 	assertRecordState(t, e, "fresh", StateClosed)
 }

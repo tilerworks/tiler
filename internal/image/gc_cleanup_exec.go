@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"strings"
 )
 
 // ExecuteCleanupLocked revalidates a displayed cleanup set under the library
-// lock. Callers must have checked current authoritative session references.
-func ExecuteCleanupLocked(imagesDir string, approved CleanupPlan) ([]VersionGCOutcome, error) {
-	return executeCleanupLocked(imagesDir, approved, hooks{})
+// lock. logsDir deletes orphan version logs. A pending journal uses the
+// logs directory it stored, not this argument. Callers must have checked
+// current authoritative session references.
+func ExecuteCleanupLocked(imagesDir, logsDir string, approved CleanupPlan) ([]VersionGCOutcome, error) {
+	return executeCleanupLocked(imagesDir, logsDir, approved, hooks{})
 }
 
-func executeCleanupLocked(imagesDir string, approved CleanupPlan, seam hooks) ([]VersionGCOutcome, error) {
+func executeCleanupLocked(imagesDir, logsDir string, approved CleanupPlan, seam hooks) ([]VersionGCOutcome, error) {
 	current, err := InspectCleanupLocked(imagesDir)
 	if err != nil {
 		return nil, err
@@ -61,6 +64,9 @@ func executeCleanupLocked(imagesDir string, approved CleanupPlan, seam hooks) ([
 		path, runErr := repo.ObjectDirPath(item.ID)
 		if runErr == nil && seam.before != nil {
 			runErr = seam.before(path, "")
+		}
+		if runErr == nil && strings.TrimSpace(logsDir) != "" {
+			runErr = removeVersionLogs(logsDir, repo.Segments, []string{item.ID})
 		}
 		if runErr == nil {
 			runErr = os.RemoveAll(path)

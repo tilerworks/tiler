@@ -109,7 +109,7 @@ func (c ReferenceCoordinator) RemoveVersionSubtree(name, root string) ([]image.I
 		if len(plan.Blockers) != 0 {
 			return &VersionRemovalBlocked{Name: name, Blockers: plan.Blockers}
 		}
-		removed, err = image.RemoveVersionSubtreeLocked(c.ImagesDir, name, root)
+		removed, err = image.RemoveVersionSubtreeLocked(c.ImagesDir, c.LogsDir, name, root)
 		return err
 	})
 	return removed, err
@@ -138,7 +138,7 @@ func (c ReferenceCoordinator) RemoveVersionRepository(name string) ([]image.Imag
 		if len(plan.Blockers) != 0 {
 			return &VersionRemovalBlocked{Name: name, Blockers: plan.Blockers}
 		}
-		removed, err = image.RemoveVersionRepositoryLocked(c.ImagesDir, name)
+		removed, err = image.RemoveVersionRepositoryLocked(c.ImagesDir, c.LogsDir, name)
 		if err != nil {
 			return err
 		}

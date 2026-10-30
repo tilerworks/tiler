@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/jiangxin/tiler/internal/activity"
@@ -359,14 +358,7 @@ func versionActivityRecord(ev activity.Event, image, source, target string) acti
 
 // activityLogDir is logs_dir/images/<name segments>.
 func (repo Repo) activityLogDir() (string, error) {
-	if strings.TrimSpace(repo.LogsDir) == "" {
-		return "", fmt.Errorf("%w: empty logs dir", ErrInvalidPath)
-	}
-	if len(repo.Segments) == 0 {
-		return "", fmt.Errorf("%w: empty image name", ErrInvalidPath)
-	}
-	parts := append([]string{repo.LogsDir, "images"}, repo.Segments...)
-	return filepath.Join(parts...), nil
+	return imageActivityDir(repo.LogsDir, repo.Segments)
 }
 
 // activityLogFile is <id>.log in the image log directory. legacy is
