@@ -18,6 +18,7 @@ func newSessionGCCmd() *cobra.Command {
 	var (
 		rawExpire string
 		assumeYes bool
+		dryRun    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "gc",
@@ -39,13 +40,16 @@ func newSessionGCCmd() *cobra.Command {
 			"rechecked against its record, its activity log, the fixed\n" +
 			"cutoff, and the live mounts before it is removed, and a\n" +
 			"session that changed or disappeared in the meantime is\n" +
-			"reported as kept.",
+			"reported as kept. With --dry-run, GC only lists candidates,\n" +
+			"never asks or deletes, and overrides --yes. Missing activity\n" +
+			"logs may still be initialized.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSessionGC(cmd, rawExpire, assumeYes)
+			return runSessionGC(cmd, rawExpire, assumeYes, dryRun)
 		},
 	}
 	bindExpireFlag(cmd, &rawExpire)
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list candidates without deleting or asking (overrides --yes)")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false,
 		"remove the listed sessions without asking")
 	return cmd
@@ -54,7 +58,7 @@ func newSessionGCCmd() *cobra.Command {
 // runSessionGC scans, confirms, and executes one session GC. The window is
 // validated before the scan, so a bad --expire never walks the sessions, and
 // the plan's cutoff stays fixed while the user answers.
-func runSessionGC(cmd *cobra.Command, rawExpire string, assumeYes bool) error {
+func runSessionGC(cmd *cobra.Command, rawExpire string, assumeYes, dryRun bool) error {
 	window, err := expireWindow(rawExpire)
 	if err != nil {
 		return err
@@ -78,6 +82,7 @@ func runSessionGC(cmd *cobra.Command, rawExpire string, assumeYes bool) error {
 		ErrOut:    cmd.ErrOrStderr(),
 		Objects:   "sessions",
 		AssumeYes: assumeYes,
+		DryRun:    dryRun,
 	}
 	approved, err := confirmation.approved()
 	if err != nil {

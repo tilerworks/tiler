@@ -14,7 +14,7 @@ import (
 
 func newImagesGCCmd() *cobra.Command {
 	var rawExpire string
-	var assumeYes bool
+	var assumeYes, dryRun bool
 	cmd := &cobra.Command{
 		Use: "gc", Short: "Preview and remove expired unreferenced image versions",
 		Long: "GC lists expired image versions not referenced by sessions, while\n" +
@@ -22,19 +22,21 @@ func newImagesGCCmd() *cobra.Command {
 			"labels pending-cleanup and orphan objects. Nothing is deleted\n" +
 			"until interactive input is exactly yes or --yes is supplied;\n" +
 			"noninteractive input without --yes only previews the candidates.\n" +
-			"Missing activity logs are initialized and retained this scan.\n" +
+			"With --dry-run, GC only lists candidates, never asks or deletes,\n" +
+			"and overrides --yes. Missing activity logs are initialized and retained this scan.\n" +
 			"Pending cleanup runs alone; rerun GC afterward for expiration.\n" +
 			"GC never removes, closes, or unmounts sessions. Retention uses\n" +
 			"--expire (default 30 days), not the legacy session age settings.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return runImagesGC(cmd, rawExpire, assumeYes) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return runImagesGC(cmd, rawExpire, assumeYes, dryRun) },
 	}
 	bindExpireFlag(cmd, &rawExpire)
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list candidates without deleting or asking (overrides --yes)")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "remove the listed image objects without asking")
 	return cmd
 }
 
-func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes bool) error {
+func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes, dryRun bool) error {
 	window, err := expireWindow(rawExpire)
 	if err != nil {
 		return err
@@ -55,7 +57,7 @@ func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes bool) error {
 	preview := imageGCPreview(plan, now, now.Add(-window))
 	approved, err := (gcConfirmation{Preview: preview, In: cmd.InOrStdin(),
 		Out: cmd.OutOrStdout(), ErrOut: cmd.ErrOrStderr(),
-		Objects: "image objects", AssumeYes: assumeYes}).approved()
+		Objects: "image objects", AssumeYes: assumeYes, DryRun: dryRun}).approved()
 	if err != nil || !approved {
 		return err
 	}

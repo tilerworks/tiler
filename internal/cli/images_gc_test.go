@@ -72,7 +72,7 @@ func TestImagesGCHelpAndUsage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("help: %v\n%s", err, stderr)
 		}
-		for _, text := range []string{"--expire", "default 30", "--yes", "orphan", "never removes"} {
+		for _, text := range []string{"--expire", "default 30", "--yes", "-n, --dry-run", "orphan", "never removes"} {
 			if !strings.Contains(stdout, text) {
 				t.Fatalf("help omitted %q: %s", text, stdout)
 			}

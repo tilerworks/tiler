@@ -369,6 +369,10 @@ Zero expires objects that are already inactive. A negative number,
 a fraction, or a value that overflows the duration range is a
 usage error and exits 2.
 
+Both commands accept `-n` / `--dry-run` to list what would be removed
+without deleting or asking, even with `--yes`. Missing activity logs may
+still be initialized, and those objects are retained during that scan.
+
 Both commands print every candidate before deleting anything. An
 interactive terminal must answer `yes` in lower case. `--yes`
 prints the list and then deletes. Without `--yes`, a pipe, a

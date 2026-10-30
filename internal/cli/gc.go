@@ -153,6 +153,8 @@ type gcConfirmation struct {
 	Objects string
 	// AssumeYes reports that --yes was given.
 	AssumeYes bool
+	// DryRun prevents approval even when --yes is given.
+	DryRun bool
 }
 
 // approved prints the preview and reports whether removal may proceed. An
@@ -163,6 +165,12 @@ type gcConfirmation struct {
 func (c gcConfirmation) approved() (bool, error) {
 	if err := c.Preview.write(c.Out); err != nil {
 		return false, fmt.Errorf("gc: preview: %w", err)
+	}
+	if c.DryRun {
+		if _, err := fmt.Fprintln(c.Out, "Dry run: nothing removed."); err != nil {
+			return false, fmt.Errorf("gc: dry-run notice: %w", err)
+		}
+		return false, nil
 	}
 	if c.Preview.candidateCount() == 0 {
 		return false, nil
