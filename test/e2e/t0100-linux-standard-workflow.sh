@@ -158,4 +158,91 @@ do
 	'
 done
 
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an open mounted session keeps its upper and stays out of GC candidates' '
+	gc_point=$standard/mnt-gc &&
+	gc_record=$sessions/gc-check/session.json &&
+	gc_upper=$sessions/gc-check/runtime/m1/upper &&
+	gc_log=$logs/sessions/gc-check.log &&
+	mkdir -p "$gc_point" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session new gc-check >"$HOME/gc-new.out" 2>"$HOME/gc-new.err" &&
+		"$tiler_bin" mount --session gc-check standard/app "$gc_point" 2>"$HOME/gc-mount.err"
+	) >gc-mount.out &&
+	printf "retained session work\n" >gc-expect &&
+	cp gc-expect "$gc_point/work.txt" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session open gc-check 2>"$HOME/gc-open.err"
+	) >gc-open.out &&
+	test_grep "^opened gc-check$" gc-open.out &&
+	test_cmp "$prepare/README.txt" "$gc_point/README.txt" &&
+	test_cmp gc-expect "$gc_point/work.txt" &&
+	test_cmp gc-expect "$gc_upper/work.txt" &&
+	grep "\"type\": \"mount\"" "$gc_record" >gc-mount-actions &&
+	test_line_count = 1 gc-mount-actions &&
+	cp "$gc_record" gc-mounted-record.before &&
+	cp "$gc_log" gc-mounted-log.before &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session gc --expire 0 --dry-run 2>"$HOME/gc-mounted.err"
+	) >gc-mounted.out &&
+	test_grep "No session expired" gc-mounted.out &&
+	test_grep ! "gc-check" gc-mounted.out &&
+	test_grep "^kept gc-check: attached" gc-mounted.err &&
+	test_cmp gc-mounted-record.before "$gc_record" &&
+	test_cmp gc-mounted-log.before "$gc_log" &&
+	test_cmp gc-expect "$gc_point/work.txt" &&
+	test_cmp gc-expect "$gc_upper/work.txt"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a closed session survives retention and zero-day GC previews' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" session close gc-check 2>"$HOME/gc-close.err"
+	) >gc-close.out &&
+	test_grep "^closed gc-check$" gc-close.out &&
+	find "$gc_point" -mindepth 1 -print >gc-remaining &&
+	test_must_be_empty gc-remaining &&
+	test_path_is_file "$gc_record" &&
+	test_path_is_file "$gc_log" &&
+	test_path_is_file "$gc_log.lock" &&
+	test_cmp gc-expect "$gc_upper/work.txt" &&
+	cp "$gc_record" gc-closed-record.before &&
+	cp "$gc_log" gc-closed-log.before &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session gc --expire 10 2>"$HOME/gc-young.err"
+	) >gc-young.out &&
+	test_grep "No session expired" gc-young.out &&
+	test_cmp gc-closed-record.before "$gc_record" &&
+	test_cmp gc-closed-log.before "$gc_log" &&
+	test_cmp gc-expect "$gc_upper/work.txt" &&
+	(
+		cd "$standard" &&
+		"$tiler_bin" session gc --expire 0 --dry-run 2>"$HOME/gc-preview.err"
+	) >gc-preview.out &&
+	test_grep "^Expired sessions" gc-preview.out &&
+	test_grep -E "^  gc-check +closed +last active " gc-preview.out &&
+	test_grep ! "^removed " gc-preview.out &&
+	test_grep ! "Type yes" gc-preview.err &&
+	test_cmp gc-closed-record.before "$gc_record" &&
+	test_cmp gc-closed-log.before "$gc_log" &&
+	test_cmp gc-expect "$gc_upper/work.txt"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'approved zero-day GC removes the closed session and all of its data' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" session gc --expire 0 --yes 2>"$HOME/gc-delete.err"
+	) >gc-delete.out &&
+	test_grep "^removed gc-check$" gc-delete.out &&
+	test_grep "^removed 1 of 1 approved sessions, kept 0$" gc-delete.out &&
+	test_path_is_missing "$sessions/gc-check" &&
+	test_path_is_missing "$gc_log" &&
+	test_path_is_missing "$gc_log.lock" &&
+	find "$gc_point" -mindepth 1 -print >gc-deleted-remaining &&
+	test_must_be_empty gc-deleted-remaining
+'
+
 test_done
