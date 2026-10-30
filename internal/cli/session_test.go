@@ -101,7 +101,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "dev") ||
+	if !strings.Contains(stdout, "SESSION") || !strings.Contains(stdout, "dev") ||
 		!strings.Contains(stdout, "active") {
 		t.Fatalf("list stdout = %q", stdout)
 	}

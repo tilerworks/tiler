@@ -51,6 +51,7 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			loadStatusActivity(engine, &overview, cmd.ErrOrStderr())
 			if asJSON {
 				return writeJSON(out, newStatusDocument(overview))
 			}
@@ -173,6 +174,7 @@ type statusDocument struct {
 
 // statusSessionJSON is one session block of the overview document.
 type statusSessionJSON struct {
+	sessionActivityJSON
 	Name      string             `json:"name"`
 	State     string             `json:"state"`
 	CreatedAt string             `json:"created_at"`
@@ -235,13 +237,14 @@ func newStatusDocument(overview session.Overview) statusDocument {
 
 func newStatusSession(view session.View) statusSessionJSON {
 	entry := statusSessionJSON{
-		Name:      view.Name,
-		State:     view.State,
-		CreatedAt: view.Created.Format(time.RFC3339),
-		ClosedAt:  view.Closed.Format(time.RFC3339),
-		Current:   view.Current,
-		Locked:    view.Locked,
-		Actions:   make([]statusActionJSON, 0, len(view.Actions)),
+		sessionActivityJSON: newSessionActivityJSON(view.Activity),
+		Name:                view.Name,
+		State:               view.State,
+		CreatedAt:           view.Created.Format(time.RFC3339),
+		ClosedAt:            view.Closed.Format(time.RFC3339),
+		Current:             view.Current,
+		Locked:              view.Locked,
+		Actions:             make([]statusActionJSON, 0, len(view.Actions)),
 	}
 	for _, action := range view.Actions {
 		entry.Actions = append(entry.Actions, newStatusAction(action.Action, action.Health))

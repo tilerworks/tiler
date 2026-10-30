@@ -13,6 +13,9 @@ import (
 var goldenSessionTime = time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
 
 func TestSessionListJSONMatchesGolden(t *testing.T) {
+	previousNow := sessionTimeNow
+	sessionTimeNow = func() time.Time { return goldenSessionTime }
+	t.Cleanup(func() { sessionTimeNow = previousNow })
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
@@ -46,9 +49,9 @@ func TestSessionListJSONMatchesGolden(t *testing.T) {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
 	want := "" +
-		"NAME  STATE   MOUNTS  CREATED              CLOSED               RM\n" +
-		"dev   active  1       2026-10-17 03:15:00  -                    -\n" +
-		"old   closed  0       2026-10-16 03:15:00  2026-10-16 07:15:00  -\n"
+		"SESSION  STATE   MOUNTS  CREATED      CLOSED       LAST ACTIVITY  RM\n" +
+		"dev      active  1       10-17 03:15  -            -              -\n" +
+		"old      closed  0       10-16 03:15  10-16 07:15  -              -\n"
 	if human != want {
 		t.Fatalf("human list =\n%s\nwant:\n%s", human, want)
 	}

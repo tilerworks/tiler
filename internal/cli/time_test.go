@@ -36,7 +36,7 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 		"images list": func(w io.Writer) error { return writeVersionImageTableAt(w, []versionImageView{view}, at, 80) },
 		"images show": func(w io.Writer) error { return writeVersionImageDetail(w, view) },
 		"session list": func(w io.Writer) error {
-			return writeSessionList(w, []session.Summary{{Name: "dev", Created: at}})
+			return writeSessionListAt(w, []session.Summary{{Name: "dev", Created: at}}, at)
 		},
 		"session show": func(w io.Writer) error {
 			return writeSessionShow(w, session.Record{Name: "dev", CreatedAt: at, Actions: []session.Action{{Timestamp: at}}})
@@ -52,7 +52,7 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := want
-			if name == "images list" {
+			if name == "images list" || name == "session list" {
 				expected = "10-31 07:00"
 			}
 			if !strings.Contains(out.String(), expected) || strings.Contains(out.String(), ".719842682") {

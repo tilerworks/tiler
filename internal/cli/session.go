@@ -182,8 +182,8 @@ func newSessionListCmd() *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List every session record",
 		Long: "Print one aligned row per session: name, state, live\n" +
-			"mount count, created and closed times, and an RM marker\n" +
-			"for --rm sessions. Times use local YYYY-MM-DD HH:MM:SS.\n" +
+			"mount count, created, closed and last activity times, and an RM\n" +
+			"marker for --rm sessions. Times follow image list formatting.\n" +
 			"--json renders one machine-readable\n" +
 			"document instead of the human listing.",
 		Args: cobra.NoArgs,
@@ -198,6 +198,9 @@ func newSessionListCmd() *cobra.Command {
 				return err
 			}
 			summaries := session.Summaries(records)
+			for i := range summaries {
+				loadSessionActivity(engine, &summaries[i], cmd.ErrOrStderr())
+			}
 			if asJSON {
 				return writeSessionListJSON(cmd.OutOrStdout(), summaries)
 			}
@@ -227,7 +230,12 @@ func newSessionShowCmd() *cobra.Command {
 				return err
 			}
 			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), rec)
+				summary := session.Summarize(rec)
+				loadSessionActivity(engine, &summary, cmd.ErrOrStderr())
+				return writeJSON(cmd.OutOrStdout(), struct {
+					session.Record
+					sessionActivityJSON
+				}{rec, newSessionActivityJSON(summary.Activity)})
 			}
 			return writeSessionShow(cmd.OutOrStdout(), rec)
 		},
@@ -445,11 +453,17 @@ func sessionUmount(cfg config.Config) session.UmountFunc {
 }
 
 // sessionTableHeader names the short-list columns.
-var sessionTableHeader = []string{"NAME", "STATE", "MOUNTS", "CREATED", "CLOSED", "RM"}
+var sessionTableHeader = []string{"SESSION", "STATE", "MOUNTS", "CREATED", "CLOSED", "LAST ACTIVITY", "RM"}
 
 // writeSessionList prints an aligned table: a header and one row per
 // session. An empty library prints nothing.
+var sessionTimeNow = time.Now
+
 func writeSessionList(w io.Writer, summaries []session.Summary) error {
+	return writeSessionListAt(w, summaries, sessionTimeNow())
+}
+
+func writeSessionListAt(w io.Writer, summaries []session.Summary, now time.Time) error {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -457,7 +471,7 @@ func writeSessionList(w io.Writer, summaries []session.Summary) error {
 	widths := make([]int, len(sessionTableHeader))
 	copy(widths, lengths(sessionTableHeader))
 	for i, summary := range summaries {
-		rows[i] = sessionTableCols(summary)
+		rows[i] = sessionTableCols(summary, now)
 		for c, col := range rows[i] {
 			if len(col) > widths[c] {
 				widths[c] = len(col)
@@ -475,7 +489,7 @@ func writeSessionList(w io.Writer, summaries []session.Summary) error {
 	return nil
 }
 
-func sessionTableCols(summary session.Summary) []string {
+func sessionTableCols(summary session.Summary, now time.Time) []string {
 	rm := "-"
 	if summary.RemoveOnClose {
 		rm = "yes"
@@ -484,8 +498,9 @@ func sessionTableCols(summary session.Summary) []string {
 		summary.Name,
 		summary.State,
 		strconv.Itoa(summary.Mounts),
-		formatTextTime(summary.Created),
-		formatTextTime(summary.Closed),
+		formatImageListTime(summary.Created, now),
+		formatImageListTime(summary.Closed, now),
+		formatSessionActivity(summary.Activity, now),
 		rm,
 	}
 }
@@ -499,6 +514,7 @@ type sessionsDocument struct {
 // model. Times are RFC3339; a zero closed_at renders as-is, matching
 // the on-disk record behavior. The schema is add-only.
 type sessionSummaryJSON struct {
+	sessionActivityJSON
 	Name      string `json:"name"`
 	State     string `json:"state"`
 	Mounts    int    `json:"mounts"`
@@ -510,11 +526,12 @@ func writeSessionListJSON(w io.Writer, summaries []session.Summary) error {
 	doc := sessionsDocument{Sessions: make([]sessionSummaryJSON, 0, len(summaries))}
 	for _, summary := range summaries {
 		doc.Sessions = append(doc.Sessions, sessionSummaryJSON{
-			Name:      summary.Name,
-			State:     summary.State,
-			Mounts:    summary.Mounts,
-			CreatedAt: summary.Created.Format(time.RFC3339),
-			ClosedAt:  summary.Closed.Format(time.RFC3339),
+			sessionActivityJSON: newSessionActivityJSON(summary.Activity),
+			Name:                summary.Name,
+			State:               summary.State,
+			Mounts:              summary.Mounts,
+			CreatedAt:           summary.Created.Format(time.RFC3339),
+			ClosedAt:            summary.Closed.Format(time.RFC3339),
 		})
 	}
 	return writeJSON(w, doc)
