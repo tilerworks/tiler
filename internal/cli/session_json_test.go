@@ -87,15 +87,10 @@ func TestSessionShowJSONMatchesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	want := "dev\n" +
-		"  state       active\n" +
-		"  created     2026-10-17 03:15:00\n" +
-		"  closed      -\n" +
-		"  mounts      1\n" +
-		"  actions     3\n" +
-		"    1  mount   alice/app          /ws/dev/app   mode=rw  status=mounted  at=2026-10-17 03:15:00\n" +
-		"    2  mount   /images/tool.sqsh  /ws/dev/tool  mode=ro  status=unmounted  at=2026-10-17 03:16:00  subdir=docs\n" +
-		"    3  umount  /images/tool.sqsh  /ws/dev/tool  mode=-  status=unmounted  at=2026-10-17 03:17:00\n"
+	want, stderr, _, err := runCmd(t, append(lib, "status", "-s", "dev")...)
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, stderr)
+	}
 	if human != want {
 		t.Fatalf("human show =\n%s\nwant:\n%s", human, want)
 	}

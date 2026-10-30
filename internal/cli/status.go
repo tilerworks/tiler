@@ -31,7 +31,6 @@ func newStatusCmd() *cobra.Command {
 				return errors.New("status: configuration is not loaded")
 			}
 			engine := sessionEngine(cfg)
-			engine.LoadTable = emptyWhenMountTableUnavailable(engine.LoadTable)
 			query := session.Query{Session: selectedSession, Image: selectedImage}
 			if len(args) == 1 {
 				query.Directory = args[0]
@@ -41,30 +40,38 @@ func newStatusCmd() *cobra.Command {
 					return usageError{err}
 				}
 			}
-			overview, err := engine.Query(os.Getenv(sessionEnvVar), query)
-			if err != nil {
-				return err
-			}
-			for _, diagnostic := range overview.Diagnostics {
-				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), terminalText(diagnostic)); err != nil {
-					return err
-				}
-			}
-			loadStatusActivity(engine, &overview, cmd.ErrOrStderr())
-			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), newStatusDocument(overview))
-			}
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			return writeStatusDetails(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd)
+			return runStatusQuery(cmd, engine, query, asJSON, true)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the status as a JSON document")
 	cmd.Flags().StringVarP(&selectedSession, "session", "s", "", "select an exact session name")
 	cmd.Flags().StringVarP(&selectedImage, "image", "i", "", "select any layer of name[:version]")
 	return cmd
+}
+
+func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Query, asJSON, includeOrphans bool) error {
+	engine.LoadTable = emptyWhenMountTableUnavailable(engine.LoadTable)
+	overview, err := engine.Query(os.Getenv(sessionEnvVar), query)
+	if err != nil {
+		return err
+	}
+	for _, diagnostic := range overview.Diagnostics {
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), terminalText(diagnostic)); err != nil {
+			return err
+		}
+	}
+	if !includeOrphans {
+		overview.Orphans = nil
+	}
+	loadStatusActivity(engine, &overview, cmd.ErrOrStderr())
+	if asJSON {
+		return writeJSON(cmd.OutOrStdout(), newStatusDocument(overview))
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	return writeStatusDetails(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd)
 }
 
 // emptyWhenMountTableUnavailable keeps a missing host mount table

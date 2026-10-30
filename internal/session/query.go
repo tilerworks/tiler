@@ -82,7 +82,7 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			// expanded actions in the existing Overview contract.
 			release, ok := e.tryReadLock(view.Name)
 			if ok {
-				rec, readErr := e.Load(view.Name)
+				rec, readErr := e.Show(view.Name)
 				release()
 				if errors.Is(readErr, ErrNotFound) {
 					continue

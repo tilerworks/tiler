@@ -118,7 +118,7 @@ func (e *Engine) sessionView(name, current string, health HealthFunc) (*View, er
 	default:
 		return &View{Summary: Summary{Name: name}, Locked: true}, nil
 	}
-	rec, err := e.Load(name)
+	rec, err := e.Show(name)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
