@@ -1,0 +1,26 @@
+dev · active · current · remove on close
+  Created: 10-17 03:15 · Last activity: 10-17 03:15
+
+  📁 alice/app:aaaaaaaaaa  →  app  [rw · mounted · healthy]
+     ├─ full         1111111111  /rt/lower-1
+     ├─ incremental  aaaaaaaaaa  /rt/lower-0
+     └─ overlay
+        ├─ upper     /rt/upper
+        └─ lower     [highest priority first]
+           ├─ /rt/lower-0
+           └─ /rt/lower-1
+
+  📁 alice/app:2222222222  →  tools  [ro · mounted · healthy]
+     └─ full         2222222222  tools
+
+  📁 alice/app:aaaaaaaaaa  →  tools  [rw · mounted · stale]
+     ├─ full         aaaaaaaaaa  unavailable
+     ├─ shadow    /rt/upper.shadow
+     ├─ Warning: recorded mount is no longer healthy
+     └─ Warning: missing\u000ametadata
+
+old · closed
+  Created: 10-17 03:15 · Closed: 10-17 03:15 · Last activity: -
+
+busy · locked
+orphan orphan overlay /rt/orphan
