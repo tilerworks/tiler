@@ -16,19 +16,24 @@ func newImagesGCCmd() *cobra.Command {
 	var rawExpire string
 	var assumeYes, dryRun bool
 	cmd := &cobra.Command{
-		Use: "gc", Short: "Preview and remove expired unreferenced image versions",
+		Use: "gc [image ...]", Short: "Preview and remove expired unreferenced image versions",
 		Long: "GC lists expired image versions not referenced by sessions, while\n" +
 			"preserving every ancestor needed by a retained version. It also\n" +
-			"labels pending-cleanup and orphan objects. Nothing is deleted\n" +
-			"until interactive input is exactly yes or --yes is supplied;\n" +
+			"labels pending-cleanup and orphan objects. Optional image names\n" +
+			"or quoted glob patterns limit cleanup; * and ? cross /.\n" +
+			"Unmatched patterns are reported; no matches remove nothing.\n" +
+			"Unselected pending cleanup must be handled before expiration.\n" +
+			"Nothing is deleted until interactive input is exactly yes\n" +
+			"or --yes is supplied;\n" +
 			"noninteractive input without --yes only previews the candidates.\n" +
 			"With --dry-run, GC only lists candidates, never asks or deletes,\n" +
 			"and overrides --yes. Missing activity logs are initialized and retained this scan.\n" +
 			"Pending cleanup runs alone; rerun GC afterward for expiration.\n" +
 			"GC never removes, closes, or unmounts sessions. Retention uses\n" +
 			"--expire (default 30 days), not the legacy session age settings.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return runImagesGC(cmd, rawExpire, assumeYes, dryRun) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runImagesGC(cmd, args, rawExpire, assumeYes, dryRun)
+		},
 	}
 	bindExpireFlag(cmd, &rawExpire)
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list candidates without deleting or asking (overrides --yes)")
@@ -36,7 +41,11 @@ func newImagesGCCmd() *cobra.Command {
 	return cmd
 }
 
-func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes, dryRun bool) error {
+func runImagesGC(cmd *cobra.Command, patterns []string, rawExpire string, assumeYes, dryRun bool) error {
+	selector, err := image.NewNameSelector(patterns)
+	if err != nil {
+		return usageError{err}
+	}
 	window, err := expireWindow(rawExpire)
 	if err != nil {
 		return err
@@ -47,9 +56,14 @@ func runImagesGC(cmd *cobra.Command, rawExpire string, assumeYes, dryRun bool) e
 	}
 	now := time.Now().UTC()
 	coordinator := session.ReferenceCoordinator{Store: session.Store{Dir: cfg.SessionsDir, LogsDir: cfg.LogsDir}, ImagesDir: cfg.ImagesDir}
-	plan, err := coordinator.PlanImageGC(now.Add(-window), nil)
+	plan, unmatched, err := coordinator.PlanSelectedImageGC(now.Add(-window), nil, selector)
 	if err != nil {
 		return fmt.Errorf("images gc: %w", err)
+	}
+	for _, pattern := range unmatched {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "No images match %q.\n", pattern); err != nil {
+			return err
+		}
 	}
 	if err := writeImageGCSkips(cmd.ErrOrStderr(), plan.Versions); err != nil {
 		return err

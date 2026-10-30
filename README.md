@@ -373,6 +373,14 @@ Both commands accept `-n` / `--dry-run` to list what would be removed
 without deleting or asking, even with `--yes`. Missing activity logs may
 still be initialized, and those objects are retained during that scan.
 
+`tiler images gc [image ...]` limits cleanup to the union of complete image
+names or quoted glob patterns. For example,
+`tiler images gc -n 'team/*' other/app` previews both selections. `*` and `?` cross `/`; character classes
+and backslash escapes are supported. Matches are sorted and deduplicated.
+Unmatched selectors are reported; no matches remove nothing. Without image
+arguments GC scans the whole library. Pending cleanup runs alone; if it
+belongs to an unselected image, clean that image first and retry.
+
 Both commands print every candidate before deleting anything. An
 interactive terminal must answer `yes` in lower case. `--yes`
 prints the list and then deletes. Without `--yes`, a pipe, a
