@@ -55,12 +55,12 @@ test_expect_success TILER 'session GC previews, initializes once, and then delet
 	test_grep "^created idle$" new.out &&
 	mkdir -p "$sessions/idle/runtime/m1/upper" &&
 	echo keep >"$sessions/idle/runtime/m1/upper/work" &&
-	test_grep "session.create" "$sessions/idle/actions.log" &&
+	test_grep "session.create" "$HOME/.tiler/logs/sessions/idle.log" &&
 	"$tiler_bin" session gc >fresh.out 2>fresh.err &&
 	test_grep "No session expired" fresh.out &&
 	test_grep ! "Type yes" fresh.err &&
 	test_path_is_file "$sessions/idle/runtime/m1/upper/work" &&
-	rewrite_activity "$sessions/idle/actions.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$HOME/.tiler/logs/sessions/idle.log" "2020-01-01T00:00:00.000000000Z" &&
 	"$tiler_bin" session gc >aged.out 2>aged.err &&
 	test_grep "Expired sessions" aged.out &&
 	test_grep "  idle  " aged.out &&
@@ -69,15 +69,15 @@ test_expect_success TILER 'session GC previews, initializes once, and then delet
 	printf "yes\n" | "$tiler_bin" session gc >pipe.out 2>pipe.err &&
 	test_grep "Nothing removed" pipe.err &&
 	test_path_is_file "$sessions/idle/runtime/m1/upper/work" &&
-	rm -f "$sessions/idle/actions.log" &&
+	rm -f "$HOME/.tiler/logs/sessions/idle.log" &&
 	"$tiler_bin" session gc --expire 0 >init1.out 2>init1.err &&
 	test_grep "No session expired" init1.out &&
 	test_grep "kept idle: initialized" init1.err &&
-	test_grep "activity.initialize" "$sessions/idle/actions.log" &&
-	cp "$sessions/idle/actions.log" idle.before &&
+	test_grep "activity.initialize" "$HOME/.tiler/logs/sessions/idle.log" &&
+	cp "$HOME/.tiler/logs/sessions/idle.log" idle.before &&
 	"$tiler_bin" session gc --expire 0 >init2.out 2>init2.err &&
 	test_grep ! initialized init2.err &&
-	test_cmp idle.before "$sessions/idle/actions.log" &&
+	test_cmp idle.before "$HOME/.tiler/logs/sessions/idle.log" &&
 	test_grep "Expired sessions" init2.out &&
 	test_grep "Nothing removed" init2.err &&
 	test_path_is_file "$sessions/idle/runtime/m1/upper/work" &&
@@ -100,7 +100,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK 'image GC previews a full version,
 	test_grep -E "^full alice/app [0-9a-f]+" build.out &&
 	id=$(cut -d" " -f3 build.out) &&
 	test -n "$id" &&
-	log=$images/alice/app/_objects/$id/actions.log &&
+	log=$HOME/.tiler/logs/images/alice/app/$id.log &&
 	test_grep "\"event\":\"image.create.full\"" "$log" &&
 	test_grep ! "image.dependency.activity" "$log" &&
 	"$tiler_bin" images gc --expire 0 >prev.out 2>prev.err &&

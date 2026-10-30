@@ -59,7 +59,7 @@ WSL2 里跑的是真正的 Linux 内核。发行版内部 `runtime.GOOS` 为
 没有 Windows 原生挂载栈，也不走 dmg。请在 WSL shell 里构建并运行
 Linux 二进制。为 Windows 交叉编译的 `tiler.exe` 不能挂载。
 
-把仓库、`$HOME/.tiler`（images、sessions、cache）以及挂载点放在
+把仓库、`$HOME/.tiler`（images、sessions、cache、logs）以及挂载点放在
 发行版自己的文件系统上（一般在 `/home/<user>` 下）。不要放在
 `/mnt/c`、`/mnt/d`：那是经 9p（WSL2）或 drvfs（WSL1）看到的
 Windows 卷。那里的原子 rename、xattr、whiteout 和 FUSE 不稳定，
@@ -208,8 +208,8 @@ tiler session close feature                # 逆序卸载，记录保留
   `cache_dir` 并整体校验通过才挂载，NAS 上的镜像因此从本地副本
   挂载，而挂载表身份仍指向原始库路径。目标必须是当前用户拥有的
   空目录，位于运行时树与全部保留目录之外，也不能是这些树的祖先
-  （挂载不得覆盖 `sessions_dir`、`images_dir`、`cache_dir` 或
-  `$HOME/.tiler`）。每次挂载都在引擎执行前
+  （挂载不得覆盖 `sessions_dir`、`images_dir`、`cache_dir`、
+  `logs_dir` 或 `$HOME/.tiler`）。每次挂载都在引擎执行前
   先写进 session 记录（write-ahead）：`-s, --session <name>` 挂进
   用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
   绑定一个，两者都没有时自动创建 `形容词-动物` 形式的
@@ -256,6 +256,22 @@ tiler session close feature                # 逆序卸载，记录保留
   `orphan` 行。带路径时报告覆盖该路径的 session：合并视图内的
   深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
   覆盖 session；无 session 覆盖的路径报错。
+
+### 活动日志
+
+每个 session 和每个镜像版本在 `logs_dir`（默认 `$HOME/.tiler/logs`）
+下各有一份 JSONL 活动日志。会话文件是
+`logs_dir/sessions/<name>.log`。版本文件是
+`logs_dir/images/<name>/<id>.log`，全量与增量都一样。多段镜像名
+（例如 `alice/app`）对应目录 `images/alice/app/`。锁文件在日志旁边，
+名字是日志文件名加 `.lock`。日志和锁的权限是 `0600`。活动字节不参与
+载荷哈希、版本 id 或 manifest schema。挂载一个不属于库版本的文件时，
+只更新会话日志。
+
+新行是一条 UTF-8 JSON，以整数格式号 `"version":1` 开头。镜像版本 id
+写在 `image_version`，没有镜像版本时省略该字段。`version` 是日志格式
+号。依赖行 `image.dependency.activity` 用 `image_version` 记下祖先
+版本 id，`source_version` 是来源 id，`source_event` 是原来的事件名。
 
 ### External images
 
@@ -343,6 +359,7 @@ tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
   images_dir    /home/alice/.tiler/images
   sessions_dir  /home/alice/.tiler/sessions
   cache_dir     /home/alice/.tiler/cache
+  logs_dir      /home/alice/.tiler/logs
   log_level     info
 
 🔧 Checks
@@ -371,6 +388,7 @@ version: 1
 images_dir: .tiler/images
 sessions_dir: .tiler/sessions      # 合并根：记录 + 每会话 runtime
 cache_dir: .tiler/cache
+logs_dir: .tiler/logs
 log_level: info
 # image_format: squashfs        # squashfs 或 erofs；省略则按工具推断
 # image_compression: zstd       # 省略则用该格式的默认压缩
@@ -382,7 +400,7 @@ log_level: info
 
 `sessions_dir` 是唯一的 session 根。其下每个 session 是自包含目录
 （`session.json`、`session.lock`，以及 `runtime/m<seq>/` 组合树）。
-不再有全局 `runtime_dir`。
+活动日志不在该目录里，而在 `logs_dir`。不再有全局 `runtime_dir`。
 
 取值按层解析，后者覆盖前者：内置默认、用户文件
 `$HOME/.tiler.yaml`、从工作目录向上遍历发现的项目级 `.tiler.yaml`，
@@ -400,8 +418,8 @@ log_level: info
 为用户文件）与核心目录，每项一行，用空格对齐。
 
 `--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
-`images_dir`、`sessions_dir`、`cache_dir`、`log_level`）与
-`results` 并列输出。config 段落不影响 doctor 的判定结果。
+`images_dir`、`sessions_dir`、`cache_dir`、`logs_dir`、
+`log_level`）与 `results` 并列输出。config 段落不影响 doctor 的判定结果。
 
 ## 用户故事
 
