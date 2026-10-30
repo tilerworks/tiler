@@ -52,6 +52,7 @@ func configSummary(cfg config.Config) doctor.ConfigSummary {
 		ImagesDir:   cfg.ImagesDir,
 		SessionsDir: cfg.SessionsDir,
 		CacheDir:    cfg.CacheDir,
+		LogsDir:     cfg.LogsDir,
 		LogLevel:    cfg.LogLevel,
 	}
 }

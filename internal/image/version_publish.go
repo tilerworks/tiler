@@ -12,54 +12,54 @@ import (
 
 // PublishFullVersion publishes a staged full file or split directory under a lock.
 // Staging must be outside imagesDir; the caller always owns its cleanup.
-func PublishFullVersion(imagesDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func PublishFullVersion(imagesDir, logsDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if node.Kind != KindFull {
 		return ImageMeta{}, errors.New("version publish: full image required")
 	}
-	return publishVersionLocked(imagesDir, name, staged, node, nil, descriptionSet)
+	return publishVersionLocked(imagesDir, logsDir, name, staged, node, nil, descriptionSet)
 }
 
 // PublishFullVersionLocked publishes while the caller holds this image's lock.
 // It exists for compound publication and reference mutations.
-func PublishFullVersionLocked(imagesDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func PublishFullVersionLocked(imagesDir, logsDir, name, staged string, node ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if node.Kind != KindFull {
 		return ImageMeta{}, errors.New("version publish: full image required")
 	}
-	return publishVersionCallerLocked(imagesDir, name, staged, node, nil, descriptionSet)
+	return publishVersionCallerLocked(imagesDir, logsDir, name, staged, node, nil, descriptionSet)
 }
 
 // PublishIncrementalVersion pins publication to a captured parent's identity.
 // The parent may be any retained version; staging remains caller-owned outside imagesDir.
-func PublishIncrementalVersion(imagesDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func PublishIncrementalVersion(imagesDir, logsDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if node.Kind != KindIncremental || node.Parent != parent.ID || parent.ID == "" {
 		return ImageMeta{}, errors.New("version publish: incremental image requires its pinned parent")
 	}
-	return publishVersionLocked(imagesDir, name, staged, node, &parent, descriptionSet)
+	return publishVersionLocked(imagesDir, logsDir, name, staged, node, &parent, descriptionSet)
 }
 
 // PublishIncrementalVersionLocked publishes against a pinned parent while the
 // caller holds this image's lock.
-func PublishIncrementalVersionLocked(imagesDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func PublishIncrementalVersionLocked(imagesDir, logsDir, name, staged string, node, parent ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if node.Kind != KindIncremental || node.Parent != parent.ID || parent.ID == "" {
 		return ImageMeta{}, errors.New("version publish: incremental image requires its pinned parent")
 	}
-	return publishVersionCallerLocked(imagesDir, name, staged, node, &parent, descriptionSet)
+	return publishVersionCallerLocked(imagesDir, logsDir, name, staged, node, &parent, descriptionSet)
 }
 
-func publishVersionLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func publishVersionLocked(imagesDir, logsDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	hold, err := LockImage(imagesDir, name, DefaultLibraryLockTimeout)
 	if err != nil {
 		return ImageMeta{}, err
 	}
 	defer hold.Release()
-	return publishVersionCallerLocked(imagesDir, name, staged, node, parent, descriptionSet)
+	return publishVersionCallerLocked(imagesDir, logsDir, name, staged, node, parent, descriptionSet)
 }
 
-func publishVersionCallerLocked(imagesDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
+func publishVersionCallerLocked(imagesDir, logsDir, name, staged string, node ImageMeta, parent *ImageMeta, descriptionSet bool) (ImageMeta, error) {
 	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return ImageMeta{}, err
 	}
-	repo, err := OpenRepo(imagesDir, name)
+	repo, err := openLoggedRepo(imagesDir, logsDir, name)
 	if err != nil {
 		return ImageMeta{}, err
 	}

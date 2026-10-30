@@ -346,7 +346,12 @@ func TestSessionGCReportsRemovedAndKeptOutcomes(t *testing.T) {
 	withTerminalSeam(t, true)
 	sessions := sessionsDir(home)
 	reader := &confirmReader{answer: "yes\n", mutate: func() {
-		w, err := activity.OpenLog(sessions, filepath.Join(sessions, "aged-b"),
+		logs := filepath.Join(home, ".tiler", "logs")
+		dir := filepath.Join(logs, "sessions")
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+			t.Fatal(mkErr)
+		}
+		w, err := activity.OpenLog(logs, dir, "aged-b.log",
 			func() time.Time { return time.Now().UTC() })
 		if err != nil {
 			t.Fatal(err)

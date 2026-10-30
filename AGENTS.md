@@ -22,9 +22,13 @@ in a single Linux package. Integration tests that need root or mounts
 call `t.Skip` when that permission is missing.
 
 The default runtime layout is under the user home directory:
-`$HOME/.tiler/images`, `$HOME/.tiler/sessions`, and
-`$HOME/.tiler/cache`. Session records and combination trees share
+`$HOME/.tiler/images`, `$HOME/.tiler/sessions`, `$HOME/.tiler/cache`,
+and `$HOME/.tiler/logs`. Session records and combination trees share
 `sessions_dir` (`sessions/<name>/` with `runtime/m<seq>/` under it).
+Activity logs live under `logs_dir`, not in the image object or
+session directory: `logs_dir/images/<name>/<id>.log` and
+`logs_dir/sessions/<name>.log`. The lock file is the log name plus
+`.lock`.
 tiler does not gain a registry, a pull command, or certificate
 signing. Integrity checks, when added later, use sha256 only.
 

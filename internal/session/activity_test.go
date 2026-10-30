@@ -27,7 +27,7 @@ type activityRecord struct {
 // log reads as no records.
 func readActivityLog(t *testing.T, dir, name string) []activityRecord {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, name, activity.LogName))
+	data, err := os.ReadFile(filepath.Join(dir+".logs", "sessions", name+".log"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -224,12 +224,87 @@ func TestCloseRemovableRemovesTheLogWithTheSession(t *testing.T) {
 	if err := e.NewRemovable("tmp"); err != nil {
 		t.Fatal(err)
 	}
+	logPath := filepath.Join(e.LogsDir, "sessions", "tmp.log")
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("close did not write a log: %v", err)
+	}
 	removed, err := e.Close("tmp", func(string) error { return nil })
 	if err != nil || !removed {
 		t.Fatalf("Close = %v, %v, want a removal", removed, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tmp")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session directory survived the --rm close: %v", err)
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session log survived the --rm close: %v", err)
+	}
+	if _, err := os.Stat(logPath + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session lock survived the --rm close: %v", err)
+	}
+}
+
+func TestRemoveDeletesTheSessionLog(t *testing.T) {
+	dir := t.TempDir()
+	e := newEngine(dir)
+	if err := e.New("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.New("keep"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Close("dev", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(e.LogsDir, "sessions", "dev.log")
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Remove("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed session log remains: %v", err)
+	}
+	if _, err := os.Stat(logPath + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed session lock remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.LogsDir, "sessions", "keep.log")); err != nil {
+		t.Fatalf("sibling session log missing: %v", err)
+	}
+}
+
+func TestDeleteRecordFilesRejectsAnUnsafeLog(t *testing.T) {
+	dir := t.TempDir()
+	logs := t.TempDir()
+	store := Store{Dir: dir, LogsDir: logs}
+	if err := os.MkdirAll(filepath.Join(dir, "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(logs, "sessions", "dev.log")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+	err := store.deleteRecordFiles("dev")
+	if !errors.Is(err, activity.ErrUnsafeFile) {
+		t.Fatalf("delete = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dev")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("session directory survived: %v", statErr)
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil || string(data) != "keep" {
+		t.Fatalf("symlink was followed: %q, %v", data, readErr)
+	}
+	info, statErr := os.Lstat(link)
+	if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink log was removed: %v", statErr)
 	}
 }
 
@@ -482,7 +557,10 @@ func TestMountActivityFailureAfterMountReportsCompletedOperation(t *testing.T) {
 	}
 	logDir := t.TempDir()
 	e.Activity = func(string) (*activity.Writer, error) {
-		return activity.OpenLog(logDir, logDir, e.Now)
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(logDir, logDir, "activity.log", e.Now)
 	}
 	point := "/mnt/dev"
 	result, err := e.RunMount("dev", mountAction(point), func(a Action) (Result, error) {
@@ -659,7 +737,11 @@ func TestStartedReplayActivityFailureKeepsTheStaleView(t *testing.T) {
 		if calls > 1 {
 			return nil, errors.New("log boom")
 		}
-		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+		dir := filepath.Join(e.LogsDir, "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(e.LogsDir, dir, name+".log", e.Now)
 	}
 	seams := &callLog{}
 	e.Clean = func(string) error {
@@ -731,7 +813,11 @@ func TestStartedUnmountActivityFailureBlocksTeardown(t *testing.T) {
 		if calls > 1 {
 			return nil, errors.New("log boom")
 		}
-		return activity.OpenLog(e.Dir, filepath.Join(e.Dir, name), e.Now)
+		dir := filepath.Join(e.LogsDir, "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		return activity.OpenLog(e.LogsDir, dir, name+".log", e.Now)
 	}
 	umounts := &callLog{}
 	removed, err := e.Close("dev", func(point string) error {

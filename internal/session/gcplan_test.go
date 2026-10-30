@@ -181,7 +181,7 @@ func TestPlanSessionsNeverRenewsExistingActivity(t *testing.T) {
 // readActivityLines returns the session log as raw lines.
 func readActivityLines(t *testing.T, e *Engine, name string) []string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(e.Dir, name, activity.LogName))
+	data, err := os.ReadFile(filepath.Join(e.LogsDir, "sessions", name+".log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestPlanSessionsKeepsWhatItCannotInspect(t *testing.T) {
 	t.Run("damaged log", func(t *testing.T) {
 		e := planEngine(t, nil, old)
 		seedMounted(t, e, "dev", "/ws/view")
-		path := filepath.Join(e.Dir, "dev", activity.LogName)
+		path := filepath.Join(e.LogsDir, "sessions", "dev.log")
 		if err := os.WriteFile(path, []byte("{truncated"), 0o600); err != nil {
 			t.Fatal(err)
 		}

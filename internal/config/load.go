@@ -123,7 +123,7 @@ func commandBase(cli Patch) (string, error) {
 }
 
 func needsWorkingDir(cli Patch) bool {
-	for _, raw := range []*string{cli.ImagesDir, cli.SessionsDir, cli.CacheDir} {
+	for _, raw := range []*string{cli.ImagesDir, cli.SessionsDir, cli.CacheDir, cli.LogsDir} {
 		if raw == nil || isHomePath(*raw) || filepath.IsAbs(*raw) {
 			continue
 		}
@@ -184,6 +184,7 @@ func resolvePatch(p Patch, baseDir, home string) Patch {
 	p.ImagesDir = resolvePathPtr(p.ImagesDir, baseDir, home)
 	p.SessionsDir = resolvePathPtr(p.SessionsDir, baseDir, home)
 	p.CacheDir = resolvePathPtr(p.CacheDir, baseDir, home)
+	p.LogsDir = resolvePathPtr(p.LogsDir, baseDir, home)
 	return p
 }
 

@@ -129,6 +129,7 @@ func recordVersionStackActivity(
 	if err != nil {
 		return fmt.Errorf("mount: activity %s: %w", action.Name, err)
 	}
+	repo.LogsDir = cfg.LogsDir
 	chain := make([]image.ImageMeta, len(stack))
 	for i, member := range stack {
 		chain[i] = member.Meta

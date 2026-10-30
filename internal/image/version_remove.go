@@ -22,11 +22,16 @@ type removalJournal struct {
 	After  VersionManifest `json:"after"`
 	IDs    []string        `json:"ids"`
 	Delete bool            `json:"delete_repository,omitempty"`
+	// LogsDir is the activity root at removal time. Recovery deletes
+	// logs from this directory. Empty means an old journal whose logs
+	// still lived in the object directories.
+	LogsDir string `json:"logs_dir,omitempty"`
 }
 
 // RemoveVersionSubtreeLocked commits removal of root and all descendants.
+// logsDir is stored on the journal and is the only log root recovery uses.
 // The caller must hold the library lock and must already have checked refs.
-func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, error) {
+func RemoveVersionSubtreeLocked(imagesDir, logsDir, name, root string) ([]ImageMeta, error) {
 	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return nil, err
 	}
@@ -55,7 +60,7 @@ func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, erro
 	after.Images = slices.DeleteFunc(slices.Clone(manifest.Images), func(node ImageMeta) bool {
 		return removed[node.ID]
 	})
-	j := removalJournal{Name: name, Before: manifest, After: after, IDs: ids}
+	j := removalJournal{Name: name, Before: manifest, After: after, IDs: ids, LogsDir: recordedLogsDir(logsDir)}
 	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
 		return nil, err
 	}
@@ -66,8 +71,9 @@ func RemoveVersionSubtreeLocked(imagesDir, name, root string) ([]ImageMeta, erro
 }
 
 // RemoveVersionRepositoryLocked commits removal of every version and then
-// removes the repository leaf. The journal and library lock remain outside it.
-func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) {
+// removes the repository leaf. logsDir is stored on the journal and is the
+// only log root recovery uses. The journal and library lock remain outside it.
+func RemoveVersionRepositoryLocked(imagesDir, logsDir, name string) ([]ImageMeta, error) {
 	if err := PrepareImageLocked(imagesDir, name); err != nil {
 		return nil, err
 	}
@@ -91,7 +97,8 @@ func RemoveVersionRepositoryLocked(imagesDir, name string) ([]ImageMeta, error) 
 	}
 	after := manifest
 	after.Images = nil
-	j := removalJournal{Name: name, Before: manifest, After: after, IDs: ids, Delete: true}
+	j := removalJournal{Name: name, Before: manifest, After: after, IDs: ids, Delete: true,
+		LogsDir: recordedLogsDir(logsDir)}
 	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
 		return nil, err
 	}
@@ -133,6 +140,9 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 				return fmt.Errorf("%w: %v", ErrCleanupPending, removeErr)
 			}
 			removeEmptyAncestors(filepath.Dir(repo.Dir), imagesDir)
+			if err := cleanupRemovalLogs(repo, j); err != nil {
+				return err
+			}
 			return finishRemovalJournal(imagesDir, j.Name, seam)
 		}
 	}
@@ -164,6 +174,9 @@ func replayVersionRemoval(imagesDir string, j removalJournal, seam hooks) error 
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("%w: %v", ErrCleanupPending, err)
 		}
+	}
+	if err := cleanupRemovalLogs(repo, j); err != nil {
+		return err
 	}
 	if j.Delete {
 		if err := os.RemoveAll(repo.Dir); err != nil {

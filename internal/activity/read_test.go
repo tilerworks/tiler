@@ -47,7 +47,7 @@ func TestLastActivityReportsMissingAndEmptyLog(t *testing.T) {
 	if _, err := w.LastActivity(); !errors.Is(err, ErrNoActivity) {
 		t.Fatalf("missing log: err = %v, want ErrNoActivity", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, LogName), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testLogName), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.LastActivity(); !errors.Is(err, ErrNoActivity) {
@@ -60,13 +60,18 @@ func TestLastActivityReportsMissingAndEmptyLog(t *testing.T) {
 func TestLastActivityRejectsDamagedTails(t *testing.T) {
 	valid := mustLine(t, testTime.Add(-time.Hour), 1)
 	cases := map[string]string{
-		"unterminated tail": valid + `{"time":"2026-10-28T09:15:30Z","event":"mount"`,
-		"not json":          valid + "{oops}\n",
-		"missing time":      valid + `{"event":"mount","phase":"started"}` + "\n",
-		"invalid time":      valid + `{"time":"yesterday","event":"mount","phase":"started"}` + "\n",
-		"missing event":     valid + `{"time":"2026-10-28T09:15:30Z","phase":"started"}` + "\n",
-		"unknown phase":     valid + `{"time":"2026-10-28T09:15:30Z","event":"mount","phase":"start"}` + "\n",
-		"empty line":        valid + "\n",
+		"unterminated tail":   valid + `{"time":"2026-10-28T09:15:30Z","event":"mount"`,
+		"not json":            valid + "{oops}\n",
+		"missing time":        valid + `{"event":"mount","phase":"started"}` + "\n",
+		"invalid time":        valid + `{"time":"yesterday","event":"mount","phase":"started"}` + "\n",
+		"missing event":       valid + `{"time":"2026-10-28T09:15:30Z","phase":"started"}` + "\n",
+		"unknown phase":       valid + `{"time":"2026-10-28T09:15:30Z","event":"mount","phase":"start"}` + "\n",
+		"format version 2":    valid + `{"version":2,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version 0":    valid + `{"version":0,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version 1.5":  valid + `{"version":1.5,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version bool": valid + `{"version":true,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"format version null": valid + `{"version":null,"time":"2026-10-28T09:15:30Z","event":"mount","phase":"started"}` + "\n",
+		"empty line":          valid + "\n",
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -78,12 +83,47 @@ func TestLastActivityRejectsDamagedTails(t *testing.T) {
 			if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); !errors.Is(err, ErrDamagedLog) {
 				t.Fatalf("Append: err = %v, want ErrDamagedLog", err)
 			}
-			after, err := os.ReadFile(filepath.Join(dir, LogName))
+			after, err := os.ReadFile(filepath.Join(dir, testLogName))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if string(after) != data {
 				t.Fatal("a damaged tail was rewritten")
+			}
+		})
+	}
+}
+
+// TestLastActivityReadsLegacyTail keeps the time of an old line and
+// restores a string version as the image version id.
+func TestLastActivityReadsLegacyTail(t *testing.T) {
+	const id = "old-image-id"
+	at := testTime.Add(-2 * time.Hour)
+	cases := map[string]string{
+		"string version":  `{"time":"` + at.Format(time.RFC3339Nano) + `","event":"mount","phase":"succeeded","version":"` + id + `"}`,
+		"missing version": `{"time":"` + at.Format(time.RFC3339Nano) + `","event":"mount","phase":"succeeded"}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			w, dir := openTestWriter(t, fixedClock(testTime))
+			writeLog(t, dir, []byte(line+"\n"))
+			got, err := w.LastActivity()
+			if err != nil {
+				t.Fatalf("LastActivity: %v", err)
+			}
+			if !got.Equal(at) {
+				t.Fatalf("last activity = %v, want %v", got, at)
+			}
+			rec, err := decodeLine([]byte(line))
+			if err != nil {
+				t.Fatalf("decodeLine: %v", err)
+			}
+			wantID := ""
+			if name == "string version" {
+				wantID = id
+			}
+			if rec.ImageVersion != wantID {
+				t.Fatalf("image version = %q, want %q", rec.ImageVersion, wantID)
 			}
 		})
 	}
@@ -104,7 +144,7 @@ func TestLastActivityHandlesLongHistory(t *testing.T) {
 		t.Fatalf("history = %d bytes, want a long log", len(data))
 	}
 	writeLog(t, dir, data)
-	if err := os.Chtimes(filepath.Join(dir, LogName), testTime, testTime); err != nil {
+	if err := os.Chtimes(filepath.Join(dir, testLogName), testTime, testTime); err != nil {
 		t.Fatal(err)
 	}
 	got, err := w.LastActivity()
@@ -123,7 +163,7 @@ func TestLastActivityRejectsUnsafeLog(t *testing.T) {
 	if err := os.WriteFile(target, []byte(mustLine(t, testTime, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(dir, LogName)); err != nil {
+	if err := os.Symlink(target, filepath.Join(dir, testLogName)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.LastActivity(); !errors.Is(err, ErrUnsafeFile) {
@@ -135,7 +175,7 @@ func TestLastActivityRejectsUnsafeLog(t *testing.T) {
 func TestLastActivityReportsLockContention(t *testing.T) {
 	w, dir := openTestWriter(t, fixedClock(testTime))
 	writeLog(t, dir, []byte(mustLine(t, testTime, 1)))
-	file, err := os.OpenFile(filepath.Join(dir, LockName), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(filepath.Join(dir, testLockName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +205,7 @@ func TestAppendKeepsEventTimeNondecreasing(t *testing.T) {
 	if !got.Equal(testTime) {
 		t.Fatalf("backward clock recorded %v, want %v", got, testTime)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	last := decodeRecord(t, lines[len(lines)-1])
 	stamp, err := time.Parse(time.RFC3339Nano, last["time"].(string))
 	if err != nil {
@@ -210,7 +250,7 @@ func TestEnsureInitializedWritesOnceAtCurrentTime(t *testing.T) {
 	if !at.Equal(testTime) {
 		t.Fatalf("initialized at %v, want %v", at, testTime)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != 1 {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
@@ -227,7 +267,7 @@ func TestEnsureInitializedWritesOnceAtCurrentTime(t *testing.T) {
 	if !at.Equal(testTime) {
 		t.Fatalf("second scan time = %v, want %v", at, testTime)
 	}
-	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 1 {
+	if lines := readLines(t, filepath.Join(dir, testLogName)); len(lines) != 1 {
 		t.Fatalf("records = %d after the second scan, want 1", len(lines))
 	}
 }
@@ -239,7 +279,7 @@ func TestEnsureInitializedKeepsExistingLog(t *testing.T) {
 	w, dir := openTestWriter(t, fixedClock(testTime))
 	data := []byte(mustLine(t, old, 1))
 	writeLog(t, dir, data)
-	before, err := os.Stat(filepath.Join(dir, LogName))
+	before, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,14 +293,14 @@ func TestEnsureInitializedKeepsExistingLog(t *testing.T) {
 	if !at.Equal(old) {
 		t.Fatalf("activity = %v, want %v", at, old)
 	}
-	after, err := os.Stat(filepath.Join(dir, LogName))
+	after, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !os.SameFile(before, after) {
 		t.Fatal("the log was replaced")
 	}
-	content, err := os.ReadFile(filepath.Join(dir, LogName))
+	content, err := os.ReadFile(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +313,7 @@ func TestEnsureInitializedKeepsExistingLog(t *testing.T) {
 // as a missing one.
 func TestEnsureInitializedInitializesEmptyLog(t *testing.T) {
 	w, dir := openTestWriter(t, fixedClock(testTime))
-	if err := os.WriteFile(filepath.Join(dir, LogName), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testLogName), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	initialized, at, err := w.EnsureInitialized(Event{Event: EventInitialize, Phase: PhaseInitialized})
@@ -283,7 +323,7 @@ func TestEnsureInitializedInitializesEmptyLog(t *testing.T) {
 	if !initialized || !at.Equal(testTime) {
 		t.Fatalf("initialized = %v at %v, want true at %v", initialized, at, testTime)
 	}
-	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 1 {
+	if lines := readLines(t, filepath.Join(dir, testLogName)); len(lines) != 1 {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
 }
@@ -301,7 +341,7 @@ func TestEnsureInitializedRejectsDamagedLog(t *testing.T) {
 	if initialized {
 		t.Fatal("a damaged log was reported as initialized")
 	}
-	content, err := os.ReadFile(filepath.Join(dir, LogName))
+	content, err := os.ReadFile(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +372,7 @@ func TestEnsureInitializedRejectsInvalidEvent(t *testing.T) {
 	if _, _, err := w.EnsureInitialized(Event{Phase: PhaseInitialized}); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("err = %v, want ErrInvalidEvent", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log exists after a rejected event: %v", err)
 	}
 }
@@ -372,7 +412,7 @@ func TestEnsureInitializedConcurrentScansInitializeOnce(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("initializations = %d, want exactly 1", count)
 	}
-	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 1 {
+	if lines := readLines(t, filepath.Join(dir, testLogName)); len(lines) != 1 {
 		t.Fatalf("records = %d, want 1", len(lines))
 	}
 }
@@ -420,7 +460,7 @@ func TestRevisionPinsTheNewestRecord(t *testing.T) {
 	if !last.Equal(after.Last) {
 		t.Fatalf("LastActivity = %v, want the revision time %v", last, after.Last)
 	}
-	if lines := readLines(t, filepath.Join(dir, LogName)); len(lines) != 2 {
+	if lines := readLines(t, filepath.Join(dir, testLogName)); len(lines) != 2 {
 		t.Fatalf("records = %d, want 2", len(lines))
 	}
 }

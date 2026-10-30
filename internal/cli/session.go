@@ -262,7 +262,7 @@ func sessionCommandEngine(cmd *cobra.Command, label, name string) (
 // same seam discipline the engines follow.
 var sessionEngine = func(cfg config.Config) *session.Engine {
 	engine := &session.Engine{
-		Store:     session.Store{Dir: cfg.SessionsDir},
+		Store:     session.Store{Dir: cfg.SessionsDir, LogsDir: cfg.LogsDir},
 		Versioned: true,
 		LoadTable: func() ([]mountinfo.Mount, error) {
 			return loadMountTable()

@@ -188,12 +188,17 @@ func readLeafFile(t *testing.T, repo Repo, name string) string {
 
 func testRepo(t *testing.T) Repo {
 	t.Helper()
-	repo, err := OpenRepo(t.TempDir(), "alice/app")
+	images := t.TempDir()
+	repo, err := OpenRepo(images, "alice/app")
 	if err != nil {
 		t.Fatal(err)
 	}
+	repo.LogsDir = logsFor(images)
 	return repo
 }
+
+// logsFor is the activity root paired with one images directory.
+func logsFor(imagesDir string) string { return imagesDir + ".logs" }
 
 func manifestFor(data []byte) Manifest {
 	sum := sha256.Sum256(data)

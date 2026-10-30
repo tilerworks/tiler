@@ -3,6 +3,8 @@ package session
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/jiangxin/tiler/internal/activity"
 )
@@ -17,7 +19,8 @@ var ErrActivityFailed = errors.New("lifecycle completed but activity log failed"
 // activityLog opens the activity log of one session. The caller holds
 // the session's exclusive lock, so the log follows the record it
 // describes. A nil writer means no sessions root is configured, which
-// unit tests that exercise the record store alone rely on.
+// unit tests that exercise the record store alone rely on. An empty
+// logs directory fails the open instead of writing beside the record.
 func (e *Engine) activityLog(name string) (*activity.Writer, error) {
 	if e.Activity != nil {
 		return e.Activity(name)
@@ -25,11 +28,17 @@ func (e *Engine) activityLog(name string) (*activity.Writer, error) {
 	if e.Dir == "" {
 		return nil, nil
 	}
-	dir, err := e.sessionDir(name)
-	if err != nil {
+	if strings.TrimSpace(e.LogsDir) == "" {
+		return nil, errors.New("session: activity log directory is not configured")
+	}
+	if _, err := e.sessionDir(name); err != nil {
 		return nil, err
 	}
-	return activity.OpenLog(e.Dir, dir, e.now)
+	dir := filepath.Join(e.LogsDir, "sessions")
+	if err := activity.PrepareDir(e.LogsDir, dir); err != nil {
+		return nil, err
+	}
+	return activity.OpenLog(e.LogsDir, dir, name+".log", e.now)
 }
 
 // beginActivity writes the started record of one session-level

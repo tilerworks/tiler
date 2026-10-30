@@ -198,7 +198,7 @@ func newImagesRemoveCmd() *cobra.Command {
 			if err != nil {
 				return usageError{err}
 			}
-			coordinator := session.ReferenceCoordinator{Store: session.Store{Dir: cfg.SessionsDir}, ImagesDir: cfg.ImagesDir}
+			coordinator := session.ReferenceCoordinator{Store: session.Store{Dir: cfg.SessionsDir, LogsDir: cfg.LogsDir}, ImagesDir: cfg.ImagesDir}
 			var removed []image.ImageMeta
 			if prefix == "" {
 				removed, err = coordinator.RemoveVersionRepository(name)

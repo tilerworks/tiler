@@ -26,6 +26,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.CacheDir != filepath.Join(root, "cache") {
 		t.Fatalf("cache dir = %q", cfg.CacheDir)
 	}
+	if cfg.LogsDir != filepath.Join(root, "logs") {
+		t.Fatalf("logs dir = %q", cfg.LogsDir)
+	}
 	if cfg.LogLevel != DefaultLogLevel {
 		t.Fatalf("log level = %q", cfg.LogLevel)
 	}

@@ -121,7 +121,7 @@ func TestResolveVersionMountNamesBrokenExternalBlock(t *testing.T) {
 	repo := testRepo(t)
 	stage, node := stagedSplitVersion(t, "payload-text-for-split", 4)
 	node.Format = Format{Type: FormatSquashfs, Compression: CompressionZstd}
-	got, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false)
+	got, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false)
 	if err != nil {
 		t.Fatal(err)
 	}

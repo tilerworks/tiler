@@ -46,7 +46,7 @@ func (c ReferenceCoordinator) ExecuteImageGC(plan ImageGCPlan, clock activity.Cl
 		if err := c.checkCleanupReferencesLocked(plan.Cleanup); err != nil {
 			return err
 		}
-		outcomes, err = image.ExecuteCleanupLocked(c.ImagesDir, plan.Cleanup)
+		outcomes, err = image.ExecuteCleanupLocked(c.ImagesDir, c.LogsDir, plan.Cleanup)
 		if err != nil {
 			return err
 		}

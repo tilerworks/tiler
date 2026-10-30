@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +36,7 @@ func paddedRecord(t *testing.T, size, seq int) []byte {
 // writeLog fills the activity log with prebuilt records.
 func writeLog(t *testing.T, dir string, data []byte) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, LogName), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testLogName), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -100,6 +101,38 @@ func keptSeqs(t *testing.T, lines []string) []int {
 	return seqs
 }
 
+// TestCompactionPreservesLegacyLineBytes copies an old line unchanged
+// and appends a version-1 record after it.
+func TestCompactionPreservesLegacyLineBytes(t *testing.T) {
+	w, dir := openTestWriter(t, fixedClock(testTime))
+	w.maxBytes, w.keepBytes = 250, 150
+	first := paddedRecord(t, 120, 1)
+	second := paddedRecord(t, 120, 2)
+	if bytes.Contains(second, []byte(`"version"`)) {
+		t.Fatalf("fixture = %q, want a legacy line", second)
+	}
+	writeLog(t, dir, append(append([]byte{}, first...), second...))
+	if _, err := w.Append(Event{
+		Event:   EventMount,
+		Phase:   PhaseSucceeded,
+		Version: "abc",
+		Seq:     3,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, testLogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(content, second) {
+		t.Fatalf("legacy bytes changed: %q", content)
+	}
+	fresh := string(content[len(second):])
+	if !strings.HasPrefix(fresh, `{"version":1,`) || !strings.Contains(fresh, `"image_version":"abc"`) {
+		t.Fatalf("new line = %q", fresh)
+	}
+}
+
 // TestAppendCompactsAtExactLimit starts from a log that is exactly
 // MaxLogBytes and proves the next append compacts and stays bounded.
 func TestAppendCompactsAtExactLimit(t *testing.T) {
@@ -116,7 +149,7 @@ func TestAppendCompactsAtExactLimit(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseSucceeded, Seq: 99}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(dir, LogName))
+	info, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +162,7 @@ func TestAppendCompactsAtExactLimit(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("compacted log mode = %o, want 600", perm)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if got := lastSeq(t, lines); got != 99 {
 		t.Fatalf("newest record seq = %d, want the new event", got)
 	}
@@ -138,7 +171,7 @@ func TestAppendCompactsAtExactLimit(t *testing.T) {
 	if !strings.Contains(joined, `"seq":`+fmt.Sprint(records)+`}`) {
 		t.Fatalf("compaction dropped the newest old record from %d bytes of history", len(data))
 	}
-	want := []string{LogName, LockName}
+	want := []string{testLogName, testLockName}
 	if got := logEntries(t, dir); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("object directory = %v, want %v: no rotation history", got, want)
 	}
@@ -153,21 +186,21 @@ func TestAppendBelowLimitKeepsTheLog(t *testing.T) {
 		data = append(data, paddedRecord(t, 200, seq)...)
 	}
 	writeLog(t, dir, data)
-	before, err := os.Stat(filepath.Join(dir, LogName))
+	before, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseSucceeded, Seq: 4}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	after, err := os.Stat(filepath.Join(dir, LogName))
+	after, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !os.SameFile(before, after) {
 		t.Fatal("the log was replaced although it had room")
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != 4 || lastSeq(t, lines) != 4 {
 		t.Fatalf("records = %d with newest %d, want 4 with newest 4", len(lines), lastSeq(t, lines))
 	}
@@ -189,14 +222,14 @@ func TestAppendCompactsLargePreexistingLog(t *testing.T) {
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseSucceeded, Seq: 7}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(dir, LogName))
+	info, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Size() > CompactKeepBytes+MaxLineBytes {
 		t.Fatalf("log = %d bytes, want a bounded suffix", info.Size())
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if got := lastSeq(t, lines); got != 7 {
 		t.Fatalf("newest record seq = %d, want 7", got)
 	}
@@ -307,7 +340,7 @@ func TestAppendCompactionFailureKeepsLog(t *testing.T) {
 			if _, err := w.Append(Event{Event: EventMount, Phase: PhaseSucceeded, Seq: 5}); !errors.Is(err, errBoom) && !errors.Is(err, io.ErrShortWrite) {
 				t.Fatalf("err = %v, want the injected failure", err)
 			}
-			content, err := os.ReadFile(filepath.Join(dir, LogName))
+			content, err := os.ReadFile(filepath.Join(dir, testLogName))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -354,14 +387,14 @@ func TestAppendRotationStaysBoundedUnderConcurrency(t *testing.T) {
 	for err := range failures {
 		t.Fatalf("append: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(dir, LogName))
+	info, err := os.Stat(filepath.Join(dir, testLogName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Size() > int64(w.maxBytes) {
 		t.Fatalf("log = %d bytes, want at most %d", info.Size(), w.maxBytes)
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) == 0 {
 		t.Fatal("rotation removed every record")
 	}

@@ -35,7 +35,7 @@ func TestHelperAppendProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helper spec = %q: %v", spec, err)
 	}
-	w, err := OpenLog(root, dir, time.Now)
+	w, err := OpenLog(root, dir, testLogName, time.Now)
 	if err != nil {
 		t.Fatalf("open log: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestAppendSerializesAcrossProcesses(t *testing.T) {
 			t.Fatalf("helper failed: %v", err)
 		}
 	}
-	lines := readLines(t, filepath.Join(dir, LogName))
+	lines := readLines(t, filepath.Join(dir, testLogName))
 	if len(lines) != processes*each {
 		t.Fatalf("records = %d, want %d", len(lines), processes*each)
 	}

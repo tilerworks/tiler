@@ -42,7 +42,8 @@ func removeVersionSetLocked(repo Repo, ids []string, seam hooks) error {
 	if err != nil {
 		return err
 	}
-	j := removalJournal{Name: repo.Name(), Before: before, After: after, IDs: ids, Delete: removeLeaf}
+	j := removalJournal{Name: repo.Name(), Before: before, After: after, IDs: ids, Delete: removeLeaf,
+		LogsDir: recordedLogsDir(repo.LogsDir)}
 	if err := saveRemovalJournal(libraryRoot(repo), j, seam); err != nil {
 		return err
 	}

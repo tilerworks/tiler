@@ -60,7 +60,7 @@ func TestResolvePayloadBytesPathRefQuickCheck(t *testing.T) {
 		return os.ErrPermission
 	}
 	t.Cleanup(func() { linkSymlink = prev })
-	if err := LinkExternal(images, "alice/app", src, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -100,7 +100,7 @@ func TestLinkExternalPathRefFallback(t *testing.T) {
 		return os.ErrPermission
 	}
 	t.Cleanup(func() { linkSymlink = prev })
-	if err := LinkExternal(images, "alice/app", src, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -122,7 +122,7 @@ func TestLinkExternalPathRefFallback(t *testing.T) {
 	if string(body) != src+"\n" {
 		t.Fatalf("path-ref body = %q", body)
 	}
-	if err := LinkExternal(images, "alice/app", src, "other"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "other"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -137,7 +137,7 @@ func TestLinkExternalIdlePathRef(t *testing.T) {
 		return os.ErrPermission
 	}
 	t.Cleanup(func() { linkSymlink = prev })
-	if err := LinkExternal(images, "alice/app", src, "test"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "test"); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := OpenRepo(images, "alice/app")
@@ -148,7 +148,7 @@ func TestLinkExternalIdlePathRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkExternal(images, "alice/app", src, "again"); err != nil {
+	if err := LinkExternal(images, logsFor(images), "alice/app", src, "again"); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(repo.MetaPath())

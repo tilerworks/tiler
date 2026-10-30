@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/image"
 )
 
@@ -38,7 +37,6 @@ func TestImageGCPendingCleanupPreviewIsStandaloneAndPreservesSessions(t *testing
 	c := newReferenceCoordinator(t)
 	nodes := writeRemovalFixture(t, c)
 	journal := seedPendingImageCleanup(t, c, nodes)
-	repo, _ := image.OpenRepo(c.ImagesDir, "alice/app")
 	rec := removalRecord("kept", StateClosed, nodes[0].ID, "")
 	rec.Actions[0].FullID = nodes[0].ID
 	if err := c.Apply(nil, &rec); err != nil {
@@ -52,8 +50,8 @@ func TestImageGCPendingCleanupPreviewIsStandaloneAndPreservesSessions(t *testing
 		t.Fatalf("cleanup plan = %+v, %v", plan, err)
 	}
 	for _, node := range nodes {
-		dir, _ := repo.ObjectDirPath(node.ID)
-		if _, err := os.Stat(filepath.Join(dir, activity.LogName)); !os.IsNotExist(err) {
+		path := filepath.Join(c.LogsDir, "images", "alice", "app", node.ID+".log")
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("cleanup preview initialized unrelated activity: %v", err)
 		}
 	}

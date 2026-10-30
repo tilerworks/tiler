@@ -4,6 +4,7 @@
     "images_dir": "/tiler-doctor-golden-home/.tiler/images",
     "sessions_dir": "/tiler-doctor-golden-home/.tiler/sessions",
     "cache_dir": "/tiler-doctor-golden-home/.tiler/cache",
+    "logs_dir": "/tiler-doctor-golden-home/.tiler/logs",
     "log_level": "info"
   },
   "results": [

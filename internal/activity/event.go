@@ -74,8 +74,13 @@ func knownPhase(phase string) bool {
 	}
 }
 
-// record is the on-disk shape; the time is always written first.
-type record struct {
+// recordVersion is the format number written on every new line.
+// Callers never set it; Event.Version remains the image version id.
+const recordVersion = 1
+
+// payload is the activity context of one line. ImageVersion is the
+// image version id and is omitted when the event has none.
+type payload struct {
 	Time          string `json:"time"`
 	Event         string `json:"event"`
 	Phase         string `json:"phase"`
@@ -84,27 +89,37 @@ type record struct {
 	Seq           int    `json:"seq,omitempty"`
 	Mountpoint    string `json:"mountpoint,omitempty"`
 	Image         string `json:"image,omitempty"`
-	Version       string `json:"version,omitempty"`
+	ImageVersion  string `json:"image_version,omitempty"`
 	SourceVersion string `json:"source_version,omitempty"`
 	SourceEvent   string `json:"source_event,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
 
+// record is the on-disk shape of one new line. The integer format
+// version is written first, then the same context fields as before.
+type record struct {
+	Version int `json:"version"`
+	payload
+}
+
 // record renders ev at one UTC instant.
 func (ev Event) record(at time.Time) record {
 	return record{
-		Time:          at.UTC().Format(time.RFC3339Nano),
-		Event:         ev.Event,
-		Phase:         ev.Phase,
-		Session:       ev.Session,
-		InstanceID:    ev.InstanceID,
-		Seq:           ev.Seq,
-		Mountpoint:    ev.Mountpoint,
-		Image:         ev.Image,
-		Version:       ev.Version,
-		SourceVersion: ev.SourceVersion,
-		SourceEvent:   ev.SourceEvent,
-		Error:         ev.Error,
+		Version: recordVersion,
+		payload: payload{
+			Time:          at.UTC().Format(time.RFC3339Nano),
+			Event:         ev.Event,
+			Phase:         ev.Phase,
+			Session:       ev.Session,
+			InstanceID:    ev.InstanceID,
+			Seq:           ev.Seq,
+			Mountpoint:    ev.Mountpoint,
+			Image:         ev.Image,
+			ImageVersion:  ev.Version,
+			SourceVersion: ev.SourceVersion,
+			SourceEvent:   ev.SourceEvent,
+			Error:         ev.Error,
+		},
 	}
 }
 

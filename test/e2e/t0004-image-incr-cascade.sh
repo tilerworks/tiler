@@ -44,7 +44,7 @@ test_have_prereq EROFS_TOOLCHAIN || skip_all='needs the erofs toolchain'
 # tiler_bin, TILER, LINUX, and FUSE_TOOLCHAIN come from sharness.d/tiler.sh.
 
 # HOME is the per-run trash directory, so tiler's default layout
-# ($HOME/.tiler/{images,runtime,sessions,cache}) is already sandboxed and
+# ($HOME/.tiler/{images,sessions,cache,logs}) is already sandboxed and
 # needs no --*-dir flags. Mount targets must sit OUTSIDE the runtime tree
 # and the reserved directories, so keep them under $HOME/work.
 #
@@ -59,6 +59,7 @@ work_dir=$HOME/work/app
 verify_dir=$HOME/work/verify
 img_dir=$HOME/.tiler/images/alice/app
 meta_file=$img_dir/meta.yaml
+img_logs=$HOME/.tiler/logs/images/alice/app
 
 # Guarantee every FUSE mount is torn down before the framework removes
 # the trash directory, even if an assertion fails or the run is
@@ -116,9 +117,9 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount and append two distinct in
 # publication stamps the root with the tip's time and leaves the other
 # branch untouched. The root records that dependency once.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'incremental activity reaches the parent and skips the sibling' '
-	tip_log=$img_dir/_objects/$layerB/actions.log &&
-	root_log=$img_dir/_objects/$id1/actions.log &&
-	sib_log=$img_dir/_objects/$layerA/actions.log &&
+	tip_log=$img_logs/$layerB.log &&
+	root_log=$img_logs/$id1.log &&
+	sib_log=$img_logs/$layerA.log &&
 	test_path_is_file "$tip_log" &&
 	tip_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"image.create.incremental\".*\"phase\":\"succeeded\".*/\\1/p" "$tip_log" | tail -n 1) &&
 	test -n "$tip_time" &&
@@ -202,22 +203,22 @@ rewrite_activity() {
 # old sibling and an old independent full are removed.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC initializes a chain once and keeps ancestors of a retained version' '
 	obj=$img_dir/_objects &&
-	rm -f "$obj/$layerB/actions.log" &&
+	rm -f "$img_logs/$layerB.log" &&
 	"$tiler_bin" images gc --expire 0 >init1.out 2>init1.err &&
 	test_grep "kept alice/app:$layerB: initialized" init1.err &&
 	test_grep "kept alice/app:$id1: initialized" init1.err &&
 	test_grep ! "kept alice/app:$layerA: initialized" init1.err &&
-	test_grep "\"event\":\"activity.initialize\"" "$obj/$layerB/actions.log" &&
-	init_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"activity.initialize\".*/\\1/p" "$obj/$layerB/actions.log") &&
+	test_grep "\"event\":\"activity.initialize\"" "$img_logs/$layerB.log" &&
+	init_time=$(sed -n "s/.*\"time\":\"\\([^\"]*\\)\".*\"event\":\"activity.initialize\".*/\\1/p" "$img_logs/$layerB.log") &&
 	test -n "$init_time" &&
-	test_grep "\"time\":\"$init_time\".*\"source_version\":\"$layerB\".*\"source_event\":\"activity.initialize\"" "$obj/$id1/actions.log" &&
-	test_grep ! "activity.initialize" "$obj/$layerA/actions.log" &&
-	cp "$obj/$id1/actions.log" id1.before &&
-	cp "$obj/$layerB/actions.log" layerB.before &&
+	test_grep "\"time\":\"$init_time\".*\"source_version\":\"$layerB\".*\"source_event\":\"activity.initialize\"" "$img_logs/$id1.log" &&
+	test_grep ! "activity.initialize" "$img_logs/$layerA.log" &&
+	cp "$img_logs/$id1.log" id1.before &&
+	cp "$img_logs/$layerB.log" layerB.before &&
 	"$tiler_bin" images gc --expire 0 >init2.out 2>init2.err &&
 	test_grep ! initialized init2.err &&
-	test_cmp id1.before "$obj/$id1/actions.log" &&
-	test_cmp layerB.before "$obj/$layerB/actions.log" &&
+	test_cmp id1.before "$img_logs/$id1.log" &&
+	test_cmp layerB.before "$img_logs/$layerB.log" &&
 	"$tiler_bin" umount "$verify_dir" &&
 	"$tiler_bin" session list >drop.list &&
 	while read -r name _
@@ -227,11 +228,11 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC initializes a chain once and 
 		"$tiler_bin" session close "$name" >"close-$name.out" &&
 		"$tiler_bin" session remove "$name" >"rm-$name.out" || return 1
 	done <drop.list &&
-	test_grep ! "image.dependency.activity" "$obj/$id2/actions.log" &&
-	rewrite_activity "$obj/$id1/actions.log" "2020-01-01T00:00:00.000000000Z" &&
-	rewrite_activity "$obj/$layerA/actions.log" "2020-01-01T00:00:00.000000000Z" &&
-	rewrite_activity "$obj/$id2/actions.log" "2020-01-01T00:00:00.000000000Z" &&
-	rewrite_activity "$obj/$layerB/actions.log" "2099-01-01T00:00:00.000000000Z" &&
+	test_grep ! "image.dependency.activity" "$img_logs/$id2.log" &&
+	rewrite_activity "$img_logs/$id1.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$img_logs/$layerA.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$img_logs/$id2.log" "2020-01-01T00:00:00.000000000Z" &&
+	rewrite_activity "$img_logs/$layerB.log" "2099-01-01T00:00:00.000000000Z" &&
 	"$tiler_bin" images gc --expire 0 --yes >anc.out 2>anc.err &&
 	test_grep "removed alice/app:$layerA" anc.out &&
 	test_grep "removed alice/app:$id2" anc.out &&

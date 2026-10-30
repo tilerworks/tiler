@@ -68,7 +68,7 @@ metal Linux. There is no Windows-native mount stack and no dmg path.
 Build and run the Linux binary in a WSL shell. A `tiler.exe` built
 for Windows cannot mount.
 
-Keep the repository, `$HOME/.tiler` (images, sessions, cache), and
+Keep the repository, `$HOME/.tiler` (images, sessions, cache, logs), and
 mountpoints on the distro's own filesystem (typically under
 `/home/<user>`). Do not put them under `/mnt/c` or `/mnt/d`: those
 are Windows volumes seen through 9p (WSL2) or drvfs (WSL1). Atomic
@@ -179,7 +179,7 @@ Available now:
   image, that default becomes a full rebuild and a warning names
   `--incremental` to keep appending.
   The packed directory must stay outside every reserved tree and must
-  not cover `images_dir`, `sessions_dir`, `cache_dir`, or
+  not cover `images_dir`, `sessions_dir`, `cache_dir`, `logs_dir`, or
   `$HOME/.tiler`; comparison uses real paths, so a symlink into or
   over those trees is refused the same way. An identical full or
   incremental payload is a no-op that reprints the same id. A dmg
@@ -255,7 +255,8 @@ Available now:
   target must be an empty directory owned by the current user,
   outside the runtime tree and every reserved directory, and must
   not be an ancestor of those trees (a mount must not cover
-  `sessions_dir`, `images_dir`, `cache_dir`, or `$HOME/.tiler`).
+  `sessions_dir`, `images_dir`, `cache_dir`, `logs_dir`, or
+  `$HOME/.tiler`).
   Every mount is recorded write-ahead in a session before the
   engine runs: `-s, --session <name>` attaches a session created with
   `session new`, the `TILER_SESSION_ID` environment variable binds
@@ -320,17 +321,22 @@ Available now:
 
 ### Activity and garbage collection
 
-Each session and each image version has its own `actions.log`.
-The session file is `sessions/<name>/actions.log`. A version file
-is `images/<name>/_objects/<id>/actions.log`, whether that version
-is full or incremental. `actions.log.lock` is the stable lock
-inode. The log and the lock are mode 0600. Activity bytes are not
-part of the payload, so they do not change a version id, sha256,
-or the manifest schema. A mount of a file that is not a library
-version updates the session log only.
+Each session and each image version has its own JSONL activity log
+under `logs_dir` (default `$HOME/.tiler/logs`). The session file is
+`logs_dir/sessions/<name>.log`. A version file is
+`logs_dir/images/<name>/<id>.log`, whether that version is full or
+incremental. A multi-segment image name such as `alice/app` is the
+directory `images/alice/app/`. The lock file sits beside the log and
+is the log file name plus `.lock`. The log and the lock are mode
+0600. Activity bytes are not part of the payload, so they do not
+change a version id, sha256, or the manifest schema. A mount of a
+file that is not a library version updates the session log only.
 
-Records are UTF-8 JSON lines. The time of the newest complete line
-is the last activity, in UTC. A file that would grow past 100 KiB
+Records are UTF-8 JSON lines. A new line starts with the integer
+format number `"version":1`. The image version id is the
+`image_version` field and is omitted when the event has none.
+`version` is the log format number. The time of the newest complete
+line is the last activity, in UTC. A file that would grow past 100 KiB
 (102400 bytes) is compacted in place to its newest complete lines,
 about 50 KiB, and the new line is appended. No rotated copy is kept.
 Compaction and a tail read do not count as activity.
@@ -339,8 +345,8 @@ An image event is stored on the source version and on every
 ancestor through the full root. The source line keeps the real
 event, such as `image.create.full`, `image.create.incremental`,
 or `mount`. Each ancestor line is `image.dependency.activity`,
-with `version` set to that ancestor, `source_version` set to the
-source id, and `source_event` set to the original event name.
+with `image_version` set to that ancestor, `source_version` set to
+the source id, and `source_event` set to the original event name.
 The phase is unchanged. One batch shares one timestamp, the later
 of the current UTC time and any tail already in the chain. Lines
 are synced from the root toward the source, holding one log lock
@@ -374,8 +380,9 @@ a missing log may be initialized.
 A session is listed only when it has no attached mount, no other
 process holds its lock, and its last activity is strictly before
 the cutoff. An active session with no mount can expire. GC does
-not unmount. Removal deletes the whole session directory: the
-record, the log, and `runtime/` upper data.
+not unmount. Removal deletes the whole session directory — the record and
+`runtime/` upper data — and the session log and lock under
+`logs_dir`.
 
 ```text
 Expired sessions (last activity before 2026-09-29T03:11:06Z):
@@ -602,6 +609,7 @@ continuation is indented to the detail column:
   images_dir    /home/alice/.tiler/images
   sessions_dir  /home/alice/.tiler/sessions
   cache_dir     /home/alice/.tiler/cache
+  logs_dir      /home/alice/.tiler/logs
   log_level     info
 
 🔧 Checks
@@ -633,6 +641,7 @@ version: 1
 images_dir: .tiler/images
 sessions_dir: .tiler/sessions      # merged root: records + per-session runtime
 cache_dir: .tiler/cache
+logs_dir: .tiler/logs
 log_level: info
 # image_format: squashfs        # squashfs or erofs; omit to infer
 # image_compression: zstd       # omit to use the format default
@@ -645,8 +654,9 @@ complete. `squashfs_options` is consumed only by the squashfs
 implementation. There is no `erofs_options` key.
 
 `sessions_dir` is the only session root. Each session is a self-contained
-directory under it (`session.json`, `session.lock`, `actions.log`,
-and `runtime/m<seq>/` combination trees). There is no separate global
+directory under it (`session.json`, `session.lock`, and
+`runtime/m<seq>/` combination trees). Activity logs are not stored
+there; they live under `logs_dir`. There is no separate global
 `runtime_dir`.
 
 `session_max_age` and `session_autoclose_stale` still load, including
@@ -677,8 +687,8 @@ core directories, one space-aligned row each.
 
 The `--json` form carries the same data as a top-level `config`
 object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,
-`log_level`) alongside `results`. The config section never affects
-the doctor verdict.
+`logs_dir`, `log_level`) alongside `results`. The config section
+never affects the doctor verdict.
 
 ## User story
 

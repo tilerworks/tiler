@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/config"
 )
 
@@ -64,7 +65,7 @@ func TestPublishRecoversRemovalBeforeReusingID(t *testing.T) {
 		t.Fatal(err)
 	}
 	node := removalTestNode(body, "", KindFull, 4)
-	if _, err := PublishFullVersion(imagesDir, repo.Name(), stage, node, false); err != nil {
+	if _, err := PublishFullVersion(imagesDir, logsFor(imagesDir), repo.Name(), stage, node, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal)); !errors.Is(err, os.ErrNotExist) {
@@ -94,7 +95,7 @@ func TestDMGCommitRecoversRemovalBeforeReadingMetadata(t *testing.T) {
 
 func TestRemoveVersionSubtreeLockedCreatesAndCompletesJournal(t *testing.T) {
 	imagesDir, repo, nodes := removalFixture(t)
-	removed, err := RemoveVersionSubtreeLocked(imagesDir, repo.Name(), nodes[1].ID)
+	removed, err := RemoveVersionSubtreeLocked(imagesDir, repo.LogsDir, repo.Name(), nodes[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestRemoveVersionSubtreeLockedCreatesAndCompletesJournal(t *testing.T) {
 
 func TestRemoveVersionRepositoryLockedDeletesLeaf(t *testing.T) {
 	imagesDir, repo, nodes := removalFixture(t)
-	removed, err := RemoveVersionRepositoryLocked(imagesDir, repo.Name())
+	removed, err := RemoveVersionRepositoryLocked(imagesDir, repo.LogsDir, repo.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +158,7 @@ func removalFixture(t *testing.T) (string, Repo, []ImageMeta) {
 	t.Helper()
 	imagesDir := t.TempDir()
 	repo, _ := OpenRepo(imagesDir, "alice/app")
+	repo.LogsDir = logsFor(imagesDir)
 	bodies := [][]byte{[]byte("root"), []byte("child"), []byte("tip")}
 	nodes := []ImageMeta{removalTestNode(bodies[0], "", KindFull, 1)}
 	nodes = append(nodes, removalTestNode(bodies[1], nodes[0].ID, KindIncremental, 2))
@@ -197,4 +199,227 @@ func removalTestNode(body []byte, parent, kind string, minute int) ImageMeta {
 func fmtDigest(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
+}
+
+func writeVersionLog(t *testing.T, repo Repo, id string) string {
+	t.Helper()
+	dir, name, err := repo.activityLogFile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".lock", []byte("lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRemovingOneVersionLeavesSiblingLogs(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	paths := make([]string, len(nodes))
+	for i, node := range nodes {
+		paths[i] = writeVersionLog(t, repo, node.ID)
+	}
+	if _, err := RemoveVersionSubtreeLocked(imagesDir, repo.LogsDir, repo.Name(), nodes[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths[1:] {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed log %s remains: %v", path, err)
+		}
+		if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed lock %s remains: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Fatalf("sibling log missing: %v", err)
+	}
+	if _, err := os.Stat(paths[0] + ".lock"); err != nil {
+		t.Fatalf("sibling lock missing: %v", err)
+	}
+}
+
+func TestRepositoryRemovalDeletesTheImageLogDirectory(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	for _, node := range nodes {
+		writeVersionLog(t, repo, node.ID)
+	}
+	neighbor := filepath.Join(repo.LogsDir, "images", "alice", "neighbor", "keep.log")
+	if err := os.MkdirAll(filepath.Dir(neighbor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(neighbor, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveVersionRepositoryLocked(imagesDir, repo.LogsDir, repo.Name()); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(repo.LogsDir, "images", "alice", "app")
+	if _, err := os.Stat(app); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("image log directory remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.LogsDir, "images")); err != nil {
+		t.Fatalf("logs/images was removed: %v", err)
+	}
+	if data, err := os.ReadFile(neighbor); err != nil || string(data) != "keep" {
+		t.Fatalf("neighbor log = %q, %v", data, err)
+	}
+}
+
+func TestLastVersionLogRemovesEmptyParentSegments(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	for _, node := range nodes {
+		writeVersionLog(t, repo, node.ID)
+	}
+	if _, err := RemoveVersionSubtreeLocked(imagesDir, repo.LogsDir, repo.Name(), nodes[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.LogsDir, "images", "alice")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty image parent remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.LogsDir, "images")); err != nil {
+		t.Fatalf("logs/images was removed: %v", err)
+	}
+}
+
+func TestReplayUsesTheJournalLogsDir(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	recorded := t.TempDir()
+	current := repo.LogsDir
+	repo.LogsDir = recorded
+	recordedLog := writeVersionLog(t, repo, nodes[2].ID)
+	repo.LogsDir = current
+	currentLog := writeVersionLog(t, repo, nodes[2].ID)
+	j := removalJournal{Name: repo.Name(), Before: removalManifest(repo, nodes),
+		After: removalManifest(repo, nodes[:2]), IDs: []string{nodes[2].ID}, LogsDir: recorded}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(mustControl(t, imagesDir, repo.Name(), versionRemovalJournal))
+	if err != nil || !strings.Contains(string(body), recorded) {
+		t.Fatalf("journal = %s, %v", body, err)
+	}
+	if err := replayVersionRemoval(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(recordedLog); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal log remains: %v", err)
+	}
+	if _, err := os.Stat(recordedLog + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal lock remains: %v", err)
+	}
+	if _, err := os.Stat(currentLog); err != nil {
+		t.Fatalf("current config log was removed: %v", err)
+	}
+}
+
+func TestOldJournalLeavesTheLogsTreeAlone(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	logPath := writeVersionLog(t, repo, nodes[2].ID)
+	j := removalJournal{Name: repo.Name(), Before: removalManifest(repo, nodes),
+		After: removalManifest(repo, nodes[:2]), IDs: []string{nodes[2].ID}}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := replayVersionRemoval(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("old journal removed the new log: %v", err)
+	}
+	object, err := repo.ObjectDirPath(nodes[2].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(object); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("object directory remains: %v", err)
+	}
+}
+
+func TestReplayRefusesASymlinkVersionLog(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	dir, name, err := repo.activityLogFile(nodes[2].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(external, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, name)
+	if err := os.Symlink(external, link); err != nil {
+		t.Skip(err)
+	}
+	j := removalJournal{Name: repo.Name(), Before: removalManifest(repo, nodes),
+		After: removalManifest(repo, nodes[:2]), IDs: []string{nodes[2].ID}, LogsDir: repo.LogsDir}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	err = replayVersionRemoval(imagesDir, j, hooks{})
+	if !errors.Is(err, ErrCleanupPending) || !errors.Is(err, activity.ErrUnsafeFile) {
+		t.Fatalf("replay = %v", err)
+	}
+	if data, readErr := os.ReadFile(external); readErr != nil || string(data) != "keep" {
+		t.Fatalf("symlink was followed: %q, %v", data, readErr)
+	}
+	info, statErr := os.Lstat(link)
+	if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink log was removed: %v", statErr)
+	}
+}
+
+func TestVersionSetRemovalDeletesOnlyTheApprovedLog(t *testing.T) {
+	_, repo, nodes := removalFixture(t)
+	paths := make([]string, len(nodes))
+	for i, node := range nodes {
+		paths[i] = writeVersionLog(t, repo, node.ID)
+	}
+	if err := RemoveVersionSetLocked(repo, []string{nodes[2].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths[2]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("approved log remains: %v", err)
+	}
+	if _, err := os.Stat(paths[2] + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("approved lock remains: %v", err)
+	}
+	for _, path := range paths[:2] {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("sibling log missing: %v", err)
+		}
+	}
+}
+
+func TestRecoveryDeletesLogsAfterTheLeafIsGone(t *testing.T) {
+	imagesDir, repo, nodes := removalFixture(t)
+	for _, node := range nodes {
+		writeVersionLog(t, repo, node.ID)
+	}
+	ids := []string{nodes[0].ID, nodes[1].ID, nodes[2].ID}
+	j := removalJournal{Name: repo.Name(), Before: removalManifest(repo, nodes),
+		After: removalManifest(repo, nil), IDs: ids, Delete: true, LogsDir: repo.LogsDir}
+	if err := saveRemovalJournal(imagesDir, j, hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(repo.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverVersionRemoval(imagesDir, repo.Name(), hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.LogsDir, "images", "alice")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered image log directory remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo.LogsDir, "images")); err != nil {
+		t.Fatalf("logs/images was removed: %v", err)
+	}
 }

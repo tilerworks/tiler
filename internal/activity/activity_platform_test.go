@@ -19,14 +19,14 @@ func TestAppendRefusesUnlockedPlatform(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenLog(root, dir, fixedClock(testTime))
+	w, err := OpenLog(root, dir, testLogName, fixedClock(testTime))
 	if err != nil {
 		t.Fatalf("OpenLog: %v", err)
 	}
 	if _, err := w.Append(Event{Event: EventMount, Phase: PhaseStarted}); !errors.Is(err, filelock.ErrUnavailable) {
 		t.Fatalf("err = %v, want filelock.ErrUnavailable", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, LogName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, testLogName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("log written without a lock: %v", err)
 	}
 }

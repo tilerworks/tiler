@@ -27,7 +27,7 @@ func TestDMGVersionsReuseRetainedContentAndDescriptions(t *testing.T) {
 	retained := versionNode("retained")
 	retained.Format, retained.ContentSHA256 = first.Format, first.ContentSHA256
 	retained.CreatedAt = first.CreatedAt.Add(time.Hour)
-	if _, err := PublishFullVersion(cfg.ImagesDir, req.Name, writeSource(t, t.TempDir(), []byte("retained")), retained, true); err != nil {
+	if _, err := PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), req.Name, writeSource(t, t.TempDir(), []byte("retained")), retained, true); err != nil {
 		t.Fatal(err)
 	}
 	req.Description, req.DescriptionSet = "ignored", false

@@ -19,7 +19,7 @@ var testNow = time.Date(2026, 10, 17, 3, 15, 0, 0, time.UTC)
 // has its own Linux tests.
 func newEngine(dir string) *Engine {
 	return &Engine{
-		Store: Store{Dir: dir},
+		Store: Store{Dir: dir, LogsDir: dir + ".logs"},
 		Now:   func() time.Time { return testNow },
 		Lock: func(string, time.Duration) (func(), error) {
 			return func() {}, nil
@@ -1441,7 +1441,7 @@ func TestEngineOperationsUseRealLocksOnLinux(t *testing.T) {
 	// The default lock seam is the real flock: a plain engine still
 	// serializes its own operations without a test seam.
 	dir := t.TempDir()
-	e := &Engine{Store: Store{Dir: dir}, Now: func() time.Time { return testNow }}
+	e := &Engine{Store: Store{Dir: dir, LogsDir: dir + ".logs"}, Now: func() time.Time { return testNow }}
 	if err := e.New("dev"); err != nil {
 		if errors.Is(err, ErrLockUnavailable) {
 			t.Skip("advisory locking needs linux")

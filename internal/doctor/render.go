@@ -47,6 +47,7 @@ type ConfigSummary struct {
 	ImagesDir   string `json:"images_dir"`
 	SessionsDir string `json:"sessions_dir"`
 	CacheDir    string `json:"cache_dir"`
+	LogsDir     string `json:"logs_dir"`
 	LogLevel    string `json:"log_level"`
 }
 
@@ -63,6 +64,7 @@ func WriteConfig(w io.Writer, s ConfigSummary) error {
 		{"images_dir", cleanDetail(s.ImagesDir)},
 		{"sessions_dir", cleanDetail(s.SessionsDir)},
 		{"cache_dir", cleanDetail(s.CacheDir)},
+		{"logs_dir", cleanDetail(s.LogsDir)},
 		{"log_level", cleanDetail(s.LogLevel)},
 	}
 	if err := writeAligned(w, rows); err != nil {

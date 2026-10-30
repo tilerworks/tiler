@@ -11,7 +11,7 @@ func TestIncrementalVersionsRetainHistoricalBranches(t *testing.T) {
 	repo, base := testRepo(t), versionNode("base")
 	root := linkImagesRoot(repo)
 	stage := writeSource(t, t.TempDir(), []byte("base"))
-	if _, err := PublishFullVersion(root, repo.Name(), stage, base, false); err != nil {
+	if _, err := PublishFullVersion(root, logsFor(root), repo.Name(), stage, base, false); err != nil {
 		t.Fatal(err)
 	}
 	parent := base
@@ -23,7 +23,7 @@ func TestIncrementalVersionsRetainHistoricalBranches(t *testing.T) {
 		node.Kind, node.Parent = KindIncremental, parent.ID
 		stage = writeSource(t, t.TempDir(), []byte(text))
 		parent.Description = "mutable publication text"
-		if _, err := PublishIncrementalVersion(root, repo.Name(), stage, node, parent, false); err != nil {
+		if _, err := PublishIncrementalVersion(root, logsFor(root), repo.Name(), stage, node, parent, false); err != nil {
 			t.Fatal(err)
 		}
 		parent = node
@@ -78,7 +78,7 @@ func TestIncrementalVersionsRejectStaleOrInvalidParents(t *testing.T) {
 			}
 			before := readLeafFile(t, repo, fileMeta)
 			stage := writeSource(t, t.TempDir(), []byte("child"))
-			if _, err := PublishIncrementalVersion(linkImagesRoot(repo), repo.Name(), stage, node, base, false); err == nil {
+			if _, err := PublishIncrementalVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, base, false); err == nil {
 				t.Fatal("accepted stale or invalid parent")
 			}
 			assertBytes(t, repo.MetaPath(), []byte(before))
@@ -103,7 +103,7 @@ func TestIncrementalPublicationRetriesAfterMetadataFailure(t *testing.T) {
 		t.Fatal("expected metadata failure")
 	}
 	assertBytes(t, repo.MetaPath(), []byte(before))
-	if _, err := PublishIncrementalVersion(linkImagesRoot(repo), repo.Name(), stage, node, base, false); err != nil {
+	if _, err := PublishIncrementalVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, base, false); err != nil {
 		t.Fatal(err)
 	}
 	assertBytes(t, stage, []byte("child"))

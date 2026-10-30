@@ -67,7 +67,7 @@ type versionActivityLine struct {
 	Event         string `json:"event"`
 	Phase         string `json:"phase"`
 	Image         string `json:"image"`
-	Version       string `json:"version"`
+	Version       string `json:"image_version"`
 	Session       string `json:"session"`
 	InstanceID    string `json:"instance_id"`
 	Seq           int    `json:"seq"`
@@ -80,11 +80,34 @@ type versionActivityLine struct {
 // activityLogPath locates the activity log of one version.
 func activityLogPath(t *testing.T, repo Repo, id string) string {
 	t.Helper()
-	dir, err := repo.ObjectDirPath(id)
+	dir, name, err := repo.activityLogFile(id)
 	if err != nil {
-		t.Fatalf("object dir: %v", err)
+		t.Fatalf("activity log of %s: %v", id, err)
 	}
-	return filepath.Join(dir, activity.LogName)
+	return filepath.Join(dir, name)
+}
+
+// openVersionLog opens the logs_dir log of one version, creating its
+// directory. Tests that replace the batch opener use it so they write
+// the same path production reads.
+func openVersionLog(repo Repo, id string, clock activity.Clock) (*activity.Writer, error) {
+	dir, name, err := repo.activityLogFile(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := activity.PrepareDir(repo.LogsDir, dir); err != nil {
+		return nil, err
+	}
+	return activity.OpenLog(repo.LogsDir, dir, name, clock)
+}
+
+func writeActivityBytes(t *testing.T, repo Repo, id string, data []byte) error {
+	t.Helper()
+	path := activityLogPath(t, repo, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // readVersionActivity decodes one version log; a missing log reads as
@@ -259,7 +282,7 @@ func TestEnsureVersionActivityRejectsADamagedTail(t *testing.T) {
 	mid := incrementalNode(base, "mid")
 	tip := incrementalNode(mid, "tip")
 	seedVersions(t, repo, base, mid, tip)
-	if err := os.WriteFile(activityLogPath(t, repo, mid.ID), []byte("{\n"), 0o600); err != nil {
+	if err := writeActivityBytes(t, repo, mid.ID, []byte("{\n")); err != nil {
 		t.Fatalf("damage the tail: %v", err)
 	}
 	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); !errors.Is(err, activity.ErrDamagedLog) {
@@ -290,11 +313,7 @@ func TestEnsureVersionActivityReportsTheVersionsWrittenBeforeAFailure(t *testing
 			if id == tip.ID && opens[id] > 2 {
 				return nil, boom
 			}
-			dir, err := repo.ObjectDirPath(id)
-			if err != nil {
-				return nil, err
-			}
-			return activity.OpenLog(libraryRoot(repo), dir, clock)
+			return openVersionLog(repo, id, clock)
 		},
 	}
 	written, err := batch.ensure(tip.ID)
@@ -323,7 +342,7 @@ func TestEnsureVersionActivitySharesTheNewestTailTime(t *testing.T) {
 	future := testActivityNow.Add(2 * time.Hour)
 	line := fmt.Sprintf("{\"time\":%q,\"event\":%q,\"phase\":%q}\n",
 		future.Format(time.RFC3339Nano), activity.EventMount, activity.PhaseSucceeded)
-	if err := os.WriteFile(activityLogPath(t, repo, base.ID), []byte(line), 0o600); err != nil {
+	if err := writeActivityBytes(t, repo, base.ID, []byte(line)); err != nil {
 		t.Fatalf("seed ancestor tail: %v", err)
 	}
 	if _, err := EnsureVersionActivityLocked(repo, tip.ID, activityClock); err != nil {
@@ -416,9 +435,9 @@ func TestEnsureVersionActivityScanOrderDoesNotChangeTheOutcome(t *testing.T) {
 	}
 }
 
-// TestEnsureVersionActivityCreatesAMissingObjectDirectory initializes a
-// legacy version whose object directory no longer exists.
-func TestEnsureVersionActivityCreatesAMissingObjectDirectory(t *testing.T) {
+// TestEnsureVersionActivityCreatesTheLogDirectoryNotTheObject initializes
+// a legacy version without recreating a removed object directory.
+func TestEnsureVersionActivityCreatesTheLogDirectoryNotTheObject(t *testing.T) {
 	repo := testRepo(t)
 	base := versionNode("base")
 	tip := incrementalNode(base, "tip")
@@ -443,6 +462,13 @@ func TestEnsureVersionActivityCreatesAMissingObjectDirectory(t *testing.T) {
 		lines := readVersionActivity(t, repo, node.ID)
 		if len(lines) != 1 || lines[0].Phase != activity.PhaseInitialized {
 			t.Fatalf("version %s lines = %+v, want one initialization", node.Description, lines)
+		}
+		dir, err := repo.ObjectDirPath(node.ID)
+		if err != nil {
+			t.Fatalf("object dir of %s: %v", node.Description, err)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("object dir of %s was recreated: %v", node.Description, err)
 		}
 	}
 }
@@ -528,7 +554,7 @@ func TestVersionActivitySharesTheNewestTailTime(t *testing.T) {
 	future := testActivityNow.Add(2 * time.Hour)
 	line := fmt.Sprintf("{\"time\":%q,\"event\":%q,\"phase\":%q}\n",
 		future.Format(time.RFC3339Nano), activity.EventMount, activity.PhaseSucceeded)
-	if err := os.WriteFile(activityLogPath(t, repo, base.ID), []byte(line), 0o600); err != nil {
+	if err := writeActivityBytes(t, repo, base.ID, []byte(line)); err != nil {
 		t.Fatalf("seed ancestor tail: %v", err)
 	}
 	ev := activity.Event{Event: activity.EventMount, Phase: activity.PhaseSucceeded}
@@ -553,7 +579,7 @@ func TestVersionActivityRejectsADamagedTailBeforeWriting(t *testing.T) {
 	mid := incrementalNode(base, "mid")
 	tip := incrementalNode(mid, "tip")
 	seedVersions(t, repo, base, mid, tip)
-	if err := os.WriteFile(activityLogPath(t, repo, mid.ID), []byte(`{"time":"broken`), 0o600); err != nil {
+	if err := writeActivityBytes(t, repo, mid.ID, []byte(`{"time":"broken`)); err != nil {
 		t.Fatalf("damage the tail: %v", err)
 	}
 	ev := activity.Event{Event: activity.EventMount, Phase: activity.PhaseStarted}
@@ -630,11 +656,7 @@ func TestVersionActivityStopsAtMidChainFailure(t *testing.T) {
 			if id == mid.ID && opens[id] > 1 {
 				return nil, boom
 			}
-			dir, err := repo.ObjectDirPath(id)
-			if err != nil {
-				return nil, err
-			}
-			return activity.OpenLog(libraryRoot(repo), dir, clock)
+			return openVersionLog(repo, id, clock)
 		},
 	}
 	ev := activity.Event{Event: activity.EventMount, Phase: activity.PhaseStarted}
@@ -710,9 +732,9 @@ func publishNode(t *testing.T, repo Repo, node ImageMeta, parent *ImageMeta) Ima
 	t.Helper()
 	stage := writeSource(t, t.TempDir(), []byte(node.Description))
 	root := linkImagesRoot(repo)
-	got, err := PublishFullVersion(root, repo.Name(), stage, node, false)
+	got, err := PublishFullVersion(root, logsFor(root), repo.Name(), stage, node, false)
 	if parent != nil {
-		got, err = PublishIncrementalVersion(root, repo.Name(), stage, node, *parent, false)
+		got, err = PublishIncrementalVersion(root, logsFor(root), repo.Name(), stage, node, *parent, false)
 	}
 	if err != nil {
 		t.Fatalf("publish %s: %v", node.Description, err)
@@ -815,7 +837,7 @@ func TestPublishActivityAbortsOnADamagedParentTail(t *testing.T) {
 	tip := incrementalNode(base, "tip")
 	stage := writeSource(t, t.TempDir(), []byte("tip"))
 	root := linkImagesRoot(repo)
-	if _, err := PublishIncrementalVersion(root, repo.Name(), stage, tip, base, false); !errors.Is(err, activity.ErrDamagedLog) {
+	if _, err := PublishIncrementalVersion(root, logsFor(root), repo.Name(), stage, tip, base, false); !errors.Is(err, activity.ErrDamagedLog) {
 		t.Fatalf("publish err = %v, want ErrDamagedLog", err)
 	}
 	manifest, err := LoadVersionManifest(repo)
@@ -839,7 +861,7 @@ func TestPublishActivityReportsAFailedCreationWrite(t *testing.T) {
 		t.Fatalf("damage the creation log: %v", err)
 	}
 	stage := writeSource(t, t.TempDir(), []byte("base"))
-	got, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, base, false)
+	got, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, base, false)
 	if !errors.Is(err, activity.ErrDamagedLog) {
 		t.Fatalf("publish err = %v, want ErrDamagedLog", err)
 	}
@@ -964,7 +986,7 @@ func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
 	t.Run("split", func(t *testing.T) {
 		repo := testRepo(t)
 		stage, node := stagedSplitVersion(t, "payload", 3)
-		if _, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false); err != nil {
+		if _, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false); err != nil {
 			t.Fatalf("publish split version: %v", err)
 		}
 		requireCreated(t, repo, node.ID, activity.EventImageCreateFull)
@@ -973,20 +995,21 @@ func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
 		withLinuxLinkPolicy(t)
 		images, nas := t.TempDir(), t.TempDir()
 		src := writeFakeSquashfs(t, nas, []byte("vendor-payload"))
-		if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+		if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 			t.Fatalf("link external: %v", err)
 		}
 		repo, err := OpenRepo(images, "alice/app")
 		if err != nil {
 			t.Fatalf("open repo: %v", err)
 		}
+		repo.LogsDir = logsFor(images)
 		manifest, err := LoadVersionManifest(repo)
 		if err != nil || len(manifest.Images) != 1 {
 			t.Fatalf("manifest = %#v, %v", manifest, err)
 		}
 		id := manifest.Images[0].ID
 		requireCreated(t, repo, id, activity.EventImageCreateFull)
-		if err := LinkExternal(images, "alice/app", src, "test-builder"); err != nil {
+		if err := LinkExternal(images, logsFor(images), "alice/app", src, "test-builder"); err != nil {
 			t.Fatalf("repeat link: %v", err)
 		}
 		lines := readVersionActivity(t, repo, id)
@@ -1004,13 +1027,13 @@ func TestPublishActivityCoversEveryPublicationPath(t *testing.T) {
 		}
 		defer hold.Release()
 		stage := writeSource(t, t.TempDir(), []byte("base"))
-		if _, err := PublishFullVersionLocked(root, repo.Name(), stage, base, false); err != nil {
+		if _, err := PublishFullVersionLocked(root, logsFor(root), repo.Name(), stage, base, false); err != nil {
 			t.Fatalf("publish under the caller lock: %v", err)
 		}
 		requireCreated(t, repo, base.ID, activity.EventImageCreateFull)
 		tip := incrementalNode(base, "tip")
 		stage = writeSource(t, t.TempDir(), []byte("tip"))
-		if _, err := PublishIncrementalVersionLocked(root, repo.Name(), stage, tip, base, false); err != nil {
+		if _, err := PublishIncrementalVersionLocked(root, logsFor(root), repo.Name(), stage, tip, base, false); err != nil {
 			t.Fatalf("publish incremental under the caller lock: %v", err)
 		}
 		requireCreated(t, repo, tip.ID, activity.EventImageCreateIncremental)

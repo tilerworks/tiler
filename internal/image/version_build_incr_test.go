@@ -13,7 +13,7 @@ import (
 func TestBuildIncrVersionSelectsEachNodesFormat(t *testing.T) {
 	cfg, base := buildConfig(t), versionNode("base")
 	repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
-	if _, err := PublishFullVersion(cfg.ImagesDir, repo.Name(), writeSource(t, t.TempDir(), []byte("base")), base, false); err != nil {
+	if _, err := PublishFullVersion(cfg.ImagesDir, logsFor(cfg.ImagesDir), repo.Name(), writeSource(t, t.TempDir(), []byte("base")), base, false); err != nil {
 		t.Fatal(err)
 	}
 	upper := upperDir(t)
@@ -59,6 +59,7 @@ func TestBuildIncrVersionRejectsInvalidInputsAndRestoresUpper(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			cfg, base := buildConfig(t), versionNode("base")
 			repo, _ := OpenRepo(cfg.ImagesDir, "alice/app")
+			repo.LogsDir = cfg.LogsDir
 			if _, err := appendFullVersion(repo, base, false, hooks{}); err != nil {
 				t.Fatal(err)
 			}

@@ -30,7 +30,7 @@ func TestCreationRejectsColonNamesBeforeSideEffects(t *testing.T) {
 					return err
 				},
 				"link": func() error {
-					return LinkExternal(cfg.ImagesDir, name, src, "test")
+					return LinkExternal(cfg.ImagesDir, logsFor(cfg.ImagesDir), name, src, "test")
 				},
 			}
 			for kind, build := range builders {

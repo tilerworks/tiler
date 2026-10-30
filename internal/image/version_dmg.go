@@ -11,7 +11,7 @@ import (
 
 // BuildDMGVersion creates an immutable full version without activating v3 runtime.
 func BuildDMGVersion(req DMGRequest) (ImageMeta, error) {
-	repo, err := OpenRepo(req.Config.ImagesDir, req.Name)
+	repo, err := openLoggedRepo(req.Config.ImagesDir, req.Config.LogsDir, req.Name)
 	if err != nil {
 		return ImageMeta{}, err
 	}

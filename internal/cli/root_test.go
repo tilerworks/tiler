@@ -288,6 +288,7 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 		"images_dir: .tiler/images",
 		"sessions_dir: .tiler/sessions",
 		"cache_dir: .tiler/cache",
+		"logs_dir: .tiler/logs",
 		"# split_size: 2G",
 	} {
 		if !strings.Contains(string(data), want) {

@@ -15,7 +15,7 @@ func TestFullVersionObjectsPreserveHistoryAndStaging(t *testing.T) {
 	root, old := filepath.Dir(filepath.Dir(repo.Dir)), versionNode("old")
 	for _, node := range []ImageMeta{old, versionNode("new")} {
 		stage := writeSource(t, t.TempDir(), []byte(node.Description))
-		if _, err := PublishFullVersion(root, repo.Name(), stage, node, true); err != nil {
+		if _, err := PublishFullVersion(root, logsFor(root), repo.Name(), stage, node, true); err != nil {
 			t.Fatal(err)
 		}
 		assertBytes(t, stage, []byte(node.Description))
@@ -24,21 +24,21 @@ func TestFullVersionObjectsPreserveHistoryAndStaging(t *testing.T) {
 	duplicate := old
 	duplicate.CreatedAt, duplicate.Description = old.CreatedAt.Add(time.Hour), "ignored"
 	stage := writeSource(t, t.TempDir(), []byte("old"))
-	got, err := PublishFullVersion(root, repo.Name(), stage, duplicate, false)
+	got, err := PublishFullVersion(root, logsFor(root), repo.Name(), stage, duplicate, false)
 	if err != nil || !got.CreatedAt.Equal(old.CreatedAt) || got.Description != old.Description {
 		t.Fatalf("duplicate changed node: %#v, %v", got, err)
 	}
 	if err := quickCheckFile(oldPath, got.Size, got.MtimeUnix); err != nil {
 		t.Fatalf("published metadata does not match object: %v", err)
 	}
-	if _, err := PublishFullVersion(root, repo.Name(), stage, duplicate, true); err == nil {
+	if _, err := PublishFullVersion(root, logsFor(root), repo.Name(), stage, duplicate, true); err == nil {
 		t.Fatal("accepted conflicting explicit description")
 	}
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(filepath.Dir(oldPath), alias); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PublishFullVersion(root, "bob/app", filepath.Join(alias, ImageFile), old, false); err == nil {
+	if _, err := PublishFullVersion(root, logsFor(root), "bob/app", filepath.Join(alias, ImageFile), old, false); err == nil {
 		t.Fatal("accepted staging alias to a published payload")
 	}
 	assertBytes(t, oldPath, []byte("old"))
@@ -52,7 +52,7 @@ func TestCallerLockedIncrementalPublishRejectsChangedBaseline(t *testing.T) {
 	repo := testRepo(t)
 	root := filepath.Dir(filepath.Dir(repo.Dir))
 	base := versionNode("old")
-	if _, err := PublishFullVersion(root, repo.Name(), writeSource(t, t.TempDir(), []byte("old")), base, false); err != nil {
+	if _, err := PublishFullVersion(root, logsFor(root), repo.Name(), writeSource(t, t.TempDir(), []byte("old")), base, false); err != nil {
 		t.Fatal(err)
 	}
 	next := versionNode("new")
@@ -69,7 +69,7 @@ func TestCallerLockedIncrementalPublishRejectsChangedBaseline(t *testing.T) {
 	changed := base
 	changed.Format.Compression = "changed"
 	stage := writeSource(t, t.TempDir(), []byte("new"))
-	if _, err := PublishIncrementalVersionLocked(root, repo.Name(), stage, next, changed, false); err == nil {
+	if _, err := PublishIncrementalVersionLocked(root, logsFor(root), repo.Name(), stage, next, changed, false); err == nil {
 		t.Fatal("changed baseline was published")
 	}
 	manifest, err := LoadVersionManifest(repo)

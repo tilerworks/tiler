@@ -40,6 +40,8 @@ type Config struct {
 	// CacheDir is the directory a later step copies images into when
 	// NAS cache is enabled. Blocks builds also stage pack scratch here.
 	CacheDir string
+	// LogsDir holds session and image-version activity logs.
+	LogsDir string
 	// KeepVersions is how many image versions to retain. Zero means
 	// the count is unlimited.
 	KeepVersions int
@@ -74,8 +76,8 @@ type Config struct {
 	// LogLevel is debug, info, warn, or error.
 	LogLevel string
 	// reservedRoot is the cleaned $HOME/.tiler tree. It stays reserved
-	// even when the four directories are moved elsewhere. Load and
-	// Defaults set it; Apply keeps the value from the lower config.
+	// even when the configured directories are moved elsewhere. Load
+	// and Defaults set it; Apply keeps the value from the lower config.
 	reservedRoot string
 	// userFile is the $HOME/.tiler.yaml path. Defaults sets it and
 	// Apply keeps the value from the lower config, so it survives
@@ -93,6 +95,7 @@ type Patch struct {
 	ImagesDir             *string
 	SessionsDir           *string
 	CacheDir              *string
+	LogsDir               *string
 	KeepVersions          *int
 	MaxAge                *time.Duration
 	SessionMaxAge         *time.Duration
@@ -115,6 +118,7 @@ func Defaults(home string) Config {
 		ImagesDir:     filepath.Join(root, "images"),
 		SessionsDir:   filepath.Join(root, "sessions"),
 		CacheDir:      filepath.Join(root, "cache"),
+		LogsDir:       filepath.Join(root, "logs"),
 		SessionMaxAge: DefaultSessionMaxAge,
 		LogLevel:      DefaultLogLevel,
 		reservedRoot:  root,
@@ -147,6 +151,7 @@ func (p Patch) Apply(base Config) Config {
 	base.ImagesDir = overlay(base.ImagesDir, p.ImagesDir)
 	base.SessionsDir = overlay(base.SessionsDir, p.SessionsDir)
 	base.CacheDir = overlay(base.CacheDir, p.CacheDir)
+	base.LogsDir = overlay(base.LogsDir, p.LogsDir)
 	base.KeepVersions = overlay(base.KeepVersions, p.KeepVersions)
 	base.MaxAge = overlay(base.MaxAge, p.MaxAge)
 	base.SessionMaxAge = overlay(base.SessionMaxAge, p.SessionMaxAge)

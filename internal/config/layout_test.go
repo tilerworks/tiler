@@ -15,10 +15,13 @@ func TestOutsideReserved(t *testing.T) {
 	images := filepath.Join(data, "images")
 	sessions := filepath.Join(data, "sessions")
 	cache := filepath.Join(data, "cache")
+	logsParent := t.TempDir()
+	logs := filepath.Join(logsParent, "logs")
 	cfg, err := Load(home, home, home, "", Patch{
 		ImagesDir:   &images,
 		SessionsDir: &sessions,
 		CacheDir:    &cache,
+		LogsDir:     &logs,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +40,8 @@ func TestOutsideReserved(t *testing.T) {
 		{name: "session runtime descendant", path: filepath.Join(sessions, "dev", "runtime", "m1"), reject: true},
 		{name: "sessions dir", path: sessions, reject: true},
 		{name: "cache descendant", path: filepath.Join(cache, "blob"), reject: true},
+		{name: "logs dir", path: logs, reject: true},
+		{name: "logs descendant", path: filepath.Join(logs, "images", "id.log"), reject: true},
 		{name: "workspace outside", path: filepath.Join(data, "work"), reject: false},
 		{name: "missing path outside", path: filepath.Join(data, "missing", "ws"), reject: false},
 		{name: "prefix neighbor of home layout", path: layout + "-backup", reject: false},
@@ -67,10 +72,13 @@ func TestCoversReserved(t *testing.T) {
 	images := filepath.Join(data, "images")
 	sessions := filepath.Join(data, "sessions")
 	cache := filepath.Join(data, "cache")
+	logsParent := t.TempDir()
+	logs := filepath.Join(logsParent, "logs")
 	cfg, err := Load(home, home, home, "", Patch{
 		ImagesDir:   &images,
 		SessionsDir: &sessions,
 		CacheDir:    &cache,
+		LogsDir:     &logs,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +93,9 @@ func TestCoversReserved(t *testing.T) {
 	}{
 		{name: "ancestor of sessions", path: data, reject: true, want: "would cover reserved"},
 		{name: "ancestor of home layout", path: home, reject: true, want: "would cover reserved"},
+		{name: "ancestor of logs", path: logsParent, reject: true, want: "would cover reserved logs_dir"},
 		{name: "sessions equality left to OutsideReserved", path: sessions, reject: false},
+		{name: "logs equality left to OutsideReserved", path: logs, reject: false},
 		{name: "sessions descendant", path: filepath.Join(sessions, "dev"), reject: false},
 		{name: "workspace outside", path: filepath.Join(data, "work"), reject: false},
 		{name: "prefix neighbor", path: layout + "-backup", reject: false},

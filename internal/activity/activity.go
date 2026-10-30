@@ -16,10 +16,6 @@ import (
 )
 
 const (
-	// LogName is the activity log inside one object directory.
-	LogName = "actions.log"
-	// LockName is the advisory lock file guarding that log.
-	LockName = LogName + ".lock"
 	// MaxLineBytes bounds one encoded record, newline included.
 	MaxLineBytes = 4096
 	// DefaultLockTimeout bounds the wait for one log lock.
@@ -78,21 +74,26 @@ type Writer struct {
 	syncDir     func(dir string)
 }
 
-// OpenLog binds a writer to dir/actions.log. dir must already exist
-// inside root; a missing directory reports the underlying error
-// instead of recreating the object that a deletion removed.
-func OpenLog(root, dir string, clock Clock) (*Writer, error) {
+// OpenLog binds a writer to dir/name inside root. dir must already
+// exist; a missing directory reports the underlying error instead of
+// recreating a tree that a deletion removed. name is one file
+// component.
+func OpenLog(root, dir, name string, clock Clock) (*Writer, error) {
 	if clock == nil {
 		return nil, errors.New("activity: nil clock")
+	}
+	if err := checkLogName(name); err != nil {
+		return nil, err
 	}
 	if err := checkManagedDir(root, dir); err != nil {
 		return nil, err
 	}
+	logPath := filepath.Join(filepath.Clean(dir), name)
 	w := &Writer{
 		root:        filepath.Clean(root),
 		dir:         filepath.Clean(dir),
-		logPath:     filepath.Join(filepath.Clean(dir), LogName),
-		lockPath:    filepath.Join(filepath.Clean(dir), LockName),
+		logPath:     logPath,
+		lockPath:    logPath + ".lock",
 		clock:       clock,
 		lockTimeout: DefaultLockTimeout,
 		maxBytes:    MaxLogBytes,
@@ -105,7 +106,7 @@ func OpenLog(root, dir string, clock Clock) (*Writer, error) {
 	return w, nil
 }
 
-// Dir returns the object directory this writer appends to.
+// Dir returns the directory this writer appends to.
 func (w *Writer) Dir() string { return w.dir }
 
 // LogPath returns the activity log this writer appends to.
@@ -210,7 +211,7 @@ func (w *Writer) openAppend() (logFile, error) {
 // createTemp creates the scratch file of one compaction beside the
 // log, so the replacement rename stays on one filesystem.
 func (w *Writer) createTemp() (tempFile, error) {
-	file, err := os.CreateTemp(w.dir, "."+LogName+".tmp-*")
+	file, err := os.CreateTemp(w.dir, "."+filepath.Base(w.logPath)+".tmp-*")
 	if err != nil {
 		return nil, err
 	}

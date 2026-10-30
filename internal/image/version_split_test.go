@@ -32,10 +32,10 @@ func TestVersionPublicationMixesPerNodeSplitModes(t *testing.T) {
 		var got ImageMeta
 		var err error
 		if i == 0 {
-			got, err = PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false)
+			got, err = PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false)
 		} else {
 			node.Kind, node.Parent = KindIncremental, parent.ID
-			got, err = PublishIncrementalVersion(linkImagesRoot(repo), repo.Name(), stage, node, parent, false)
+			got, err = PublishIncrementalVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, parent, false)
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -94,7 +94,7 @@ func TestSplitVersionsRejectCorruptionAndRecoverOrphans(t *testing.T) {
 				t.Fatalf("failure exposed metadata: %v", err)
 			}
 			if failure == "metadata" || failure == "sync" {
-				if _, err := PublishFullVersion(linkImagesRoot(repo), repo.Name(), stage, node, false); err != nil {
+				if _, err := PublishFullVersion(linkImagesRoot(repo), logsFor(linkImagesRoot(repo)), repo.Name(), stage, node, false); err != nil {
 					t.Fatal(err)
 				}
 			}

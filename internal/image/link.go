@@ -27,14 +27,14 @@ var linkDarwinHost = func() bool { return runtime.GOOS == "darwin" }
 var linkSymlink = os.Symlink
 
 // LinkExternal registers an external image as an immutable full version.
-func LinkExternal(imagesDir, name, srcPath, builder string) error {
-	_, err := LinkExternalVersion(imagesDir, name, srcPath, builder)
+func LinkExternal(imagesDir, logsDir, name, srcPath, builder string) error {
+	_, err := LinkExternalVersion(imagesDir, logsDir, name, srcPath, builder)
 	return err
 }
 
 // LinkExternalVersion registers an external image and returns its full ID.
-func LinkExternalVersion(imagesDir, name, srcPath, builder string) (string, error) {
-	repo, err := OpenRepo(imagesDir, name)
+func LinkExternalVersion(imagesDir, logsDir, name, srcPath, builder string) (string, error) {
+	repo, err := openLoggedRepo(imagesDir, logsDir, name)
 	if err != nil {
 		return "", fmt.Errorf("link: %w", err)
 	}

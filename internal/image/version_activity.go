@@ -3,7 +3,6 @@ package image
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -218,19 +217,20 @@ func (b versionActivityBatch) initialize(id string, at time.Time, ev activity.Ev
 	return wrote, nil
 }
 
-// prepare creates the object directory of every chain member. The log
-// lives inside that directory, and a version committed before this
-// release carries no activity files yet, so the first record of a
-// batch may be the one that needs the directory.
+// prepare creates the log directory shared by the chain. It does not
+// create object directories; those exist only for payloads.
 func (b versionActivityBatch) prepare(chain []ImageMeta) error {
+	dir, err := b.repo.activityLogDir()
+	if err != nil {
+		return err
+	}
 	for _, node := range chain {
-		dir, err := b.repo.ObjectDirPath(node.ID)
-		if err == nil {
-			err = os.MkdirAll(dir, 0o755)
-		}
-		if err != nil {
+		if err := checkID(node.ID); err != nil {
 			return fmt.Errorf("activity directory of version %s: %w", node.ID, err)
 		}
+	}
+	if err := activity.PrepareDir(b.repo.LogsDir, dir); err != nil {
+		return fmt.Errorf("activity directory of %s: %w", b.repo.Name(), err)
 	}
 	return nil
 }
@@ -328,16 +328,16 @@ func (b versionActivityBatch) resolvedClock() activity.Clock {
 	return func() time.Time { return time.Now().UTC() }
 }
 
-// writer opens the activity log of one version object directory.
+// writer opens the activity log of one version under logs_dir.
 func (b versionActivityBatch) writer(id string, clock activity.Clock) (*activity.Writer, error) {
 	if b.open != nil {
 		return b.open(b.repo, id, clock)
 	}
-	dir, err := b.repo.ObjectDirPath(id)
+	dir, name, err := b.repo.activityLogFile(id)
 	if err != nil {
 		return nil, err
 	}
-	return activity.OpenLog(libraryRoot(b.repo), dir, clock)
+	return activity.OpenLog(b.repo.LogsDir, dir, name, clock)
 }
 
 // versionActivityRecord renders the record one version receives.
@@ -354,6 +354,23 @@ func versionActivityRecord(ev activity.Event, image, source, target string) acti
 	record.SourceVersion = source
 	record.SourceEvent = ev.Event
 	return record
+}
+
+// activityLogDir is logs_dir/images/<name segments>.
+func (repo Repo) activityLogDir() (string, error) {
+	return imageActivityDir(repo.LogsDir, repo.Segments)
+}
+
+// activityLogFile is <id>.log in the image log directory.
+func (repo Repo) activityLogFile(id string) (dir, name string, err error) {
+	if err = checkID(id); err != nil {
+		return "", "", err
+	}
+	dir, err = repo.activityLogDir()
+	if err != nil {
+		return "", "", err
+	}
+	return dir, id + ".log", nil
 }
 
 // libraryRoot returns the images root that holds repo.

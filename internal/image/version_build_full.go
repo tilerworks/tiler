@@ -66,7 +66,7 @@ func BuildFullVersion(req FullRequest) (node ImageMeta, err error) {
 	if err := runFullVersionSmoke(req, payload, node); err != nil {
 		return ImageMeta{}, err
 	}
-	return PublishFullVersion(req.Config.ImagesDir, repo.Name(), payload, node, req.DescriptionSet)
+	return PublishFullVersion(req.Config.ImagesDir, req.Config.LogsDir, repo.Name(), payload, node, req.DescriptionSet)
 }
 
 func configOutsideStage(req FullRequest) error {
