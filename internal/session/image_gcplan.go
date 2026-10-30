@@ -14,33 +14,57 @@ import (
 // PlanImages inspects image expiry without replaying image or session deletion.
 // Only missing activity initialization may change a version; all locks are
 // released before the caller presents this snapshot for confirmation.
-func (c ReferenceCoordinator) PlanImages(cutoff time.Time, clock activity.Clock) (plans []image.VersionGCPlan, err error) {
+func (c ReferenceCoordinator) PlanImages(cutoff time.Time, clock activity.Clock) ([]image.VersionGCPlan, error) {
+	plans, _, err := c.PlanSelectedImages(cutoff, clock, image.NameSelector{})
+	return plans, err
+}
+
+// PlanSelectedImages resolves complete image names under the library lock and
+// initializes activity only for that fixed selection. References remain global.
+func (c ReferenceCoordinator) PlanSelectedImages(cutoff time.Time, clock activity.Clock, selector image.NameSelector) (plans []image.VersionGCPlan, unmatched []string, err error) {
 	if cutoff.IsZero() {
-		return nil, errors.New("image gc: zero cutoff")
+		return nil, nil, errors.New("image gc: zero cutoff")
 	}
 	err = c.withLibrary(func() error {
-		if err := image.CheckVersionGCReadyLocked(c.ImagesDir); err != nil {
-			return err
-		}
-		refs, err := c.gcReferencesLocked()
-		if err != nil {
-			return err
-		}
 		repos, err := image.ListRepos(c.ImagesDir)
 		if err != nil {
 			return err
 		}
+		names := make([]string, 0, len(repos))
 		for _, repo := range repos {
-			repo.LogsDir = c.LogsDir
-			plan, err := image.PlanVersionGCLocked(repo, refs[repo.Name()], cutoff, clock)
-			if err != nil {
-				return fmt.Errorf("image gc: %s: %w", repo.Name(), err)
-			}
-			plans = append(plans, plan)
+			names = append(names, repo.Name())
 		}
-		return nil
+		selected, missing := selector.Select(names)
+		unmatched = missing
+		plans, err = c.planImageNamesLocked(cutoff, clock, selected)
+		return err
 	})
-	return plans, err
+	return plans, unmatched, err
+}
+
+// planImageNamesLocked scans only resolved names, never expanding an empty set.
+func (c ReferenceCoordinator) planImageNamesLocked(cutoff time.Time, clock activity.Clock, names []string) ([]image.VersionGCPlan, error) {
+	if err := image.CheckVersionGCReadyLocked(c.ImagesDir); err != nil {
+		return nil, err
+	}
+	refs, err := c.gcReferencesLocked()
+	if err != nil {
+		return nil, err
+	}
+	var plans []image.VersionGCPlan
+	for _, name := range names {
+		repo, err := image.OpenRepo(c.ImagesDir, name)
+		if err != nil {
+			return nil, err
+		}
+		repo.LogsDir = c.LogsDir
+		plan, err := image.PlanVersionGCLocked(repo, refs[name], cutoff, clock)
+		if err != nil {
+			return nil, fmt.Errorf("image gc: %s: %w", name, err)
+		}
+		plans = append(plans, plan)
+	}
+	return plans, nil
 }
 
 // gcReferencesLocked derives pins from validated sources without trusting or
