@@ -165,8 +165,7 @@ func writeSessionGCReport(w io.Writer, report session.GCReport, approved int) er
 	return err
 }
 
-// formatGCStamp renders one listing timestamp: UTC with second precision, the
-// same spelling the other session listings use.
+// formatGCStamp uses the shared local text timestamp format.
 func formatGCStamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339)
+	return formatTextTime(t)
 }

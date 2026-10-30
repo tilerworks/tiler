@@ -400,10 +400,10 @@ func TestSessionShowRendersActionLog(t *testing.T) {
 	for _, want := range []string{
 		"dev\n",
 		"  state       active\n",
-		"  created     2026-10-17T03:15:00Z\n",
+		"  created     2026-10-17 03:15:00\n",
 		"  mounts      1\n",
 		"  actions     1\n",
-		fmt.Sprintf("    1  mount  alice/app  %s  mode=rw  status=mounted  at=2026-10-17T03:15:00Z  subdir=src\n", view),
+		fmt.Sprintf("    1  mount  alice/app  %s  mode=rw  status=mounted  at=2026-10-17 03:15:00  subdir=src\n", view),
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("show missing %q:\n%s", want, stdout)

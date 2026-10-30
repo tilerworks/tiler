@@ -59,18 +59,23 @@ func configSummary(cfg config.Config) doctor.ConfigSummary {
 
 func newDoctorCmd() *cobra.Command {
 	var asJSON bool
+	var width int
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Probe the local image toolchain and host tools",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validateOutputWidth(width); err != nil {
+				return err
+			}
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("doctor: configuration is not loaded")
 			}
-			return writeDoctor(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON)
+			return writeDoctor(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON, width)
 		},
 	}
+	bindOutputWidth(cmd, &width)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render probe results as a JSON document")
 	return cmd
 }
@@ -84,17 +89,17 @@ func newDoctorCmd() *cobra.Command {
 // error listing the failed names, so doctor exits 1, while warn and
 // info results never affect the exit code. The config section never
 // affects the verdict.
-func writeDoctor(ctx context.Context, w, progress io.Writer, cfg config.Config, asJSON bool) error {
+func writeDoctor(ctx context.Context, w, progress io.Writer, cfg config.Config, asJSON bool, width int) error {
 	results, probeErr := runDoctor(ctx, cfg, progress)
 	summary := configSummary(cfg)
 	var err error
 	if asJSON {
 		err = writeJSON(w, doctorDocument{Config: &summary, Results: results})
 	} else {
-		if err = doctor.WriteConfig(w, summary); err != nil {
+		if err = doctor.WriteConfig(w, summary, width); err != nil {
 			return err
 		}
-		err = doctor.Write(w, results)
+		err = doctor.Write(w, results, width)
 	}
 	if err != nil {
 		return err

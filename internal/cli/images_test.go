@@ -153,8 +153,8 @@ func TestImagesListAllVersionsAndShowSelected(t *testing.T) {
 	id3 := buildImmutableImage(t, lib, "bob/tool", other)
 
 	out := mustList(t, lib)
-	for _, want := range []string{"alice/app", "latest=" + listID(id2), listID(id1),
-		"bob/tool", "latest=" + listID(id3)} {
+	for _, want := range []string{"alice/app", "latest: " + listID(id2), listID(id1),
+		"bob/tool", "latest: " + listID(id3)} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls all missing %s:\n%s", want, out)
 		}

@@ -18,60 +18,7 @@ type versionImageView struct {
 	Images   []image.ImageMeta
 	Selected *image.ImageMeta
 	Stack    []image.ImageMeta
-}
-
-func writeVersionImageTable(w io.Writer, views []versionImageView) error {
-	if len(views) == 0 {
-		_, err := fmt.Fprintln(w, "No images found.")
-		return err
-	}
-	collides := false
-	for i, view := range views {
-		if i > 0 {
-			if _, err := fmt.Fprintln(w); err != nil {
-				return err
-			}
-		}
-		if view.Latest == nil {
-			if _, err := fmt.Fprintf(w, "%s  latest=-\n  No image versions.\n", view.Name); err != nil {
-				return err
-			}
-			continue
-		}
-		if _, err := fmt.Fprintf(w, "%s  latest=%s  created=%s\n",
-			view.Name, listID(view.Latest.ID), versionCreatedAt(view.Latest.CreatedAt)); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintln(w, "  ID          KIND         CREATED               DESCRIPTION"); err != nil {
-			return err
-		}
-		depths := make(map[string]int, len(view.Images))
-		shortIDs := make(map[string]bool, len(view.Images))
-		for _, node := range view.Images {
-			short := listID(node.ID)
-			collides = collides || shortIDs[short]
-			shortIDs[short] = true
-			depth := 0
-			if node.Parent != "" {
-				depth = depths[node.Parent] + 1
-			}
-			depths[node.ID] = depth
-			description := terminalText(image.DescriptionSummary(node.Description))
-			if description == "" {
-				description = "-"
-			}
-			if _, err := fmt.Fprintf(w, "%s%s  %-11s  %s  %s\n",
-				strings.Repeat("  ", depth+1), listID(node.ID), node.Kind,
-				versionCreatedAt(node.CreatedAt), description); err != nil {
-				return err
-			}
-		}
-	}
-	if collides {
-		_, err := fmt.Fprintln(w, "Short IDs collide; use images list --json for full IDs.")
-		return err
-	}
-	return nil
+	Activity map[string]imageListActivity
 }
 
 func terminalText(text string) string {
@@ -86,7 +33,7 @@ func terminalText(text string) string {
 	return out.String()
 }
 
-func versionCreatedAt(created time.Time) string {
+func versionCreatedAtJSON(created time.Time) string {
 	return created.UTC().Format(time.RFC3339Nano)
 }
 
@@ -103,7 +50,7 @@ func writeVersionImageDetail(w io.Writer, view versionImageView) error {
 		parent = "-"
 	}
 	fields := [][2]string{{"id", node.ID}, {"parent", parent},
-		{"created", versionCreatedAt(node.CreatedAt)}, {"format", formatDetail(node.Format)},
+		{"created", formatTextTime(node.CreatedAt)}, {"format", formatDetail(node.Format)},
 		{"size", fmt.Sprintf("%d (%s)", node.Size, formatSize(node.Size))},
 		{"payload", versionPayloadKind(*node)}, {"description", node.Description}}
 	for _, field := range fields {
@@ -160,7 +107,7 @@ func newVersionImageJSON(view versionImageView) versionImageJSON {
 			parent = &value
 		}
 		out.Images = append(out.Images, versionNodeJSON{ID: node.ID, Parent: parent,
-			Kind: node.Kind, CreatedAt: versionCreatedAt(node.CreatedAt),
+			Kind: node.Kind, CreatedAt: versionCreatedAtJSON(node.CreatedAt),
 			Format: versionFormatJSON{Type: node.Format.Type, Compression: node.Format.Compression},
 			Size:   node.Size, PayloadKind: versionPayloadKind(node), Description: node.Description,
 			Summary: image.DescriptionSummary(node.Description)})

@@ -70,15 +70,20 @@ func readDescribeDescription(cmd *cobra.Command, messages, files []string, curre
 
 func newImagesListCmd() *cobra.Command {
 	var asJSON bool
+	var width int
 	cmd := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List image versions",
-		Long: "Print each repository as an immutable version forest. The latest version is shown first, followed by parent-before-child topology with shortened IDs, creation times, formats, and description summaries. --json preserves full IDs and descriptions.",
+		Long: "Print each repository with a package icon, version count, and latest ID. The table (120 columns by default, adjustable with -w/--width) uses tree guides in IMAGE, a star for the latest version, and right-aligned SIZE for each node's own payload, excluding ancestors. CREATED and LAST ACTIVITY use local MM-DD HH:MM for the current year; other years show complete elapsed months such as 6mo or 1y6mo (future values have an in prefix). DESCRIPTION wraps its summary to at most two lines, aligned with the description column, with an ellipsis for omitted text. Deep tree guides and long names are elided to fit. Activity includes creation, failed actions, initialization, and descendant events propagated to ancestors, not only successful use. Missing or empty logs show -; unreadable or damaged logs show unknown with a warning on stderr. Listing does not renew activity. --json preserves full IDs and metadata without reading activity logs.",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validateOutputWidth(width); err != nil {
+				return err
+			}
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("images list: configuration is not loaded")
 			}
-			return listAllImages(cmd.OutOrStdout(), cfg, false, asJSON)
+			return listAllImages(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON, width)
 		}}
+	bindOutputWidth(cmd, &width)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
 	return cmd
 }
@@ -98,7 +103,7 @@ func newImagesShowCmd() *cobra.Command {
 	return cmd
 }
 
-func listAllImages(w io.Writer, cfg config.Config, _ bool, asJSON bool) error {
+func listAllImages(w, warnings io.Writer, cfg config.Config, asJSON bool, width int) error {
 	views, err := collectVersionImages(cfg.ImagesDir)
 	if err != nil {
 		return err
@@ -106,7 +111,10 @@ func listAllImages(w io.Writer, cfg config.Config, _ bool, asJSON bool) error {
 	if asJSON {
 		return writeVersionImagesJSON(w, views)
 	}
-	return writeVersionImageTable(w, views)
+	if err := collectVersionActivity(views, cfg, warnings); err != nil {
+		return err
+	}
+	return writeVersionImageTable(w, views, width)
 }
 
 func showOneImage(w io.Writer, cfg config.Config, ref string, asJSON bool) error {

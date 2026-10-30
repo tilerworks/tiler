@@ -120,6 +120,15 @@ failures.
 
 ## Usage
 
+Text timestamps in image and session commands, status, and GC previews
+use the runtime local time zone with second precision
+(`YYYY-MM-DD HH:MM:SS`), except the compact image listing described below.
+JSON, activity logs, and stored metadata retain
+their existing timestamp formats and precision.
+
+`images list` and `doctor` accept `-w/--width` for formatted text output
+(default 120 columns, minimum 80). Width does not change JSON output.
+
 The target workflow is: build an image, mount it, develop, finish the
 session, and show status. A quick start covers the workflow:
 
@@ -145,7 +154,7 @@ tiler session close feature                # reverse unmount, record kept
 Available now:
 
 - `tiler version` prints one version line.
-- `tiler doctor [--json]` probes `/dev/fuse`, the shared external
+- `tiler doctor [-w <columns>] [--json]` probes `/dev/fuse`, the shared external
   tools, the image toolchain (one complete squashfs or erofs stack
   is enough; a missing stack warns), and the squashfuse subdir
   baseline, then inspects the storage: a
@@ -197,9 +206,32 @@ Available now:
   one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [--json]` prints each name's latest version and
-  complete parent-first tree, using 10-hex IDs and creation times.
-  `images show <name[:hash]>` accepts a scoped 4-to-64-hex prefix.
+- `tiler images list [-w <columns>] [--json]` prints each repository with a package
+  icon, version count, and latest ID. The table defaults to 120 terminal
+  display columns, including CJK text and common emoji sequences.
+  Use `-w/--width` to change the limit, for example `-w 80` or
+  `--width 160`. The minimum width is 80; JSON ignores the width.
+  `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
+  the latest version with `★`. Deep ancestor guides and long repository
+  names are elided when needed, preserving IDs and the latest marker.
+  Right-aligned `SIZE` is the node's own payload size, including all
+  blocks for a split payload, without adding ancestor sizes.
+  `CREATED` and `LAST ACTIVITY` use local `MM-DD HH:MM` for the current
+  year. Other years show complete elapsed calendar months: `6mo`, `1y`,
+  or `1y6mo`; less than one month is `<1mo`. Future values use an `in`
+  prefix. One clock snapshot determines the current year for the table.
+  `DESCRIPTION` wraps the first-line summary into at most two lines;
+  its continuation aligns with the description column, and an ellipsis
+  marks omitted text. Full timestamps and descriptions remain available
+  through `images show <name[:hash]>`, which accepts a scoped 4-to-64-hex
+  prefix.
+  Activity includes creation, failed actions, initialization, and
+  descendant dependency events propagated through every ancestor to the
+  full image. It is not limited to successful use. Missing or empty logs
+  display `-`; unreadable or damaged logs display `unknown` with a
+  warning on stderr, while the listing continues. Listing does not renew
+  activity. `--json` preserves full IDs and the existing metadata fields
+  without reading activity logs.
 - `tiler mount <name[:hash]> <dir>` mounts that immutable tip and its
   ancestors; a bare name selects the newest node on any branch.
 - Builds accept `-m/--message` and `-F/--file` (`-F -` reads stdin);
@@ -302,7 +334,7 @@ Available now:
   command prints `removed` rather than `closed`. `session remove <name>`
   deletes a closed record and refuses an active one. `session
   list [--json]` prints one aligned row per record (name, state,
-  mount count, created and closed dates, and an RM marker for
+  mount count, created and closed times, and an RM marker for
   `--rm` sessions). `session show <name> [--json]` prints a
   multi-line record — identity fields, then one line per action
   — and the `--json` form of show is the record object itself. A

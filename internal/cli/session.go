@@ -185,8 +185,9 @@ func newSessionListCmd() *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List every session record",
 		Long: "Print one aligned row per session: name, state, live\n" +
-			"mount count, created and closed dates, and an RM marker\n" +
-			"for --rm sessions. --json renders one machine-readable\n" +
+			"mount count, created and closed times, and an RM marker\n" +
+			"for --rm sessions. Times use local YYYY-MM-DD HH:MM:SS.\n" +
+			"--json renders one machine-readable\n" +
 			"document instead of the human listing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -486,17 +487,10 @@ func sessionTableCols(summary session.Summary) []string {
 		summary.Name,
 		summary.State,
 		strconv.Itoa(summary.Mounts),
-		formatSessionDate(summary.Created),
-		formatSessionDate(summary.Closed),
+		formatTextTime(summary.Created),
+		formatTextTime(summary.Closed),
 		rm,
 	}
-}
-
-func formatSessionDate(t time.Time) string {
-	if t.IsZero() {
-		return "-"
-	}
-	return t.UTC().Format("2006-01-02")
 }
 
 // sessionsDocument is the session list --json envelope.
@@ -546,8 +540,8 @@ func writeSessionShow(w io.Writer, rec session.Record) error {
 		fields = append(fields, [2]string{"rm", "true"})
 	}
 	fields = append(fields,
-		[2]string{"created", rec.CreatedAt.UTC().Format(time.RFC3339)},
-		[2]string{"closed", formatSessionRFC3339(rec.ClosedAt)},
+		[2]string{"created", formatTextTime(rec.CreatedAt)},
+		[2]string{"closed", formatTextTime(rec.ClosedAt)},
 		[2]string{"mounts", strconv.Itoa(session.Summarize(rec).Mounts)},
 		[2]string{"actions", strconv.Itoa(len(rec.Actions))},
 	)
@@ -558,13 +552,6 @@ func writeSessionShow(w io.Writer, rec session.Record) error {
 		}
 	}
 	return writeSessionActionLines(w, rec.Actions)
-}
-
-func formatSessionRFC3339(t time.Time) string {
-	if t.IsZero() {
-		return "-"
-	}
-	return t.UTC().Format(time.RFC3339)
 }
 
 func writeSessionActionLines(w io.Writer, actions []session.Action) error {
@@ -594,7 +581,7 @@ func writeSessionActionLines(w io.Writer, actions []session.Action) error {
 			imageWidth, sessionActionImage(action),
 			pointWidth, action.Mountpoint,
 			mode, action.Status,
-			action.Timestamp.UTC().Format(time.RFC3339))
+			formatTextTime(action.Timestamp))
 		if action.Subdir != "" {
 			line += "  subdir=" + action.Subdir
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -150,18 +151,10 @@ func TestWriteVersionImageTableRendersCompleteForest(t *testing.T) {
 		Images: []image.ImageMeta{root, child, branch, newRoot}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
-	want := "alice/app  latest=dddddddddd  created=2026-10-28T04:00:00Z\n" +
-		"  ID          KIND         CREATED               DESCRIPTION\n" +
-		"  aaaaaaaaaa  full         2026-10-28T01:00:00Z  Base runtime\n" +
-		"    bbbbbbbbbb  incremental  2026-10-28T02:00:00Z  Add tools\n" +
-		"    cccccccccc  incremental  2026-10-28T03:00:00Z  -\n" +
-		"  dddddddddd  full         2026-10-28T04:00:00Z  New base\n"
-	if out.String() != want {
-		t.Fatalf("table = %q, want %q", out.String(), want)
-	}
+	assertGolden(t, "version_images_forest", out.Bytes())
 }
 
 func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
@@ -172,7 +165,7 @@ func TestWriteVersionImageTableReportsShortIDCollisions(t *testing.T) {
 	var out bytes.Buffer
 	view := versionImageView{Name: "alice/app", Latest: &two,
 		Images: []image.ImageMeta{one, two}}
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(out.String(),
@@ -303,7 +296,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	cfg := config.Config{ImagesDir: dir}
 
 	var out bytes.Buffer
-	if err := listAllImages(&out, cfg, false, false); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, false, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	if text := out.String(); !strings.Contains(text, "alice/app") || !strings.Contains(text, child.ID[:10]) {
@@ -317,7 +310,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 		t.Fatalf("show output = %q", out.String())
 	}
 	out.Reset()
-	if err := listAllImages(&out, cfg, false, true); err != nil {
+	if err := listAllImages(&out, io.Discard, cfg, true, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	var doc struct {
@@ -330,7 +323,7 @@ func TestVersionRepositoryReadersUseImmutableMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "alice", "app", image.ImageFile), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := listAllImages(&out, cfg, false, false); err == nil || !strings.Contains(err.Error(), "legacy layout") {
+	if err := listAllImages(&out, io.Discard, cfg, false, defaultOutputWidth); err == nil || !strings.Contains(err.Error(), "legacy layout") {
 		t.Fatalf("mixed layout error = %v", err)
 	}
 }
@@ -355,7 +348,7 @@ func TestVersionImageOutputGoldens(t *testing.T) {
 		Images: []image.ImageMeta{root, child, grandchild, branch, collision}}
 
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, []versionImageView{view}); err != nil {
+	if err := writeVersionImageTableAt(&out, []versionImageView{view}, base.Add(24*time.Hour), 80); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_list", out.Bytes())
@@ -376,7 +369,7 @@ func TestVersionImageOutputGoldens(t *testing.T) {
 
 func TestVersionImageEmptyLibraryGoldens(t *testing.T) {
 	var out bytes.Buffer
-	if err := writeVersionImageTable(&out, nil); err != nil {
+	if err := writeVersionImageTable(&out, nil, defaultOutputWidth); err != nil {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_empty", out.Bytes())
@@ -385,4 +378,60 @@ func TestVersionImageEmptyLibraryGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertGolden(t, "version_images_empty_json", out.Bytes())
+}
+
+func TestVersionImageTableAlignsAcrossRepositories(t *testing.T) {
+	at := time.Date(2026, 10, 28, 1, 0, 0, 123456789, time.UTC)
+	root := versionNode("a", image.KindFull, "", at)
+	root.Size = 1024 * 1024
+	child := versionNode("b", image.KindIncremental, root.ID, at.Truncate(time.Second))
+	child.Size = 1024
+	grandchild := versionNode("c", image.KindIncremental, child.ID, at)
+	grandchild.Size = 0
+	grandchild.Blocks = []image.BlockEntry{{}}
+	other := versionNode("d", image.KindFull, "", at)
+	other.Size = 42
+	views := []versionImageView{
+		{Name: "one", Latest: &grandchild, Images: []image.ImageMeta{root, child, grandchild}},
+		{Name: "empty"},
+		{Name: "two", Latest: &other, Images: []image.ImageMeta{other}},
+	}
+	for i := range views {
+		views[i].Activity = make(map[string]imageListActivity)
+		for j, node := range views[i].Images {
+			views[i].Activity[node.ID] = imageListActivity{At: at.Add(time.Duration(j))}
+		}
+	}
+	var out bytes.Buffer
+	if err := writeVersionImageTableAt(&out, views, at.Add(24*time.Hour), 80); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\t") || !strings.Contains(out.String(), "📦 empty · 0 versions · latest: -\n  No image versions.\n") {
+		t.Fatalf("unexpected table: %q", out.String())
+	}
+	var starts []int
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "  ") || strings.Contains(line, "No image") {
+			continue
+		}
+		if displayWidth(line) > 80 || strings.HasSuffix(line, " ") {
+			t.Fatalf("invalid line width or padding: %q", line)
+		}
+		var columns []int
+		if strings.Contains(line, "DESCRIPTION") {
+			columns = []int{displayWidth(line[:strings.Index(line, "CREATED")]), displayWidth(line[:strings.Index(line, "LAST ACTIVITY")]), displayWidth(line[:strings.Index(line, "DESCRIPTION")])}
+		} else {
+			columns = []int{displayWidth(line[:strings.Index(line, "10-28")]), displayWidth(line[:strings.LastIndex(line, "10-28")]), displayWidth(line[:strings.Index(line, "description")])}
+			for _, size := range []string{"1 MiB", "1 KiB", "0 B", "42 B"} {
+				if index := strings.Index(line, size); index >= 0 && displayWidth(line[:index+len(size)]) != columns[0]-2 {
+					t.Fatalf("size not right-aligned: %q", line)
+				}
+			}
+		}
+		if starts == nil {
+			starts = columns
+		} else if !reflect.DeepEqual(starts, columns) {
+			t.Fatalf("columns %v differ from %v in %q", columns, starts, line)
+		}
+	}
 }
