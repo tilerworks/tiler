@@ -18,6 +18,8 @@ const (
 // record reconciled against one mount table snapshot, plus the tiler
 // views that stay mounted without an active record claiming them.
 type Overview struct {
+	// Diagnostics reports incomplete optional query information.
+	Diagnostics []string
 	// Current carries the environment session marker verbatim; it
 	// may be empty and may match no record, which is not an error.
 	Current string

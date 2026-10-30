@@ -8,14 +8,25 @@ import (
 	"strings"
 )
 
-// Query selects sessions by their recorded mount directories.
+// Query selects sessions by directory, exact session name, and image stack.
 type Query struct {
 	Directory string
+	Session   string
+	Image     string
 }
 
 // Query returns complete matching session views from one host snapshot.
 // Unlike reverse lookup, either directory may contain the other.
 func (e *Engine) Query(current string, query Query) (Overview, error) {
+	if query.Session != "" {
+		if err := ValidateName(query.Session); err != nil {
+			return Overview{}, err
+		}
+	}
+	filter, err := e.queryImage(query.Image)
+	if err != nil {
+		return Overview{}, err
+	}
 	directory := ""
 	if query.Directory != "" {
 		info, err := os.Stat(query.Directory)
@@ -35,7 +46,19 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 		return Overview{}, err
 	}
 	selected := overview.Sessions[:0]
+	found := query.Session == ""
 	for _, view := range overview.Sessions {
+		if view.Name == query.Session {
+			found = true
+		}
+	}
+	if !found {
+		return Overview{}, fmt.Errorf("session: %s: %w", query.Session, ErrNotFound)
+	}
+	for _, view := range overview.Sessions {
+		if query.Session != "" && query.Session != view.Name {
+			continue
+		}
 		if view.State == StateClosed && !view.Locked {
 			// Read again under the scan lock; closed records have no
 			// expanded actions in the existing Overview contract.
@@ -56,28 +79,22 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 				view = View{Summary: Summary{Name: view.Name}, Locked: true}
 			}
 		}
-		if directory == "" || matchesDirectory(view, directory) {
+		if matchesQuery(view, directory, filter, e.ImagesDir, &overview.Diagnostics) {
 			selected = append(selected, view)
 		}
 	}
 	overview.Sessions = selected
 	orphans := overview.Orphans[:0]
 	for _, orphan := range overview.Orphans {
+		if query.Session != "" || query.Image != "" {
+			continue
+		}
 		if directory == "" || relatedQueryPath(orphan.Point, directory) {
 			orphans = append(orphans, orphan)
 		}
 	}
 	overview.Orphans = orphans
 	return overview, nil
-}
-
-func matchesDirectory(view View, directory string) bool {
-	for _, action := range view.Actions {
-		if action.Type == TypeMount && action.Mountpoint != "" && relatedQueryPath(action.Mountpoint, directory) {
-			return true
-		}
-	}
-	return false
 }
 
 func relatedQueryPath(path, directory string) bool {
