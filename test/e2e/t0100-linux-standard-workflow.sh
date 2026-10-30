@@ -14,7 +14,7 @@ sessions=$standard/.tiler/sessions
 logs=$standard/.tiler/logs
 
 # Later lifecycle steps share this project and its immutable version history.
-test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT 'prepare an isolated project with a tagged Git source' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLIENT 'prepare an isolated project with a tagged Git source' '
 	workflow_config "$standard" &&
 	mkdir -p "$prepare/docs" &&
 	workflow_git_init "$prepare" &&
@@ -42,7 +42,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT 'prepare an isolated 
 	'\''
 '
 
-test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT 'publish the initial full with metadata and an activity log' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLIENT 'publish the initial full with metadata and an activity log' '
 	(
 		cd "$prepare" &&
 		"$tiler_bin" build -I standard/app -f --format squashfs -m initial 2>"$HOME/base.err"
@@ -354,5 +354,114 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fre
 	test_path_is_missing "$logs/sessions/$verify_session.log" &&
 	test_path_is_missing "$logs/sessions/$verify_session.log.lock"
 '
+
+# Each branch owns a distinct named session, with work left after publication.
+for tiler_branch_kind in chain branch
+do
+	test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN "$tiler_branch_kind increment uses its explicitly mounted parent" '
+		if test "$tiler_branch_kind" = chain
+		then
+			branch_parent=$delta_id
+		else
+			branch_parent=$base_id
+		fi &&
+		branch_point=$standard/mnt-$tiler_branch_kind &&
+		branch_session=$tiler_branch_kind-edit &&
+		mkdir -p "$branch_point" &&
+		(
+			cd "$standard" &&
+			"$tiler_bin" session new "$branch_session" >"$HOME/$tiler_branch_kind-new.out" 2>"$HOME/$tiler_branch_kind-new.err" &&
+			"$tiler_bin" mount --session "$branch_session" "standard/app:$branch_parent" "$branch_point" 2>"$HOME/$tiler_branch_kind-mount.err"
+		) >"$tiler_branch_kind-mount.out" &&
+		printf "%s published content\n" "$tiler_branch_kind" >"$tiler_branch_kind-published" &&
+		cp "$tiler_branch_kind-published" "$branch_point/$tiler_branch_kind.txt" &&
+		(
+			cd "$branch_point" &&
+			"$tiler_bin" build -i --format squashfs 2>"$HOME/$tiler_branch_kind-build.err"
+		) >"$tiler_branch_kind-build.out" &&
+		test_grep -E "^incr standard/app [0-9a-f]{64}$" "$tiler_branch_kind-build.out" &&
+		branch_id=$(cut -d" " -f3 "$tiler_branch_kind-build.out") &&
+		if test "$tiler_branch_kind" = chain
+		then
+			chain_tip_id=$branch_id
+		else
+			branch_tip_id=$branch_id
+		fi &&
+		test_grep -E "^[[:space:]]*parent: $branch_parent$" "$images/_objects/$branch_id/image.yaml" &&
+		printf "%s unpublished work\n" "$tiler_branch_kind" >"$tiler_branch_kind-pending" &&
+		cp "$tiler_branch_kind-pending" "$branch_point/$tiler_branch_kind-pending.txt" &&
+		test_cmp "$tiler_branch_kind-pending" "$sessions/$branch_session/runtime/m1/upper/$tiler_branch_kind-pending.txt"
+	'
+done
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'version details and the tree distinguish descendants from sibling branches' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" images show "standard/app:$chain_tip_id" >"$HOME/chain-show.out" 2>"$HOME/chain-show.err" &&
+		"$tiler_bin" images show "standard/app:$branch_tip_id" >"$HOME/branch-show.out" 2>"$HOME/branch-show.err" &&
+		"$tiler_bin" images show standard/app >"$HOME/latest-show.out" 2>"$HOME/latest-show.err" &&
+		"$tiler_bin" images ls 2>"$HOME/branch-tree.err"
+	) >branch-tree.out &&
+	test_grep -E "^  parent +$delta_id$" chain-show.out &&
+	test_grep -E "^  parent +$base_id$" branch-show.out &&
+	test_grep -E "^  id +$branch_tip_id$" latest-show.out &&
+	sed -n "s/^    \([0-9a-f]\{64\}\)$/\1/p" chain-show.out >chain-ancestors &&
+	printf "%s\n%s\n" "$base_id" "$delta_id" >chain-ancestors.expect &&
+	test_cmp chain-ancestors.expect chain-ancestors &&
+	sed -n "s/^    \([0-9a-f]\{64\}\)$/\1/p" branch-show.out >branch-ancestors &&
+	printf "%s\n" "$base_id" >branch-ancestors.expect &&
+	test_cmp branch-ancestors.expect branch-ancestors &&
+	test_grep "^     ├─ ${delta_id%${delta_id#??????????}}  " branch-tree.out &&
+	test_grep "^     │  └─ ${chain_tip_id%${chain_tip_id#??????????}}  " branch-tree.out &&
+	test_grep "^     └─ ${branch_tip_id%${branch_tip_id#??????????}} ★  " branch-tree.out &&
+	grep "^[[:space:]]*- id:" "$images/meta.yaml" >branch-version-count &&
+	test_line_count = 4 branch-version-count
+'
+
+for tiler_branch_kind in chain branch
+do
+	test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN "a fresh $tiler_branch_kind view inherits ancestors and excludes sibling work" '
+		if test "$tiler_branch_kind" = chain
+		then
+			branch_id=$chain_tip_id &&
+			other_branch=branch
+		else
+			branch_id=$branch_tip_id &&
+			other_branch=chain
+		fi &&
+		(
+			cd "$standard" &&
+			"$tiler_bin" mount --rm "standard/app:$branch_id" "$verify_point" 2>"$HOME/$tiler_branch_kind-verify.err"
+		) >"$tiler_branch_kind-verify.out" &&
+		verify_session=$(sed -n "s/^new session created: //p" "$tiler_branch_kind-verify.out") &&
+		test -n "$verify_session" &&
+		test_cmp "$tiler_branch_kind-published" "$verify_point/$tiler_branch_kind.txt" &&
+		test_cmp "$prepare/docs/guide.txt" "$verify_point/docs/guide.txt" &&
+		test_path_is_missing "$verify_point/$other_branch.txt" &&
+		test_path_is_missing "$verify_point/chain-pending.txt" &&
+		test_path_is_missing "$verify_point/branch-pending.txt" &&
+		test_path_is_missing "$verify_point/pending.txt" &&
+		if test "$tiler_branch_kind" = chain
+		then
+			test_cmp delta-readme "$verify_point/README.txt" &&
+			test_cmp delta-addition "$verify_point/published.txt" &&
+			test_path_is_missing "$verify_point/obsolete.txt"
+		else
+			test_cmp "$prepare/README.txt" "$verify_point/README.txt" &&
+			test_cmp "$prepare/obsolete.txt" "$verify_point/obsolete.txt" &&
+			test_path_is_missing "$verify_point/published.txt"
+		fi &&
+		test_cmp "$tiler_branch_kind-pending" "$standard/mnt-$tiler_branch_kind/$tiler_branch_kind-pending.txt" &&
+		(
+			cd "$standard" &&
+			"$tiler_bin" umount "$verify_point" 2>"$HOME/$tiler_branch_kind-verify-umount.err"
+		) >"$tiler_branch_kind-verify-umount.out" &&
+		find "$verify_point" -mindepth 1 -print >branch-verify-unmounted &&
+		test_must_be_empty branch-verify-unmounted &&
+		test_path_is_missing "$sessions/$verify_session" &&
+		test_path_is_missing "$logs/sessions/$verify_session.log" &&
+		test_path_is_missing "$logs/sessions/$verify_session.log.lock"
+	'
+done
 
 test_done

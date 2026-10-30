@@ -4,6 +4,11 @@ test_lazy_prereq WORKFLOW_GIT '
 	command -v git >/dev/null 2>&1
 '
 
+# The CLI checks the format client even when packing without a mount.
+test_lazy_prereq WORKFLOW_SQUASHFS_CLIENT '
+	command -v squashfuse_ll >/dev/null 2>&1
+'
+
 workflow_config () {
 	mkdir -p "$1" &&
 	cat >"$1/.tiler.yaml" <<-\EOF
