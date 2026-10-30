@@ -126,6 +126,13 @@ use the runtime local time zone with second precision
 JSON, activity logs, and stored metadata retain
 their existing timestamp formats and precision.
 
+`tiler images` (alias `tiler image`) and `tiler session` (alias
+`tiler sessions`) run `list` when no subcommand is given. Text output
+starts with a hint to use `ls` to hide the hint and `-h` for more
+subcommands. List flags such as
+`--json` and image listing's `-w/--width` work on the group too; JSON
+omits the hint. Explicit `list` output is unchanged.
+
 `images list` and `doctor` accept `-w/--width` for formatted text output
 (default 120 columns, minimum 80). Width does not change JSON output.
 

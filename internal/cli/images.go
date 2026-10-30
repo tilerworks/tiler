@@ -17,8 +17,12 @@ import (
 const listIDHex = 10
 
 func newImagesCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "images", Aliases: []string{"image"}, Short: "Manage the local image library",
-		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
+	cmd := newImagesListCmd()
+	cmd.Use = "images"
+	cmd.Aliases = []string{"image"}
+	cmd.Short = "Manage the local image library"
+	cmd.Long = "Manage the local image library. Without a subcommand, list image versions."
+	addDefaultListHint(cmd)
 	cmd.AddCommand(newImagesListCmd(), newImagesShowCmd(), newImagesDescribeCmd(), newImagesGCCmd(), newImagesRemoveCmd())
 	return cmd
 }

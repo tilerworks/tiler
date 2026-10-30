@@ -20,21 +20,18 @@ import (
 )
 
 func newSessionCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "session",
-		Aliases: []string{"sessions"},
-		Short:   "Manage mount sessions",
-		Long: "A session is the durable record of an ordered set of mounts\n" +
-			"and the unit of crash recovery. Every action is recorded\n" +
-			"before it runs, so after a killed process or daemon one\n" +
-			"'session open' replays the record and restores every mount.\n" +
-			"'session close' tears the mounts down in reverse order and\n" +
-			"keeps the record for audit; 'session remove' deletes a\n" +
-			"closed record.",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
-	}
+	cmd := newSessionListCmd()
+	cmd.Use = "session"
+	cmd.Aliases = []string{"sessions"}
+	cmd.Short = "Manage mount sessions"
+	cmd.Long = "A session is the durable record of an ordered set of mounts\n" +
+		"and the unit of crash recovery. Every action is recorded\n" +
+		"before it runs, so after a killed process or daemon one\n" +
+		"'session open' replays the record and restores every mount.\n" +
+		"'session close' tears the mounts down in reverse order and\n" +
+		"keeps the record for audit; 'session remove' deletes a\n" +
+		"closed record. Without a subcommand, list sessions."
+	addDefaultListHint(cmd)
 	cmd.AddCommand(newSessionNewCmd())
 	cmd.AddCommand(newSessionOpenCmd())
 	cmd.AddCommand(newSessionCloseCmd())

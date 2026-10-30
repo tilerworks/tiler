@@ -467,15 +467,15 @@ func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
 	}
 }
 
-func TestSessionGroupWithoutSubcommandShowsHelp(t *testing.T) {
+func TestSessionGroupWithoutSubcommandListsSessions(t *testing.T) {
 	home, _ := withWorkspace(t)
 	_, lib := libFlags(home)
 	stdout, stderr, _, err := runCmd(t, append(lib, "session")...)
 	if err != nil {
 		t.Fatalf("session: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout+stderr, "Usage:") {
-		t.Fatalf("no help printed: %q %q", stdout, stderr)
+	if stdout != "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n" || stderr != "" {
+		t.Fatalf("unexpected empty session listing: %q %q", stdout, stderr)
 	}
 }
 
