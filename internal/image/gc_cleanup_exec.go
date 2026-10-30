@@ -16,7 +16,7 @@ func ExecuteCleanupLocked(imagesDir, logsDir string, approved CleanupPlan) ([]Ve
 }
 
 func executeCleanupLocked(imagesDir, logsDir string, approved CleanupPlan, seam hooks) ([]VersionGCOutcome, error) {
-	current, err := InspectCleanupLocked(imagesDir)
+	current, err := inspectCleanupNamesLocked(imagesDir, approved.names)
 	if err != nil {
 		return nil, err
 	}

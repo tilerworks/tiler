@@ -28,12 +28,47 @@ type CleanupPlan struct {
 	journalBody []byte
 	journalInfo os.FileInfo
 	repoTree    map[string]os.FileInfo
+	names       []string
 }
 
 // InspectCleanupLocked lists existing cleanup without replaying any deletion.
 // The caller must hold the library lock and separately validate session pins.
 func InspectCleanupLocked(imagesDir string) (CleanupPlan, error) {
+	return inspectCleanupNamesLocked(imagesDir, nil)
+}
+
+// InspectSelectedCleanupLocked resolves names including a partially removed
+// pending repository, and preserves that fixed selection for revalidation.
+func InspectSelectedCleanupLocked(imagesDir string, selector NameSelector) (CleanupPlan, []string, []string, error) {
+	pending, err := inspectPendingCleanup(imagesDir)
+	if err != nil {
+		return CleanupPlan{}, nil, nil, err
+	}
+	repos, err := ListRepos(imagesDir)
+	if err != nil {
+		return CleanupPlan{}, nil, nil, err
+	}
+	var names []string
+	for _, repo := range repos {
+		names = append(names, repo.Name())
+	}
+	if pending.Pending {
+		names = append(names, pending.journal.Name)
+	}
+	selected, unmatched := selector.Select(names)
+	plan, err := inspectCleanupNamesLocked(imagesDir, selected)
+	return plan, selected, unmatched, err
+}
+
+func inspectCleanupNamesLocked(imagesDir string, names []string) (CleanupPlan, error) {
+	if names != nil && len(names) == 0 {
+		return CleanupPlan{names: names}, nil
+	}
 	plan, err := inspectPendingCleanup(imagesDir)
+	plan.names = names
+	if err == nil && plan.Pending && names != nil && !slices.Contains(names, plan.journal.Name) {
+		return CleanupPlan{}, fmt.Errorf("image gc: unselected image %s has pending cleanup; clean it first and retry", plan.journal.Name)
+	}
 	if err != nil || plan.Pending {
 		return plan, err
 	}
@@ -42,6 +77,9 @@ func InspectCleanupLocked(imagesDir string) (CleanupPlan, error) {
 		return plan, err
 	}
 	for _, repo := range repos {
+		if names != nil && !slices.Contains(names, repo.Name()) {
+			continue
+		}
 		manifest, err := LoadVersionManifest(repo)
 		if err != nil {
 			return plan, err
