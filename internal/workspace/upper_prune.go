@@ -89,14 +89,20 @@ type PruneReport struct {
 // stores second granularity. A file rewritten within the same
 // second as its baked copy with an unchanged size and metadata can
 // therefore be deleted by mistake. This residual risk is accepted
-// in exchange for never hashing content.
+// in exchange for never hashing content. An emptied plain directory
+// matches when its mode, owner, and mtime truncated to whole
+// seconds agree with the lower directory. Those directory fields
+// are taken before children are removed, because a removal
+// refreshes the directory mtime.
 //
-// Every doubtful case is kept fail-safe: type mismatches, hard
+// Every doubtful case is kept fail-safe: a path the lower view does
+// not have (including an empty directory), type mismatches, hard
 // links, fifos, sockets, device nodes, redirect subtrees, opaque
 // subtrees the lower side still fills, and any stat, read, xattr,
 // or removal error. Per-entry problems are counted in the report
-// and never abort the walk; the returned error only reports unusable
-// roots.
+// and never abort the walk. The returned error reports unusable
+// roots, and an empty or unlistable lower view: that view must not
+// delete whiteouts.
 func PruneUpper(upperDir, lowerView string) (PruneReport, error) {
 	return pruneUpper(upperDir, lowerView, pruneHooks{})
 }
@@ -105,6 +111,9 @@ func PruneUpper(upperDir, lowerView string) (PruneReport, error) {
 func pruneUpper(upperDir, lowerView string, seam pruneHooks) (PruneReport, error) {
 	p := pruner{seam: seam}
 	if err := checkPruneRoots(upperDir, lowerView); err != nil {
+		return p.report, err
+	}
+	if err := requireLowerView(lowerView); err != nil {
 		return p.report, err
 	}
 	if err := p.pruneRoot(upperDir, lowerView); err != nil {
@@ -116,7 +125,8 @@ func pruneUpper(upperDir, lowerView string, seam pruneHooks) (PruneReport, error
 // checkPruneRoots refuses to run unless both sides are distinct
 // real directories that contain neither each other nor themselves.
 // A missing lowerView must never read as "the lower stack has
-// nothing": that would delete every whiteout and empty directory.
+// nothing": that would delete every whiteout. An empty but present
+// lower view is refused by requireLowerView for the same reason.
 // A symlinked root is rejected because the walk would edit the link
 // target instead of the directory the caller named, and aliased or
 // nested roots are rejected because a tree compared with itself —
@@ -178,6 +188,21 @@ func resolvedRoot(dir string) (string, error) {
 		return "", fmt.Errorf("workspace: upper prune: %w", err)
 	}
 	return resolved, nil
+}
+
+// requireLowerView refuses a comparison root that cannot be listed
+// or has no entries. Both look like "the lower stack has nothing",
+// and walking either one would delete every whiteout whose path is
+// absent. The caller has not modified the upper tree yet.
+func requireLowerView(lowerView string) error {
+	entries, err := os.ReadDir(lowerView)
+	if err != nil {
+		return fmt.Errorf("workspace: upper prune: cannot list %s: %w", lowerView, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("workspace: upper prune: %s has no entries", lowerView)
+	}
+	return nil
 }
 
 // pruneHooks are test seams for the platform probes the prune rules
@@ -316,7 +341,7 @@ func (p *pruner) pruneEntry(path, lowerPath string) {
 		return
 	}
 	if info.IsDir() {
-		p.pruneDir(path, lowerPath)
+		p.pruneDir(path, lowerPath, info)
 		return
 	}
 	st, err := p.seam.statOf(path, info)
@@ -345,7 +370,7 @@ func (p *pruner) pruneEntry(path, lowerPath string) {
 // subtree, and an opaque marker changes what children may be
 // compared against. An unreadable marker set keeps the whole
 // subtree fail-safe.
-func (p *pruner) pruneDir(path, lowerPath string) {
+func (p *pruner) pruneDir(path, lowerPath string, info os.FileInfo) {
 	xattrs, err := p.seam.xattrsOf(path)
 	if err != nil {
 		p.report.Errors++
@@ -363,7 +388,7 @@ func (p *pruner) pruneDir(path, lowerPath string) {
 	if !listed {
 		return
 	}
-	p.prunePlainDir(path, lowerPath, empty)
+	p.prunePlainDir(path, lowerPath, info, empty)
 }
 
 // pruneOpaqueDir handles a directory marked opaque. The marker hides
@@ -435,23 +460,57 @@ func probeLowerDir(path string) (lowerDirState, error) {
 	return lowerHasContent, nil
 }
 
-// prunePlainDir removes a plain directory that is empty after its
-// children were cleaned and has no lower counterpart at all; every
-// other state is kept.
-func (p *pruner) prunePlainDir(path, lowerPath string, empty bool) {
+// prunePlainDir removes an emptied plain directory only when the
+// lower side is a directory with the same mode, owner, and
+// second-granularity mtime. info is the upper directory as it was
+// before children were cleaned, so the mtime comparison is not
+// poisoned by those removals. A path the lower view does not have
+// stays, including an empty directory. A type mismatch or a
+// metadata difference stays too.
+func (p *pruner) prunePlainDir(path, lowerPath string, info os.FileInfo, empty bool) {
 	if !empty {
 		p.report.Kept++
 		return
 	}
-	_, err := os.Lstat(lowerPath)
-	switch {
-	case err == nil:
+	lowerInfo, err := os.Lstat(lowerPath)
+	if errors.Is(err, os.ErrNotExist) {
 		p.report.Kept++
-	case errors.Is(err, os.ErrNotExist):
-		p.remove(path, &p.report.RemovedDirs)
-	default:
-		p.report.Errors++
+		return
 	}
+	if err != nil {
+		p.report.Errors++
+		return
+	}
+	if !lowerInfo.IsDir() {
+		p.report.Kept++
+		return
+	}
+	st, err := p.seam.statOf(path, info)
+	if err != nil {
+		p.report.Errors++
+		return
+	}
+	lowerSt, err := p.seam.statOf(lowerPath, lowerInfo)
+	if err != nil {
+		p.report.Errors++
+		return
+	}
+	if !sameDirMeta(info, lowerInfo, st, lowerSt) {
+		p.report.Kept++
+		return
+	}
+	p.remove(path, &p.report.RemovedDirs)
+}
+
+// sameDirMeta is the metadata quick check for two directories:
+// full mode, ownership, and mtime truncated to whole seconds.
+// Directory size is not compared. Both sides are already verified
+// directories, so the full mode adds the setgid and sticky bits.
+func sameDirMeta(upper, lower os.FileInfo, upperSt, lowerSt platformStat) bool {
+	return upper.Mode() == lower.Mode() &&
+		upper.ModTime().Unix() == lower.ModTime().Unix() &&
+		upperSt.uid == lowerSt.uid &&
+		upperSt.gid == lowerSt.gid
 }
 
 // pruneFile judges one regular file. A file the lower stack does

@@ -74,6 +74,25 @@ func makeFixtureDir(t *testing.T, path string) {
 	setFixtureTime(t, path, fixtureMtime, 0)
 }
 
+// pinFixtureDir sets the permission bits and mtime of a directory
+// the metadata comparison will read. Chmod runs first so the
+// timestamp is the value the prune decision sees.
+func pinFixtureDir(t *testing.T, path string, perm os.FileMode, sec, nsec int64) {
+	t.Helper()
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatal(err)
+	}
+	setFixtureTime(t, path, sec, nsec)
+}
+
+// anchorLower puts one real entry in the lower root so the
+// comparison view is listable and non-empty. Tests that pin a
+// missing path use it to avoid the empty-root refusal.
+func anchorLower(t *testing.T, lower string) {
+	t.Helper()
+	writeFixtureFile(t, filepath.Join(lower, "anchor.txt"), "anchor", 0o644)
+}
+
 // setFixtureTime moves both timestamps of a path.
 func setFixtureTime(t *testing.T, path string, sec, nsec int64) {
 	t.Helper()
@@ -273,28 +292,29 @@ func TestPruneUpperRootMarkers(t *testing.T) {
 			t.Fatal("opaque marker was touched")
 		}
 	})
-	t.Run("opaque root over empty lower cleaned and stripped", func(t *testing.T) {
+	t.Run("empty lower root deletes nothing", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
 		writeFixtureFile(t, filepath.Join(upper, "new.txt"), "new", 0o644)
 		makeFixtureDir(t, filepath.Join(upper, "d"))
 		seam := newFakePlatform()
 		seam.mark(upper, xattrOpaque)
 		report, err := pruneUpper(upper, lower, seam.hooks())
-		if err != nil {
-			t.Fatal(err)
+		if err == nil {
+			t.Fatal("empty lower was accepted")
 		}
-		wantReport(t, report, PruneReport{RemovedDirs: 1, Kept: 1, StrippedOpaque: 1})
+		wantReport(t, report, PruneReport{})
 		assertExists(t, upper)
 		assertExists(t, filepath.Join(upper, "new.txt"))
-		assertGone(t, filepath.Join(upper, "d"))
-		if seam.has(upper, xattrOpaque) {
-			t.Fatal("opaque marker survived the strip")
+		assertExists(t, filepath.Join(upper, "d"))
+		if !seam.has(upper, xattrOpaque) {
+			t.Fatal("opaque marker was stripped")
 		}
 	})
 }
 
 func TestPruneUpperEmptyUpperIsNoop(t *testing.T) {
 	upper, lower := fixtureRoots(t)
+	anchorLower(t, lower)
 	report, err := PruneUpper(upper, lower)
 	if err != nil {
 		t.Fatal(err)
@@ -438,6 +458,7 @@ func TestPruneUpperSymlinks(t *testing.T) {
 	})
 	t.Run("lower missing kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		makeFixtureSymlink(t, "f.txt", filepath.Join(upper, "link"))
 		report, err := pruneUpper(upper, lower, plainHooks())
 		if err != nil {
@@ -482,6 +503,7 @@ func TestPruneUpperHardLinkedFileKept(t *testing.T) {
 func TestPruneUpperSpecialFilesKept(t *testing.T) {
 	t.Run("fifo and socket kept", func(t *testing.T) {
 		upper, lower := shortFixtureRoots(t)
+		anchorLower(t, lower)
 		fifo := filepath.Join(upper, "fifo")
 		if err := syscall.Mknod(fifo, syscall.S_IFIFO|0o644, 0); err != nil {
 			t.Skipf("fifo creation unavailable: %v", err)
@@ -502,6 +524,7 @@ func TestPruneUpperSpecialFilesKept(t *testing.T) {
 	})
 	t.Run("real device node kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		dev := filepath.Join(upper, "dev")
 		if err := syscall.Mknod(dev, syscall.S_IFCHR|0o600, 1<<8|3); err != nil {
 			t.Skipf("creating device nodes needs privilege: %v", err)
@@ -532,6 +555,7 @@ func TestPruneUpperWhiteout(t *testing.T) {
 	}
 	t.Run("lower gone whiteout removed", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		mknodWhiteout(t, filepath.Join(upper, "gone.txt"))
 		report, err := PruneUpper(upper, lower)
 		if err != nil {
@@ -551,6 +575,16 @@ func TestPruneUpperWhiteout(t *testing.T) {
 		}
 		wantReport(t, report, PruneReport{Kept: 1})
 		assertExists(t, filepath.Join(upper, "live.txt"))
+	})
+	t.Run("empty lower keeps whiteout", func(t *testing.T) {
+		upper, lower := fixtureRoots(t)
+		mknodWhiteout(t, filepath.Join(upper, "gone.txt"))
+		report, err := PruneUpper(upper, lower)
+		if err == nil {
+			t.Fatal("empty lower was accepted")
+		}
+		wantReport(t, report, PruneReport{})
+		assertExists(t, filepath.Join(upper, "gone.txt"))
 	})
 }
 
@@ -644,6 +678,7 @@ func TestPruneUpperMetacopyStub(t *testing.T) {
 	})
 	t.Run("lower missing kept", func(t *testing.T) {
 		upper, lower, seam := newStub(t, 0o644, fixtureMtime, "missing")
+		anchorLower(t, lower)
 		report, err := pruneUpper(upper, lower, seam.hooks())
 		if err != nil {
 			t.Fatal(err)
@@ -713,6 +748,7 @@ func TestPruneUpperOpaqueDir(t *testing.T) {
 	}
 	t.Run("empty dir without lower removed", func(t *testing.T) {
 		upper, lower, dir, seam := newOpaque(t, false, "missing")
+		anchorLower(t, lower)
 		report, err := pruneUpper(upper, lower, seam.hooks())
 		if err != nil {
 			t.Fatal(err)
@@ -744,6 +780,7 @@ func TestPruneUpperOpaqueDir(t *testing.T) {
 	})
 	t.Run("non-empty dir without lower stripped", func(t *testing.T) {
 		upper, lower, dir, seam := newOpaque(t, true, "missing")
+		anchorLower(t, lower)
 		report, err := pruneUpper(upper, lower, seam.hooks())
 		if err != nil {
 			t.Fatal(err)
@@ -770,20 +807,10 @@ func TestPruneUpperOpaqueDir(t *testing.T) {
 }
 
 func TestPruneUpperPlainDirs(t *testing.T) {
-	t.Run("empty dir without lower removed", func(t *testing.T) {
+	t.Run("empty dir without lower kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		makeFixtureDir(t, filepath.Join(upper, "d"))
-		report, err := pruneUpper(upper, lower, plainHooks())
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantReport(t, report, PruneReport{RemovedDirs: 1})
-		assertGone(t, filepath.Join(upper, "d"))
-	})
-	t.Run("empty dir over lower dir kept", func(t *testing.T) {
-		upper, lower := fixtureRoots(t)
-		makeFixtureDir(t, filepath.Join(upper, "d"))
-		makeFixtureDir(t, filepath.Join(lower, "d"))
 		report, err := pruneUpper(upper, lower, plainHooks())
 		if err != nil {
 			t.Fatal(err)
@@ -791,31 +818,99 @@ func TestPruneUpperPlainDirs(t *testing.T) {
 		wantReport(t, report, PruneReport{Kept: 1})
 		assertExists(t, filepath.Join(upper, "d"))
 	})
-	t.Run("nested empty dirs removed post-order", func(t *testing.T) {
+	t.Run("matching empty dir removed", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		makeFixtureDir(t, filepath.Join(upper, "d"))
+		makeFixtureDir(t, filepath.Join(lower, "d"))
+		pinFixtureDir(t, filepath.Join(upper, "d"), 0o755, fixtureMtime, 0)
+		pinFixtureDir(t, filepath.Join(lower, "d"), 0o755, fixtureMtime, 0)
+		report, err := pruneUpper(upper, lower, plainHooks())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantReport(t, report, PruneReport{RemovedDirs: 1})
+		assertGone(t, filepath.Join(upper, "d"))
+	})
+	t.Run("matching emptied dir removed", func(t *testing.T) {
+		upper, lower := fixtureRoots(t)
+		writeFixtureFile(t, filepath.Join(upper, "d", "f.txt"), "hello", 0o644)
+		writeFixtureFile(t, filepath.Join(lower, "d", "f.txt"), "hello", 0o644)
+		// Sub-second stamps still match. The directory mtime is
+		// pinned before the child is removed; the decision must
+		// use that snapshot.
+		pinFixtureDir(t, filepath.Join(upper, "d"), 0o755, fixtureMtime, 200_000_000)
+		pinFixtureDir(t, filepath.Join(lower, "d"), 0o755, fixtureMtime, 800_000_000)
+		report, err := pruneUpper(upper, lower, plainHooks())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantReport(t, report, PruneReport{RemovedFiles: 1, RemovedDirs: 1})
+		assertGone(t, filepath.Join(upper, "d"))
+	})
+	t.Run("metadata-different emptied dir kept", func(t *testing.T) {
+		cases := []struct {
+			name string
+			edit func(t *testing.T, upperDir, lowerDir string, seam *fakePlatform)
+		}{
+			{
+				name: "mode differs",
+				edit: func(t *testing.T, upperDir, _ string, _ *fakePlatform) {
+					pinFixtureDir(t, upperDir, 0o700, fixtureMtime, 0)
+				},
+			},
+			{
+				name: "mtime second differs",
+				edit: func(t *testing.T, upperDir, _ string, _ *fakePlatform) {
+					pinFixtureDir(t, upperDir, 0o755, fixtureMtime+1, 0)
+				},
+			},
+			{
+				name: "uid differs",
+				edit: func(_ *testing.T, upperDir, _ string, seam *fakePlatform) {
+					seam.stats[upperDir] = platformStat{nlink: 1, uid: 65534}
+				},
+			},
+			{
+				name: "gid differs",
+				edit: func(_ *testing.T, upperDir, _ string, seam *fakePlatform) {
+					seam.stats[upperDir] = platformStat{nlink: 1, gid: 65534}
+				},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				upper, lower := fixtureRoots(t)
+				dir := filepath.Join(upper, "d")
+				lowerDir := filepath.Join(lower, "d")
+				writeFixtureFile(t, filepath.Join(dir, "f.txt"), "hello", 0o644)
+				writeFixtureFile(t, filepath.Join(lowerDir, "f.txt"), "hello", 0o644)
+				pinFixtureDir(t, dir, 0o755, fixtureMtime, 0)
+				pinFixtureDir(t, lowerDir, 0o755, fixtureMtime, 0)
+				seam := newFakePlatform()
+				tc.edit(t, dir, lowerDir, seam)
+				report, err := pruneUpper(upper, lower, seam.hooks())
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantReport(t, report, PruneReport{RemovedFiles: 1, Kept: 1})
+				assertExists(t, dir)
+			})
+		}
+	})
+	t.Run("nested empty dirs without lower kept", func(t *testing.T) {
+		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		makeFixtureDir(t, filepath.Join(upper, "d", "e"))
 		report, err := pruneUpper(upper, lower, plainHooks())
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantReport(t, report, PruneReport{RemovedDirs: 2})
-		assertGone(t, filepath.Join(upper, "d"))
-	})
-	t.Run("dir emptied by pruning over lower kept", func(t *testing.T) {
-		upper, lower := fixtureRoots(t)
-		writeFixtureFile(t, filepath.Join(upper, "d", "f.txt"), "hello", 0o644)
-		writeFixtureFile(t, filepath.Join(lower, "d", "f.txt"), "hello", 0o644)
-		report, err := pruneUpper(upper, lower, plainHooks())
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The child matched and went away, but the lower still has
-		// the directory, so the cleaned parent stays.
-		wantReport(t, report, PruneReport{RemovedFiles: 1, Kept: 1})
-		assertExists(t, filepath.Join(upper, "d"))
+		wantReport(t, report, PruneReport{Kept: 2})
+		assertExists(t, filepath.Join(upper, "d", "e"))
 	})
 	t.Run("non-empty dir kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		writeFixtureFile(t, filepath.Join(upper, "d", "new.txt"), "new", 0o644)
 		report, err := pruneUpper(upper, lower, plainHooks())
 		if err != nil {
@@ -848,6 +943,7 @@ func TestPruneUpperReadErrorsKeepFailSafe(t *testing.T) {
 	}
 	t.Run("unreadable upper dir kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		writeFixtureFile(t, filepath.Join(upper, "d", "f.txt"), "hello", 0o644)
 		hidden := filepath.Join(upper, "d")
 		lockDown(t, hidden)
@@ -859,21 +955,24 @@ func TestPruneUpperReadErrorsKeepFailSafe(t *testing.T) {
 		unlock(t, hidden)
 		assertExists(t, filepath.Join(hidden, "f.txt"))
 	})
-	t.Run("unreadable lower keeps the matching file", func(t *testing.T) {
+	t.Run("unreadable lower directory keeps the matching file", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
-		writeFixtureFile(t, filepath.Join(upper, "f.txt"), "hello", 0o644)
-		writeFixtureFile(t, filepath.Join(lower, "f.txt"), "hello", 0o644)
-		lockDown(t, lower)
+		anchorLower(t, lower)
+		writeFixtureFile(t, filepath.Join(upper, "sub", "f.txt"), "hello", 0o644)
+		writeFixtureFile(t, filepath.Join(lower, "sub", "f.txt"), "hello", 0o644)
+		hidden := filepath.Join(lower, "sub")
+		lockDown(t, hidden)
 		report, err := pruneUpper(upper, lower, plainHooks())
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantReport(t, report, PruneReport{Errors: 1})
-		unlock(t, lower)
-		assertExists(t, filepath.Join(upper, "f.txt"))
+		wantReport(t, report, PruneReport{Errors: 1, Kept: 1})
+		unlock(t, hidden)
+		assertExists(t, filepath.Join(upper, "sub", "f.txt"))
 	})
 	t.Run("unreadable upper root is an error", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		writeFixtureFile(t, filepath.Join(upper, "f.txt"), "hello", 0o644)
 		lockDown(t, upper)
 		if _, err := pruneUpper(upper, lower, plainHooks()); err == nil {
@@ -897,6 +996,9 @@ func TestPruneUpperReportCounters(t *testing.T) {
 	makeFixtureSymlink(t, "same.txt", filepath.Join(lower, "link"))
 	writeFixtureFile(t, filepath.Join(upper, "d", "inner.txt"), "inner", 0o644)
 	writeFixtureFile(t, filepath.Join(lower, "d", "inner.txt"), "inner", 0o644)
+	// The emptied directory stays because its mtime does not match.
+	pinFixtureDir(t, filepath.Join(upper, "d"), 0o755, fixtureMtime, 0)
+	pinFixtureDir(t, filepath.Join(lower, "d"), 0o755, fixtureMtime+5, 0)
 	makeFixtureDir(t, filepath.Join(upper, "e"))
 	report, err := pruneUpper(upper, lower, plainHooks())
 	if err != nil {
@@ -905,16 +1007,15 @@ func TestPruneUpperReportCounters(t *testing.T) {
 	wantReport(t, report, PruneReport{
 		RemovedFiles: 2, // same.txt and d/inner.txt
 		RemovedLinks: 1, // link
-		RemovedDirs:  1, // e
-		Kept:         3, // changed.txt, new.txt, and the emptied d
+		Kept:         4, // changed.txt, new.txt, emptied d, and e
 	})
 	assertGone(t, filepath.Join(upper, "same.txt"))
 	assertGone(t, filepath.Join(upper, "link"))
 	assertGone(t, filepath.Join(upper, "d", "inner.txt"))
-	assertGone(t, filepath.Join(upper, "e"))
+	assertExists(t, filepath.Join(upper, "e"))
+	assertExists(t, filepath.Join(upper, "d"))
 	assertExists(t, filepath.Join(upper, "changed.txt"))
 	assertExists(t, filepath.Join(upper, "new.txt"))
-	assertExists(t, filepath.Join(upper, "d"))
 }
 
 // TestPruneUpperRealProbesOnLinux runs the exported entry point with
@@ -960,14 +1061,29 @@ func TestPruneUpperRealProbesOnLinux(t *testing.T) {
 		wantReport(t, report, PruneReport{Kept: 2})
 		assertExists(t, filepath.Join(upper, "f.txt"))
 	})
-	t.Run("empty dir removed", func(t *testing.T) {
+	t.Run("empty dir without lower kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
+		anchorLower(t, lower)
 		makeFixtureDir(t, filepath.Join(upper, "d"))
 		report, err := PruneUpper(upper, lower)
 		if err != nil {
 			t.Fatal(err)
 		}
+		wantReport(t, report, PruneReport{Kept: 1})
+		assertExists(t, filepath.Join(upper, "d"))
+	})
+	t.Run("matching empty dir removed", func(t *testing.T) {
+		upper, lower := fixtureRoots(t)
+		makeFixtureDir(t, filepath.Join(upper, "d"))
+		makeFixtureDir(t, filepath.Join(lower, "d"))
+		pinFixtureDir(t, filepath.Join(upper, "d"), 0o755, fixtureMtime, 0)
+		pinFixtureDir(t, filepath.Join(lower, "d"), 0o755, fixtureMtime, 0)
+		report, err := PruneUpper(upper, lower)
+		if err != nil {
+			t.Fatal(err)
+		}
 		wantReport(t, report, PruneReport{RemovedDirs: 1})
+		assertGone(t, filepath.Join(upper, "d"))
 	})
 	t.Run("setuid copy-up kept", func(t *testing.T) {
 		upper, lower := fixtureRoots(t)
@@ -986,6 +1102,58 @@ func TestPruneUpperRealProbesOnLinux(t *testing.T) {
 // stubs: off Linux no probe succeeds, so nothing is removed. The
 // root marker probe fails first and keeps the whole tree fail-safe,
 // counting a single error.
+// TestPruneUpperRefusesEmptyOrUnlistableLower pins the comparison
+// view guard: an empty or unlistable lower root returns an error
+// and leaves the upper tree untouched, so whiteouts are not deleted
+// just because every lower path is absent.
+func TestPruneUpperRefusesEmptyOrUnlistableLower(t *testing.T) {
+	t.Run("empty lower", func(t *testing.T) {
+		upper, lower := fixtureRoots(t)
+		writeFixtureFile(t, filepath.Join(upper, "new.txt"), "new", 0o644)
+		makeFixtureDir(t, filepath.Join(upper, "d"))
+		whiteout := filepath.Join(upper, "gone.txt")
+		haveWhiteout := false
+		if runtime.GOOS == "linux" {
+			if err := syscall.Mknod(whiteout, syscall.S_IFCHR|0o600, 0); err == nil {
+				haveWhiteout = true
+			}
+		}
+		report, err := pruneUpper(upper, lower, plainHooks())
+		if err == nil {
+			t.Fatal("empty lower was accepted")
+		}
+		wantReport(t, report, PruneReport{})
+		assertExists(t, filepath.Join(upper, "new.txt"))
+		assertExists(t, filepath.Join(upper, "d"))
+		if haveWhiteout {
+			assertExists(t, whiteout)
+		}
+	})
+	t.Run("unlistable lower", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can list mode 000 directories")
+		}
+		upper, lower := fixtureRoots(t)
+		writeFixtureFile(t, filepath.Join(upper, "f.txt"), "hello", 0o644)
+		writeFixtureFile(t, filepath.Join(lower, "f.txt"), "hello", 0o644)
+		makeFixtureDir(t, filepath.Join(upper, "d"))
+		if err := os.Chmod(lower, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(lower, 0o755) })
+		report, err := pruneUpper(upper, lower, plainHooks())
+		if err == nil {
+			t.Fatal("unlistable lower was accepted")
+		}
+		wantReport(t, report, PruneReport{})
+		if err := os.Chmod(lower, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		assertExists(t, filepath.Join(upper, "f.txt"))
+		assertExists(t, filepath.Join(upper, "d"))
+	})
+}
+
 func TestPruneUpperKeepsEverythingOffLinux(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("linux probes the real overlay metadata")
