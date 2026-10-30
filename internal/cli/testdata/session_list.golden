@@ -1,6 +1,8 @@
 {
   "sessions": [
     {
+      "last_activity_at": null,
+      "last_activity_unknown": false,
       "name": "dev",
       "state": "active",
       "mounts": 1,
@@ -8,6 +10,8 @@
       "closed_at": "0001-01-01T00:00:00Z"
     },
     {
+      "last_activity_at": null,
+      "last_activity_unknown": false,
       "name": "old",
       "state": "closed",
       "mounts": 0,

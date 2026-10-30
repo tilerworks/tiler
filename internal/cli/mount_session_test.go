@@ -223,9 +223,8 @@ func TestMountImplicitSessionIsIsomorphic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, generated+"\n") ||
-		!strings.Contains(stdout, "  state       active\n") ||
-		!strings.Contains(stdout, "  mount") {
+	if !strings.HasPrefix(stdout, generated+" · active\n") ||
+		!strings.Contains(stdout, "📁") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 	stdout, stderr, _, err = runCmd(t, append(lib, "session", "close", generated)...)
@@ -478,8 +477,7 @@ func TestMountRemovableMarksImplicitSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, generated+"\n") ||
-		!strings.Contains(stdout, "  rm          true\n") {
+	if !strings.HasPrefix(stdout, generated+" · active · remove on close\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 }

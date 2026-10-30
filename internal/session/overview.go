@@ -18,6 +18,8 @@ const (
 // record reconciled against one mount table snapshot, plus the tiler
 // views that stay mounted without an active record claiming them.
 type Overview struct {
+	// Diagnostics reports incomplete optional query information.
+	Diagnostics []string
 	// Current carries the environment session marker verbatim; it
 	// may be empty and may match no record, which is not an error.
 	Current string
@@ -38,6 +40,8 @@ type View struct {
 	// its contents stay unreported and its actions unexpanded until
 	// the operation finishes.
 	Locked bool
+	// Mounts are expanded only by Query; Overview retains its existing contract.
+	Mounts []MountView
 	// Actions are the record's actions with mount health
 	// annotations. Only active records expand their actions.
 	Actions []ActionView
@@ -114,7 +118,7 @@ func (e *Engine) sessionView(name, current string, health HealthFunc) (*View, er
 	default:
 		return &View{Summary: Summary{Name: name}, Locked: true}, nil
 	}
-	rec, err := e.Load(name)
+	rec, err := e.Show(name)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}

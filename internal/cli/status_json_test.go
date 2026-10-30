@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jiangxin/tiler/internal/mountinfo"
@@ -31,6 +32,7 @@ func withStatusJSONSeams(t *testing.T, healthy map[string]bool) {
 	}
 	withSessionSeams(t, func(engine *session.Engine) {
 		engine.SessionsDir = "/sessions"
+		engine.ImagesDir = "/images"
 		engine.LoadTable = func() ([]mountinfo.Mount, error) { return table, nil }
 		engine.Health = func(point string) bool { return healthy[point] }
 	})
@@ -67,8 +69,8 @@ func TestStatusOverviewJSONMatchesGolden(t *testing.T) {
 		dev.Actions[2].Health != "" {
 		t.Fatalf("health marks = %+v, want only the live mount annotated", dev.Actions)
 	}
-	if old.State != "closed" || len(old.Actions) != 0 {
-		t.Fatalf("old = %+v, want closed without actions", old)
+	if old.State != "closed" || len(old.Actions) != 1 {
+		t.Fatalf("old = %+v, want closed historical actions", old)
 	}
 	orphan := doc.OrphanViews[0]
 	if orphan.Point != "/ws/orphan" || orphan.FSType != "fuse.fuse-overlayfs" ||
@@ -77,7 +79,7 @@ func TestStatusOverviewJSONMatchesGolden(t *testing.T) {
 	}
 }
 
-func TestStatusPathJSONMatchesGolden(t *testing.T) {
+func TestStatusDirectoryJSONMatchesGolden(t *testing.T) {
 	home, _ := withWorkspace(t)
 	lib := statusJSONLib(home)
 	withStatusJSONSeams(t, map[string]bool{"/ws/dev/app": true})
@@ -86,23 +88,19 @@ func TestStatusPathJSONMatchesGolden(t *testing.T) {
 	stdout, stderr, _, err := runCmd(t,
 		append(lib, "status", "/ws/dev/app/src/main.go", "--json")...)
 	if err != nil {
-		t.Fatalf("status path --json: %v\n%s", err, stderr)
+		t.Fatalf("status directory --json: %v\n%s", err, stderr)
 	}
 	assertGolden(t, "status_path", []byte(stdout))
-	var doc statusPathDocument
+	var doc statusDocument
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("status path --json is not parseable: %v\n%s", err, stdout)
+		t.Fatalf("status directory --json is not parseable: %v\n%s", err, stdout)
 	}
-	if doc.Path != "/ws/dev/app/src/main.go" || doc.Session != "dev" ||
-		doc.State != "active" || doc.Mountpoint != "/ws/dev/app" || doc.Stale {
+	if len(doc.Sessions) != 1 || doc.Sessions[0].Name != "dev" || len(doc.Sessions[0].Mounts) != 2 || doc.Sessions[0].Actions[0].Health != "healthy" {
 		t.Fatalf("doc = %+v", doc)
-	}
-	if doc.Action == nil || doc.Action.Seq != 1 || doc.Action.Health != "healthy" {
-		t.Fatalf("action = %+v, want the healthy covering mount", doc.Action)
 	}
 }
 
-func TestStatusPathJSONStaleAndUncovered(t *testing.T) {
+func TestStatusDirectoryJSONStaleAndEmpty(t *testing.T) {
 	home, _ := withWorkspace(t)
 	lib := statusJSONLib(home)
 	withStatusJSONSeams(t, map[string]bool{})
@@ -110,23 +108,31 @@ func TestStatusPathJSONStaleAndUncovered(t *testing.T) {
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "status", "/ws/dev/app", "--json")...)
 	if err != nil {
-		t.Fatalf("status path --json: %v\n%s", err, stderr)
+		t.Fatalf("status directory --json: %v\n%s", err, stderr)
 	}
-	var doc statusPathDocument
+	var doc statusDocument
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("status path --json is not parseable: %v\n%s", err, stdout)
+		t.Fatalf("status directory --json is not parseable: %v\n%s", err, stdout)
 	}
-	if !doc.Stale || doc.Action == nil || doc.Action.Health != "stale" {
-		t.Fatalf("doc = %+v, want the stale covering view", doc)
+	if len(doc.Sessions) != 1 || doc.Sessions[0].Actions[0].Health != "stale" {
+		t.Fatalf("doc = %+v, want the stale mount", doc)
 	}
 
-	// An uncovered path stays a runtime error: the report goes to
-	// stderr and stdout carries no document.
 	stdout, _, _, err = runCmd(t, append(lib, "status", "/nowhere", "--json")...)
-	if ExitCode(err) != 1 {
-		t.Fatalf("ExitCode(%v) = %d, want 1", err, ExitCode(err))
+	if err != nil || strings.Contains(stdout, "null") || !strings.Contains(stdout, `"sessions": []`) {
+		t.Fatalf("empty directory JSON = %s, %v", stdout, err)
 	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want no document for an uncovered path", stdout)
+}
+
+func TestStatusMountJSONPreservesCompleteIdentities(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	mount := session.MountView{ActionView: session.ActionView{Action: session.Action{Seq: 1, FullID: id, TipID: id, ServedID: id, ServedTip: id}}}
+	mount.Layers = []session.LayerView{{Image: "alice/app", Version: id, Kind: "full", Mountpoint: "/runtime/lower-0", Available: true}}
+	entry := newStatusMount(mount)
+	if entry.FullID != id || entry.TipID != id || entry.ServedID != id || entry.ServedTip != id || entry.Layers[0].Version != id || entry.Layers[0].Mountpoint != "/runtime/lower-0" {
+		t.Fatalf("mount JSON = %+v", entry)
+	}
+	if entry.OverlayLowers == nil || entry.Diagnostics == nil || entry.Layers == nil {
+		t.Fatalf("null array in %+v", entry)
 	}
 }

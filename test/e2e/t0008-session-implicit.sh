@@ -93,10 +93,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'mount without --session creates 
 # as a named one, and has a --json form.
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'session show renders a generated record' '
 	"$tiler_bin" session show "$auto1" >show2.out 2>show2.err &&
-	test_grep -E "^$auto1$" show2.out &&
-	test_grep -E "^  state +active$" show2.out &&
-	test_grep -E "^  created +" show2.out &&
-	test_grep -E "^    1  mount  tmp/auto  .*  mode=rw  status=mounted" show2.out &&
+	test_grep -E "^$auto1 · active" show2.out &&
+	test_grep -E "Last activity:" show2.out &&
+	test_grep -E "^  Created:" show2.out &&
+	test_grep -E "📁 tmp/auto:.*\[rw · mounted · healthy\]" show2.out &&
 	"$tiler_bin" session show "$auto1" --json >showj.out 2>showj.err &&
 	test_grep "\"actions\"" showj.out &&
 	test_grep "tmp/auto" showj.out

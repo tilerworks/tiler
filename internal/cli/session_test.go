@@ -101,7 +101,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session list: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "dev") ||
+	if !strings.Contains(stdout, "SESSION") || !strings.Contains(stdout, "dev") ||
 		!strings.Contains(stdout, "active") {
 		t.Fatalf("list stdout = %q", stdout)
 	}
@@ -110,7 +110,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, "dev\n") || !strings.Contains(stdout, "  state       active\n") {
+	if !strings.HasPrefix(stdout, "dev · active\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 
@@ -154,7 +154,7 @@ func TestSessionReadCommandsRejectLegacyRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, args := range [][]string{{"session", "list"}, {"session", "show", "legacy"}} {
+	for _, args := range [][]string{{"session", "list"}, {"session", "show", "legacy"}, {"session", "show", "legacy", "--json"}, {"status", "-s", "legacy"}} {
 		stdout, _, _, err := runCmd(t, append(lib, args...)...)
 		if ExitCode(err) != 1 || !strings.Contains(err.Error(), "session: parse") ||
 			!strings.Contains(err.Error(), "unsupported record version 0") ||
@@ -384,7 +384,7 @@ func TestSessionCloseUnmountsInReverseOrder(t *testing.T) {
 	}
 }
 
-func TestSessionShowRendersActionLog(t *testing.T) {
+func TestSessionShowRendersLayeredMounts(t *testing.T) {
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
 	withMountSeams(t, nil)
@@ -398,12 +398,11 @@ func TestSessionShowRendersActionLog(t *testing.T) {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
 	for _, want := range []string{
-		"dev\n",
-		"  state       active\n",
-		"  created     2026-10-17 03:15:00\n",
-		"  mounts      1\n",
-		"  actions     1\n",
-		fmt.Sprintf("    1  mount  alice/app  %s  mode=rw  status=mounted  at=2026-10-17 03:15:00  subdir=src\n", view),
+		"dev · active\n",
+		"Created:",
+		"📁 alice/app:",
+		compactStatusPath(view, work),
+		"[rw · mounted · stale]",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("show missing %q:\n%s", want, stdout)
@@ -442,8 +441,7 @@ func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "  state       active\n") ||
-		!strings.Contains(stdout, "  rm          true\n") {
+	if !strings.Contains(stdout, "dev · active · remove on close\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 

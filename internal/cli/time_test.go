@@ -36,13 +36,13 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 		"images list": func(w io.Writer) error { return writeVersionImageTableAt(w, []versionImageView{view}, at, 80) },
 		"images show": func(w io.Writer) error { return writeVersionImageDetail(w, view) },
 		"session list": func(w io.Writer) error {
-			return writeSessionList(w, []session.Summary{{Name: "dev", Created: at}})
+			return writeSessionListAt(w, []session.Summary{{Name: "dev", Created: at}}, at)
 		},
 		"session show": func(w io.Writer) error {
-			return writeSessionShow(w, session.Record{Name: "dev", CreatedAt: at, Actions: []session.Action{{Timestamp: at}}})
+			return writeStatusDetails(w, session.Overview{Sessions: []session.View{{Summary: session.Summary{Name: "dev", Created: at}}}}, at, "/")
 		},
 		"status": func(w io.Writer) error {
-			return writeSessionBlock(w, session.View{Summary: session.Summary{Name: "dev", Created: at}})
+			return writeStatusDetails(w, session.Overview{Sessions: []session.View{{Summary: session.Summary{Name: "dev", Created: at}}}}, at, "/")
 		},
 	}
 	for name, render := range renders {
@@ -52,7 +52,7 @@ func TestTextTimesUseLocalSecondsWithoutChangingJSON(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := want
-			if name == "images list" {
+			if name == "images list" || name == "session list" || name == "status" || name == "session show" {
 				expected = "10-31 07:00"
 			}
 			if !strings.Contains(out.String(), expected) || strings.Contains(out.String(), ".719842682") {

@@ -223,7 +223,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'GC initializes a chain once and 
 	"$tiler_bin" session list >drop.list &&
 	while read -r name _
 	do
-		test "$name" = NAME && continue
+		test "$name" = SESSION && continue
 		test -n "$name" || continue
 		"$tiler_bin" session close "$name" >"close-$name.out" &&
 		"$tiler_bin" session remove "$name" >"rm-$name.out" || return 1

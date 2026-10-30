@@ -101,7 +101,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'build --link records a position 
 	auto=$(sed -n "s/^new session created: //p" mount.out) &&
 	test -n "$auto" &&
 	"$tiler_bin" session show "$auto" >show.out 2>show.err &&
-	test_grep -E "^    1  mount  $lib_name  .*  mode=rw  status=mounted" show.out &&
+	test_grep -E "📁 $lib_name:.*\[rw · mounted · healthy\]" show.out &&
 	"$tiler_bin" session show "$auto" --json >showj.out 2>showj.err &&
 	test_grep -F "\"image\": \"$lib_name\"" showj.out &&
 	test_grep -F "\"full_id\": \"$base_id\"" showj.out

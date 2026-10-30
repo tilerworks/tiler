@@ -98,6 +98,10 @@ func rejectExistingSymlinks(root, dir string) error {
 // ends up owner-only, so a log or lock inherited with wider
 // permissions is tightened instead of trusted.
 func openRegular(path string, flag int) (*os.File, error) {
+	return openRegularMode(path, flag, true)
+}
+
+func openRegularMode(path string, flag int, tighten bool) (*os.File, error) {
 	before, err := os.Lstat(path)
 	switch {
 	case err == nil:
@@ -122,7 +126,7 @@ func openRegular(path string, flag int) (*os.File, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("%w: %s", ErrUnsafeFile, path)
 	}
-	if info.Mode().Perm() != filePerm {
+	if tighten && info.Mode().Perm() != filePerm {
 		if err := file.Chmod(filePerm); err != nil {
 			_ = file.Close()
 			return nil, fmt.Errorf("activity: %w", err)

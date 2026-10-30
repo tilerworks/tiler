@@ -39,6 +39,7 @@ func newSessionCmd() *cobra.Command {
 	cmd.AddCommand(newSessionGCCmd())
 	cmd.AddCommand(newSessionListCmd())
 	cmd.AddCommand(newSessionShowCmd())
+	cmd.AddCommand(newStatusCmd())
 	return cmd
 }
 
@@ -176,14 +177,15 @@ func newSessionRemoveCmd() *cobra.Command {
 }
 
 func newSessionListCmd() *cobra.Command {
-	var asJSON bool
+	var asJSON, verbose bool
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List every session record",
 		Long: "Print one aligned row per session: name, state, live\n" +
-			"mount count, created and closed times, and an RM marker\n" +
-			"for --rm sessions. Times use local YYYY-MM-DD HH:MM:SS.\n" +
+			"mount count, created, closed and last activity times, and an RM\n" +
+			"marker for --rm sessions. Times follow image list formatting.\n" +
+			"--verbose shows each session and its layered mounts.\n" +
 			"--json renders one machine-readable\n" +
 			"document instead of the human listing.",
 		Args: cobra.NoArgs,
@@ -193,11 +195,17 @@ func newSessionListCmd() *cobra.Command {
 				return errors.New("session list: configuration is not loaded")
 			}
 			engine := sessionEngine(cfg)
+			if verbose && !asJSON {
+				return runStatusQuery(cmd, engine, session.Query{}, false, false)
+			}
 			records, err := engine.List()
 			if err != nil {
 				return err
 			}
 			summaries := session.Summaries(records)
+			for i := range summaries {
+				loadSessionActivity(engine, &summaries[i], cmd.ErrOrStderr())
+			}
 			if asJSON {
 				return writeSessionListJSON(cmd.OutOrStdout(), summaries)
 			}
@@ -205,6 +213,7 @@ func newSessionListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the listing as a JSON document")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show detailed layered mounts")
 	return cmd
 }
 
@@ -213,23 +222,27 @@ func newSessionShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show one session record in detail",
-		Long: "Show prints a multi-line record: state, rm marker,\n" +
-			"timestamps, mount and action counts, then one aligned\n" +
-			"line per action. --json renders the record object.",
+		Long: "Show the session and its layered mounts, including live health.\n" +
+			"--json preserves the record object with recent activity fields.",
 		Args: exactOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, engine, err := sessionCommandEngine(cmd, "session show", args[0])
 			if err != nil {
 				return err
 			}
+			if !asJSON {
+				return runStatusQuery(cmd, engine, session.Query{Session: args[0]}, false, false)
+			}
 			rec, err := engine.Show(args[0])
 			if err != nil {
 				return err
 			}
-			if asJSON {
-				return writeJSON(cmd.OutOrStdout(), rec)
-			}
-			return writeSessionShow(cmd.OutOrStdout(), rec)
+			summary := session.Summarize(rec)
+			loadSessionActivity(engine, &summary, cmd.ErrOrStderr())
+			return writeJSON(cmd.OutOrStdout(), struct {
+				session.Record
+				sessionActivityJSON
+			}{rec, newSessionActivityJSON(summary.Activity)})
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the record as a JSON document")
@@ -445,11 +458,17 @@ func sessionUmount(cfg config.Config) session.UmountFunc {
 }
 
 // sessionTableHeader names the short-list columns.
-var sessionTableHeader = []string{"NAME", "STATE", "MOUNTS", "CREATED", "CLOSED", "RM"}
+var sessionTableHeader = []string{"SESSION", "STATE", "MOUNTS", "CREATED", "CLOSED", "LAST ACTIVITY", "RM"}
 
 // writeSessionList prints an aligned table: a header and one row per
 // session. An empty library prints nothing.
+var sessionTimeNow = time.Now
+
 func writeSessionList(w io.Writer, summaries []session.Summary) error {
+	return writeSessionListAt(w, summaries, sessionTimeNow())
+}
+
+func writeSessionListAt(w io.Writer, summaries []session.Summary, now time.Time) error {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -457,7 +476,7 @@ func writeSessionList(w io.Writer, summaries []session.Summary) error {
 	widths := make([]int, len(sessionTableHeader))
 	copy(widths, lengths(sessionTableHeader))
 	for i, summary := range summaries {
-		rows[i] = sessionTableCols(summary)
+		rows[i] = sessionTableCols(summary, now)
 		for c, col := range rows[i] {
 			if len(col) > widths[c] {
 				widths[c] = len(col)
@@ -475,7 +494,7 @@ func writeSessionList(w io.Writer, summaries []session.Summary) error {
 	return nil
 }
 
-func sessionTableCols(summary session.Summary) []string {
+func sessionTableCols(summary session.Summary, now time.Time) []string {
 	rm := "-"
 	if summary.RemoveOnClose {
 		rm = "yes"
@@ -484,8 +503,9 @@ func sessionTableCols(summary session.Summary) []string {
 		summary.Name,
 		summary.State,
 		strconv.Itoa(summary.Mounts),
-		formatTextTime(summary.Created),
-		formatTextTime(summary.Closed),
+		formatImageListTime(summary.Created, now),
+		formatImageListTime(summary.Closed, now),
+		formatSessionActivity(summary.Activity, now),
 		rm,
 	}
 }
@@ -499,6 +519,7 @@ type sessionsDocument struct {
 // model. Times are RFC3339; a zero closed_at renders as-is, matching
 // the on-disk record behavior. The schema is add-only.
 type sessionSummaryJSON struct {
+	sessionActivityJSON
 	Name      string `json:"name"`
 	State     string `json:"state"`
 	Mounts    int    `json:"mounts"`
@@ -510,91 +531,13 @@ func writeSessionListJSON(w io.Writer, summaries []session.Summary) error {
 	doc := sessionsDocument{Sessions: make([]sessionSummaryJSON, 0, len(summaries))}
 	for _, summary := range summaries {
 		doc.Sessions = append(doc.Sessions, sessionSummaryJSON{
-			Name:      summary.Name,
-			State:     summary.State,
-			Mounts:    summary.Mounts,
-			CreatedAt: summary.Created.Format(time.RFC3339),
-			ClosedAt:  summary.Closed.Format(time.RFC3339),
+			sessionActivityJSON: newSessionActivityJSON(summary.Activity),
+			Name:                summary.Name,
+			State:               summary.State,
+			Mounts:              summary.Mounts,
+			CreatedAt:           summary.Created.Format(time.RFC3339),
+			ClosedAt:            summary.Closed.Format(time.RFC3339),
 		})
 	}
 	return writeJSON(w, doc)
-}
-
-// sessionDetailKeyWidth is the padded key column of a named session
-// record. It fits "actions".
-const sessionDetailKeyWidth = 10
-
-// writeSessionShow renders a multi-line record: identity fields, then
-// one aligned line per action.
-func writeSessionShow(w io.Writer, rec session.Record) error {
-	if _, err := fmt.Fprintln(w, rec.Name); err != nil {
-		return err
-	}
-	fields := [][2]string{
-		{"state", rec.State},
-	}
-	if rec.RemoveOnClose {
-		fields = append(fields, [2]string{"rm", "true"})
-	}
-	fields = append(fields,
-		[2]string{"created", formatTextTime(rec.CreatedAt)},
-		[2]string{"closed", formatTextTime(rec.ClosedAt)},
-		[2]string{"mounts", strconv.Itoa(session.Summarize(rec).Mounts)},
-		[2]string{"actions", strconv.Itoa(len(rec.Actions))},
-	)
-	for _, field := range fields {
-		if _, err := fmt.Fprintf(w, "  %-*s  %s\n",
-			sessionDetailKeyWidth, field[0], field[1]); err != nil {
-			return err
-		}
-	}
-	return writeSessionActionLines(w, rec.Actions)
-}
-
-func writeSessionActionLines(w io.Writer, actions []session.Action) error {
-	if len(actions) == 0 {
-		return nil
-	}
-	typeWidth, imageWidth, pointWidth := 0, 0, 0
-	for _, action := range actions {
-		if len(action.Type) > typeWidth {
-			typeWidth = len(action.Type)
-		}
-		image := sessionActionImage(action)
-		if len(image) > imageWidth {
-			imageWidth = len(image)
-		}
-		if len(action.Mountpoint) > pointWidth {
-			pointWidth = len(action.Mountpoint)
-		}
-	}
-	for _, action := range actions {
-		mode := action.Mode
-		if mode == "" {
-			mode = "-"
-		}
-		line := fmt.Sprintf("    %d  %-*s  %-*s  %-*s  mode=%s  status=%s  at=%s",
-			action.Seq, typeWidth, action.Type,
-			imageWidth, sessionActionImage(action),
-			pointWidth, action.Mountpoint,
-			mode, action.Status,
-			formatTextTime(action.Timestamp))
-		if action.Subdir != "" {
-			line += "  subdir=" + action.Subdir
-		}
-		if action.RuntimeID != "" {
-			line += "  runtime=" + action.RuntimeID
-		}
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func sessionActionImage(action session.Action) string {
-	if action.Image == "" {
-		return "-"
-	}
-	return action.Image
 }

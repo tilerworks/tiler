@@ -1048,6 +1048,8 @@ func (e *Engine) Show(name string) (Record, error) {
 
 // Summary is the short-list read model of one session.
 type Summary struct {
+	// Activity is read from the separate log, not the session record.
+	Activity ActivityView
 	// Name is the session name.
 	Name string
 	// State is active or closed.
