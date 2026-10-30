@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
 // Query selects sessions by directory, exact session name, and image stack.
@@ -41,7 +43,16 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			return Overview{}, err
 		}
 	}
-	overview, err := e.Overview(current)
+	var table []mountinfo.Mount
+	scan := *e
+	if !e.useDiskImages() {
+		table, err = e.loadTable()
+		if err != nil {
+			return Overview{}, err
+		}
+		scan.LoadTable = func() ([]mountinfo.Mount, error) { return table, nil }
+	}
+	overview, err := scan.Overview(current)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -80,6 +91,7 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			}
 		}
 		if matchesQuery(view, directory, filter, e.ImagesDir, &overview.Diagnostics) {
+			view.Mounts = e.mountDetails(view, table)
 			selected = append(selected, view)
 		}
 	}

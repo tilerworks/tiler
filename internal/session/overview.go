@@ -40,6 +40,8 @@ type View struct {
 	// its contents stay unreported and its actions unexpanded until
 	// the operation finishes.
 	Locked bool
+	// Mounts are expanded only by Query; Overview retains its existing contract.
+	Mounts []MountView
 	// Actions are the record's actions with mount health
 	// annotations. Only active records expand their actions.
 	Actions []ActionView
