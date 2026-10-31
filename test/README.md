@@ -106,6 +106,19 @@ delete those sessions before reusing `mnt-verify/`; residual upper data
 cannot make a broken image look correct. The full rebuild also compares
 peer session records to prove their immutable pins did not change.
 
+The standard workflow checks edits to existing files, nonempty directory
+deletion, removal followed by recreation, and rename before and after
+publication, including a second replay and fresh image mounts. It closes
+all workflow sessions and checks the kernel mount table for residue;
+exit cleanup reports failed tiler and FUSE unmounts.
+
+Two `test_expect_failure` cases track a known replay gap: deleting a file
+first created and published in the still-mounted upper leaves no
+whiteout against the old lower, so the new image exposes it again after
+replay. This affects both incremental and full publication. These are
+executed known failures, not skipped coverage; convert them to success
+cases when the deletion state is preserved.
+
 The import source publishes `source/app` in `remote/prepare/`, with
 `source-edit` at `remote/mnt-edit/`. Both remote and local have their
 own config and storage directories. Local imports use these names:

@@ -13,6 +13,82 @@ images=$standard/.tiler/images/standard/app
 sessions=$standard/.tiler/sessions
 logs=$standard/.tiler/logs
 
+# Decode kernel mountpoint escapes before comparing sandbox paths.
+standard_mounts () (
+	tiler_mount_root=$(cd "$standard" && pwd -P) &&
+	TILER_TEST_STANDARD="$tiler_mount_root" awk '
+	BEGIN { root = ENVIRON["TILER_TEST_STANDARD"] }
+	{
+		point = $5
+		gsub(/\\040/, " ", point)
+		gsub(/\\011/, "\t", point)
+		gsub(/\\012/, "\n", point)
+		gsub(/\\134/, sprintf("%c%c", 92, 92), point)
+		if (point == root || index(point, root "/") == 1) print point
+	}' /proc/self/mountinfo
+)
+
+cleanup_standard () (
+	cd "$standard" || return 1
+	tiler_cleanup_failed=0
+	for tiler_point in "$standard"/mnt-*
+	do
+		test "$tiler_point" = "$standard/mnt-*" && continue
+		if "$tiler_bin" umount "$tiler_point" >"$HOME/cleanup-tiler.out" 2>"$HOME/cleanup-tiler.err"
+		then
+			continue
+		fi
+		printf "tiler umount failed for %s; trying FUSE cleanup\n" "$tiler_point" >&2
+		cat "$HOME/cleanup-tiler.err" >&2
+		if ! "$fusermount3_bin" -uz "$tiler_point" >"$HOME/cleanup-fuse.out" 2>"$HOME/cleanup-fuse.err"
+		then
+			printf "FUSE cleanup also failed for %s\n" "$tiler_point" >&2
+			cat "$HOME/cleanup-fuse.err" >&2
+			tiler_cleanup_failed=1
+		fi
+	done
+	standard_mounts >"$HOME/cleanup-mounts" || return 1
+	if test -s "$HOME/cleanup-mounts"
+	then
+		printf "Mounts remain below %s after cleanup:\n" "$standard" >&2
+		cat "$HOME/cleanup-mounts" >&2
+		return 1
+	fi
+	test "$tiler_cleanup_failed" -eq 0
+)
+
+# Apply the same path operations before and after each publication.
+edit_standard_paths () (
+	tiler_view=$1 &&
+	tiler_prefix=$2-$3 &&
+	test_cmp "$prepare/$tiler_prefix-tree/nested/file.txt" "$tiler_view/$tiler_prefix-tree/nested/file.txt" &&
+	rm -r "$tiler_view/$tiler_prefix-tree" &&
+	test_cmp "$prepare/$tiler_prefix-recreate.txt" "$tiler_view/$tiler_prefix-recreate.txt" &&
+	rm "$tiler_view/$tiler_prefix-recreate.txt" &&
+	cp "$HOME/$tiler_prefix-recreated" "$tiler_view/$tiler_prefix-recreate.txt" &&
+	test_cmp "$prepare/$tiler_prefix-rename.txt" "$tiler_view/$tiler_prefix-rename.txt" &&
+	mv "$tiler_view/$tiler_prefix-rename.txt" "$tiler_view/$tiler_prefix-renamed.txt"
+)
+
+check_standard_paths () (
+	for tiler_stage in before after
+	do
+		tiler_prefix=$2-$tiler_stage &&
+		if test "$3" = session || test "$tiler_stage" = before
+		then
+			test_path_is_missing "$1/$tiler_prefix-tree" &&
+			test_cmp "$HOME/$tiler_prefix-recreated" "$1/$tiler_prefix-recreate.txt" &&
+			test_path_is_missing "$1/$tiler_prefix-rename.txt" &&
+			test_cmp "$prepare/$tiler_prefix-rename.txt" "$1/$tiler_prefix-renamed.txt"
+		else
+			test_cmp "$prepare/$tiler_prefix-tree/nested/file.txt" "$1/$tiler_prefix-tree/nested/file.txt" &&
+			test_cmp "$prepare/$tiler_prefix-recreate.txt" "$1/$tiler_prefix-recreate.txt" &&
+			test_cmp "$prepare/$tiler_prefix-rename.txt" "$1/$tiler_prefix-rename.txt" &&
+			test_path_is_missing "$1/$tiler_prefix-renamed.txt"
+		fi || return 1
+	done
+)
+
 # Later lifecycle steps share this project and its immutable version history.
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLIENT 'prepare an isolated project with a tagged Git source' '
 	workflow_config "$standard" &&
@@ -24,6 +100,20 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLI
 	printf "remove after the increment\n" >"$prepare/remove-after-increment.txt" &&
 	printf "remove in the rebuilt full\n" >"$prepare/remove-before-rebuild.txt" &&
 	printf "remove after the rebuilt full\n" >"$prepare/remove-after-rebuild.txt" &&
+	printf "base incremental edit\n" >"$prepare/modified-before-increment.txt" &&
+	printf "base full edit\n" >"$prepare/modified-before-rebuild.txt" &&
+	for tiler_publication in increment rebuild
+	do
+		for tiler_stage in before after
+		do
+			tiler_prefix=$tiler_publication-$tiler_stage &&
+			mkdir -p "$prepare/$tiler_prefix-tree/nested" &&
+			printf "original tree %s\n" "$tiler_prefix" >"$prepare/$tiler_prefix-tree/nested/file.txt" &&
+			printf "original file %s\n" "$tiler_prefix" >"$prepare/$tiler_prefix-recreate.txt" &&
+			printf "rename source %s\n" "$tiler_prefix" >"$prepare/$tiler_prefix-rename.txt" &&
+			printf "replacement after removing %s with distinct contents\n" "$tiler_prefix" >"$HOME/$tiler_prefix-recreated" || return 1
+		done || return 1
+	done &&
 	git -C "$prepare" add . &&
 	git -C "$prepare" commit -m "Create initial source" &&
 	git -C "$prepare" tag -a -m "Initial version" v1 &&
@@ -33,16 +123,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLI
 	git -C "$prepare" cat-file -t v1 >tag-type &&
 	printf "tag\n" >expect-tag-type &&
 	test_cmp expect-tag-type tag-type &&
-	test_atexit '\''
-		(
-			cd "$standard" || exit
-			for tiler_point in "$standard"/mnt-*
-			do
-				"$tiler_bin" umount "$tiler_point" >/dev/null 2>&1 ||
-				"$fusermount3_bin" -uz "$tiler_point" >/dev/null 2>&1 || true
-			done
-		)
-	'\''
+	test_atexit cleanup_standard
 '
 
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLIENT 'publish the initial full with metadata and an activity log' '
@@ -265,6 +346,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an in
 	printf "published addition\n" >delta-addition &&
 	cp delta-readme "$edit_point/README.txt" &&
 	cp delta-addition "$edit_point/published.txt" &&
+	printf "published existing-file edit\n" >delta-modified &&
+	cp delta-modified "$edit_point/modified-before-increment.txt" &&
+	cp delta-addition "$edit_point/published-then-deleted.txt" &&
+	edit_standard_paths "$edit_point" increment before &&
 	test_cmp "$prepare/obsolete.txt" "$edit_point/obsolete.txt" &&
 	rm "$edit_point/obsolete.txt" &&
 	test_path_is_missing "$edit_point/obsolete.txt" &&
@@ -295,6 +380,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an in
 	test_cmp "$prepare/remove-after-increment.txt" "$edit_point/remove-after-increment.txt" &&
 	rm "$edit_point/remove-after-increment.txt" &&
 	test_path_is_missing "$edit_point/remove-after-increment.txt" &&
+	test_cmp delta-addition "$edit_point/published-then-deleted.txt" &&
+	rm "$edit_point/published-then-deleted.txt" &&
+	test_path_is_missing "$edit_point/published-then-deleted.txt" &&
+	edit_standard_paths "$edit_point" increment after &&
 	(
 		cd "$standard" &&
 		"$tiler_bin" umount "$edit_point" 2>"$HOME/edit-umount.err"
@@ -320,6 +409,8 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'repla
 	test_grep ! -F "\"served_id\":" "$edit_record" &&
 	test_grep ! -F "\"served_tip\":" "$edit_record" &&
 	test_path_is_missing "$edit_upper/published.txt" &&
+	test_path_is_missing "$edit_upper/modified-before-increment.txt" &&
+	test_cmp delta-modified "$edit_point/modified-before-increment.txt" &&
 	test_cmp delta-addition "$edit_point/published.txt" &&
 	test_cmp post-build-readme "$edit_point/README.txt" &&
 	test_cmp post-build-readme "$edit_upper/README.txt" &&
@@ -334,6 +425,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'repla
 	test_cmp delta-tag replayed-tag
 '
 
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'incremental replay preserves tree deletion recreation and rename boundaries' '
+	check_standard_paths "$edit_point" increment session
+'
+
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'another remount keeps both incremental deletions after served pins are cleared' '
 	(
 		cd "$standard" &&
@@ -343,9 +438,18 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'anoth
 	test_path_is_missing "$edit_point/obsolete.txt" &&
 	test_path_is_missing "$edit_point/remove-after-increment.txt" &&
 	test_path_is_missing "$edit_upper/published.txt" &&
+	test_cmp delta-modified "$edit_point/modified-before-increment.txt" &&
+	test_path_is_missing "$edit_upper/modified-before-increment.txt" &&
+	check_standard_paths "$edit_point" increment session &&
 	test_cmp delta-addition "$edit_point/published.txt" &&
 	test_cmp post-build-readme "$edit_point/README.txt" &&
 	test_cmp post-build-addition "$edit_point/pending.txt"
+'
+
+# Unlinking an upper-only file leaves no whiteout against the still-served
+# old lower. The desired image then exposes it again when replay switches.
+test_expect_failure TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published incremental file stays deleted after replay' '
+	test_path_is_missing "$edit_point/published-then-deleted.txt"
 '
 
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fresh incremental view serves the publication without subsequent work' '
@@ -360,6 +464,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fre
 	test "$verify_session" != "$edit_session" &&
 	test_cmp delta-readme "$verify_point/README.txt" &&
 	test_cmp delta-addition "$verify_point/published.txt" &&
+	test_cmp delta-addition "$verify_point/published-then-deleted.txt" &&
+	test_cmp delta-modified "$verify_point/modified-before-increment.txt" &&
+	check_standard_paths "$verify_point" increment image &&
 	test_cmp "$prepare/docs/guide.txt" "$verify_point/docs/guide.txt" &&
 	test_path_is_missing "$verify_point/obsolete.txt" &&
 	test_cmp "$prepare/remove-after-increment.txt" "$verify_point/remove-after-increment.txt" &&
@@ -467,6 +574,7 @@ do
 		test_path_is_missing "$verify_point/pending.txt" &&
 		if test "$tiler_branch_kind" = chain
 		then
+			check_standard_paths "$verify_point" increment image &&
 			test_cmp delta-readme "$verify_point/README.txt" &&
 			test_cmp delta-addition "$verify_point/published.txt" &&
 			test_path_is_missing "$verify_point/obsolete.txt"
@@ -506,6 +614,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a ful
 	printf "addition published in the rebuilt full\n" >rebuild-addition &&
 	cp rebuild-readme "$rebuild_point/README.txt" &&
 	cp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	printf "rebuilt existing-file edit\n" >rebuild-modified &&
+	cp rebuild-modified "$rebuild_point/modified-before-rebuild.txt" &&
+	cp rebuild-addition "$rebuild_point/rebuilt-then-deleted.txt" &&
+	edit_standard_paths "$rebuild_point" rebuild before &&
 	test_cmp "$prepare/remove-before-rebuild.txt" "$rebuild_point/remove-before-rebuild.txt" &&
 	rm "$rebuild_point/remove-before-rebuild.txt" &&
 	test_path_is_missing "$rebuild_point/remove-before-rebuild.txt" &&
@@ -527,6 +639,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a ful
 	test_cmp "$prepare/remove-after-rebuild.txt" "$rebuild_point/remove-after-rebuild.txt" &&
 	rm "$rebuild_point/remove-after-rebuild.txt" &&
 	test_path_is_missing "$rebuild_point/remove-after-rebuild.txt" &&
+	test_cmp rebuild-addition "$rebuild_point/rebuilt-then-deleted.txt" &&
+	rm "$rebuild_point/rebuilt-then-deleted.txt" &&
+	test_path_is_missing "$rebuild_point/rebuilt-then-deleted.txt" &&
+	edit_standard_paths "$rebuild_point" rebuild after &&
 	(
 		cd "$standard" &&
 		"$tiler_bin" session close full-rebuild 2>"$HOME/rebuild-close.err"
@@ -551,6 +667,8 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'openi
 	test_grep ! -F "\"served_id\":" "$rebuild_record" &&
 	test_grep ! -F "\"served_tip\":" "$rebuild_record" &&
 	test_path_is_missing "$rebuild_upper/rebuilt.txt" &&
+	test_path_is_missing "$rebuild_upper/modified-before-rebuild.txt" &&
+	test_cmp rebuild-modified "$rebuild_point/modified-before-rebuild.txt" &&
 	test_cmp rebuild-addition "$rebuild_point/rebuilt.txt" &&
 	test_cmp rebuild-pending-readme "$rebuild_point/README.txt" &&
 	test_cmp rebuild-pending-readme "$rebuild_upper/README.txt" &&
@@ -565,6 +683,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'openi
 	test_cmp branch-pin.before "$sessions/branch-edit/session.json"
 '
 
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'full replay preserves tree deletion recreation and rename boundaries' '
+	check_standard_paths "$rebuild_point" rebuild session
+'
+
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'another remount keeps both full rebuild deletions after served pins are cleared' '
 	(
 		cd "$standard" &&
@@ -575,8 +697,16 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'anoth
 	test_path_is_missing "$rebuild_point/remove-after-rebuild.txt" &&
 	test_path_is_missing "$rebuild_upper/rebuilt.txt" &&
 	test_cmp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	test_cmp rebuild-modified "$rebuild_point/modified-before-rebuild.txt" &&
+	test_path_is_missing "$rebuild_upper/modified-before-rebuild.txt" &&
+	check_standard_paths "$rebuild_point" rebuild session &&
 	test_cmp rebuild-pending-readme "$rebuild_point/README.txt" &&
 	test_cmp rebuild-pending "$rebuild_point/rebuild-pending.txt"
+'
+
+# The same upper-only deletion gap applies when publishing a new full.
+test_expect_failure TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published full-image file stays deleted after replay' '
+	test_path_is_missing "$rebuild_point/rebuilt-then-deleted.txt"
 '
 
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the rebuilt full mounts independently and keeps all five historical versions' '
@@ -593,6 +723,10 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the r
 	test_grep ! -E "^[[:space:]]*parent:" "$images/_objects/$rebuilt_full_id/image.yaml" &&
 	test_cmp rebuild-readme "$verify_point/README.txt" &&
 	test_cmp rebuild-addition "$verify_point/rebuilt.txt" &&
+	test_cmp rebuild-addition "$verify_point/rebuilt-then-deleted.txt" &&
+	test_cmp rebuild-modified "$verify_point/modified-before-rebuild.txt" &&
+	check_standard_paths "$verify_point" increment image &&
+	check_standard_paths "$verify_point" rebuild image &&
 	test_cmp delta-addition "$verify_point/published.txt" &&
 	test_cmp chain-published "$verify_point/chain.txt" &&
 	test_path_is_missing "$verify_point/obsolete.txt" &&
@@ -620,6 +754,44 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the r
 	test_path_is_missing "$sessions/$verify_session" &&
 	test_path_is_missing "$logs/sessions/$verify_session.log" &&
 	test_path_is_missing "$logs/sessions/$verify_session.log.lock"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'closing every workflow session leaves no sandbox mounts' '
+	standard_mounts >live-mounts &&
+	test_grep -F -x "$edit_point" live-mounts &&
+	for tiler_session in "$edit_session" chain-edit branch-edit full-rebuild
+	do
+		(
+			cd "$standard" &&
+			"$tiler_bin" session close "$tiler_session" >"$HOME/final-$tiler_session.out" 2>"$HOME/final-$tiler_session.err"
+		) || return 1
+	done &&
+	for tiler_point in "$standard"/mnt-*
+	do
+		find "$tiler_point" -mindepth 1 >final-entries &&
+		test_must_be_empty final-entries || return 1
+	done &&
+	standard_mounts >final-mounts &&
+	test_must_be_empty final-mounts
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'cleanup reports failures from both unmount tools' '
+	cat >"$HOME/fail-unmount" <<-\EOF &&
+	#!/bin/sh
+	printf "injected unmount failure\n" >&2
+	exit 1
+	EOF
+	chmod +x "$HOME/fail-unmount" &&
+	(
+		tiler_bin=$HOME/fail-unmount &&
+		fusermount3_bin=$HOME/fail-unmount &&
+		test_expect_code 1 cleanup_standard >"$HOME/cleanup-probe.out" 2>"$HOME/cleanup-probe.err"
+	) &&
+	test_grep "^tiler umount failed for " cleanup-probe.err &&
+	test_grep "^FUSE cleanup also failed for " cleanup-probe.err &&
+	test_grep "^injected unmount failure$" cleanup-probe.err &&
+	standard_mounts >cleanup-probe-mounts &&
+	test_must_be_empty cleanup-probe-mounts
 '
 
 test_done
