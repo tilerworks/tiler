@@ -14,6 +14,11 @@ reproduce them, unlike the older out-of-tree smoke scripts.
 - `e2e/` — tiler's own e2e cases, one file per scenario, named
   `tNNNN-<name>.sh` following the framework convention.
 
+Each sandbox has its own Git repository at the trash root. Keep it even
+for CLI-only cases: Git discovery must stop inside the sandbox rather
+than reach the enclosing tiler checkout. Scenarios with Git source data
+create their own nested repositories.
+
 ## Running
 
 Build the binary first, then run every case:
@@ -155,6 +160,9 @@ Neither suite changes the shared bootstrap or disables chain lint.
 
 ## Cases
 
+- `e2e/t0027-bootstrap-isolation.sh` — verifies the sandbox root owns a
+  Git repository and discovery from nested directories stays there even
+  without `GIT_CEILING_DIRECTORIES`. Needs only Git, without tiler or FUSE.
 - `e2e/t0000-doctor.sh` — `tiler doctor` exits 0 on an equipped host.
   Proves the vendored framework runs inside the repository.
 - `e2e/t0001-config-bootstrap.sh` — tiler creates `$HOME/.tiler.yaml`
