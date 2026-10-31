@@ -121,8 +121,11 @@ whiteouts through FUSE and reuses that journal after an interrupted
 attempt. The journal is removed after the new session pin is durable.
 
 The import source publishes `source/app` in `remote/prepare/`, with
-`source-edit` at `remote/mnt-edit/`. Both remote and local have their
-own config and storage directories. Local imports use these names:
+`source-edit` at `remote/mnt-edit/` and `source-branch` at
+`remote/mnt-branch/`. Its graph is `full -> delta -> tip` plus
+`full -> sibling`. The delta modifies, deletes, recreates, and renames
+source files. Both remote and local have their own config and storage
+directories. Local imports use these names:
 
 | Image | Local mountpoint | Source selection |
 | --- | --- | --- |
@@ -130,12 +133,27 @@ own config and storage directories. Local imports use these names:
 | `copied/file` | `mnt-copy-file/` | Full payload file, `--copy` |
 | `linked/chain` | `mnt-link-chain/` | Image directory, full then incremental `--hash`, `--link` |
 | `copied/chain` | `mnt-copy-chain/` | Image directory, full then incremental `--hash`, `--copy` |
+| `linked/fresh` | `mnt-link-fresh/` | Tip and ancestors imported into an empty repository, `--link` |
+| `copied/fresh` | `mnt-copy-fresh/` | Tip and ancestors imported into an empty repository, `--copy` |
+
+Directory imports select a version and its ancestors with `--hash`;
+they exclude siblings and descendants. A standalone payload file is
+imported as one full image even when its sidecar describes an increment.
+File imports reject `--hash` without changing existing metadata. The
+temporary `boundary/link` and `boundary/copy` repositories cover this
+distinction.
 
 Import verification uses generated `--rm` sessions. Before moving the
 source offline, it destroys all old verification sessions and clears
 the local cache. Fresh link mounts must fail, fresh copy mounts must
 succeed, and restored-source link mounts must recover. Source metadata
 and payload snapshots remain unchanged after local imports and removal.
+Separate probes remove only the full or incremental payload and check
+link failure, copy independence, and source recovery. An in-place byte
+change preserves source size and mtime: `mount --verify` must reject the
+linked images while copied images retain their original content. Cleanup
+reports both unmount tools' failures and checks the kernel mount table
+for residue below either project.
 
 The split project publishes `split/app`, edits through `split-edit`
 at `mnt-edit/`, and verifies through a fresh `--rm` session at
