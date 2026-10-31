@@ -21,6 +21,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,WORKFLOW_SQUASHFS_CLI
 	printf "base content\n" >"$prepare/README.txt" &&
 	printf "base guide\n" >"$prepare/docs/guide.txt" &&
 	printf "remove in the increment\n" >"$prepare/obsolete.txt" &&
+	printf "remove after the increment\n" >"$prepare/remove-after-increment.txt" &&
+	printf "remove in the rebuilt full\n" >"$prepare/remove-before-rebuild.txt" &&
+	printf "remove after the rebuilt full\n" >"$prepare/remove-after-rebuild.txt" &&
 	git -C "$prepare" add . &&
 	git -C "$prepare" commit -m "Create initial source" &&
 	git -C "$prepare" tag -a -m "Initial version" v1 &&
@@ -262,7 +265,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an in
 	printf "published addition\n" >delta-addition &&
 	cp delta-readme "$edit_point/README.txt" &&
 	cp delta-addition "$edit_point/published.txt" &&
+	test_cmp "$prepare/obsolete.txt" "$edit_point/obsolete.txt" &&
 	rm "$edit_point/obsolete.txt" &&
+	test_path_is_missing "$edit_point/obsolete.txt" &&
 	git -C "$edit_point" add . &&
 	git -C "$edit_point" commit -m "Publish the first increment" &&
 	git -C "$edit_point" tag -a -m "Incremental version" v2 &&
@@ -287,6 +292,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an in
 	printf "work not included in the increment\n" >post-build-addition &&
 	cp post-build-readme "$edit_point/README.txt" &&
 	cp post-build-addition "$edit_point/pending.txt" &&
+	test_cmp "$prepare/remove-after-increment.txt" "$edit_point/remove-after-increment.txt" &&
+	rm "$edit_point/remove-after-increment.txt" &&
+	test_path_is_missing "$edit_point/remove-after-increment.txt" &&
 	(
 		cd "$standard" &&
 		"$tiler_bin" umount "$edit_point" 2>"$HOME/edit-umount.err"
@@ -301,7 +309,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'an in
 	test_grep -F "\"served_tip\": \"$base_id\"" "$edit_record"
 '
 
-test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'replaying the edited session prunes published files and keeps subsequent work' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'replaying the edited session prunes published files and preserves deletions before and after the build' '
 	(
 		cd "$standard" &&
 		"$tiler_bin" session open "$edit_session" 2>"$HOME/edit-open.err"
@@ -319,10 +327,25 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'repla
 	test_cmp post-build-addition "$edit_upper/pending.txt" &&
 	test_cmp "$prepare/docs/guide.txt" "$edit_point/docs/guide.txt" &&
 	test_path_is_missing "$edit_point/obsolete.txt" &&
+	test_path_is_missing "$edit_point/remove-after-increment.txt" &&
 	git -C "$edit_point" rev-parse HEAD >replayed-commit &&
 	git -C "$edit_point" rev-parse "v2^{commit}" >replayed-tag &&
 	test_cmp delta-commit replayed-commit &&
 	test_cmp delta-tag replayed-tag
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'another remount keeps both incremental deletions after served pins are cleared' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" umount "$edit_point" 2>"$HOME/edit-repeat-umount.err" &&
+		"$tiler_bin" session open "$edit_session" 2>"$HOME/edit-repeat-open.err"
+	) >edit-repeat-open.out &&
+	test_path_is_missing "$edit_point/obsolete.txt" &&
+	test_path_is_missing "$edit_point/remove-after-increment.txt" &&
+	test_path_is_missing "$edit_upper/published.txt" &&
+	test_cmp delta-addition "$edit_point/published.txt" &&
+	test_cmp post-build-readme "$edit_point/README.txt" &&
+	test_cmp post-build-addition "$edit_point/pending.txt"
 '
 
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fresh incremental view serves the publication without subsequent work' '
@@ -339,6 +362,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a fre
 	test_cmp delta-addition "$verify_point/published.txt" &&
 	test_cmp "$prepare/docs/guide.txt" "$verify_point/docs/guide.txt" &&
 	test_path_is_missing "$verify_point/obsolete.txt" &&
+	test_cmp "$prepare/remove-after-increment.txt" "$verify_point/remove-after-increment.txt" &&
 	test_path_is_missing "$verify_point/pending.txt" &&
 	git -C "$verify_point" rev-parse HEAD >published-commit &&
 	git -C "$verify_point" rev-parse "v2^{commit}" >published-tag &&
@@ -482,6 +506,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a ful
 	printf "addition published in the rebuilt full\n" >rebuild-addition &&
 	cp rebuild-readme "$rebuild_point/README.txt" &&
 	cp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	test_cmp "$prepare/remove-before-rebuild.txt" "$rebuild_point/remove-before-rebuild.txt" &&
+	rm "$rebuild_point/remove-before-rebuild.txt" &&
+	test_path_is_missing "$rebuild_point/remove-before-rebuild.txt" &&
 	(
 		cd "$rebuild_point" &&
 		"$tiler_bin" build -f --format squashfs -m "rebuilt full" 2>"$HOME/rebuild-build.err"
@@ -497,6 +524,9 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a ful
 	printf "work after the full publication\n" >rebuild-pending &&
 	cp rebuild-pending-readme "$rebuild_point/README.txt" &&
 	cp rebuild-pending "$rebuild_point/rebuild-pending.txt" &&
+	test_cmp "$prepare/remove-after-rebuild.txt" "$rebuild_point/remove-after-rebuild.txt" &&
+	rm "$rebuild_point/remove-after-rebuild.txt" &&
+	test_path_is_missing "$rebuild_point/remove-after-rebuild.txt" &&
 	(
 		cd "$standard" &&
 		"$tiler_bin" session close full-rebuild 2>"$HOME/rebuild-close.err"
@@ -510,7 +540,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a ful
 	test_grep -F "\"served_tip\": \"$chain_tip_id\"" "$rebuild_record"
 '
 
-test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'opening the rebuilt session prunes baked files and preserves other session pins' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'opening the rebuilt session prunes baked files and preserves deletions and other session pins' '
 	(
 		cd "$standard" &&
 		"$tiler_bin" session open full-rebuild 2>"$HOME/rebuild-open.err"
@@ -528,9 +558,25 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'openi
 	test_cmp rebuild-pending "$rebuild_upper/rebuild-pending.txt" &&
 	test_cmp chain-published "$rebuild_point/chain.txt" &&
 	test_path_is_missing "$rebuild_point/obsolete.txt" &&
+	test_path_is_missing "$rebuild_point/remove-before-rebuild.txt" &&
+	test_path_is_missing "$rebuild_point/remove-after-rebuild.txt" &&
 	test_cmp edit-pin.before "$edit_record" &&
 	test_cmp chain-pin.before "$sessions/chain-edit/session.json" &&
 	test_cmp branch-pin.before "$sessions/branch-edit/session.json"
+'
+
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'another remount keeps both full rebuild deletions after served pins are cleared' '
+	(
+		cd "$standard" &&
+		"$tiler_bin" session close full-rebuild 2>"$HOME/rebuild-repeat-close.err" &&
+		"$tiler_bin" session open full-rebuild 2>"$HOME/rebuild-repeat-open.err"
+	) >rebuild-repeat-open.out &&
+	test_path_is_missing "$rebuild_point/remove-before-rebuild.txt" &&
+	test_path_is_missing "$rebuild_point/remove-after-rebuild.txt" &&
+	test_path_is_missing "$rebuild_upper/rebuilt.txt" &&
+	test_cmp rebuild-addition "$rebuild_point/rebuilt.txt" &&
+	test_cmp rebuild-pending-readme "$rebuild_point/README.txt" &&
+	test_cmp rebuild-pending "$rebuild_point/rebuild-pending.txt"
 '
 
 test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the rebuilt full mounts independently and keeps all five historical versions' '
@@ -550,6 +596,8 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'the r
 	test_cmp delta-addition "$verify_point/published.txt" &&
 	test_cmp chain-published "$verify_point/chain.txt" &&
 	test_path_is_missing "$verify_point/obsolete.txt" &&
+	test_path_is_missing "$verify_point/remove-before-rebuild.txt" &&
+	test_cmp "$prepare/remove-after-rebuild.txt" "$verify_point/remove-after-rebuild.txt" &&
 	test_path_is_missing "$verify_point/branch.txt" &&
 	test_path_is_missing "$verify_point/pending.txt" &&
 	test_path_is_missing "$verify_point/chain-pending.txt" &&
