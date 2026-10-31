@@ -447,8 +447,8 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'anoth
 '
 
 # Unlinking an upper-only file leaves no whiteout against the still-served
-# old lower. The desired image then exposes it again when replay switches.
-test_expect_failure TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published incremental file stays deleted after replay' '
+# old lower. Replay must create a whiteout before switching to the new image.
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published incremental file stays deleted after replay' '
 	test_path_is_missing "$edit_point/published-then-deleted.txt"
 '
 
@@ -705,7 +705,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'anoth
 '
 
 # The same upper-only deletion gap applies when publishing a new full.
-test_expect_failure TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published full-image file stays deleted after replay' '
+test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'a newly published full-image file stays deleted after replay' '
 	test_path_is_missing "$rebuild_point/rebuilt-then-deleted.txt"
 '
 

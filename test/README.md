@@ -69,7 +69,7 @@ equipped host, so a genuine regression is never masked by a skip.
 
 ## Linux comprehensive workflows
 
-The three workflow suites combine commands over real project data.
+The workflow suites combine commands over real project data.
 Command-specific cases below remain as focused regression coverage.
 Each workflow owns a sandbox project with `prepare/`, `.tiler.yaml`,
 and `.tiler/{images,sessions,cache,logs}`. The four storage paths are
@@ -112,12 +112,12 @@ publication, including a second replay and fresh image mounts. It closes
 all workflow sessions and checks the kernel mount table for residue;
 exit cleanup reports failed tiler and FUSE unmounts.
 
-Two `test_expect_failure` cases track a known replay gap: deleting a file
-first created and published in the still-mounted upper leaves no
-whiteout against the old lower, so the new image exposes it again after
-replay. This affects both incremental and full publication. These are
-executed known failures, not skipped coverage; convert them to success
-cases when the deletion state is preserved.
+Replay also preserves deletion of a file first created and published in
+the still-mounted upper, for both incremental and full publication.
+Before pruning, a durable runtime journal records paths missing from the
+served view but present in the desired image. Replay generates their
+whiteouts through FUSE and reuses that journal after an interrupted
+attempt. The journal is removed after the new session pin is durable.
 
 The import source publishes `source/app` in `remote/prepare/`, with
 `source-edit` at `remote/mnt-edit/`. Both remote and local have their

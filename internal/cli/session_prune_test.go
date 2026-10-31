@@ -266,12 +266,14 @@ func TestRunEnginePruneIncompleteFollowsTheWindow(t *testing.T) {
 	tests := []struct {
 		name   string
 		prune  bool
+		rebase bool
 		failed bool
 		want   bool
 	}{
 		{name: "failed window", prune: true, failed: true, want: true},
 		{name: "finished or empty upper", prune: true, failed: false, want: false},
 		{name: "prune not requested", prune: false, failed: true, want: false},
+		{name: "reconciled upper with failed optimization", prune: true, rebase: true, failed: true, want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,7 +283,11 @@ func TestRunEnginePruneIncompleteFollowsTheWindow(t *testing.T) {
 					PruneFailed: tc.failed,
 				}, nil
 			}
-			got, err := runEngine(workspace.Request{PruneUpper: tc.prune, MergedDir: "/view"})
+			req := workspace.Request{PruneUpper: tc.prune, MergedDir: "/view"}
+			if tc.rebase {
+				req.Rebase = &workspace.UpperRebase{}
+			}
+			got, err := runEngine(req)
 			if err != nil {
 				t.Fatal(err)
 			}

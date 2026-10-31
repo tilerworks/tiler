@@ -94,6 +94,9 @@ type Request struct {
 	// prune failure only warns on stderr and never blocks the
 	// mount. Read-only requests ignore it.
 	PruneUpper bool
+	// Rebase preserves deletions before switching from a served stack. Unlike
+	// redundant-file pruning, this must succeed even when the upper is empty.
+	Rebase *UpperRebase
 	// Progress receives the upper-prune lines. Nil writes nothing,
 	// so callers that do not care stay quiet. The text is
 	// "pruning upper ...", then "pruning upper ... N%" while the
@@ -545,6 +548,9 @@ func (w *Workspace) plan(
 	if err := cleanTransit(lowerCheckPoint(w.runtimeDir), req, run, seam); err != nil {
 		return w.fail(err)
 	}
+	if err := cleanRebaseTransits(req, run, seam); err != nil {
+		return w.fail(err)
+	}
 	if err := w.cleanLowers(req, len(members), run, seam); err != nil {
 		return w.fail(err)
 	}
@@ -976,8 +982,26 @@ func mountOverlay(req Request, members []member, w *Workspace, seam hooks) (*Wor
 			return nil, err
 		}
 	}
+	if req.Rebase != nil {
+		if req.ReadOnly {
+			return nil, w.fail(errors.New("workspace: a read-only view cannot rebase an upper"))
+		}
+		if err := w.rebaseUpper(req, points, seam); err != nil {
+			return nil, w.fail(fmt.Errorf("workspace: upper rebase: %w", err))
+		}
+	}
 	if wantPrune {
 		w.pruneWindow(req, points, seam)
+	}
+	if req.Rebase != nil {
+		plan, err := pendingRebasePlan(w.runtimeDir, req.Rebase.Identity)
+		if err != nil || plan == nil {
+			return nil, w.fail(errors.Join(errors.New("workspace: missing upper rebase plan"), err))
+		}
+		plan.Ready = true
+		if err := saveRebasePlan(w.runtimeDir, *plan); err != nil {
+			return nil, w.fail(err)
+		}
 	}
 	if err := w.mountMerged(req, points, seam); err != nil {
 		return nil, err

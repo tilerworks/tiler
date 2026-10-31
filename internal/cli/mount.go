@@ -68,6 +68,8 @@ type mountFlags struct {
 	// when the recorded served stack resolves differently from the
 	// desired stack; the mount command leaves it false.
 	pruneUpper bool
+	// rebaseInstance binds a replay journal to the session incarnation.
+	rebaseInstance string
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -627,7 +629,9 @@ func runEngine(req workspace.Request) (session.Result, error) {
 // not ask to prune, and a window that finished stay false and the
 // replay clears the served pins.
 func incompleteUpperPrune(req workspace.Request, ws *workspace.Workspace) bool {
-	return req.PruneUpper && ws.PruneFailed
+	// Reconciliation has already made this upper valid for the desired stack.
+	// Redundant-file pruning can warn without keeping obsolete served pins.
+	return req.Rebase == nil && req.PruneUpper && ws.PruneFailed
 }
 
 // engineUnavailable points an unavailable mount environment at the

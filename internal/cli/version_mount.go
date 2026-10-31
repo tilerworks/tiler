@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/config"
@@ -29,27 +30,55 @@ func versionMountRequest(
 	if err != nil {
 		return workspace.Request{}, nil, err
 	}
-	members := make([]workspace.MountMember, 0, len(stack))
-	for _, member := range stack {
-		path, err := materializeVersionMember(cfg, action.Name, member)
+	members, err := materializeMountStack(cfg, action.Name, stack)
+	if err != nil {
+		return workspace.Request{}, nil, err
+	}
+	var rebase *workspace.UpperRebase
+	if !flags.readOnly && action.ServedTip != "" && stack[0].Meta.Format.Type != "dmg" {
+		served, err := action.VersionStack(cfg.ImagesDir, true)
 		if err != nil {
-			return workspace.Request{}, nil, err
+			return workspace.Request{}, nil, fmt.Errorf("rebase served stack: %w", err)
 		}
-		members = append(members, workspace.MountMember{
-			Path: path, FSName: member.Path, Format: member.Meta.Format.Type,
-		})
+		same := slices.EqualFunc(stack, served, func(a, b session.VersionMember) bool { return a.Meta.ID == b.Meta.ID })
+		if !same {
+			oldMembers, err := materializeMountStack(cfg, action.Name, served)
+			if err != nil {
+				return workspace.Request{}, nil, err
+			}
+			rebase = &workspace.UpperRebase{Identity: rebaseIdentity(flags.rebaseInstance, action), Members: oldMembers}
+			flags.pruneUpper = true
+		}
 	}
 	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, nil, fmt.Errorf("mount: %w", err)
 	}
 	return workspace.Request{
-		Members: members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper,
+		Members: members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper, Rebase: rebase,
 		Subdir: flags.subdir, Table: toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions, FuseOptions: cfg.FuseOptions,
 		RuntimeDir: runtimeDir, MergedDir: dir, Run: mountRun,
 		Progress: mountNotice,
 	}, stack, nil
+}
+
+func materializeMountStack(cfg config.Config, name string, stack []session.VersionMember) ([]workspace.MountMember, error) {
+	members := make([]workspace.MountMember, 0, len(stack))
+	for _, member := range stack {
+		path, err := materializeVersionMember(cfg, name, member)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, workspace.MountMember{Path: path, FSName: member.Path, Format: member.Meta.Format.Type})
+	}
+	return members, nil
+}
+
+func rebaseIdentity(instance string, action session.Action) workspace.RebaseIdentity {
+	return workspace.RebaseIdentity{Instance: instance, Image: action.Name, Runtime: action.RuntimeID,
+		ServedFull: action.ServedID, ServedTip: action.ServedTip,
+		DesiredFull: action.FullID, DesiredTip: action.TipID}
 }
 
 // runVersionMountEngine executes one library mount or replay. The mount
