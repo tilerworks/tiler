@@ -101,6 +101,8 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			view.Mounts = e.mountDetails(view, table)
 			if e.useDiskImages() {
 				e.annotateDiskDetails(view.Name, view.Mounts, diskImages)
+			} else {
+				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, e.tableActivity(view, table))
 			}
 			selected = append(selected, view)
 		}
