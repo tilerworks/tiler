@@ -11,7 +11,7 @@ import (
 )
 
 func newStatusCmd() *cobra.Command {
-	var asJSON bool
+	var asJSON, active, inactive bool
 	var selectedSession, selectedImage string
 	cmd := &cobra.Command{
 		Use:     "status [directory]",
@@ -22,15 +22,26 @@ func newStatusCmd() *cobra.Command {
 			"sessions with mounts above or below it. Use --session for an exact\n" +
 			"session or --image name[:version] for any layer of an image.\n" +
 			"Filters intersect; selected sessions retain all their mounts.\n" +
+			"--active selects active records or sessions with remaining mounts;\n" +
+			"--no-active selects closed sessions without mounts. Unknown activity\n" +
+			"is retained by either filter. These flags are mutually exclusive.\n" +
 			"--json always renders an overview document with a sessions array.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("active") && cmd.Flags().Changed("no-active") {
+				return usageError{errors.New("status: --active and --no-active are mutually exclusive")}
+			}
 			cfg, ok := loadedConfig(cmd)
 			if !ok {
 				return errors.New("status: configuration is not loaded")
 			}
 			engine := sessionEngine(cfg)
 			query := session.Query{Session: selectedSession, Image: selectedImage}
+			if active {
+				query.Activity = session.ActivityActive
+			} else if inactive {
+				query.Activity = session.ActivityInactive
+			}
 			if len(args) == 1 {
 				query.Directory = args[0]
 			}
@@ -43,6 +54,8 @@ func newStatusCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the status as a JSON document")
+	cmd.Flags().BoolVar(&active, "active", false, "select active records or sessions with remaining mounts")
+	cmd.Flags().BoolVar(&inactive, "no-active", false, "select closed sessions without mounts")
 	cmd.Flags().StringVarP(&selectedSession, "session", "s", "", "select an exact session name")
 	cmd.Flags().StringVarP(&selectedImage, "image", "i", "", "select any layer of name[:version]")
 	return cmd
@@ -83,14 +96,16 @@ type statusDocument struct {
 // statusSessionJSON is one session block of the overview document.
 type statusSessionJSON struct {
 	sessionActivityJSON
-	Name      string             `json:"name"`
-	State     string             `json:"state"`
-	CreatedAt string             `json:"created_at"`
-	ClosedAt  string             `json:"closed_at"`
-	Current   bool               `json:"current"`
-	Locked    bool               `json:"locked"`
-	Actions   []statusActionJSON `json:"actions"`
-	Mounts    []statusMountJSON  `json:"mounts"`
+	Name            string             `json:"name"`
+	State           string             `json:"state"`
+	CreatedAt       string             `json:"created_at"`
+	ClosedAt        string             `json:"closed_at"`
+	Current         bool               `json:"current"`
+	Locked          bool               `json:"locked"`
+	Active          bool               `json:"active"`
+	ActivityReasons []string           `json:"activity_reasons"`
+	Actions         []statusActionJSON `json:"actions"`
+	Mounts          []statusMountJSON  `json:"mounts"`
 }
 
 // statusActionJSON is one recorded action with its health mark.
@@ -143,6 +158,8 @@ func newStatusSession(view session.View) statusSessionJSON {
 		ClosedAt:            view.Closed.Format(time.RFC3339),
 		Current:             view.Current,
 		Locked:              view.Locked,
+		Active:              view.ActivityClass == session.ActivityActive,
+		ActivityReasons:     append([]string{}, view.ActivityReasons...),
 		Actions:             make([]statusActionJSON, 0, len(view.Actions)),
 		Mounts:              make([]statusMountJSON, 0, len(view.Mounts)),
 	}

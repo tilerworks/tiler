@@ -10,6 +10,8 @@
       "closed_at": "0001-01-01T00:00:00Z",
       "current": true,
       "locked": false,
+      "active": true,
+      "activity_reasons": [],
       "actions": [
         {
           "seq": 1,
@@ -109,6 +111,8 @@
       "closed_at": "2026-10-16T07:15:00Z",
       "current": false,
       "locked": false,
+      "active": false,
+      "activity_reasons": [],
       "actions": [
         {
           "seq": 1,

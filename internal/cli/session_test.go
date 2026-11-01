@@ -110,7 +110,7 @@ func TestSessionNewListShowRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.HasPrefix(stdout, "dev · active\n") {
+	if !strings.HasPrefix(stdout, "dev · active · missing-mounts\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 
@@ -398,7 +398,7 @@ func TestSessionShowRendersLayeredMounts(t *testing.T) {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
 	for _, want := range []string{
-		"dev · active\n",
+		"dev · active · missing-mounts\n",
 		"Created:",
 		"📁 alice/app:",
 		compactStatusPath(view, work),
@@ -441,7 +441,7 @@ func TestSessionNewRemovableClosesRemovesAndPurges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "dev · active · remove on close\n") {
+	if !strings.Contains(stdout, "dev · active · remove on close · missing-mounts\n") {
 		t.Fatalf("show stdout = %q", stdout)
 	}
 

@@ -63,6 +63,7 @@ func writeStatusTitle(w *strings.Builder, view session.View, now time.Time) {
 			parts = append(parts, mark.label)
 		}
 	}
+	parts = append(parts, view.ActivityReasons...)
 	fmt.Fprintln(w, terminalText(strings.Join(parts, " · ")))
 	if view.Locked {
 		return
