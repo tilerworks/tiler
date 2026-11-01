@@ -79,6 +79,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'images list and show render the 
 	test_grep -E "^incr alice/app [0-9a-f]+" incr.out &&
 	"$tiler_bin" images ls >lsall.out 2>lsall.err &&
 	test_grep "alice/app" lsall.out &&
+	test_grep "VERSIONS.*TOTAL SIZE.*LAST ACTIVITY" lsall.out &&
+	test_line_count = 2 lsall.out &&
+	"$tiler_bin" images ls -v >verbose.out &&
+	test_grep "CREATED.*LAST ACTIVITY.*DESCRIPTION" verbose.out &&
 	"$tiler_bin" images show alice/app >ls.out 2>ls.err &&
 	test_grep -E "^  parent +$id1$" ls.out &&
 	test_grep -E "^    $id1$" ls.out &&

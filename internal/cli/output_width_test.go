@@ -28,7 +28,7 @@ func TestImageListOutputWidthFlag(t *testing.T) {
 		{160, []string{"--width", "160"}},
 	} {
 		t.Run(fmt.Sprint(tc.width), func(t *testing.T) {
-			args := append(append([]string{}, lib...), "image", "ls")
+			args := append(append([]string{}, lib...), "image", "ls", "-v")
 			out, stderr, _, err := runCmd(t, append(args, tc.args...)...)
 			if err != nil {
 				t.Fatalf("list: %v\n%s", err, stderr)

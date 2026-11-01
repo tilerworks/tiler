@@ -145,7 +145,7 @@ their existing timestamp formats and precision.
 `tiler sessions`) run `list` when no subcommand is given. Text output
 starts with a hint to use `ls` to hide the hint and `-h` for more
 subcommands. List flags such as
-`--json` and image listing's `-w/--width` work on the group too; JSON
+`--json`, `-v/--verbose`, and image listing's `-w/--width` work on the group too; JSON
 omits the hint. Explicit `list` output is unchanged.
 
 `images list` and `doctor` accept `-w/--width` for formatted text output
@@ -228,12 +228,17 @@ Available now:
   one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [-w <columns>] [--json]` prints each repository with a package
-  icon, version count, and latest ID. The table defaults to 120 terminal
+- `tiler images list [-v|--verbose] [-w <columns>] [--json]` prints one
+  row per image: `IMAGE`, `VERSIONS`, `TOTAL SIZE`, and `LAST ACTIVITY`.
+  Total size sums every version's own payload once across all branches.
+  Last activity is the newest event across all versions; if any version
+  activity cannot be read reliably, the aggregate is `unknown`.
+  `-v` restores the detailed version tree with times and descriptions.
+  JSON is identical with and without `-v`. The table defaults to 120 terminal
   display columns, including CJK text and common emoji sequences.
   Use `-w/--width` to change the limit, for example `-w 80` or
   `--width 160`. The minimum width is 80; JSON ignores the width.
-  `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
+  In verbose mode, `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
   the latest version with `★`. Deep ancestor guides and long repository
   names are elided when needed, preserving IDs and the latest marker.
   Right-aligned `SIZE` is the node's own payload size, including all

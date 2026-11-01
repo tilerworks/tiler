@@ -531,7 +531,7 @@ test_expect_success TILER,LINUX,SQUASHFS_PACK,WORKFLOW_GIT,FUSE_TOOLCHAIN 'versi
 		"$tiler_bin" images show "standard/app:$chain_tip_id" >"$HOME/chain-show.out" 2>"$HOME/chain-show.err" &&
 		"$tiler_bin" images show "standard/app:$branch_tip_id" >"$HOME/branch-show.out" 2>"$HOME/branch-show.err" &&
 		"$tiler_bin" images show standard/app >"$HOME/latest-show.out" 2>"$HOME/latest-show.err" &&
-		"$tiler_bin" images ls 2>"$HOME/branch-tree.err"
+		"$tiler_bin" images ls -v 2>"$HOME/branch-tree.err"
 	) >branch-tree.out &&
 	test_grep -E "^  parent +$delta_id$" chain-show.out &&
 	test_grep -E "^  parent +$base_id$" branch-show.out &&
