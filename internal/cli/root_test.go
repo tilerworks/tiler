@@ -122,19 +122,20 @@ func TestVersionLineUsesDefaultAndOverride(t *testing.T) {
 	}{
 		{name: "default", version: "dev", want: "tiler dev\n"},
 		{name: "overridden", version: "1.2.3", want: "tiler 1.2.3\n"},
+		{name: "git", version: "v0.1.0-2-gabcdef0-dirty", want: "tiler v0.1.0-2-gabcdef0-dirty\n"},
+		{name: "archive", version: "0.1.0.change", want: "tiler 0.1.0.change\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			Version = tt.version
-			stdout, _, _, err := runCmd(t, "version")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ExitCode(err) != 0 {
-				t.Fatalf("ExitCode = %d, want 0", ExitCode(err))
-			}
-			if stdout != tt.want {
-				t.Fatalf("stdout = %q, want %q", stdout, tt.want)
+			for _, args := range [][]string{{"version"}, {"--version"}} {
+				stdout, stderr, _, err := runCmd(t, args...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stdout != tt.want || stderr != "" {
+					t.Fatalf("%v: stdout = %q, stderr = %q, want %q", args, stdout, stderr, tt.want)
+				}
 			}
 		})
 	}
@@ -184,18 +185,18 @@ func TestCacheFlagOverlaysOnlyWhenExplicit(t *testing.T) {
 	_, work := withWorkspace(t)
 	writeProjectConfig(t, work, "cache_enabled: true\n")
 
-	cfg := mustRun(t, "version")
+	cfg := mustRun(t)
 	if !cfg.CacheEnabled {
 		t.Fatal("omitted --cache cleared cache_enabled from the file")
 	}
 
-	cfg = mustRun(t, "version", "--cache=false")
+	cfg = mustRun(t, "--cache=false")
 	if cfg.CacheEnabled {
 		t.Fatal("explicit --cache=false did not override the file")
 	}
 
 	writeProjectConfig(t, work, "cache_enabled: false\n")
-	cfg = mustRun(t, "version", "--cache")
+	cfg = mustRun(t, "--cache")
 	if !cfg.CacheEnabled {
 		t.Fatal("explicit --cache did not override the file")
 	}
@@ -205,18 +206,18 @@ func TestSessionAutocloseFlagOverlaysOnlyWhenExplicit(t *testing.T) {
 	_, work := withWorkspace(t)
 	writeProjectConfig(t, work, "session_autoclose_stale: true\n")
 
-	cfg := mustRun(t, "version")
+	cfg := mustRun(t)
 	if !cfg.SessionAutocloseStale {
 		t.Fatal("omitted flag cleared session_autoclose_stale from the file")
 	}
 
-	cfg = mustRun(t, "version", "--session-autoclose-stale=false")
+	cfg = mustRun(t, "--session-autoclose-stale=false")
 	if cfg.SessionAutocloseStale {
 		t.Fatal("explicit --session-autoclose-stale=false did not override the file")
 	}
 
 	writeProjectConfig(t, work, "session_autoclose_stale: false\n")
-	cfg = mustRun(t, "version", "--session-autoclose-stale")
+	cfg = mustRun(t, "--session-autoclose-stale")
 	if !cfg.SessionAutocloseStale {
 		t.Fatal("explicit --session-autoclose-stale did not override the file")
 	}
@@ -226,13 +227,13 @@ func TestSplitSizeFileLoads(t *testing.T) {
 	_, work := withWorkspace(t)
 	writeProjectConfig(t, work, "split_size: 2G\n")
 
-	cfg := mustRun(t, "version")
+	cfg := mustRun(t)
 	if cfg.SplitSize != 2<<30 {
 		t.Fatalf("split_size = %d, want 2G", cfg.SplitSize)
 	}
 
 	writeProjectConfig(t, work, "split_size: 0\n")
-	cfg = mustRun(t, "version")
+	cfg = mustRun(t)
 	if cfg.SplitSize != 0 {
 		t.Fatalf("explicit zero split_size = %d", cfg.SplitSize)
 	}
@@ -264,7 +265,7 @@ func TestRemovedSplitFlagsAndKeys(t *testing.T) {
 	}
 
 	writeProjectConfig(t, work, "split_enabled: true\n")
-	_, stderr, _, err = runCmd(t, "version")
+	_, stderr, _, err = runCmd(t)
 	if ExitCode(err) != 1 || !strings.Contains(stderr, "split_enabled") {
 		t.Fatalf("project old key: ExitCode(%v) stderr %q", err, stderr)
 	}
@@ -276,7 +277,7 @@ func TestRunCreatesUserConfigFile(t *testing.T) {
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("user config already exists before any command")
 	}
-	if _, _, _, err := runCmd(t, "version"); err != nil {
+	if _, _, _, err := runCmd(t); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -307,7 +308,7 @@ func TestRunKeepsExistingUserConfig(t *testing.T) {
 	home, _ := withWorkspace(t)
 	// A current-schema file must not be rewritten on later runs.
 	writeProjectConfig(t, home, "version: 1\nlog_level: debug\n")
-	if _, _, _, err := runCmd(t, "version"); err != nil {
+	if _, _, _, err := runCmd(t); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".tiler.yaml"))
@@ -326,7 +327,7 @@ func TestRunUpgradesLegacyUserConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := runCmd(t, "version"); err != nil {
+	if _, _, _, err := runCmd(t); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -363,7 +364,7 @@ func TestRunUpgradeFailurePrefersUpgradeError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(home, 0o755) })
 
-	_, stderr, _, err := runCmd(t, "version")
+	_, stderr, _, err := runCmd(t)
 	if ExitCode(err) == 0 {
 		t.Fatal("expected failure when upgrade cannot rewrite a legacy file")
 	}
@@ -393,7 +394,7 @@ func TestCeilingDirBoundsProjectWalk(t *testing.T) {
 	t.Chdir(deep)
 
 	// Without a ceiling the walk reaches zone and applies the marker.
-	cfg := mustRun(t, "version")
+	cfg := mustRun(t)
 	if cfg.CacheDir != filepath.Join(zone, "marker-cache") {
 		t.Fatalf("control cache_dir = %q, want the zone marker", cfg.CacheDir)
 	}
@@ -401,7 +402,7 @@ func TestCeilingDirBoundsProjectWalk(t *testing.T) {
 	// With the ceiling at sandbox, zone sits above it and is excluded, so
 	// the default cache dir stands.
 	t.Setenv("TILER_CEILING_DIR", sandbox)
-	cfg = mustRun(t, "version")
+	cfg = mustRun(t)
 	if cfg.CacheDir != filepath.Join(home, ".tiler", "cache") {
 		t.Fatalf("ceiling cache_dir = %q, want the default", cfg.CacheDir)
 	}

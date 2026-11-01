@@ -15,6 +15,19 @@ Licensed under [MIT](LICENSE).
 Build from this tree with `make build`. The static binary is written
 to `bin/tiler`.
 
+`tiler version` and `tiler --version` print the same `tiler <version>`
+line without loading or creating configuration. `make build` records
+`git describe --dirty` from this source tree, preserving the tag prefix
+and dirty marker. Without a usable tag it records
+`git describe --always --dirty` instead. For a source archive without
+Git metadata, it reads the newest version heading in [CHANGELOG.md](CHANGELOG.md)
+and appends `.change`, for example `tiler 0.1.0.change`. An enclosing
+repository outside the extracted source is ignored. The version stays
+fixed when the binary is installed or run from another directory.
+
+Use `make build` for source-derived versions. A direct `go build`
+without the linker override prints `tiler dev`.
+
 `go install` is planned. Release binary downloads are planned.
 
 `tiler doctor` checks the shared runtime tools and each image stack:
@@ -162,7 +175,7 @@ tiler session close feature                # reverse unmount, record kept
 
 Available now:
 
-- `tiler version` prints one version line.
+- `tiler version` and `tiler --version` print one version line.
 - `tiler doctor [-w <columns>] [--json]` probes `/dev/fuse`, the shared external
   tools, the image toolchain (one complete squashfs or erofs stack
   is enough; a missing stack warns), and the squashfuse subdir

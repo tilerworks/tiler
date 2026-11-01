@@ -27,7 +27,7 @@ test_expect_success TILER 'no user config exists before the first run' '
 '
 
 test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
-	"$tiler_bin" version &&
+	"$tiler_bin" >config.out 2>config.err &&
 	test_path_is_file "$HOME/.tiler.yaml" &&
 	test_grep "^version: 1$" "$HOME/.tiler.yaml" &&
 	test_grep "^images_dir: .tiler/images$" "$HOME/.tiler.yaml" &&
@@ -40,7 +40,7 @@ test_expect_success TILER 'tiler creates $HOME/.tiler.yaml from the template' '
 test_expect_success TILER 'a later run leaves an edited config untouched' '
 	echo "# user edit" >>"$HOME/.tiler.yaml" &&
 	cp "$HOME/.tiler.yaml" config.before &&
-	"$tiler_bin" version &&
+	"$tiler_bin" >config.out 2>config.err &&
 	test_cmp config.before "$HOME/.tiler.yaml"
 '
 
@@ -56,7 +56,7 @@ test_expect_success TILER 'legacy user config without version is upgraded' '
 	EOF
 	cp "$HOME/.tiler.yaml" legacy.before &&
 	rm -f "$HOME/.tiler.yaml.bak" &&
-	"$tiler_bin" version &&
+	"$tiler_bin" >config.out 2>config.err &&
 	test_grep "^version: 1$" "$HOME/.tiler.yaml" &&
 	test_grep ! "runtime_dir" "$HOME/.tiler.yaml" &&
 	test_path_is_file "$HOME/.tiler.yaml.bak" &&

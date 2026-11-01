@@ -35,8 +35,8 @@ test_expect_success TILER 'legacy session age settings stay parseable and do not
 	session_max_age: 0s
 	session_autoclose_stale: true
 	EOF
-	"$tiler_bin" version >ver.out 2>ver.err &&
-	test_grep "^tiler " ver.out &&
+	"$tiler_bin" >config.out 2>config.err &&
+	test_grep "^Usage:" config.out &&
 	test_grep "session_max_age: 0s" "$HOME/.tiler.yaml" &&
 	test_grep "session_autoclose_stale: true" "$HOME/.tiler.yaml" &&
 	test_expect_code 2 "$tiler_bin" session gc --expire -1 >neg.out 2>neg.err &&

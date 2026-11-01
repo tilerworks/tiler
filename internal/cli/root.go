@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is printed by the version command. It stays dev when the
-// build does not pass -X github.com/jiangxin/tiler/internal/cli.Version.
+// Version is injected by make build and printed by both version entrypoints.
+// Direct go builds stay dev unless the caller supplies the same linker flag.
 var Version = "dev"
 
 // filesystemRoot is the walk limit for project files outside the
@@ -31,8 +31,9 @@ type loadedConfigKey struct{}
 func NewRootCmd() *cobra.Command {
 	flags := &flagSet{}
 	root := &cobra.Command{
-		Use:   "tiler",
-		Short: "Turn directory snapshots into overlay workspaces",
+		Use:     "tiler",
+		Short:   "Turn directory snapshots into overlay workspaces",
+		Version: Version,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			return prepare(cmd, flags)
 		},
@@ -45,6 +46,7 @@ func NewRootCmd() *cobra.Command {
 	// completion list only the canonical command, so the Aliases
 	// block is omitted from cobra's usage text.
 	root.SetUsageTemplate(usageWithoutAliases)
+	root.SetVersionTemplate("tiler {{.Version}}\n")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return usageError{err}
 	})
@@ -63,6 +65,9 @@ func NewRootCmd() *cobra.Command {
 
 func prepare(cmd *cobra.Command, flags *flagSet) error {
 	silenceRuntimeUsage(cmd)
+	if cmd.Name() == "version" {
+		return nil
+	}
 	if cmd.Name() == "benchmark" {
 		return rejectBenchmarkRootFlags(cmd)
 	}

@@ -12,6 +12,15 @@ tiler 把目录快照打成只读容器镜像，再用 overlay 提供可写工�
 
 在本仓库执行 `make build` 即可构建。静态二进制写到 `bin/tiler`。
 
+`tiler version` and `tiler --version` print the same `tiler <version>`
+line without reading or creating configuration. `make build` embeds
+`git describe --dirty`, falling back to `git describe --always --dirty`
+when no usable tag exists. Source archives without Git metadata use the
+newest version in [CHANGELOG.md](CHANGELOG.md) with a `.change` suffix,
+for example `tiler 0.1.0.change`. An enclosing unrelated repository is
+ignored. The installed binary keeps its build-time version. Direct
+`go build` without the linker override continues to report `tiler dev`.
+
 `go install` 尚在规划中。发布二进制下载尚在规划中。
 
 `tiler doctor` 检查共用运行时工具和每一套镜像栈：
@@ -131,7 +140,7 @@ tiler session close feature                # 逆序卸载，记录保留
 
 当前可用：
 
-- `tiler version` 打印一行版本。
+- `tiler version` and `tiler --version` print one version line.
 - `tiler doctor [--json]` 探测 `/dev/fuse`、共用外部工具、镜像
   工具链（squashfs 或 erofs 至少一套完整即可，缺另一套为警告）
   与 squashfuse subdir 基线，并进一步体检存储：稀疏阶梯探测镜像库与缓存目录

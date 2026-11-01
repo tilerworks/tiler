@@ -12,7 +12,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the tiler version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "tiler %s\n", Version)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "tiler %s\n", cmd.Root().Version)
 			return err
 		},
 	}

@@ -1,8 +1,11 @@
 # Quality gates for the tiler development loop.
 # A change is done when fmt, lint, and test are all green.
 
-build: ## CGO_ENABLED=0 go build -o bin/ ./cmd/...
-	CGO_ENABLED=0 go build -o bin/ ./cmd/...
+build: ## build a versioned static binary under bin/
+	@tiler_version=$$(sh scripts/version.sh) && \
+	CGO_ENABLED=0 go build \
+		-ldflags "-X github.com/jiangxin/tiler/internal/cli.Version=$$tiler_version" \
+		-o bin/ ./cmd/...
 
 fmt: ## golangci-lint fmt
 	golangci-lint fmt

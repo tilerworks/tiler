@@ -45,6 +45,9 @@ cannot support them:
 
 - **No tiler binary** — build it with `make build`, or put `tiler` on
   `PATH`. `make e2e` prints a notice and the case reports a TAP skip.
+- **No Go or make** — `t0028-version.sh` still checks source version
+  resolution and the available binary, but skips its compilation cases.
+  The compilation cases reuse the caller's Go build and module caches.
 - **No FUSE toolchain** — `tiler doctor` and the mount-driven cases
   `t0003` through `t0014` need `/dev/fuse` and the external
   FUSE/squashfs tools (`squashfuse_ll`, `fuse-overlayfs`,

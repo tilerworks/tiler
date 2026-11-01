@@ -52,7 +52,7 @@ func TestExitCodeBoundaries(t *testing.T) {
 		{name: "missing session record is runtime",
 			args: []string{"session", "show", "ghost"}, want: 1},
 		{name: "reserved tree working directory is runtime",
-			seed: seedReservedCwd, args: []string{"version"}, want: 1},
+			seed: seedReservedCwd, want: 1},
 		{name: "corrupt block manifest mount is runtime",
 			seed: seedCorruptBlocks,
 			args: []string{"mount", "alice/data", "/ws/view"}, want: 1},
