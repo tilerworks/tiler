@@ -63,7 +63,7 @@ type Entry struct {
 // quality gate rely on.
 type Request struct {
 	// Members overrides the legacy Full/Layers fields with a root-to-tip
-	// stack. Each path must already be materialized; Concat cannot be combined.
+	// stack. Concat cannot be combined with explicit members.
 	Members []MountMember
 	// Full is the full image file mounted as the base layer.
 	Full string
@@ -142,11 +142,14 @@ type Request struct {
 }
 
 // MountMember carries one layer's payload path, optional published identity,
-// and container type. Split payloads are materialized by the caller.
+// and container type. Split payloads can provide resolved Blocks instead.
 type MountMember struct {
 	Path   string
 	FSName string
 	Format string
+	// Blocks lists resolved payload files for a concatfs view, in byte order.
+	// Empty mounts Path directly. Path remains the canonical descriptor name.
+	Blocks []string
 }
 
 // ConcatSource describes the concat view of a byte-block payload
@@ -215,6 +218,7 @@ type member struct {
 	path   string
 	fsname string
 	format string
+	blocks []string
 }
 
 // Mount mounts the requested view.
@@ -227,15 +231,13 @@ type member struct {
 // upper and a work directory under the caller-supplied combination
 // directory (sessions/<name>/runtime/m<seq>/); a read-only chain
 // merges lowerdir-only, and a read-only single image mounts straight
-// onto the target with no runtime state. When Subdir is set, every
-// layer is pre-checked with HasSubdir first and the layers missing
-// the subdirectory are dropped before any mount.
+// onto the target. Split members also need runtime concat mounts. When
+// Subdir is set, every layer is checked with HasSubdir and layers missing
+// the subdirectory are dropped before mounting their containers.
 //
-// With Concat set, concatfs mounts the block directory at a
-// runtime transit point first and the base layer mounts the virtual
-// concatenated file from it — the zero-reassembly route for a
-// byte-block payload. The transit point is the first recorded mount,
-// so every teardown reaches it last.
+// Members with Blocks mount concatfs views at runtime transit points
+// before mounting any container, so rollback detaches their dependents
+// first. The legacy Concat field provides a single base-layer view.
 //
 // With PruneUpper set on a read-write request whose upper directory
 // already exists with content, the mounted lowers are merged
@@ -291,9 +293,11 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace: runtime tree %s is inside the mount target %s",
 			req.RuntimeDir, req.MergedDir)
 	}
-	members, err = pruneBySubdir(members, req, run)
-	if err != nil {
-		return nil, err
+	if !hasBlockMembers(members) {
+		members, err = pruneBySubdir(members, req, run)
+		if err != nil {
+			return nil, err
+		}
 	}
 	w := &Workspace{MergedDir: req.MergedDir, run: run}
 	if err := w.prepareTarget(req, members, run, seam); err != nil {
@@ -304,6 +308,16 @@ func mount(req Request, run runFunc, seam hooks) (*Workspace, error) {
 	}
 	if err := w.plan(req, members, run, seam); err != nil {
 		return nil, err
+	}
+	if hasBlockMembers(members) {
+		members, err = w.mountBlockMembers(members, seam)
+		if err != nil {
+			return nil, w.fail(err)
+		}
+		members, err = pruneBySubdir(members, req, run)
+		if err != nil {
+			return nil, w.fail(err)
+		}
 	}
 	if req.Concat != nil {
 		if err := w.mountConcatBase(req, seam); err != nil {
@@ -530,7 +544,7 @@ func (w *Workspace) plan(
 	if err := guardTarget(req.MergedDir); err != nil {
 		return w.fail(err)
 	}
-	if req.ReadOnly && len(members) == 1 && req.Concat == nil {
+	if req.ReadOnly && len(members) == 1 && req.Concat == nil && !hasBlockMembers(members) && !hasBlockTransits(req) {
 		return nil
 	}
 	w.runtimeDir = filepath.Clean(req.RuntimeDir)
@@ -552,6 +566,9 @@ func (w *Workspace) plan(
 		return w.fail(err)
 	}
 	if err := w.cleanLowers(req, len(members), run, seam); err != nil {
+		return w.fail(err)
+	}
+	if err := cleanBlockTransits(req, run, seam); err != nil {
 		return w.fail(err)
 	}
 	if req.Concat != nil {
@@ -854,6 +871,9 @@ func requiredTools(req Request) ([]string, error) {
 	if req.Concat != nil {
 		tools = append(tools, "concatfs")
 	}
+	if hasBlockMembers(members) && !slices.Contains(tools, "concatfs") {
+		tools = append(tools, "concatfs")
+	}
 	return tools, nil
 }
 
@@ -915,12 +935,19 @@ func stack(req Request) ([]member, error) {
 			fsname: layerFSName(req, i),
 			format: format,
 		})
+		if len(req.Members) > 0 {
+			members[len(members)-1].blocks = req.Members[i+1].Blocks
+		}
 	}
 	fsname := req.FullFSName
 	if fsname == "" {
 		fsname = req.Full
 	}
-	return append(members, member{path: req.Full, fsname: fsname, format: req.Format}), nil
+	base := member{path: req.Full, fsname: fsname, format: req.Format}
+	if len(req.Members) > 0 {
+		base.blocks = req.Members[0].Blocks
+	}
+	return append(members, base), nil
 }
 
 // memberRequest projects explicit members onto the legacy runtime path fields.

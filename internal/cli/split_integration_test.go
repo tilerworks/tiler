@@ -140,7 +140,7 @@ func TestSplitBlocksReassembleRoundTrip(t *testing.T) {
 		}
 	}
 
-	// The default route mounts through a materialized cache copy.
+	// Mount the published block payload through the available route.
 	view := filepath.Join(work, "view")
 	deferForceUmount(t, sessionsRoot, view)
 	mustSessionNew(t, lib, "dev")
@@ -282,150 +282,84 @@ func requireConcatfs(t *testing.T) string {
 }
 
 func TestSplitBlocksConcatRouteRoundTrip(t *testing.T) {
-	t.Skip("concat route is no longer selected from configuration")
 	requireMountTestEnv(t)
 	requireConcatfs(t)
 	home, work := withWorkspace(t)
 	imagesDir, lib := libFlags(home)
-	sessionsRoot := sessionsDir(home)
-	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home)
-	src := splitSource(t)
-	wantTree := listTree(t, src)
-	res := buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveVersionMount(cfg, "alice/data")
+	lib = append(lib, "--cache-dir", cfg.CacheDir)
+	res := buildSplitBlocks(t, cfg, "alice/data", splitSource(t), 128*1024)
+	// Build smoke checks may populate the cache; mount must work without it.
+	if err := os.RemoveAll(cfg.CacheDir); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := image.OpenRepo(imagesDir, "alice/data")
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := filepath.Join(imagesDir, "alice", "data", image.ImageFile)
-	blocksDir := filepath.Join(imagesDir, "alice", "data", "_objects", res.ID)
-
-	view := filepath.Join(work, "concat-view")
-	deferForceUmount(t, sessionsRoot, view)
-	mustSessionNew(t, lib, "dev")
-	mountOK(t, lib, "mounted "+view+"\n",
-		"mount", "--read-only", "--session", "dev", "alice/data", view)
-
-	// Zero reassembly: no assembled copy appears in the cache.
-	if entries, readErr := os.ReadDir(cacheDir); readErr == nil {
-		for _, entry := range entries {
-			if entry.Name() == target.SHA256+image.SquashExt {
-				t.Fatal("the concat route materialized a cache copy")
-			}
-		}
+	canonical, err := repo.ObjectPayloadPath(res)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The mount table shows the canonical identity at the target
-	// and the concat transit point under the runtime tree.
+	view := filepath.Join(work, "concat-view")
+	deferForceUmount(t, cfg.SessionsDir, view)
+	mustSessionNew(t, lib, "dev")
+	mountOK(t, lib, "mounted "+view+"\n", "mount", "--read-only", "--subdir", "docs", "--session", "dev", "alice/data", view)
+	assertBytesFile(t, filepath.Join(view, "guide.md"), "# guide\n")
+	runtime := filepath.Join(cfg.SessionsDir, "dev", "runtime", "m1")
+	virtual := filepath.Join(runtime, "concat-0", concatViewFile)
+	if got := fileSHA256Hex(t, virtual); got != res.SHA256 {
+		t.Fatalf("virtual digest = %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.CacheDir, res.SHA256+image.SquashExt)); !os.IsNotExist(err) {
+		t.Fatalf("materialized cache image: %v", err)
+	}
 	entry, ok := entryAt(realTable(t), view)
 	if !ok || entry.Source != canonical {
-		t.Fatalf("entry at %s = %+v, want fsname %s", view, entry, canonical)
+		t.Fatalf("mount identity = %+v", entry)
 	}
-	transit := ""
-	for _, m := range entriesUnder(realTable(t), sessionsRoot) {
-		if filepath.Base(m.Point) == "concat" {
-			transit = m.Point
-		}
-	}
-	if transit == "" {
-		t.Fatalf("no concat transit point under %s", sessionsRoot)
-	}
-	// The virtual concatenated file hashes to the whole image
-	// digest without any materialization.
-	virtual := filepath.Join(transit, concatViewFile)
-	if got := fileSHA256Hex(t, virtual); got != target.SHA256 {
-		t.Errorf("virtual concat digest = %s, want %s", got, target.SHA256)
-	}
-	if got := listTree(t, view); !slices.Equal(got, wantTree) {
-		t.Errorf("mounted view does not match the source tree")
-	}
-
-	// Killing both daemons of the combination: one session open
-	// recovers the whole route.
 	killDaemon(t, findDaemon(t, "squashfuse_ll", view))
-	killDaemon(t, findDaemon(t, "concatfs", blocksDir))
-	waitStale(t, view)
+	killDaemon(t, findDaemon(t, "concatfs", filepath.Join(runtime, "block-data-0")))
+	waitOverlayDead(t, view)
 	if out := mustCmd(t, append(lib, "session", "open", "dev")...); out != "opened dev\n" {
-		t.Fatalf("open output = %q", out)
+		t.Fatalf("open = %q", out)
 	}
-	if got := listTree(t, view); !slices.Equal(got, wantTree) {
-		t.Errorf("recovered view does not match the source tree")
+	assertBytesFile(t, filepath.Join(view, "guide.md"), "# guide\n")
+	if _, err := os.Stat(filepath.Join(cfg.CacheDir, res.SHA256+image.SquashExt)); !os.IsNotExist(err) {
+		t.Fatalf("replay materialized a cache image: %v", err)
 	}
-	entry, ok = entryAt(realTable(t), view)
-	if !ok || entry.Source != canonical {
-		t.Fatalf("recovered entry at %s = %+v, want fsname %s", view, entry, canonical)
-	}
-
-	// A repeated open keeps the same daemons serving.
 	pid := findDaemon(t, "squashfuse_ll", view)
-	if out := mustCmd(t, append(lib, "session", "open", "dev")...); out != "opened dev\n" {
-		t.Fatalf("repeated open output = %q", out)
-	}
+	mustCmd(t, append(lib, "session", "open", "dev")...)
 	if again := findDaemon(t, "squashfuse_ll", view); again != pid {
-		t.Errorf("the healthy combination was remounted: %d -> %d", pid, again)
+		t.Fatal("healthy open remounted the view")
 	}
-
-	// The path umount tears the whole combination down.
-	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
-		t.Fatalf("umount output = %q", out)
-	}
-	assertNoResidue(t, sessionsRoot, view)
-	if out := umountCmd(t, lib, view); out != "" {
-		t.Fatalf("an idempotent umount printed %q", out)
-	}
+	umountCmd(t, lib, view)
+	assertNoResidue(t, cfg.SessionsDir, view)
 }
 
 func TestSplitBlocksConcatDegradesToReassembly(t *testing.T) {
-	t.Skip("concat route is no longer selected from configuration")
 	requireMountTestEnv(t)
-	requireConcatfs(t)
+	original := concatAvailable
+	t.Cleanup(func() { concatAvailable = original })
+	concatAvailable = func() bool { return false }
 	home, work := withWorkspace(t)
 	_, lib := libFlags(home)
-	sessionsRoot := sessionsDir(home)
-	cacheDir := filepath.Join(home, ".tiler", "cache")
 	cfg := splitConfig(home)
-	src := splitSource(t)
-	wantTree := listTree(t, src)
-	buildSplitBlocks(t, cfg, "alice/data", src, 128*1024)
-	target, err := image.ResolveVersionMount(cfg, "alice/data")
-	if err != nil {
+	lib = append(lib, "--cache-dir", cfg.CacheDir)
+	res := buildSplitBlocks(t, cfg, "alice/data", splitSource(t), 128*1024)
+	if err := os.RemoveAll(cfg.CacheDir); err != nil {
 		t.Fatal(err)
 	}
-
-	// Concat selection left configuration with the global split
-	// flags; this skipped test kept a PATH probe seam that no
-	// longer exists. A later mount step can restore concat choice.
-	view := filepath.Join(work, "degraded")
-	deferForceUmount(t, sessionsRoot, view)
-	stdout, stderr, _, err := runCmd(t, append(lib,
-		"mount", "alice/data", view)...)
-	if err != nil {
-		t.Fatalf("mount: %v\n%s", err, stderr)
+	view := filepath.Join(work, "reassembled")
+	deferForceUmount(t, cfg.SessionsDir, view)
+	mountCreatedOK(t, lib, "mounted "+view+"\n", "mount", "--read-only", "alice/data", view)
+	assertBytesFile(t, filepath.Join(view, "docs", "guide.md"), "# guide\n")
+	cached := filepath.Join(cfg.CacheDir, res.SHA256+image.SquashExt)
+	if got := fileSHA256Hex(t, cached); got != res.SHA256 {
+		t.Fatalf("cache digest = %s", got)
 	}
-	name, rest, ok := parseNewSessionCreated(stdout)
-	if !ok || !generatedSessionName.MatchString(name) || rest != "mounted "+view+"\n" {
-		t.Fatalf("stdout = %q", stdout)
-	}
-	for _, want := range []string{
-		"concatfs", "reassembly", "contrib/concatfs", "never installs it automatically",
-	} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("guidance = %q, want it to contain %q", stderr, want)
-		}
-	}
-	// The degrade materialized the content-addressed cache copy and
-	// the view serves the source tree.
-	cached := filepath.Join(cacheDir, target.SHA256+image.SquashExt)
-	if got := fileSHA256Hex(t, cached); got != target.SHA256 {
-		t.Errorf("materialized copy digest = %s, want %s", got, target.SHA256)
-	}
-	if got := listTree(t, view); !slices.Equal(got, wantTree) {
-		t.Errorf("the degraded view does not match the source tree")
-	}
-	if out := umountCmd(t, lib, view); out != "unmounted "+view+"\n" {
-		t.Fatalf("umount output = %q", out)
-	}
-	assertNoResidue(t, sessionsRoot, view)
+	umountCmd(t, lib, view)
+	assertNoResidue(t, cfg.SessionsDir, view)
 }
 
 func TestSplitGuidanceWalkthrough(t *testing.T) {

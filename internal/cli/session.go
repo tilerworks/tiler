@@ -379,6 +379,11 @@ func versionTarget(target image.Target) bool {
 		if strings.Contains(filepath.ToSlash(member.Path), "/_objects/") {
 			return true
 		}
+		for _, block := range member.Blocks {
+			if strings.Contains(filepath.ToSlash(block.Path), "/_objects/") {
+				return true
+			}
+		}
 	}
 	return false
 }

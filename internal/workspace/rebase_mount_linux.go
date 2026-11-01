@@ -26,14 +26,18 @@ func cleanRebaseTransits(req Request, run runFunc, seam hooks) error {
 	}
 	// Views hold the lower mounts busy regardless of mount-table ordering.
 	slices.SortFunc(points, func(a, b string) int {
-		view := func(p string) bool {
-			return !strings.HasPrefix(filepath.Base(p), "lower-")
-		}
-		if view(a) != view(b) {
-			if view(a) {
-				return -1
+		rank := func(p string) int {
+			switch {
+			case strings.HasPrefix(filepath.Base(p), "concat-"):
+				return 2
+			case strings.HasPrefix(filepath.Base(p), "lower-"):
+				return 1
+			default:
+				return 0
 			}
-			return 1
+		}
+		if rank(a) != rank(b) {
+			return rank(a) - rank(b)
 		}
 		return strings.Compare(b, a)
 	})
@@ -123,6 +127,10 @@ func (w *Workspace) rebaseCurrent(req Request, temp *Workspace, seam hooks) (str
 		return "", err
 	}
 	if err := preflight(oldReq); err != nil {
+		return "", err
+	}
+	members, err = temp.mountBlockMembers(members, seam)
+	if err != nil {
 		return "", err
 	}
 	members, err = pruneBySubdir(members, oldReq, w.run)

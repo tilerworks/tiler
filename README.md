@@ -32,12 +32,13 @@ both stacks and no format setting, builds stay squashfs with zstd.
 `git` is optional. Doctor always lists it, and a missing binary is a failed probe rather than a silent skip. A failed git probe does not block the other checks.
 
 Optional helper tools ship as sources under `contrib/`: `concatfs`
-(optional helper for manual byte-block concat; build needs gcc and
+(direct byte-block mounts on Linux; build needs gcc and
 libfuse3-dev) and `slowfs` (latency injection for slow-NAS
 comparisons; build needs a Go toolchain). Each directory records the
 upstream origin, license, and build command. tiler prompts when a
 scenario needs one and it is missing; it never installs them
-automatically. tiler does not select concatfs as a mount route.
+automatically. Linux mounts use concatfs when it is on PATH and
+reassemble blocks in the cache otherwise.
 
 ## macOS
 
@@ -630,18 +631,20 @@ tiler build --split 0 ...   # this build stays single-file
 
 When the effective size is greater than zero, **full and each
 incremental layer** are stored as fixed-size byte blocks under
-`_blocks/<layer-id>/blk.NNN`. Digests and sizes on metadata still
-describe the whole logical squashfs per layer. Mounting reassembles
-every layer into `<cache_dir>/<layer-sha256>.sqsh` (each block
-verified, then the whole digest) and stacks them newest-incr-first
-with the same overlay path as a single-file chain. The cache
-directory needs room for the reassembled layers. Mixing forms is
-refused: a blocks active cannot append a single-file incr, and a
-single active cannot append blocks — rebuild with a matching full
-first. The optional contrib `concatfs` helper remains available for
-manual use, but tiler no longer selects a concat mount route from
-configuration or flags.
+`_objects/<layer-id>/blk.NNN`. Digests and sizes in metadata describe
+the whole logical container per layer. On Linux, when `concatfs` is
+on PATH, mounting exposes each layer as a virtual concatenated file
+and mounts directly from its blocks. Only small descriptors are
+written under the session runtime; no complete cache image is created.
+Linked imports resolve each block to its external payload path.
 
+Without `concatfs`, mounting reassembles each layer into
+`<cache_dir>/<layer-sha256>.sqsh`, so the cache needs room for those
+complete layers. Both routes verify each block and the whole digest,
+then stack the containers newest-increment-first through the same
+overlay path. Session reopen uses the available route too. Build
+quality checks can still reassemble split layers in the cache.
+No configuration key or mount flag selects concatfs.
 When the doctor single-file limit probe finds a cap on the image
 library or the cache directory, it advises setting `split_size` (or
 `tiler build --split`); with a positive `split_size` the same probe
@@ -783,8 +786,8 @@ library. When the target filesystem caps single-file size — a
 quota'd NAS share or a FAT-class volume — `tiler doctor` reports
 the limit and advises `split_size` / `tiler build --split`. With a
 positive block size, full and incremental layers store as verified
-byte blocks; mounting reassembles each layer in the cache directory
-and overlays them. One library, one command surface — the block
+byte blocks; mounting uses concatfs when available, or reassembles
+each layer in the cache directory, then overlays them. One library, one command surface — the block
 size is a configuration (or per-build flag) choice.
 
 Machines read the same command surface. Every list and view
