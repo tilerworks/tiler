@@ -82,7 +82,7 @@ sets `split_size: 1M`. Each build explicitly selects squashfs.
 | --- | --- | --- |
 | `t0100-linux-standard-workflow.sh` | `ws-standard/` | Tagged Git full, both `--rm` paths, session GC, incremental replay/pruning, descendants, siblings, and a rebuilt full |
 | `t0101-linux-import-workflow.sh` | `ws-import/{remote,local}/` | File and dependency-closure link/copy imports, mounted no-op, source outage/recovery, and safe local deletion |
-| `t0102-linux-split-workflow.sh` | `ws-split/` | Configured full/incremental blocks, exact boundaries/order, block and reassembled SHA256, and fresh mounted binary content |
+| `t0102-linux-split-workflow.sh` | `ws-split/` | Full/incremental blocks, split boundaries and overrides, cold-cache integrity failures/recovery, replay deletions, optional concatfs direct and linked mounts, and cleanup diagnostics |
 | `t0103-linux-replay-deletions.sh` | `ws-replay/` | Consecutive publications, empty-upper deletions, new tree/link deletion, rename/recreation, and replay failure recovery |
 
 The standard project publishes `standard/app`. Its version variables

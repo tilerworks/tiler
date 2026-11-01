@@ -30,7 +30,7 @@ workflow_git_init () {
 
 # Read the block records emitted by tiler's object metadata serializer.
 workflow_block_manifest () {
-	awk '
+	awk -v min_blocks="${2:-2}" '
 	function emit() {
 		if (name != sprintf("blk.%03d", count) || sizes != 1 || sums != 1 ||
 		    size !~ /^[0-9]+$/ || length(sum) != 64 || sum ~ /[^0-9a-f]/) {
@@ -50,7 +50,7 @@ workflow_block_manifest () {
 	blocks && $1 == "sha256:" { sum = $2; sums++; next }
 	END {
 		if (seen) emit()
-		exit (bad || sections != 1 || count < 2)
+		exit (bad || sections != 1 || count < min_blocks)
 	}
 	' "$1"
 }
