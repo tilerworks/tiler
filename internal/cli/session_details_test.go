@@ -18,7 +18,7 @@ func TestSessionDetailsShareStatusAndVerboseAliases(t *testing.T) {
 	sessionTimeNow = func() time.Time { return goldenSessionTime }
 	t.Cleanup(func() { sessionTimeNow = previous })
 	for _, name := range []string{"dev", "old"} {
-		status, _, _, err := runCmd(t, append(lib, "status", "-s", name)...)
+		status, _, _, err := runCmd(t, append(lib, "status", "-v", "-s", name)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +90,7 @@ func TestSessionDetailsHandleEmptyLockedAndInvalidNames(t *testing.T) {
 		e.Lock = func(string, time.Duration) (func(), error) { return nil, session.ErrLockHeld }
 	})
 	out, _, _, err = runCmd(t, append(lib, "session", "show", "empty")...)
-	if err != nil || out != "empty · locked\n" {
+	if err != nil || out != "empty · locked · activity-unknown\n" {
 		t.Fatalf("locked: %v %s", err, out)
 	}
 	for _, tc := range []struct {

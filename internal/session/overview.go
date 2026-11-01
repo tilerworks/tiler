@@ -40,6 +40,10 @@ type View struct {
 	// its contents stay unreported and its actions unexpanded until
 	// the operation finishes.
 	Locked bool
+	// ActivityClass and ActivityReasons are computed by Query from the record
+	// and host mount snapshot; they are never persisted in the session record.
+	ActivityClass   ActivityClass
+	ActivityReasons []string
 	// Mounts are expanded only by Query; Overview retains its existing contract.
 	Mounts []MountView
 	// Actions are the record's actions with mount health

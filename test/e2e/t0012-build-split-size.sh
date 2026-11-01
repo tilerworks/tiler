@@ -146,7 +146,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'a new full preserves the pinned 
 	"$tiler_bin" images show alice/split >ls-new.out 2>ls-new.err &&
 	test_grep -E "^  id +$id2$" ls-new.out &&
 	test_grep -E "^  payload +blocks$" ls-new.out &&
-	"$tiler_bin" images list >ls-hold.out 2>ls-hold.err &&
+	"$tiler_bin" images list -v >ls-hold.out 2>ls-hold.err &&
 	test_grep "${id1%${id1#??????????}}" ls-hold.out &&
 	"$tiler_bin" umount "$verify_dir" >unpin.out 2>unpin.err &&
 	test_grep -E "^unmounted " unpin.out

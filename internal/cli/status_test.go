@@ -76,7 +76,7 @@ func TestStatusOverviewRendering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, stderr)
 	}
-	for _, want := range []string{"dev · active · current", "[rw · mounted · healthy]", "old · closed", "orphan /ws/orphan"} {
+	for _, want := range []string{"dev · active · current", "[rw · healthy · warning]", "old · closed", "orphan /ws/orphan"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("missing %q in %s", want, stdout)
 		}
@@ -91,7 +91,7 @@ func TestStatusOverviewMarksStaleMounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "mounted · stale") {
+	if !strings.Contains(stdout, "rw · stale") {
 		t.Fatalf("stdout = %q, want the stale annotation", stdout)
 	}
 	// The dead view of a live record stays claimed: only the
@@ -159,7 +159,7 @@ func TestStatusPathStaleMark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status path: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "mounted · stale") {
+	if !strings.Contains(stdout, "rw · stale") {
 		t.Fatalf("stdout = %q, want the stale mark", stdout)
 	}
 }

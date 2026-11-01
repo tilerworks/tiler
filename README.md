@@ -145,7 +145,7 @@ their existing timestamp formats and precision.
 `tiler sessions`) run `list` when no subcommand is given. Text output
 starts with a hint to use `ls` to hide the hint and `-h` for more
 subcommands. List flags such as
-`--json` and image listing's `-w/--width` work on the group too; JSON
+`--json`, `-v/--verbose`, and image listing's `-w/--width` work on the group too; JSON
 omits the hint. Explicit `list` output is unchanged.
 
 `images list` and `doctor` accept `-w/--width` for formatted text output
@@ -228,12 +228,17 @@ Available now:
   one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
   active form must stay consistent: blocks active only appends
   blocks layers; single active only appends single layers.
-- `tiler images list [-w <columns>] [--json]` prints each repository with a package
-  icon, version count, and latest ID. The table defaults to 120 terminal
+- `tiler images list [-v|--verbose] [-w <columns>] [--json]` prints one
+  row per image: `IMAGE`, `VERSIONS`, `TOTAL SIZE`, and `LAST ACTIVITY`.
+  Total size sums every version's own payload once across all branches.
+  Last activity is the newest event across all versions; if any version
+  activity cannot be read reliably, the aggregate is `unknown`.
+  `-v` restores the detailed version tree with times and descriptions.
+  JSON is identical with and without `-v`. The table defaults to 120 terminal
   display columns, including CJK text and common emoji sequences.
   Use `-w/--width` to change the limit, for example `-w 80` or
   `--width 160`. The minimum width is 80; JSON ignores the width.
-  `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
+  In verbose mode, `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
   the latest version with `★`. Deep ancestor guides and long repository
   names are elided when needed, preserving IDs and the latest marker.
   Right-aligned `SIZE` is the node's own payload size, including all
@@ -360,29 +365,57 @@ Available now:
   Recent activity comes from the newest session-log event, including failed
   operations; missing activity is `-`, and unreadable activity is `unknown`.
   Listing never renews activity. `-v` prints each session's layered mount tree.
-  `session show <name>` shares the detailed output of `status -s <name>`;
+  `session show <name>` shares the detailed output of `status -v -s <name>`;
   its `--json` form preserves the record object and action history.
   List, show, and status JSON add `last_activity_at` (UTC RFC3339 or null)
   and `last_activity_unknown`. `-v` affects text only: list JSON is identical
   with and without it. A generated name accepts the same commands as an
   explicit name; only `--rm` changes close into a delete.
-- `tiler status [directory] [-s session] [-i name[:version]] [--json]`
+- `tiler status [directory] [-s session] [-i name[:version]]
+  [--active | --no-active] [-v|--verbose] [--json]`
   and `tiler session status` are equivalent. A directory selects every
   session whose mount contains it or is contained by it. File arguments
   are rejected; an unrelated directory returns an empty list. `-s` selects
   an exact session name. `-i` matches full or incremental layers; omitting
   the version matches all versions of that image. Filters intersect on
   the same mount, and selected sessions retain all their mounts.
-  Detailed text shows session times, current/locked markers, and one 📁
+  `--active` selects records still marked active or sessions with actual
+  mounts, including internal layer remnants. `--no-active` selects closed
+  sessions without mounts and hides orphans. Both flags are mutually
+  exclusive, even when explicitly set to false; a single false disables
+  that filter. Default output includes all sessions.
+  Active records with no mounts show `missing-mounts`; internal-only
+  mounts or closed records with mounts show `residual-mounts`. These
+  diagnostics do not change the stored state or infer why mounts vanished.
+  Locked sessions and unavailable mount information can produce
+  `activity-unknown`; unknown sessions remain visible under either filter.
+  Default text shows a session heading and one line per mount with its
+  image version, target path, rw/ro mode and health or unmounted status.
+  Activity diagnostics and current/locked markers remain visible. A
+  `warning` marker indicates additional mount diagnostics; use `-v` for
+  their full text. Orphans show their target and filesystem type.
+  `-v`/`--verbose` adds session times and one 📁
   mount tree with image versions, paths, rw/ro access and live health.
   Layers run from full to tip; overlay lowers are shown highest priority
   first, with the writable upper separately. macOS shows the attached
   shadow instead. Paths use the shorter relative/absolute spelling, or
   trailing components within 63 display columns. JSON keeps complete IDs
   and paths. Unclaimed mounts remain visible as orphans in status.
+  `-v` affects text only; JSON is identical with and without it.
   Status JSON always uses the `current_session`, `sessions`, `orphan_views`
   overview envelope. This replaces the former single-path JSON document;
   consumers must read the `sessions` array, which can contain many results.
+  Each status session adds `active` and `activity_reasons` (an array, empty
+  when no diagnostic applies). Unknown activity encodes `active: false`
+  with `activity-unknown`; check the reasons before treating false as
+  confirmed inactivity.
+
+  ```bash
+  tiler status --active
+  tiler status --active -v  # include times and layered mount details
+  tiler status ./work --active --image alice/app
+  tiler status --no-active --json
+  ```
 
 ### Activity and garbage collection
 

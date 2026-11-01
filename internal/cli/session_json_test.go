@@ -87,7 +87,7 @@ func TestSessionShowJSONMatchesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session show: %v\n%s", err, stderr)
 	}
-	want, stderr, _, err := runCmd(t, append(lib, "status", "-s", "dev")...)
+	want, stderr, _, err := runCmd(t, append(lib, "status", "-v", "-s", "dev")...)
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, stderr)
 	}

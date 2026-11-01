@@ -10,16 +10,21 @@ import (
 	"github.com/jiangxin/tiler/internal/mountinfo"
 )
 
-// Query selects sessions by directory, exact session name, and image stack.
+// Query selects sessions by directory, name, image stack, and activity.
 type Query struct {
 	Directory string
 	Session   string
 	Image     string
+	// Activity accepts active, inactive, or empty for every session.
+	Activity ActivityClass
 }
 
 // Query returns complete matching session views from one host snapshot.
 // Unlike reverse lookup, either directory may contain the other.
 func (e *Engine) Query(current string, query Query) (Overview, error) {
+	if query.Activity != "" && query.Activity != ActivityActive && query.Activity != ActivityInactive {
+		return Overview{}, fmt.Errorf("session: invalid activity filter: %q", query.Activity)
+	}
 	if query.Session != "" {
 		if err := ValidateName(query.Session); err != nil {
 			return Overview{}, err
@@ -45,6 +50,7 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 	}
 	var table []mountinfo.Mount
 	var diskImages []DiskImage
+	tableAvailable := true
 	scan := *e
 	if e.useDiskImages() {
 		diskImages, err = e.diskImages()
@@ -54,6 +60,9 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 		scan.LoadDiskImages = func() ([]DiskImage, error) { return diskImages, nil }
 	} else {
 		table, err = e.loadTable()
+		if errors.Is(err, mountinfo.ErrUnavailable) {
+			table, err, tableAvailable = nil, nil, false
+		}
 		if err != nil {
 			return Overview{}, err
 		}
@@ -101,14 +110,21 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			view.Mounts = e.mountDetails(view, table)
 			if e.useDiskImages() {
 				e.annotateDiskDetails(view.Name, view.Mounts, diskImages)
+				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, e.diskActivity(view, diskImages))
+			} else {
+				evidence := e.tableActivity(view, table)
+				evidence.Available = tableAvailable
+				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, evidence)
 			}
-			selected = append(selected, view)
+			if query.Activity == "" || view.ActivityClass == ActivityUnknown || view.ActivityClass == query.Activity {
+				selected = append(selected, view)
+			}
 		}
 	}
 	overview.Sessions = selected
 	orphans := overview.Orphans[:0]
 	for _, orphan := range overview.Orphans {
-		if query.Session != "" || query.Image != "" {
+		if query.Session != "" || query.Image != "" || query.Activity == ActivityInactive {
 			continue
 		}
 		if directory == "" || relatedQueryPath(orphan.Point, directory) {

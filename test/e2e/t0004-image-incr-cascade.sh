@@ -81,7 +81,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,EROFS_TOOLCHAIN 'mount and append
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,EROFS_TOOLCHAIN 'mixed-format siblings retain their shared parent in history' '
-	"$tiler_bin" images list >ls.out 2>ls.err &&
+	"$tiler_bin" images list -v >ls.out 2>ls.err &&
 	test_grep "${layerA%${layerA#??????????}}" ls.out &&
 	test_grep "${layerB%${layerB#??????????}}" ls.out &&
 	grep "^[[:space:]]*- id:" "$meta_file" >matching-lines &&
