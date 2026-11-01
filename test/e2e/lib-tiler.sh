@@ -5,9 +5,11 @@ TEST_DIRECTORY=$(cd "$(dirname "$0")" && pwd) || exit 1
 TEST_LIB_DIRECTORY=$(cd "$TEST_DIRECTORY/../git-test-lib" && pwd) || exit 1
 export TEST_DIRECTORY TEST_LIB_DIRECTORY
 
-# These are CLI tests, not Git worktree tests. A case needing a repository
-# must create its own explicitly instead of inheriting an unrelated one.
-TEST_NO_CREATE_REPO=1
+# Keep the harness-created Git repository at the sandbox root. The trash
+# directory lives under tiler's source checkout, so Git commands must stop
+# here instead of discovering and modifying the project's own repository.
+# Clear inherited opt-outs too; scenarios may still create nested repos.
+unset TEST_NO_CREATE_REPO
 . "$TEST_LIB_DIRECTORY/test-lib.sh"
 
 # Git's harness sanitizes Git variables; isolate tiler's inputs as well.

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -35,10 +36,8 @@ func platformStatOf(info os.FileInfo) (platformStat, error) {
 	}, nil
 }
 
-// overlayXattrs returns the trusted.overlay.* xattrs of path mapped
-// to their values. A path that carries no xattrs, or whose
-// filesystem does not support them, reports an empty map; only the
-// overlay markers are of interest here.
+// overlayXattrs includes trusted overlay markers and FUSE opacity. The
+// FUSE marker file is normalized to the same key as its optional xattr.
 func overlayXattrs(path string) (map[string][]byte, error) {
 	names, err := listXattr(path)
 	if err != nil {
@@ -46,7 +45,7 @@ func overlayXattrs(path string) (map[string][]byte, error) {
 	}
 	found := make(map[string][]byte, len(names))
 	for _, name := range names {
-		if !strings.HasPrefix(name, overlayXattrPrefix) {
+		if !strings.HasPrefix(name, overlayXattrPrefix) && name != xattrFuseOpaque {
 			continue
 		}
 		value, err := getXattr(path, name)
@@ -57,6 +56,12 @@ func overlayXattrs(path string) (map[string][]byte, error) {
 			return nil, err
 		}
 		found[name] = value
+	}
+	_, err = os.Lstat(filepath.Join(path, ".wh..wh..opq"))
+	if err == nil {
+		found[xattrFuseOpaque] = []byte("y")
+	} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+		return nil, err
 	}
 	return found, nil
 }

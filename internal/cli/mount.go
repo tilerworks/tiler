@@ -68,6 +68,8 @@ type mountFlags struct {
 	// when the recorded served stack resolves differently from the
 	// desired stack; the mount command leaves it false.
 	pruneUpper bool
+	// rebaseInstance binds a replay journal to the session incarnation.
+	rebaseInstance string
 }
 
 // sessionEnvVar names an existing session a mount attaches to when
@@ -627,7 +629,9 @@ func runEngine(req workspace.Request) (session.Result, error) {
 // not ask to prune, and a window that finished stay false and the
 // replay clears the served pins.
 func incompleteUpperPrune(req workspace.Request, ws *workspace.Workspace) bool {
-	return req.PruneUpper && ws.PruneFailed
+	// Reconciliation has already made this upper valid for the desired stack.
+	// Redundant-file pruning can warn without keeping obsolete served pins.
+	return req.Rebase == nil && req.PruneUpper && ws.PruneFailed
 }
 
 // engineUnavailable points an unavailable mount environment at the
@@ -814,10 +818,9 @@ func payloadBytesPaths(paths []string) ([]string, error) {
 
 // guardMountFormat refuses unknown or mismatched container magic
 // before a mount action is appended. File-path and single-file
-// library paths are already known. A blocks payload is reassembled
-// first so the check sees the bytes that would be mounted; the cache
-// is content-addressed, and the returned paths are what the action
-// callback stacks. A nil path list means the payload is not blocks.
+// library paths are already known. Versioned blocks are verified directly
+// when concatfs is available, or reassembled into the cache otherwise.
+// Legacy blocks return materialized paths for the action callback.
 func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) {
 	versioned := target.Library && len(target.Members) != 0
 	for _, member := range target.Members {
@@ -830,10 +833,14 @@ func guardMountFormat(cfg config.Config, target image.Target) ([]string, error) 
 				format = target.Format
 			}
 			if len(member.Blocks) != 0 {
-				// Assembly still checks every known block digest before
+				// Both routes check every known block digest before
 				// write-ahead. Format magic is read from the resolved
 				// block windows, not from position-file text.
-				if _, err := materializeBlockLayers(cfg, image.Target{
+				if concatAvailable() {
+					if err := image.VerifyBlockPayload(member.Blocks, member.SHA256, member.Size); err != nil {
+						return nil, err
+					}
+				} else if _, err := materializeBlockLayers(cfg, image.Target{
 					Library: true, Format: format, Form: image.PayloadBlocks,
 					Members: []image.Member{member},
 				}); err != nil {

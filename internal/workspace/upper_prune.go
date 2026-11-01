@@ -8,12 +8,12 @@ import (
 	"strings"
 )
 
-// The overlay markers the prune rules interpret. They live in the
-// trusted xattr namespace, which only Linux overlay filesystems use.
+// The overlay markers the Linux prune probes recognize.
 const (
-	xattrOpaque   = "trusted.overlay.opaque"
-	xattrMetacopy = "trusted.overlay.metacopy"
-	xattrRedirect = "trusted.overlay.redirect"
+	xattrOpaque     = "trusted.overlay.opaque"
+	xattrMetacopy   = "trusted.overlay.metacopy"
+	xattrRedirect   = "trusted.overlay.redirect"
+	xattrFuseOpaque = "user.fuseoverlayfs.opaque"
 )
 
 // platformStat carries the raw stat fields the prune rules need
@@ -291,6 +291,19 @@ func (p *pruner) skipRedirect(dir string, includeSelf bool) {
 	p.note(n)
 }
 
+// keepFuseOpaque preserves the marker and children together. Removing a
+// baked child while the FUSE opacity marker survives would hide its lower copy.
+func (p *pruner) keepFuseOpaque(dir string, includeSelf bool) {
+	p.report.Kept++
+	if p.progress != nil {
+		n := countTreeEntries(dir)
+		if includeSelf {
+			n++
+		}
+		p.note(n)
+	}
+}
+
 // countTreeEntries counts descendants of dir, not dir itself. The
 // walk stats names only; it does not read regular-file contents.
 func countTreeEntries(dir string) int {
@@ -316,6 +329,10 @@ func (p *pruner) pruneRoot(upperDir, lowerView string) error {
 	xattrs, err := p.seam.xattrsOf(upperDir)
 	if err != nil {
 		p.report.Errors++
+		return nil
+	}
+	if _, ok := xattrs[xattrFuseOpaque]; ok {
+		p.keepFuseOpaque(upperDir, false)
 		return nil
 	}
 	if _, ok := xattrs[xattrRedirect]; ok {
@@ -432,6 +449,10 @@ func (p *pruner) pruneDir(path, lowerPath string, info os.FileInfo) {
 	if err != nil {
 		p.report.Errors++
 		p.note(1)
+		return
+	}
+	if _, ok := xattrs[xattrFuseOpaque]; ok {
+		p.keepFuseOpaque(path, true)
 		return
 	}
 	if _, ok := xattrs[xattrRedirect]; ok {

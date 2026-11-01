@@ -108,13 +108,16 @@ func withMountSeams(t *testing.T, table []mountinfo.Mount) *mountFake {
 	f := &mountFake{table: table}
 	origRun, origCache, origTable := mountRun, ensureCache, loadMountTable
 	origMount, origUmount, origAssemble := mountEngine, unmountEngine, assembleBlocks
+	origConcat := concatAvailable
 	t.Cleanup(func() {
 		mountRun, ensureCache, loadMountTable = origRun, origCache, origTable
 		mountEngine, unmountEngine, assembleBlocks = origMount, origUmount, origAssemble
+		concatAvailable = origConcat
 	})
 	mountRun, ensureCache = f.runTool, f.cache
 	loadMountTable = func() ([]mountinfo.Mount, error) { return f.table, nil }
 	mountEngine, unmountEngine, assembleBlocks = f.mount, f.umount, f.assemble
+	concatAvailable = func() bool { return false }
 	installFoundTools(t)
 	return f
 }

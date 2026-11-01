@@ -286,6 +286,18 @@ var sessionEngine = func(cfg config.Config) *session.Engine {
 	engine.HealthyMount = func(name string, action session.Action) error {
 		return recordHealthyMountActivity(cfg, name, action)
 	}
+	engine.ReplayReady = func(rec session.Record, action session.Action) (bool, error) {
+		if action.Name == "" || action.ServedTip == "" {
+			return false, nil
+		}
+		return workspace.RebaseReady(sessionRuntimeDir(cfg, rec.Name, action), rebaseIdentity(rec.InstanceID, action))
+	}
+	engine.MountRecorded = func(rec session.Record, action session.Action) error {
+		if action.Name == "" || action.ServedTip != "" {
+			return nil
+		}
+		return workspace.CompleteRebase(sessionRuntimeDir(cfg, rec.Name, action), rebaseIdentity(rec.InstanceID, action))
+	}
 	if readHdiutilInfo != nil {
 		reader := readHdiutilInfo
 		engine.LoadDiskImages = func() ([]session.DiskImage, error) {
@@ -310,10 +322,11 @@ var resolveStackTip = func(cfg config.Config, name, fullID, tipID string) (image
 // record froze at mount or rebase time. A rebased record also names
 // the served stack its live view froze at; when that stack resolves
 // to other lower layers than the desired stack, the request asks the
-// engine to prune the reused upper of what the new lowers already
-// serve. The execution shares the mount command's engine half and
-// reuses sessions/<name>/runtime/m<seq>. Warnings that do not fail
-// the replay print to warn.
+// engine to preserve deletions and prune redundant upper entries before
+// switching lowers. Deletion reconciliation must succeed; redundant-file
+// pruning can warn and continue. Execution shares the mount command's engine
+// half and reuses sessions/<name>/runtime/m<seq>. Legacy prune warnings print
+// to warn.
 func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountFunc {
 	return func(action session.Action) (session.Result, error) {
 		var (
@@ -328,15 +341,19 @@ func sessionMount(cfg config.Config, name string, warn io.Writer) session.MountF
 		if err != nil {
 			return session.Result{}, fmt.Errorf("session: replay %s: %w", action.Image, err)
 		}
-		flags := mountFlags{
-			readOnly:   action.Mode == session.ModeRO,
-			subdir:     action.Subdir,
-			pruneUpper: replayPruneUpper(cfg, action, target, warn),
-		}
+		flags := mountFlags{readOnly: action.Mode == session.ModeRO, subdir: action.Subdir}
 		if action.Name != "" && versionTarget(target) {
+			if action.ServedTip != "" && !flags.readOnly && target.Format != "dmg" {
+				rec, err := (session.Store{Dir: cfg.SessionsDir}).Load(name)
+				if err != nil {
+					return session.Result{}, err
+				}
+				flags.rebaseInstance = rec.InstanceID
+			}
 			return runVersionMountEngine(cfg, name, action, action.Mountpoint, flags,
 				sessionRuntimeDir(cfg, name, action))
 		}
+		flags.pruneUpper = replayPruneUpper(cfg, action, target, warn)
 		return runMountEngine(cfg, target, action.Mountpoint, flags,
 			sessionRuntimeDir(cfg, name, action), nil)
 	}
@@ -361,6 +378,11 @@ func versionTarget(target image.Target) bool {
 	for _, member := range target.Members {
 		if strings.Contains(filepath.ToSlash(member.Path), "/_objects/") {
 			return true
+		}
+		for _, block := range member.Blocks {
+			if strings.Contains(filepath.ToSlash(block.Path), "/_objects/") {
+				return true
+			}
 		}
 	}
 	return false

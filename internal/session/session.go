@@ -131,6 +131,10 @@ type Engine struct {
 	// nothing. It runs inside the version scope, so the caller already
 	// holds the library lock.
 	HealthyMount func(name string, action Action) error
+	// ReplayReady recognizes a recovered desired view before its lost writeback.
+	ReplayReady func(Record, Action) (bool, error)
+	// MountRecorded acknowledges runtime recovery only after the record is durable.
+	MountRecorded func(Record, Action) error
 }
 
 // New creates one fresh active record under the session's exclusive
@@ -248,7 +252,7 @@ func (e *Engine) RunMount(name string, action Action, mount MountFunc) (Result, 
 	if wbErr := e.Writeback(name, stored.Seq, StatusMounted, result.Mountpoint); wbErr != nil {
 		return result, wbErr
 	}
-	return result, logErr
+	return result, errors.Join(logErr, e.finishRecordedMount(name, stored.Seq))
 }
 
 // Open replays one record into a consistent mounted state: the
@@ -305,25 +309,31 @@ func (e *Engine) openRecord(name string, rec Record, mount MountFunc) error {
 			continue
 		}
 		if action.Mountpoint != "" && health(action.Mountpoint) {
-			// Reconcile the record with the healthy reality: an
-			// action left pending or failed by a crash between the
-			// execution and its writeback becomes mounted without a
-			// remount, keeping a repeated open a pure no-op. A
-			// served-carrying action only reaches this branch after
-			// its replay cleaned the stale point and the remount
-			// actually succeeded, so the reconcile empties the
-			// replaced served stack ids in the same writeback
-			// instead of stranding them beside status=mounted. An
-			// already-mounted action is left untouched: a healthy
-			// mounted view carrying served ids still serves the
-			// replaced stack.
+			ready := false
+			if e.ReplayReady != nil {
+				var err error
+				ready, err = e.ReplayReady(rec, action)
+				if err != nil {
+					return err
+				}
+			}
+			if ready {
+				action.ServedID, action.ServedTip = "", ""
+			}
+			// Pending or failed actions with healthy views recover as mounted.
+			// For an already-mounted action, a ready journal proves the lower
+			// transition completed before its writeback was lost. Without that
+			// proof, keep the served pins of a healthy post-build view.
 			if err := e.reportHealthyMount(name, action); err != nil {
 				return err
 			}
-			if action.Status != StatusMounted {
+			if action.Status != StatusMounted || ready {
 				if err := e.WritebackMounted(name, action.Seq, "", true); err != nil {
 					return err
 				}
+			}
+			if err := e.finishRecordedMount(name, action.Seq); err != nil {
+				return err
 			}
 			continue
 		}
@@ -407,7 +417,23 @@ func (e *Engine) replay(name string, action Action, clean CleanFunc, mount Mount
 	if wbErr := e.WritebackMounted(name, action.Seq, result.Mountpoint, clearServed); wbErr != nil {
 		return wbErr
 	}
-	return logErr
+	return errors.Join(logErr, e.finishRecordedMount(name, action.Seq))
+}
+
+func (e *Engine) finishRecordedMount(name string, seq int) error {
+	if e.MountRecorded == nil {
+		return nil
+	}
+	rec, err := e.Load(name)
+	if err != nil {
+		return err
+	}
+	for _, action := range rec.Actions {
+		if action.Seq == seq {
+			return e.MountRecorded(rec, action)
+		}
+	}
+	return fmt.Errorf("session: %s has no action %d", name, seq)
 }
 
 // mountedWithLostRecord reports a mount callback that mounted the view

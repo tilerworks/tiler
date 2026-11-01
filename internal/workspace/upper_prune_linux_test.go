@@ -69,6 +69,39 @@ func TestOverlayXattrsEmptyOnFreshPath(t *testing.T) {
 	}
 }
 
+func TestPruneUpperKeepsFuseOpaqueContents(t *testing.T) {
+	for _, marker := range []string{"xattr", "file"} {
+		for _, directory := range []string{".", "objects"} {
+			t.Run(marker+"/"+directory, func(t *testing.T) {
+				upper, lower := fixtureRoots(t)
+				dir := filepath.Join(upper, directory)
+				file := filepath.Join(directory, "published")
+				writeFixtureFile(t, filepath.Join(upper, file), "baked", 0o644)
+				writeFixtureFile(t, filepath.Join(lower, file), "baked", 0o644)
+				if marker == "xattr" {
+					if err := syscall.Setxattr(dir, xattrFuseOpaque, []byte("y"), 0); err != nil {
+						t.Skipf("user xattrs unavailable: %v", err)
+					}
+				} else {
+					writeFixtureFile(t, filepath.Join(dir, ".wh..wh..opq"), "", 0o644)
+				}
+				report, err := PruneUpper(upper, lower)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertExists(t, filepath.Join(upper, file))
+				markers, err := overlayXattrs(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := markers[xattrFuseOpaque]; !ok || report.RemovedFiles != 0 {
+					t.Fatalf("opaque contents changed: markers=%v report=%+v", markers, report)
+				}
+			})
+		}
+	}
+}
+
 // TestPruneUpperRealOpaqueMarker walks the exported entry point
 // against real trusted.overlay.opaque markers. Writing the trusted
 // namespace needs privilege, so the test skips without it.

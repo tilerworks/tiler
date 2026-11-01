@@ -14,7 +14,7 @@ import (
 
 // AssembleBlocks materializes the logical whole image of a blocks
 // payload as <cacheDir>/<wantSHA>.sqsh, the content-addressed cache
-// entry the default mount route consumes.
+// entry consumed when concatfs is unavailable.
 //
 // A hit re-verifies the cached copy against the whole digest and
 // returns it without reading any block; a corrupted copy is rebuilt.
@@ -98,7 +98,7 @@ func streamBlocks(out *os.File, blocks []BlockFile, wantSHA string, wantSize int
 // appendBlock streams one block file into out while feeding the
 // block digest and the shared whole-image digest. The recorded size
 // and digest pin the block down; a bad block is named in the error.
-func appendBlock(out *os.File, block BlockFile, whole io.Writer) (int64, error) {
+func appendBlock(out io.Writer, block BlockFile, whole io.Writer) (int64, error) {
 	path, err := resolveBlockBytes(block)
 	if err != nil {
 		return 0, fmt.Errorf("cache: %w", err)
@@ -111,7 +111,11 @@ func appendBlock(out *os.File, block BlockFile, whole io.Writer) (int64, error) 
 	n, copyErr := io.Copy(io.MultiWriter(out, sum, whole), in)
 	closeErr := in.Close()
 	if err := joinWriteErr(copyErr, closeErr); err != nil {
-		return n, classifyBlockCopy(out.Name(), block.Name, err)
+		name := ""
+		if file, ok := out.(*os.File); ok {
+			name = file.Name()
+		}
+		return n, classifyBlockCopy(name, block.Name, err)
 	}
 	if n != block.Size {
 		return n, fmt.Errorf("cache: block %s has size %d, meta records %d",
@@ -121,6 +125,24 @@ func appendBlock(out *os.File, block BlockFile, whole io.Writer) (int64, error) 
 		return n, fmt.Errorf("cache: block %s does not match sha256", block.Name)
 	}
 	return n, nil
+}
+
+// VerifyBlockPayload checks every block and the whole logical image without
+// materializing it. Direct concat mounts retain the assembly integrity checks.
+func VerifyBlockPayload(blocks []BlockFile, wantSHA string, wantSize int64) error {
+	whole := sha256.New()
+	var size int64
+	for _, block := range blocks {
+		n, err := appendBlock(io.Discard, block, whole)
+		if err != nil {
+			return err
+		}
+		size += n
+	}
+	if size != wantSize || hex.EncodeToString(whole.Sum(nil)) != wantSHA {
+		return errors.New("image: block payload size or sha256 does not match metadata")
+	}
+	return nil
 }
 
 // classifyBlockCopy keeps the plain per-block meaning of a copy

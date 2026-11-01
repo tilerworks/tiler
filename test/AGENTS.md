@@ -62,11 +62,15 @@ do not modify `git-test-lib/` to refactor tiler's tests.
 
 Set `test_description`, then source `e2e/lib-tiler.sh` relative to `$0`.
 The bootstrap resolves the script directory before the framework changes
-cwd and HOME, pins artifacts under `e2e/`, sets
-`TEST_NO_CREATE_REPO=1`, clears inherited `TILER_SESSION_ID` and
+cwd and HOME, pins artifacts under `e2e/`, and clears
+`TEST_NO_CREATE_REPO` so the framework initializes a Git repository at
+the sandbox root. Keep that repository: it stops Git discovery from
+reaching and modifying tiler's enclosing source checkout, even without
+a Git ceiling. The bootstrap clears inherited `TILER_SESSION_ID` and
 `SOURCE_DATE_EPOCH`, and exports a `TILER_CEILING_DIR` at the physical
-trash root. Create a Git repository explicitly if a scenario
-needs one. Keep shared tiler capabilities in `e2e/sharness.d/tiler.sh`;
+trash root. Create nested Git repositories explicitly for scenarios
+that need their own source history. Keep shared tiler capabilities in
+`e2e/sharness.d/tiler.sh`;
 keep scenario-specific helpers in the case or a focused `lib-*.sh`.
 
 Use single-quoted test bodies, tab indentation, and `&&` between steps.

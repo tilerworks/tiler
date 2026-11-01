@@ -14,6 +14,11 @@ reproduce them, unlike the older out-of-tree smoke scripts.
 - `e2e/` — tiler's own e2e cases, one file per scenario, named
   `tNNNN-<name>.sh` following the framework convention.
 
+Each sandbox has its own Git repository at the trash root. Keep it even
+for CLI-only cases: Git discovery must stop inside the sandbox rather
+than reach the enclosing tiler checkout. Scenarios with Git source data
+create their own nested repositories.
+
 ## Running
 
 Build the binary first, then run every case:
@@ -46,10 +51,11 @@ cannot support them:
   `fusermount3`, `mksquashfs`). `t0007-session-recovery.sh` and the
   stale case in `t0009-status.sh` also need `pgrep` to find the daemon
   they SIGKILL. Where they are absent, the case skips rather than
-  false-fails. `t0026-activity-gc.sh` previews and deletes without a
-  mount. Its session half needs only `tiler`. Its image half also
-  needs `mksquashfs` (`SQUASHFS_PACK`) and skips that half when the
-  packer is missing.
+  false-fails. The initial cases in `t0026-activity-gc.sh` preview
+  and delete without a mount. Record-only cases need just `tiler`;
+  its packing case needs `mksquashfs` and `squashfuse_ll`, because
+  the CLI checks the format client even when no mount is requested.
+  Its separate activity/ancestor graph needs the FUSE toolchain.
 - **No EROFS toolchain** — `t0015-erofs-image.sh` needs `/dev/fuse`,
   `mkfs.erofs`, `erofsfuse`, `fuse-overlayfs`, `fusermount3`, and
   `git`. It skips cleanly on a squashfs-only host.
@@ -61,8 +67,134 @@ cannot support them:
 A case only fails when its real assertion breaks on a properly
 equipped host, so a genuine regression is never masked by a skip.
 
+## Linux comprehensive workflows
+
+The workflow suites combine commands over real project data.
+Command-specific cases below remain as focused regression coverage.
+Each workflow owns a sandbox project with `prepare/`, `.tiler.yaml`,
+and `.tiler/{images,sessions,cache,logs}`. The four storage paths are
+relative to the project config, so working inside a mounted Git tree
+still uses that project's library. Mountpoints stay outside `.tiler/`.
+The standard and import projects omit `split_size`; the split project
+sets `split_size: 1M`. Each build explicitly selects squashfs.
+
+| Suite | Project | Coverage |
+| --- | --- | --- |
+| `t0100-linux-standard-workflow.sh` | `ws-standard/` | Tagged Git full, both `--rm` paths, session GC, incremental replay/pruning, descendants, siblings, and a rebuilt full |
+| `t0101-linux-import-workflow.sh` | `ws-import/{remote,local}/` | File and dependency-closure link/copy imports, mounted no-op, source outage/recovery, and safe local deletion |
+| `t0102-linux-split-workflow.sh` | `ws-split/` | Full/incremental blocks, split boundaries and overrides, cold-cache integrity failures/recovery, replay deletions, optional concatfs direct and linked mounts, and cleanup diagnostics |
+| `t0103-linux-replay-deletions.sh` | `ws-replay/` | Consecutive publications, empty-upper deletions, new tree/link deletion, rename/recreation, and replay failure recovery |
+
+The standard project publishes `standard/app`. Its version variables
+are `base_id`, `delta_id`, `chain_tip_id`, `branch_tip_id`, and
+`rebuilt_full_id`. The graph is `base -> delta -> chain` plus
+`base -> branch`, followed by an independent full root.
+
+| Standard scenario | Mountpoint | Session |
+| --- | --- | --- |
+| Implicit `--rm` | `mnt-auto-rm/` | Generated; captured as `auto_rm_session` |
+| Named `--rm` | `mnt-named-rm/` | `scratch-edit` |
+| Retention and GC | `mnt-gc/` | `gc-check` |
+| Increment and replay | `mnt-edit/` | Generated; captured as `edit_session` |
+| Descendant increment | `mnt-chain/` | `chain-edit` |
+| Sibling increment | `mnt-branch/` | `branch-edit` |
+| Full rebuild | `mnt-rebuild/` | `full-rebuild` |
+| Published-version verification | `mnt-verify/` | A fresh generated `--rm` session each time |
+
+Replay checks distinguish files already baked into the new lower from
+later upper edits. Published-version checks use new sessions, then
+delete those sessions before reusing `mnt-verify/`; residual upper data
+cannot make a broken image look correct. The full rebuild also compares
+peer session records to prove their immutable pins did not change.
+
+The standard workflow checks edits to existing files, nonempty directory
+deletion, removal followed by recreation, and rename before and after
+publication, including a second replay and fresh image mounts. It closes
+all workflow sessions and checks the kernel mount table for residue;
+exit cleanup reports failed tiler and FUSE unmounts.
+
+Replay also preserves deletion of a file first created and published in
+the still-mounted upper, for both incremental and full publication.
+Before pruning, a durable runtime journal records paths missing from the
+served view but present in the desired image. Replay generates their
+whiteouts through FUSE and reuses that journal after an interrupted
+attempt. The journal is removed after the new session pin is durable.
+
+The import source publishes `source/app` in `remote/prepare/`, with
+`source-edit` at `remote/mnt-edit/` and `source-branch` at
+`remote/mnt-branch/`. Its graph is `full -> delta -> tip` plus
+`full -> sibling`. The delta modifies, deletes, recreates, and renames
+source files. Both remote and local have their own config and storage
+directories. Local imports use these names:
+
+| Image | Local mountpoint | Source selection |
+| --- | --- | --- |
+| `linked/file` | `mnt-link-file/` | Full payload file, `--link` |
+| `copied/file` | `mnt-copy-file/` | Full payload file, `--copy` |
+| `linked/chain` | `mnt-link-chain/` | Image directory, full then incremental `--hash`, `--link` |
+| `copied/chain` | `mnt-copy-chain/` | Image directory, full then incremental `--hash`, `--copy` |
+| `linked/fresh` | `mnt-link-fresh/` | Tip and ancestors imported into an empty repository, `--link` |
+| `copied/fresh` | `mnt-copy-fresh/` | Tip and ancestors imported into an empty repository, `--copy` |
+
+Directory imports select a version and its ancestors with `--hash`;
+they exclude siblings and descendants. A standalone payload file is
+imported as one full image even when its sidecar describes an increment.
+File imports reject `--hash` without changing existing metadata. The
+temporary `boundary/link` and `boundary/copy` repositories cover this
+distinction.
+
+Import verification uses generated `--rm` sessions. Before moving the
+source offline, it destroys all old verification sessions and clears
+the local cache. Fresh link mounts must fail, fresh copy mounts must
+succeed, and restored-source link mounts must recover. Source metadata
+and payload snapshots remain unchanged after local imports and removal.
+Separate probes remove only the full or incremental payload and check
+link failure, copy independence, and source recovery. An in-place byte
+change preserves source size and mtime: `mount --verify` must reject the
+linked images while copied images retain their original content. Cleanup
+reports both unmount tools' failures and checks the kernel mount table
+for residue below either project.
+
+The split project publishes `split/app`, edits through `split-edit`
+at `mnt-edit/`, and verifies through a fresh `--rm` session at
+`mnt-verify/`. Its two 2 MiB source files are
+`prepare/bin/base-a.bin` and `base-b.bin`; the increment adds a
+2 MiB `bin/delta.bin`. Non-final blocks must be 1,048,576 bytes;
+the final block is nonempty and at most that size. The checks compare
+all three binaries after mounting the published chain independently.
+
+These suites are ordered lifecycles with shared fixtures; later tests
+depend on setup and publications earlier in the same file. Run the
+whole suite for workflow validation, rather than selecting an arbitrary
+later test with `--run`. For example, from the repository root:
+
+```sh
+make build
+sh test/e2e/t0100-linux-standard-workflow.sh -v -x
+sh test/e2e/t0101-linux-import-workflow.sh -v -x
+sh test/e2e/t0102-linux-split-workflow.sh -v -x
+```
+
+An absolute script path also works from another working directory;
+artifacts remain under `test/e2e/`. Mounting needs
+`TILER,LINUX,FUSE_TOOLCHAIN`; the Git-backed suites also require Git.
+Pure packing checks use `SQUASHFS_PACK` and
+`WORKFLOW_SQUASHFS_CLIENT` without requiring `/dev/fuse`, overlay,
+or unmount tools. `lib-workflow.sh` defines the client and Git probes,
+project/Git fixture setup, and the limited block-manifest reader.
+Assertions still use the existing git-test-lib helpers.
+
+The standard and import scripts set `TEST_NO_MALLOC_CHECK=1` before
+loading the framework. Git's glibc allocator instrumentation otherwise
+aborts the external squashfuse daemon while reading Git objects; the
+Go binary and all content/replay assertions are still exercised.
+Neither suite changes the shared bootstrap or disables chain lint.
+
 ## Cases
 
+- `e2e/t0027-bootstrap-isolation.sh` — verifies the sandbox root owns a
+  Git repository and discovery from nested directories stays there even
+  without `GIT_CEILING_DIRECTORIES`. Needs only Git, without tiler or FUSE.
 - `e2e/t0000-doctor.sh` — `tiler doctor` exits 0 on an equipped host.
   Proves the vendored framework runs inside the repository.
 - `e2e/t0001-config-bootstrap.sh` — tiler creates `$HOME/.tiler.yaml`
@@ -79,15 +211,12 @@ equipped host, so a genuine regression is never masked by a skip.
   checks that mounting a different image onto a live view is refused as
   a conflict rather than silently restacked. Needs the FUSE toolchain;
   skips cleanly without it.
-- `e2e/t0004-image-incr-cascade.sh` — builds a base full image, mounts
-  it, and appends two distinct incremental layers, then confirms the
-  chain cascades in `images show` and in `meta.yaml`. A fresh remount
-  covers mixed-format history, index recovery, GC retention, and editor
-  descriptions. An incremental publication stamps its parent with the
-  same time and leaves a sibling branch unchanged. A later GC
-  initializes a missing child log once, refreshes that parent, and
-  then removes an old sibling and an old independent root while the
-  parent of a retained child stays.
+- `e2e/t0004-image-incr-cascade.sh` — builds mixed-format sibling
+  increments with a shared full parent, checks their history, and
+  merges a new independent full. Historical mounts cover immutable
+  pins, reference-index recovery, retained dependencies, and edited
+  descriptions. Needs both squashfs and EROFS toolchains. Activity
+  propagation and ancestor GC coverage live in `t0026`.
 - `e2e/t0005-images-ls-gc-rm.sh` — exercises the library subcommands
   over a mounted image: `images list` / `images show` (all images,
   one-name detail, `--json`), a GC preview that does not delete while
@@ -103,13 +232,18 @@ equipped host, so a genuine regression is never masked by a skip.
   does not delete it, a mount into a closed session refused, and
   `remove` deleting the closed record. Needs the FUSE toolchain;
   skips cleanly without it.
-- `e2e/t0026-activity-gc.sh` — nonprivileged GC. A legacy
+- `e2e/t0026-activity-gc.sh` — GC preview, activity, and retention. A legacy
   `session_max_age: 0s` file still loads and does not block
   `session gc`. The session half checks the preview, a piped `yes`,
   one-time log initialization, and `--yes` removal of `runtime/`
-  upper data. The image half packs one full version with `mksquashfs`
-  (no FUSE), checks the same preview and initialization contract, and
-  skips when the packer is missing.
+  upper data. Its mount-free image case requires the squashfs packer
+  and format client. A separate squashfs graph checks exact parent
+  activity propagation, unchanged sibling logs, one-time missing-log
+  initialization, and retaining an ancestor of a recent child while
+  expired siblings and an independent full are removed. That graph
+  needs FUSE, but neither EROFS nor the earlier mount-free fixture.
+  Use `--run=1-4` for the original independent cases or `--run=5-8`
+  for the complete graph sequence.
 - `e2e/t0007-session-recovery.sh` — simulates a daemon crash by
   SIGKILLing the FUSE process behind a named session's writable view
   (a `kill_view` helper), confirms the write-ahead record survives
@@ -154,7 +288,7 @@ equipped host, so a genuine regression is never masked by a skip.
   cleanly without it.
 - `e2e/t0012-build-split-size.sh` — builds a full image with a small
   `--split` into multiple blocks, mounts it, writes the upper, builds
-  an incr with the same `--split` into `_blocks/<incr-id>/`, remounts
+  an incr with the same `--split` into `_objects/<incr-id>/`, remounts
   to verify the upper file. Omitting
   `--split` or setting project `split_size: 0` stays a single
   `image.sqsh`. Needs the FUSE toolchain; skips cleanly without it.
@@ -188,12 +322,10 @@ equipped host, so a genuine regression is never masked by a skip.
 
 ## Adding cases in later phases
 
-Drop a new `tNNNN-<name>.sh` into `e2e/`, sourcing the framework the
-same way `t0000-doctor.sh` does (preset `TEST_LIB_DIRECTORY` and
-`TEST_DIRECTORY` against the script location, then `. test-lib.sh`).
-`make e2e` picks it up with no further wiring. This is where the
-`../tiler-e2e` s00-s08 scenario suite will be migrated, one case at a
-time.
+Drop a new `tNNNN-<name>.sh` into `e2e/`, sourcing `lib-tiler.sh`
+relative to the script as `t0000-doctor.sh` does. `make e2e` picks it
+up with no further wiring. Keep scenario-specific helpers inside the
+case or a focused `lib-*.sh`; do not modify the vendored framework.
 
 Shared helpers load automatically from `e2e/sharness.d/*.sh` (see
 `e2e/sharness.d/tiler.sh`): `tiler_bin`, the `TILER` prereq, OS

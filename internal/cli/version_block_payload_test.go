@@ -14,7 +14,10 @@ import (
 	"github.com/jiangxin/tiler/internal/image"
 )
 
-func TestVersionMountMaterializesExternalBlockBytes(t *testing.T) {
+func TestVersionMountResolvesExternalBlocksForBothRoutes(t *testing.T) {
+	original := concatAvailable
+	t.Cleanup(func() { concatAvailable = original })
+	concatAvailable = func() bool { return false }
 	root := t.TempDir()
 	cfg := config.Config{
 		ImagesDir: filepath.Join(root, "images"),
@@ -64,6 +67,33 @@ func TestVersionMountMaterializesExternalBlockBytes(t *testing.T) {
 	}
 	if err := os.Remove(req.Members[0].Path); err != nil {
 		t.Fatal(err)
+	}
+	concatAvailable = func() bool { return true }
+	direct, _, err := versionMountRequest(cfg, versionMountAction(id, id), "/view", mountFlags{}, "/runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(direct.Members[0].Blocks) != 2 || direct.Members[0].Blocks[0] != positionTarget(t, leaves[0]) ||
+		direct.Members[0].Blocks[1] != positionTarget(t, leaves[1]) {
+		t.Fatalf("concat sources = %+v", direct.Members)
+	}
+	entries, err := os.ReadDir(cfg.CacheDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("concat materialized a cache entry: %v, %v", entries, err)
+	}
+	target, err := image.ResolveVersionMount(cfg, "alice/app")
+	if err != nil || !versionTarget(target) {
+		t.Fatalf("split version was not recognized for replay: %+v, %v", target, err)
+	}
+	// Newlines are valid on-disk names but cannot fit concatfs line records.
+	// A raw block at such a location must retain the reassembly route.
+	odd := filepath.Join(t.TempDir(), "block\nbytes")
+	if err := os.WriteFile(odd, alpha, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := concatBlockPaths([]image.BlockFile{{Path: odd}})
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("unencodable block path: %v, %v", paths, err)
 	}
 	if err := os.Remove(positionTarget(t, leaves[1])); err != nil {
 		t.Fatal(err)

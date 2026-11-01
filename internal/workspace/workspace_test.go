@@ -617,7 +617,9 @@ func newFakeKernel() *fakeKernel {
 func (k *fakeKernel) run(name string, args ...string) error {
 	k.calls = append(k.calls, append([]string{name}, args...))
 	switch name {
-	case "squashfuse_ll", "fuse-overlayfs", "concatfs":
+	case "concatfs":
+		k.live[args[1]] = true
+	case "squashfuse_ll", "fuse-overlayfs":
 		k.live[args[len(args)-1]] = true
 	case "fusermount3":
 		point := args[len(args)-1]

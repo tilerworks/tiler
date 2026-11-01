@@ -15,6 +15,7 @@ import (
 	"github.com/jiangxin/tiler/internal/image"
 	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
+	"github.com/jiangxin/tiler/internal/workspace"
 )
 
 // mountActivityLine is one decoded image activity record.
@@ -206,7 +207,8 @@ func TestSessionReplayActivityFollowsTheRecordedTip(t *testing.T) {
 // reused upper against those lowers.
 func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs")}
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs"),
+		SessionsDir: filepath.Join(root, "sessions")}
 	base, _, servedTip, desiredTip, _ := mountActivityLibrary(t, cfg.ImagesDir)
 	writeVersionPayload(t, cfg.ImagesDir, "alice/app", desiredTip, desiredTip.Description)
 	fake := withMountSeams(t, nil)
@@ -217,6 +219,15 @@ func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 	defer hold.Release()
 	action := mountActivityAction(base.ID, desiredTip.ID)
 	action.ServedID, action.ServedTip = base.ID, servedTip.ID
+	action.Status, action.Timestamp = session.StatusMounted, time.Now()
+	rec, err := session.NewVersionRecord("dev", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Actions = []session.Action{action}
+	if err := (session.Store{Dir: cfg.SessionsDir}).SaveVersion(rec); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sessionMount(cfg, "dev", io.Discard)(action); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -224,6 +235,9 @@ func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 		t.Fatalf("mount requests = %d, want one", len(fake.mountReqs))
 	}
 	req := fake.mountReqs[0]
+	if req.Rebase == nil || req.Rebase.Identity.Instance != rec.InstanceID || len(req.Rebase.Members) != 3 {
+		t.Fatalf("rebase = %+v, want the bound served stack", req.Rebase)
+	}
 	if !req.PruneUpper {
 		t.Fatal("PruneUpper = false, want the changed lower stack to prune")
 	}
@@ -237,6 +251,62 @@ func TestSessionReplayMountsDesiredStackWhenServedDiffers(t *testing.T) {
 			t.Fatalf("member = %#v, want the desired stack, not the served tip", member)
 		}
 	}
+}
+
+func TestHealthyReplayCompletesRebaseAfterLostWriteback(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), LogsDir: filepath.Join(root, "logs"),
+		SessionsDir: filepath.Join(root, "sessions")}
+	base, _, servedTip, desiredTip, _ := mountActivityLibrary(t, cfg.ImagesDir)
+	writeVersionPayload(t, cfg.ImagesDir, "alice/app", desiredTip, desiredTip.Description)
+	rec, err := session.NewVersionRecord("dev", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := mountActivityAction(base.ID, desiredTip.ID)
+	action.Status, action.Timestamp = session.StatusMounted, time.Now()
+	action.ServedID, action.ServedTip = base.ID, servedTip.ID
+	rec.Actions = []session.Action{action}
+	if err := (session.Store{Dir: cfg.SessionsDir}).SaveVersion(rec); err != nil {
+		t.Fatal(err)
+	}
+	runtime := sessionRuntimeDir(cfg, rec.Name, action)
+	if err := os.MkdirAll(runtime, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journal := struct {
+		Version  int                      `json:"version"`
+		Identity workspace.RebaseIdentity `json:"identity"`
+		Deleted  []string                 `json:"deleted"`
+		Applied  bool                     `json:"applied"`
+		Ready    bool                     `json:"ready"`
+	}{1, rebaseIdentity(rec.InstanceID, action), []string{"removed"}, true, true}
+	body, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(runtime, "rebase.json")
+	if err := os.WriteFile(journalPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := sessionEngine(cfg)
+	engine.Health = func(string) bool { return true }
+	engine.LoadTable = func() ([]mountinfo.Mount, error) { return nil, nil }
+	if err := engine.Open("dev", func(session.Action) (session.Result, error) {
+		t.Fatal("remounted a healthy recovered view")
+		return session.Result{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := engine.Load("dev")
+	if err != nil || fresh.Actions[0].ServedTip != "" || fresh.Actions[0].TipID != desiredTip.ID {
+		t.Fatalf("recovered record = %+v, %v", fresh, err)
+	}
+	if _, err := os.Lstat(journalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("acknowledged journal survived: %v", err)
+	}
+	requireMountActivity(t, cfg, "alice/app", desiredTip, "", "/view", []string{activity.PhaseSucceeded})
+	requireNoMountActivity(t, cfg, "alice/app", servedTip.ID)
 }
 
 // TestHealthyOpenRenewsTheMountActivity records the stack of a view the

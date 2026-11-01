@@ -323,15 +323,15 @@ tiler build --split 64k --full --image alice/app /path/to/src
 tiler build --split 0 ...   # 本次构建不分块
 ```
 
-有效块大小大于零时，**全量与每一层增量**都存为定长字节块
-（`_blocks/<layer-id>/blk.NNN`）。元数据上的 digest/size 仍描述
-该层整份逻辑 squashfs。挂载时对每层重组进
-`<cache_dir>/<layer-sha256>.sqsh`（逐块校验再校验整体摘要），再按
-newest-incr-first 走与单文件链相同的 overlay。缓存目录需要容纳
-重组后的各层。形态混用会被拒绝：blocks 活跃位不能追加单文件
-incr，single 活跃位不能追加切块层——需先用匹配形态做 full 重建。
-可选的 contrib `concatfs` 仍可手工使用，但 tiler 不再从配置或
-旗标选择 concat 挂载路线。
+With a positive block size, full and incremental layers are stored
+as byte blocks under `_objects/<layer-id>/blk.NNN`. Linux automatically
+uses `concatfs` from PATH to mount virtual images directly from those
+blocks, including linked imports. Session runtime holds small descriptors;
+mounting does not create a complete cache image. Without `concatfs`,
+mounting reassembles each layer into `<cache_dir>/<layer-sha256>.sqsh`.
+Both routes verify block and whole-image digests and support session
+reopen. Build quality checks can still reassemble layers. No configuration
+key or mount flag is required.
 
 doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会建议设置
 `split_size`（或 `tiler build --split`）；`split_size` 为正时，同一

@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/jiangxin/tiler/internal/activity"
 	"github.com/jiangxin/tiler/internal/config"
@@ -9,6 +12,8 @@ import (
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
+
+var concatAvailable = hostConcatAvailable
 
 // versionMountRequest prepares a v3 mount or replay request from the
 // desired identity recorded on the session action (full id and tip id).
@@ -29,27 +34,73 @@ func versionMountRequest(
 	if err != nil {
 		return workspace.Request{}, nil, err
 	}
-	members := make([]workspace.MountMember, 0, len(stack))
-	for _, member := range stack {
-		path, err := materializeVersionMember(cfg, action.Name, member)
+	members, err := materializeMountStack(cfg, action.Name, stack)
+	if err != nil {
+		return workspace.Request{}, nil, err
+	}
+	var rebase *workspace.UpperRebase
+	if !flags.readOnly && action.ServedTip != "" && stack[0].Meta.Format.Type != "dmg" {
+		served, err := action.VersionStack(cfg.ImagesDir, true)
 		if err != nil {
-			return workspace.Request{}, nil, err
+			return workspace.Request{}, nil, fmt.Errorf("rebase served stack: %w", err)
 		}
-		members = append(members, workspace.MountMember{
-			Path: path, FSName: member.Path, Format: member.Meta.Format.Type,
-		})
+		same := slices.EqualFunc(stack, served, func(a, b session.VersionMember) bool { return a.Meta.ID == b.Meta.ID })
+		if !same {
+			oldMembers, err := materializeMountStack(cfg, action.Name, served)
+			if err != nil {
+				return workspace.Request{}, nil, err
+			}
+			rebase = &workspace.UpperRebase{Identity: rebaseIdentity(flags.rebaseInstance, action), Members: oldMembers}
+			flags.pruneUpper = true
+		}
 	}
 	table, err := mountTableOrEmpty()
 	if err != nil {
 		return workspace.Request{}, nil, fmt.Errorf("mount: %w", err)
 	}
 	return workspace.Request{
-		Members: members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper,
+		Members: members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper, Rebase: rebase,
 		Subdir: flags.subdir, Table: toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions, FuseOptions: cfg.FuseOptions,
 		RuntimeDir: runtimeDir, MergedDir: dir, Run: mountRun,
 		Progress: mountNotice,
 	}, stack, nil
+}
+
+func materializeMountStack(cfg config.Config, name string, stack []session.VersionMember) ([]workspace.MountMember, error) {
+	members := make([]workspace.MountMember, 0, len(stack))
+	for _, member := range stack {
+		if len(member.Meta.Blocks) != 0 && concatAvailable() {
+			blocks, err := versionBlockFiles(cfg, name, member)
+			if err != nil {
+				return nil, err
+			}
+			if err := image.VerifyBlockPayload(blocks, member.Meta.SHA256, member.Meta.Size); err != nil {
+				return nil, err
+			}
+			paths, err := concatBlockPaths(blocks)
+			if err != nil {
+				return nil, err
+			}
+			if len(paths) != 0 {
+				members = append(members, workspace.MountMember{Path: member.Path, FSName: member.Path,
+					Format: member.Meta.Format.Type, Blocks: paths})
+				continue
+			}
+		}
+		path, err := materializeVersionMember(cfg, name, member)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, workspace.MountMember{Path: path, FSName: member.Path, Format: member.Meta.Format.Type})
+	}
+	return members, nil
+}
+
+func rebaseIdentity(instance string, action session.Action) workspace.RebaseIdentity {
+	return workspace.RebaseIdentity{Instance: instance, Image: action.Name, Runtime: action.RuntimeID,
+		ServedFull: action.ServedID, ServedTip: action.ServedTip,
+		DesiredFull: action.FullID, DesiredTip: action.TipID}
 }
 
 // runVersionMountEngine executes one library mount or replay. The mount
@@ -157,18 +208,9 @@ func materializeVersionMember(
 	member session.VersionMember,
 ) (string, error) {
 	if len(member.Meta.Blocks) != 0 {
-		repo, err := image.OpenRepo(cfg.ImagesDir, name)
+		blocks, err := versionBlockFiles(cfg, name, member)
 		if err != nil {
 			return "", err
-		}
-		blocks := make([]image.BlockFile, 0, len(member.Meta.Blocks))
-		for _, block := range member.Meta.Blocks {
-			path, err := repo.ObjectBlockPath(member.Meta.ID, block.Name)
-			if err != nil {
-				return "", err
-			}
-			blocks = append(blocks, image.BlockFile{Path: path, Name: block.Name,
-				Size: block.Size, MtimeUnix: block.MtimeUnix, SHA256: block.SHA256})
 		}
 		return assembleBlocks(cfg.CacheDir, blocks, member.Meta.SHA256, member.Meta.Size)
 	}
@@ -184,4 +226,39 @@ func materializeVersionMember(
 		return "", fmt.Errorf("mount: %w", err)
 	}
 	return cached, nil
+}
+
+func versionBlockFiles(cfg config.Config, name string, member session.VersionMember) ([]image.BlockFile, error) {
+	repo, err := image.OpenRepo(cfg.ImagesDir, name)
+	if err != nil {
+		return nil, err
+	}
+	var blocks []image.BlockFile
+	for _, block := range member.Meta.Blocks {
+		path, err := repo.ObjectBlockPath(member.Meta.ID, block.Name)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, image.BlockFile{Path: filepath.Clean(path), Name: block.Name,
+			Size: block.Size, MtimeUnix: block.MtimeUnix, SHA256: block.SHA256})
+	}
+	return blocks, nil
+}
+
+// concatBlockPaths resolves imported position files before creating the runtime
+// descriptor. A line break cannot be encoded in that format; keep reassembly
+// available for otherwise valid payload paths containing those characters.
+func concatBlockPaths(blocks []image.BlockFile) ([]string, error) {
+	paths := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		path, err := image.ResolvePayloadBytesPath(block.Path)
+		if err != nil {
+			return nil, err
+		}
+		if strings.ContainsAny(path, "\r\n") {
+			return nil, nil
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
