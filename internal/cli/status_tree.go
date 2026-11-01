@@ -16,29 +16,46 @@ type statusTreeNode struct {
 
 // writeStatusDetails renders the shared, snapshot-based session detail view.
 func writeStatusDetails(w io.Writer, overview session.Overview, now time.Time, cwd string) error {
+	return writeStatusOutput(w, overview, now, cwd, true)
+}
+
+func writeStatusOutput(w io.Writer, overview session.Overview, now time.Time, cwd string, verbose bool) error {
 	var text strings.Builder
 	ids, collision := map[string]string{}, false
 	for i, view := range overview.Sessions {
 		if i > 0 {
 			text.WriteByte('\n')
 		}
-		writeStatusTitle(&text, view, now)
+		writeStatusHeading(&text, view)
+		if verbose {
+			writeStatusTimes(&text, view, now)
+		}
 		for _, mount := range view.Mounts {
 			marks := mount.Mode + " · " + mount.Status
 			if mount.Health != "" {
 				marks += " · " + mount.Health
 			}
-			fmt.Fprintf(&text, "\n  📁 %s  →  %s  [%s]\n", statusMountImage(mount, cwd), compactStatusPath(mount.Mountpoint, cwd), terminalText(marks))
+			if verbose {
+				fmt.Fprintf(&text, "\n  📁 %s  →  %s  [%s]\n", statusMountImage(mount, cwd), compactStatusPath(mount.Mountpoint, cwd), terminalText(marks))
+			} else {
+				writeStatusMountSummary(&text, mount, cwd)
+			}
 			for _, layer := range mount.Layers {
 				short := listID(layer.Version)
 				collision = collision || ids[short] != "" && ids[short] != layer.Version
 				ids[short] = layer.Version
 			}
-			writeStatusTree(&text, statusMountTree(mount, cwd), "     ")
+			if verbose {
+				writeStatusTree(&text, statusMountTree(mount, cwd), "     ")
+			}
 		}
 	}
 	for _, orphan := range overview.Orphans {
-		fmt.Fprintf(&text, "orphan %s %s %s\n", compactStatusPath(orphan.Point, cwd), terminalText(orphan.FSType), compactStatusPath(orphan.RuntimeDir, cwd))
+		if verbose {
+			fmt.Fprintf(&text, "orphan %s %s %s\n", compactStatusPath(orphan.Point, cwd), terminalText(orphan.FSType), compactStatusPath(orphan.RuntimeDir, cwd))
+		} else {
+			fmt.Fprintf(&text, "orphan %s  [%s]\n", compactStatusPath(orphan.Point, cwd), terminalText(orphan.FSType))
+		}
 	}
 	if text.Len() == 0 {
 		text.WriteString("no sessions recorded\n")
@@ -50,7 +67,7 @@ func writeStatusDetails(w io.Writer, overview session.Overview, now time.Time, c
 	return err
 }
 
-func writeStatusTitle(w *strings.Builder, view session.View, now time.Time) {
+func writeStatusHeading(w *strings.Builder, view session.View) {
 	parts := []string{view.Name}
 	if view.State != "" {
 		parts = append(parts, view.State)
@@ -65,6 +82,9 @@ func writeStatusTitle(w *strings.Builder, view session.View, now time.Time) {
 	}
 	parts = append(parts, view.ActivityReasons...)
 	fmt.Fprintln(w, terminalText(strings.Join(parts, " · ")))
+}
+
+func writeStatusTimes(w *strings.Builder, view session.View, now time.Time) {
 	if view.Locked {
 		return
 	}
@@ -133,4 +153,24 @@ func writeStatusTree(w *strings.Builder, nodes []statusTreeNode, prefix string) 
 		fmt.Fprintln(w, prefix+connector+node.label)
 		writeStatusTree(w, node.children, prefix+continuation)
 	}
+}
+
+func writeStatusTitle(w *strings.Builder, view session.View, now time.Time) {
+	writeStatusHeading(w, view)
+	writeStatusTimes(w, view, now)
+}
+
+func writeStatusMountSummary(w *strings.Builder, mount session.MountView, cwd string) {
+	marks := []string{mount.Mode}
+	if mount.Status == session.StatusUnmounted {
+		marks = append(marks, mount.Status)
+	} else if mount.Health != "" {
+		marks = append(marks, mount.Health)
+	} else if mount.Status != "" {
+		marks = append(marks, mount.Status)
+	}
+	if len(mount.Diagnostics) > 0 || mount.ServedTip != "" && mount.ServedTip != mount.TipID {
+		marks = append(marks, "warning")
+	}
+	fmt.Fprintf(w, "  %s → %s  [%s]\n", statusMountImage(mount, cwd), compactStatusPath(mount.Mountpoint, cwd), terminalText(strings.Join(marks, " · ")))
 }

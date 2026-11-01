@@ -202,7 +202,7 @@ do
 		test_path_is_file "$logs/sessions/$rm_session.log.lock" &&
 		(
 			cd "$standard" &&
-			"$tiler_bin" status "$rm_point" 2>"$HOME/rm-status.err"
+			"$tiler_bin" status -v "$rm_point" 2>"$HOME/rm-status.err"
 		) >rm-status.out &&
 		test_grep "^$rm_session · active" rm-status.out &&
 		test_grep "standard/app:.*\[rw · mounted · healthy\]" rm-status.out &&

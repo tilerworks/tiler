@@ -196,7 +196,7 @@ func newSessionListCmd() *cobra.Command {
 			}
 			engine := sessionEngine(cfg)
 			if verbose && !asJSON {
-				return runStatusQuery(cmd, engine, session.Query{}, false, false)
+				return runStatusQuery(cmd, engine, session.Query{}, false, false, true)
 			}
 			records, err := engine.List()
 			if err != nil {
@@ -231,7 +231,7 @@ func newSessionShowCmd() *cobra.Command {
 				return err
 			}
 			if !asJSON {
-				return runStatusQuery(cmd, engine, session.Query{Session: args[0]}, false, false)
+				return runStatusQuery(cmd, engine, session.Query{Session: args[0]}, false, false, true)
 			}
 			rec, err := engine.Show(args[0])
 			if err != nil {

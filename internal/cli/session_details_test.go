@@ -18,7 +18,7 @@ func TestSessionDetailsShareStatusAndVerboseAliases(t *testing.T) {
 	sessionTimeNow = func() time.Time { return goldenSessionTime }
 	t.Cleanup(func() { sessionTimeNow = previous })
 	for _, name := range []string{"dev", "old"} {
-		status, _, _, err := runCmd(t, append(lib, "status", "-s", name)...)
+		status, _, _, err := runCmd(t, append(lib, "status", "-v", "-s", name)...)
 		if err != nil {
 			t.Fatal(err)
 		}

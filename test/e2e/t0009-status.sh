@@ -19,9 +19,9 @@ fi
 
 test_expect_success TILER 'empty and unrelated directory queries succeed' '
 	mkdir -p "$HOME/work/uncovered" &&
-	"$tiler_bin" status >empty.out 2>empty.err &&
+	"$tiler_bin" status -v >empty.out 2>empty.err &&
 	test_grep "^no sessions recorded$" empty.out &&
-	"$tiler_bin" status "$HOME/work/uncovered" --json >empty.json &&
+	"$tiler_bin" status -v "$HOME/work/uncovered" --json >empty.json &&
 	test_grep -F "\"sessions\": []" empty.json &&
 	test_grep -F "\"orphan_views\": []" empty.json
 '
@@ -29,9 +29,9 @@ test_expect_success TILER 'empty and unrelated directory queries succeed' '
 test_expect_success TILER,LINUX 'unmounted active records remain visible with missing mount diagnostics' '
 	"$tiler_bin" session new idle &&
 	test_when_finished '\''"$tiler_bin" session close idle && "$tiler_bin" session remove idle'\'' &&
-	"$tiler_bin" status --active -s idle >idle.out &&
+	"$tiler_bin" status -v --active -s idle >idle.out &&
 	test_grep "^idle · active · missing-mounts$" idle.out &&
-	"$tiler_bin" status --no-active -s idle --json >idle.json &&
+	"$tiler_bin" status -v --no-active -s idle --json >idle.json &&
 	test_grep -F "\"sessions\": []" idle.json
 '
 
@@ -43,22 +43,27 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'healthy sessions show mount deta
 	"$tiler_bin" session new dev &&
 	"$tiler_bin" mount --session dev tmp/status "$s_dir" &&
 	"$tiler_bin" mount --session dev tmp/status "$s2_dir" &&
-	TILER_SESSION_ID=dev "$tiler_bin" status >live.out &&
+	TILER_SESSION_ID=dev "$tiler_bin" status -v >live.out &&
 	test_grep "^dev · active · current$" live.out &&
 	test_grep "📁 tmp/status:.*\[rw · mounted · healthy\]" live.out &&
 	test_grep "upper.*runtime/m1/upper" live.out &&
 	test_grep "lower.*highest priority first" live.out &&
-	TILER_SESSION_ID=bogus "$tiler_bin" status >other.out &&
+	"$tiler_bin" status --active >summary.out &&
+	test_grep "tmp/status:.*\[rw · healthy\]" summary.out &&
+	test_grep ! -E "Created:|runtime/|📁" summary.out &&
+	"$tiler_bin" st --active >short.out &&
+	test_cmp summary.out short.out &&
+	TILER_SESSION_ID=bogus "$tiler_bin" status -v >other.out &&
 	test_grep ! " · current" other.out
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'directory filters and detail aliases agree without renewing activity' '
 	cp "$HOME/.tiler/logs/sessions/dev.log" activity.before &&
-	"$tiler_bin" status "$HOME/work" >parent.out &&
-	"$tiler_bin" status "$s_dir/sub/deep" >child.out &&
+	"$tiler_bin" status -v "$HOME/work" >parent.out &&
+	"$tiler_bin" status -v "$s_dir/sub/deep" >child.out &&
 	test_cmp parent.out child.out &&
-	"$tiler_bin" status -s dev >selected.out &&
-	"$tiler_bin" session status -s dev >alias.out &&
+	"$tiler_bin" status -v -s dev >selected.out &&
+	"$tiler_bin" session status -v -s dev >alias.out &&
 	"$tiler_bin" session show dev >show.out &&
 	"$tiler_bin" session list -v >verbose.out &&
 	test_cmp selected.out alias.out &&
@@ -71,7 +76,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'directory filters and detail ali
 	"$tiler_bin" session list >brief.out &&
 	test_grep "CLOSED.*LAST ACTIVITY.*RM" brief.out &&
 	test_cmp activity.before "$HOME/.tiler/logs/sessions/dev.log" &&
-	test_expect_code 1 "$tiler_bin" status "$s_dir/README.txt" >file.out 2>file.err &&
+	test_expect_code 1 "$tiler_bin" status -v "$s_dir/README.txt" >file.out 2>file.err &&
 	test_grep "directory required" file.err
 '
 
@@ -86,42 +91,42 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'layered image filters find full 
 	"$tiler_bin" session close dev && "$tiler_bin" session open dev &&
 	for version in "$full" "$middle" "$tip"
 	do
-		"$tiler_bin" status "$HOME/work" -s dev -i "tmp/status:$version" --json >layer.json &&
+		"$tiler_bin" status -v "$HOME/work" -s dev -i "tmp/status:$version" --json >layer.json &&
 		test_grep -F "\"name\": \"dev\"" layer.json &&
 		test_grep -F "\"version\": \"$version\"" layer.json || return 1
 	done &&
-	"$tiler_bin" status -s dev >layers.out &&
+	"$tiler_bin" status -v -s dev >layers.out &&
 	test_grep "full.*runtime/m1/lower-2" layers.out &&
 	test_grep "incremental.*runtime/m1/lower-1" layers.out &&
 	test_grep "incremental.*runtime/m1/lower-0" layers.out &&
-	"$tiler_bin" status -i tmp/status --json >all.json &&
+	"$tiler_bin" status -v -i tmp/status --json >all.json &&
 	test_grep -F "\"name\": \"dev\"" all.json
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'active filtering retains mounted sessions and excludes them from the inverse' '
-	"$tiler_bin" status --active -s dev --json >active.json &&
+	"$tiler_bin" status -v --active -s dev --json >active.json &&
 	test_grep -F "\"active\": true" active.json &&
-	"$tiler_bin" status --no-active -s dev --json >inactive.json &&
+	"$tiler_bin" status -v --no-active -s dev --json >inactive.json &&
 	test_grep -F "\"sessions\": []" inactive.json
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a killed view is stale while its peer stays healthy' '
 	kill_view "$s2_dir" &&
 	wait_for_stale_view dev stale.json &&
-	"$tiler_bin" status -s dev >stale.out &&
+	"$tiler_bin" status -v -s dev >stale.out &&
 	test_grep "\[rw · mounted · healthy\]" stale.out &&
 	test_grep "\[rw · mounted · stale\]" stale.out &&
-	"$tiler_bin" status -s dev --json >stale.json &&
+	"$tiler_bin" status -v -s dev --json >stale.json &&
 	test_grep -F "\"health\": \"stale\"" stale.json
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'closed sessions retain mount history without live views' '
 	"$tiler_bin" session close dev &&
-	"$tiler_bin" status -s dev >closed.out &&
+	"$tiler_bin" status -v -s dev >closed.out &&
 	test_grep "^dev · closed$" closed.out &&
 	test_grep "Closed:.*Last activity:" closed.out &&
 	test_grep "\[rw · unmounted\]" closed.out &&
-	"$tiler_bin" status -s dev --json >closed.json &&
+	"$tiler_bin" status -v -s dev --json >closed.json &&
 	test_grep -F "\"actions\": [" closed.json &&
 	test_grep -F "\"orphan_views\": []" closed.json
 '
@@ -130,10 +135,10 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'internal layers remain active af
 	"$tiler_bin" session open dev &&
 	"$fusermount3_bin" -u "$s_dir" &&
 	"$fusermount3_bin" -u "$s2_dir" &&
-	"$tiler_bin" status --active -s dev >residual.out &&
+	"$tiler_bin" status -v --active -s dev >residual.out &&
 	test_grep "^dev · active · residual-mounts$" residual.out &&
 	"$tiler_bin" session close dev &&
-	"$tiler_bin" status --no-active -s dev --json >inactive.json &&
+	"$tiler_bin" status -v --no-active -s dev --json >inactive.json &&
 	test_grep -F "\"name\": \"dev\"" inactive.json &&
 	test_grep -F "\"active\": false" inactive.json
 '
@@ -144,7 +149,7 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'lost records leave orphans outsi
 	auto=$(sed -n "s/^new session created: //p" mount.out) &&
 	test -n "$auto" &&
 	rm -f "$HOME/.tiler/sessions/$auto/session.json" &&
-	"$tiler_bin" status >orphan.out &&
+	"$tiler_bin" status -v >orphan.out &&
 	test_grep "^orphan .*fuse.fuse-overlayfs " orphan.out &&
 	"$tiler_bin" session list -v >list.out &&
 	test_grep ! "^orphan " list.out

@@ -11,7 +11,7 @@ import (
 )
 
 func newStatusCmd() *cobra.Command {
-	var asJSON, active, inactive bool
+	var asJSON, active, inactive, verbose bool
 	var selectedSession, selectedImage string
 	cmd := &cobra.Command{
 		Use:     "status [directory]",
@@ -25,7 +25,8 @@ func newStatusCmd() *cobra.Command {
 			"--active selects active records or sessions with remaining mounts;\n" +
 			"--no-active selects closed sessions without mounts. Unknown activity\n" +
 			"is retained by either filter. These flags are mutually exclusive.\n" +
-			"--json always renders an overview document with a sessions array.",
+			"Default text summarizes sessions and mounts; --verbose adds times\n" +
+			"and layered mount details. --json always renders the full overview.",
 		Args: maxOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("active") && cmd.Flags().Changed("no-active") {
@@ -50,10 +51,11 @@ func newStatusCmd() *cobra.Command {
 					return usageError{err}
 				}
 			}
-			return runStatusQuery(cmd, engine, query, asJSON, true)
+			return runStatusQuery(cmd, engine, query, asJSON, true, verbose)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "render the status as a JSON document")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show times and detailed layered mounts")
 	cmd.Flags().BoolVar(&active, "active", false, "select active records or sessions with remaining mounts")
 	cmd.Flags().BoolVar(&inactive, "no-active", false, "select closed sessions without mounts")
 	cmd.Flags().StringVarP(&selectedSession, "session", "s", "", "select an exact session name")
@@ -61,7 +63,7 @@ func newStatusCmd() *cobra.Command {
 	return cmd
 }
 
-func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Query, asJSON, includeOrphans bool) error {
+func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Query, asJSON, includeOrphans, verbose bool) error {
 	overview, err := engine.Query(os.Getenv(sessionEnvVar), query)
 	if err != nil {
 		return err
@@ -82,7 +84,7 @@ func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Qu
 	if err != nil {
 		return err
 	}
-	return writeStatusDetails(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd)
+	return writeStatusOutput(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd, verbose)
 }
 
 // statusDocument is the status --json overview envelope. The schema

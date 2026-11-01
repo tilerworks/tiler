@@ -30,7 +30,7 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 
 	// Both views serve: the overview shows the active session with
 	// two healthy mounts and no orphans.
-	stdout := mustCmd(t, append(lib, "status")...)
+	stdout := mustCmd(t, append(lib, "status", "-v")...)
 	assertStatusOverview(t, stdout, "dev · active", 2, "mounted · healthy", 0)
 	if !strings.Contains(stdout, " current") {
 		t.Fatalf("stdout = %q, want the environment session marked current", stdout)
@@ -80,7 +80,7 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 	// report the dead view stale while the healthy one stays.
 	killDaemon(t, findDaemon(t, "fuse-overlayfs", view2))
 	waitOverlayDead(t, view2)
-	stdout = mustCmd(t, append(lib, "status")...)
+	stdout = mustCmd(t, append(lib, "status", "-v")...)
 	assertStatusOverview(t, stdout, "dev · active", 2, "", 0)
 	if !strings.Contains(stdout, "mounted · healthy") {
 		t.Fatalf("stdout = %q, want the surviving view healthy", stdout)
@@ -107,7 +107,7 @@ func TestStatusReconcilesRealMounts(t *testing.T) {
 			t.Fatalf("action %+v is not unmounted after close", action)
 		}
 	}
-	stdout = mustCmd(t, append(lib, "status")...)
+	stdout = mustCmd(t, append(lib, "status", "-v")...)
 	assertStatusOverview(t, stdout, "dev · closed", 2, "", 0)
 	doc = statusOverviewJSON(t, lib)
 	if len(doc.Sessions) != 1 || doc.Sessions[0].State != session.StateClosed ||

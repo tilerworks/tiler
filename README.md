@@ -360,14 +360,14 @@ Available now:
   Recent activity comes from the newest session-log event, including failed
   operations; missing activity is `-`, and unreadable activity is `unknown`.
   Listing never renews activity. `-v` prints each session's layered mount tree.
-  `session show <name>` shares the detailed output of `status -s <name>`;
+  `session show <name>` shares the detailed output of `status -v -s <name>`;
   its `--json` form preserves the record object and action history.
   List, show, and status JSON add `last_activity_at` (UTC RFC3339 or null)
   and `last_activity_unknown`. `-v` affects text only: list JSON is identical
   with and without it. A generated name accepts the same commands as an
   explicit name; only `--rm` changes close into a delete.
 - `tiler status [directory] [-s session] [-i name[:version]]
-  [--active | --no-active] [--json]`
+  [--active | --no-active] [-v|--verbose] [--json]`
   and `tiler session status` are equivalent. A directory selects every
   session whose mount contains it or is contained by it. File arguments
   are rejected; an unrelated directory returns an empty list. `-s` selects
@@ -384,13 +384,19 @@ Available now:
   diagnostics do not change the stored state or infer why mounts vanished.
   Locked sessions and unavailable mount information can produce
   `activity-unknown`; unknown sessions remain visible under either filter.
-  Detailed text shows session times, current/locked markers, and one 📁
+  Default text shows a session heading and one line per mount with its
+  image version, target path, rw/ro mode and health or unmounted status.
+  Activity diagnostics and current/locked markers remain visible. A
+  `warning` marker indicates additional mount diagnostics; use `-v` for
+  their full text. Orphans show their target and filesystem type.
+  `-v`/`--verbose` adds session times and one 📁
   mount tree with image versions, paths, rw/ro access and live health.
   Layers run from full to tip; overlay lowers are shown highest priority
   first, with the writable upper separately. macOS shows the attached
   shadow instead. Paths use the shorter relative/absolute spelling, or
   trailing components within 63 display columns. JSON keeps complete IDs
   and paths. Unclaimed mounts remain visible as orphans in status.
+  `-v` affects text only; JSON is identical with and without it.
   Status JSON always uses the `current_session`, `sessions`, `orphan_views`
   overview envelope. This replaces the former single-path JSON document;
   consumers must read the `sessions` array, which can contain many results.
@@ -401,6 +407,7 @@ Available now:
 
   ```bash
   tiler status --active
+  tiler status --active -v  # include times and layered mount details
   tiler status ./work --active --image alice/app
   tiler status --no-active --json
   ```

@@ -51,10 +51,13 @@ test_expect_success TILER,MACOS,HDIUTIL 'a writable session mounts and status is
 	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino" &&
-	"$tiler_bin" status --active >live.out 2>live.err &&
+	"$tiler_bin" status -v --active >live.out 2>live.err &&
 	test_grep "\[rw · mounted · healthy\]" live.out &&
 	test_grep "shadow.*upper.shadow" live.out &&
-	"$tiler_bin" status --no-active -s rec --json >inactive.json &&
+	"$tiler_bin" status --active >summary.out &&
+	test_grep "\[rw · healthy\]" summary.out &&
+	test_grep ! -E "Created:|upper.shadow|📁" summary.out &&
+	"$tiler_bin" status -v --no-active -s rec --json >inactive.json &&
 	test_grep -F "\"sessions\": []" inactive.json
 '
 
@@ -70,7 +73,7 @@ test_expect_success TILER,MACOS,HDIUTIL 'the mountpoint can disappear while the 
 	test_path_is_file "$shadow" &&
 	current_shadow_ino=$(stat -f %i "$shadow") &&
 	test "$current_shadow_ino" = "$shadow_ino" &&
-	"$tiler_bin" status --active >stale.out 2>stale.err &&
+	"$tiler_bin" status -v --active >stale.out 2>stale.err &&
 	test_grep "^rec · active · missing-mounts$" stale.out &&
 	test_grep "\[rw · mounted · stale\]" stale.out
 '
@@ -86,7 +89,7 @@ test_expect_success TILER,MACOS,HDIUTIL 'session open reattaches the same shadow
 '
 
 test_expect_success TILER,MACOS,HDIUTIL 'status is healthy when mountpoint, image, and shadow match' '
-	"$tiler_bin" status >healthy.out 2>healthy.err &&
+	"$tiler_bin" status -v >healthy.out 2>healthy.err &&
 	test_grep "\[rw · mounted · healthy\]" healthy.out &&
 	"$hdiutil_bin" info -plist >info.plist 2>info.err &&
 	test_grep -F "$shadow" info.plist &&
@@ -103,9 +106,9 @@ test_expect_success TILER,MACOS,HDIUTIL 'internal disk attachments remain active
 	mkdir -p "$remnant" &&
 	test_when_finished '\''"$hdiutil_bin" detach "$remnant" >/dev/null 2>&1'\'' &&
 	"$hdiutil_bin" attach -nobrowse -mountpoint "$remnant" -shadow "$shadow" "$image" >attach.out 2>attach.err &&
-	"$tiler_bin" status --active -s rec >residual.out 2>residual.err &&
+	"$tiler_bin" status -v --active -s rec >residual.out 2>residual.err &&
 	test_grep "^rec · active · residual-mounts$" residual.out &&
-	"$tiler_bin" status --no-active -s rec --json >inactive.json &&
+	"$tiler_bin" status -v --no-active -s rec --json >inactive.json &&
 	test_grep -F "\"sessions\": []" inactive.json
 '
 
