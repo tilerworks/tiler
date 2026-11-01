@@ -45,6 +45,7 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 	}
 	var table []mountinfo.Mount
 	var diskImages []DiskImage
+	tableAvailable := true
 	scan := *e
 	if e.useDiskImages() {
 		diskImages, err = e.diskImages()
@@ -54,6 +55,9 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 		scan.LoadDiskImages = func() ([]DiskImage, error) { return diskImages, nil }
 	} else {
 		table, err = e.loadTable()
+		if errors.Is(err, mountinfo.ErrUnavailable) {
+			table, err, tableAvailable = nil, nil, false
+		}
 		if err != nil {
 			return Overview{}, err
 		}
@@ -101,8 +105,11 @@ func (e *Engine) Query(current string, query Query) (Overview, error) {
 			view.Mounts = e.mountDetails(view, table)
 			if e.useDiskImages() {
 				e.annotateDiskDetails(view.Name, view.Mounts, diskImages)
+				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, e.diskActivity(view, diskImages))
 			} else {
-				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, e.tableActivity(view, table))
+				evidence := e.tableActivity(view, table)
+				evidence.Available = tableAvailable
+				view.ActivityClass, view.ActivityReasons = classifyActivity(view.State, view.Locked, evidence)
 			}
 			selected = append(selected, view)
 		}

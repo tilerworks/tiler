@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/jiangxin/tiler/internal/mountinfo"
 	"github.com/jiangxin/tiler/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -50,7 +49,6 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Query, asJSON, includeOrphans bool) error {
-	engine.LoadTable = emptyWhenMountTableUnavailable(engine.LoadTable)
 	overview, err := engine.Query(os.Getenv(sessionEnvVar), query)
 	if err != nil {
 		return err
@@ -72,23 +70,6 @@ func runStatusQuery(cmd *cobra.Command, engine *session.Engine, query session.Qu
 		return err
 	}
 	return writeStatusDetails(cmd.OutOrStdout(), overview, sessionTimeNow(), cwd)
-}
-
-// emptyWhenMountTableUnavailable keeps a missing host mount table
-// from aborting status. Any other load error is unchanged.
-func emptyWhenMountTableUnavailable(
-	load func() ([]mountinfo.Mount, error),
-) func() ([]mountinfo.Mount, error) {
-	if load == nil {
-		return nil
-	}
-	return func() ([]mountinfo.Mount, error) {
-		table, err := load()
-		if errors.Is(err, mountinfo.ErrUnavailable) {
-			return nil, nil
-		}
-		return table, err
-	}
 }
 
 // statusDocument is the status --json overview envelope. The schema
