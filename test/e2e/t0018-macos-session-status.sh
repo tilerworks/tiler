@@ -51,9 +51,11 @@ test_expect_success TILER,MACOS,HDIUTIL 'a writable session mounts and status is
 	test_path_is_file "$shadow" &&
 	shadow_ino=$(stat -f %i "$shadow") &&
 	test -n "$shadow_ino" &&
-	"$tiler_bin" status >live.out 2>live.err &&
+	"$tiler_bin" status --active >live.out 2>live.err &&
 	test_grep "\[rw · mounted · healthy\]" live.out &&
-	test_grep "shadow.*upper.shadow" live.out
+	test_grep "shadow.*upper.shadow" live.out &&
+	"$tiler_bin" status --no-active -s rec --json >inactive.json &&
+	test_grep -F "\"sessions\": []" inactive.json
 '
 
 test_expect_success TILER,MACOS,HDIUTIL 'the mountpoint can disappear while the shadow stays' '
@@ -68,7 +70,8 @@ test_expect_success TILER,MACOS,HDIUTIL 'the mountpoint can disappear while the 
 	test_path_is_file "$shadow" &&
 	current_shadow_ino=$(stat -f %i "$shadow") &&
 	test "$current_shadow_ino" = "$shadow_ino" &&
-	"$tiler_bin" status >stale.out 2>stale.err &&
+	"$tiler_bin" status --active >stale.out 2>stale.err &&
+	test_grep "^rec · active · missing-mounts$" stale.out &&
 	test_grep "\[rw · mounted · stale\]" stale.out
 '
 
@@ -91,6 +94,19 @@ test_expect_success TILER,MACOS,HDIUTIL 'status is healthy when mountpoint, imag
 	test_grep -F -e "$image" -e "$image_phys" info.plist &&
 	work_phys=$(cd "$work_dir" && pwd -P) &&
 	test_grep -F -e "$work_dir" -e "$work_phys" info.plist
+'
+
+# This final case moves the shared attachment into its runtime tree.
+test_expect_success TILER,MACOS,HDIUTIL 'internal disk attachments remain active with residual diagnostics' '
+	"$hdiutil_bin" detach "$work_dir" >detach.out 2>detach.err &&
+	remnant=$HOME/.tiler/sessions/rec/runtime/m1/remnant &&
+	mkdir -p "$remnant" &&
+	test_when_finished '\''"$hdiutil_bin" detach "$remnant" >/dev/null 2>&1'\'' &&
+	"$hdiutil_bin" attach -nobrowse -mountpoint "$remnant" -shadow "$shadow" "$image" >attach.out 2>attach.err &&
+	"$tiler_bin" status --active -s rec >residual.out 2>residual.err &&
+	test_grep "^rec · active · residual-mounts$" residual.out &&
+	"$tiler_bin" status --no-active -s rec --json >inactive.json &&
+	test_grep -F "\"sessions\": []" inactive.json
 '
 
 test_done

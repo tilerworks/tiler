@@ -26,6 +26,15 @@ test_expect_success TILER 'empty and unrelated directory queries succeed' '
 	test_grep -F "\"orphan_views\": []" empty.json
 '
 
+test_expect_success TILER,LINUX 'unmounted active records remain visible with missing mount diagnostics' '
+	"$tiler_bin" session new idle &&
+	test_when_finished '\''"$tiler_bin" session close idle && "$tiler_bin" session remove idle'\'' &&
+	"$tiler_bin" status --active -s idle >idle.out &&
+	test_grep "^idle · active · missing-mounts$" idle.out &&
+	"$tiler_bin" status --no-active -s idle --json >idle.json &&
+	test_grep -F "\"sessions\": []" idle.json
+'
+
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'healthy sessions show mount details and current markers' '
 	mkdir -p "$src_dir/sub/deep" "$s_dir" "$s2_dir" &&
 	echo hello >"$src_dir/README.txt" &&
@@ -89,6 +98,13 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'layered image filters find full 
 	test_grep -F "\"name\": \"dev\"" all.json
 '
 
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'active filtering retains mounted sessions and excludes them from the inverse' '
+	"$tiler_bin" status --active -s dev --json >active.json &&
+	test_grep -F "\"active\": true" active.json &&
+	"$tiler_bin" status --no-active -s dev --json >inactive.json &&
+	test_grep -F "\"sessions\": []" inactive.json
+'
+
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN,KILL_VIEW 'a killed view is stale while its peer stays healthy' '
 	kill_view "$s2_dir" &&
 	wait_for_stale_view dev stale.json &&
@@ -108,6 +124,18 @@ test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'closed sessions retain mount his
 	"$tiler_bin" status -s dev --json >closed.json &&
 	test_grep -F "\"actions\": [" closed.json &&
 	test_grep -F "\"orphan_views\": []" closed.json
+'
+
+test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'internal layers remain active after user views disappear' '
+	"$tiler_bin" session open dev &&
+	"$fusermount3_bin" -u "$s_dir" &&
+	"$fusermount3_bin" -u "$s2_dir" &&
+	"$tiler_bin" status --active -s dev >residual.out &&
+	test_grep "^dev · active · residual-mounts$" residual.out &&
+	"$tiler_bin" session close dev &&
+	"$tiler_bin" status --no-active -s dev --json >inactive.json &&
+	test_grep -F "\"name\": \"dev\"" inactive.json &&
+	test_grep -F "\"active\": false" inactive.json
 '
 
 test_expect_success TILER,LINUX,FUSE_TOOLCHAIN 'lost records leave orphans outside verbose session lists' '

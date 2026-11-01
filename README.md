@@ -366,13 +366,24 @@ Available now:
   and `last_activity_unknown`. `-v` affects text only: list JSON is identical
   with and without it. A generated name accepts the same commands as an
   explicit name; only `--rm` changes close into a delete.
-- `tiler status [directory] [-s session] [-i name[:version]] [--json]`
+- `tiler status [directory] [-s session] [-i name[:version]]
+  [--active | --no-active] [--json]`
   and `tiler session status` are equivalent. A directory selects every
   session whose mount contains it or is contained by it. File arguments
   are rejected; an unrelated directory returns an empty list. `-s` selects
   an exact session name. `-i` matches full or incremental layers; omitting
   the version matches all versions of that image. Filters intersect on
   the same mount, and selected sessions retain all their mounts.
+  `--active` selects records still marked active or sessions with actual
+  mounts, including internal layer remnants. `--no-active` selects closed
+  sessions without mounts and hides orphans. Both flags are mutually
+  exclusive, even when explicitly set to false; a single false disables
+  that filter. Default output includes all sessions.
+  Active records with no mounts show `missing-mounts`; internal-only
+  mounts or closed records with mounts show `residual-mounts`. These
+  diagnostics do not change the stored state or infer why mounts vanished.
+  Locked sessions and unavailable mount information can produce
+  `activity-unknown`; unknown sessions remain visible under either filter.
   Detailed text shows session times, current/locked markers, and one 📁
   mount tree with image versions, paths, rw/ro access and live health.
   Layers run from full to tip; overlay lowers are shown highest priority
@@ -383,6 +394,16 @@ Available now:
   Status JSON always uses the `current_session`, `sessions`, `orphan_views`
   overview envelope. This replaces the former single-path JSON document;
   consumers must read the `sessions` array, which can contain many results.
+  Each status session adds `active` and `activity_reasons` (an array, empty
+  when no diagnostic applies). Unknown activity encodes `active: false`
+  with `activity-unknown`; check the reasons before treating false as
+  confirmed inactivity.
+
+  ```bash
+  tiler status --active
+  tiler status ./work --active --image alice/app
+  tiler status --no-active --json
+  ```
 
 ### Activity and garbage collection
 
