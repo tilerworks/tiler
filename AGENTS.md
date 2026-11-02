@@ -12,6 +12,20 @@ cite chapter numbers, page numbers, or requirement numbers from those
 external documents. Test names are descriptive English and carry no
 external document numbers.
 
+`README.md` and `README.zh.md` are synchronized English and Chinese
+versions of the same document. Keep their content, section order,
+examples, commands, links, diagrams, and data equivalent; update both
+files together whenever either changes. Language-switch links point
+to the other version. `README.zh.md` is an exception to the English-only
+rule for in-repo documents.
+
+Hard-wrap English prose in `README.md` at about 80 columns. Keep Markdown
+links and inline code intact; headings, tables, and fenced code blocks
+may exceed that width. Do not hard-wrap Chinese paragraphs in
+`README.zh.md`: joining wrapped lines can insert unwanted spaces between
+Chinese characters. These line-wrapping differences are intentional and
+do not change the requirement to keep both versions in sync.
+
 ## Runtime and product surface
 
 Builds use Go 1.25 or newer with `CGO_ENABLED=0` static binaries.

@@ -1,852 +1,464 @@
-# tiler
+# tiler: Rebuild Workspaces as Easily as Laying Tiles
 
-[中文](README.zh.md)
+[简体中文](README.zh.md)
 
-tiler packs a directory snapshot into a read-only container image and
-provides a writable workspace with an overlay. The first containers
-are squashfs and erofs. The tool does not inspect content types. Git
-repository acceleration is one scenario, handled by scripts beside
-the tool.
+AI coding is changing the pace of programming: it does not always have to
+happen on your own computer. You can hand a task to an agent and let it change
+code and run tests on a remote machine or in a temporary environment, then
+bring the result back. Several agents can explore the same project at once.
 
-Licensed under [MIT](LICENSE).
+Cloning a large repository or copying a directory for every task is slow.
+Sharing one writable directory tends to mix changes from different tasks.
 
-## Installation
+**tiler solves this with workspace image snapshots: it saves the workspace
+directory as a read-only image, then creates several independent writable
+workspaces from that same image.**
 
-Build from this tree with `make build`. The static binary is written
-to `bin/tiler`.
+The name comes from laying tiles: you build a workspace from an image you
+already have, the way a wall is covered with prefabricated tiles.
 
-`tiler version` and `tiler --version` print the same `tiler <version>`
-line without loading or creating configuration. `make build` records
-`git describe --dirty` from this source tree, preserving the tag prefix
-and dirty marker. Without a usable tag it records
-`git describe --always --dirty` instead. For a source archive without
-Git metadata, it reads the newest version heading in [CHANGELOG.md](CHANGELOG.md)
-and appends `.change`, for example `tiler 0.1.0.change`. An enclosing
-repository outside the extracted source is ignored. The version stays
-fixed when the binary is installed or run from another directory.
+## From Copying Directories to Sharing a Base
 
-Use `make build` for source-derived versions. A direct `go build`
-without the linker override prints `tiler dev`.
+Suppose your project is ready, including source code, Git history, and the files
+you need. The shortest workflow is:
 
-`go install` is planned. Release binary downloads are planned.
+```bash
+tiler build --image alice/app source
+tiler mount alice/app work-a
+git -C work-a pull
+tiler mount alice/app work-b
+git -C work-b pull
+```
 
-`tiler doctor` checks the shared runtime tools and each image stack:
+If the image comes from a Git workspace with a remote and tracking branch
+configured, run `git pull` after mounting to update the workspace to the current
+remote state before handing it to a task. Pulled changes go only into each
+workspace's writable layer.
 
-- squashfs stack: `mksquashfs`, `squashfuse_ll`
-- erofs stack: `mkfs.erofs`, `erofsfuse`
-- shared: `fuse-overlayfs`, `fusermount3`, and `/dev/fuse`
+You can now assign the two workspaces to separate tasks. They read from the same
+read-only base, while changes go into their own writable layers. When one task
+changes a file, the other still sees its own version.
 
-A stack is complete only when every binary in it is installed. At
-least one complete stack passes the `image_toolchain` probe. A
-missing stack is a warning. No complete stack fails that probe.
-The shared checks still fail the run on their own. On a host with
-both stacks and no format setting, builds stay squashfs with zstd.
+When finished, leave the workspaces before unmounting them:
 
-`git` is optional. Doctor always lists it, and a missing binary is a failed probe rather than a silent skip. A failed git probe does not block the other checks.
+```bash
+tiler umount work-a
+tiler umount work-b
+```
 
-Optional helper tools ship as sources under `contrib/`: `concatfs`
-(direct byte-block mounts on Linux; build needs gcc and
-libfuse3-dev) and `slowfs` (latency injection for slow-NAS
-comparisons; build needs a Go toolchain). Each directory records the
-upstream origin, license, and build command. tiler prompts when a
-scenario needs one and it is missing; it never installs them
-automatically. Linux mounts use concatfs when it is on PATH and
-reassemble blocks in the cache otherwise.
+Changes made in a session are kept and can be restored later. A task does not
+copy the whole base directory again, which suits parallel AI tasks, repeated
+tests, and reuse of large code trees. For example, one agent can fix a bug
+while another tries a refactor. Both start from the same version and run tests
+on their own. If the Git repository in the base image falls too far behind,
+every sync is slow; update the image. tiler can build incremental images (Linux
+only) and full images.
 
-## macOS
+tiler does not require any particular kind of directory contents. A Git
+repository is simply a common case. It stores file snapshots. It does not
+replace Git commits and collaboration, and it does not install system
+dependencies for you. The image is a filesystem image, not a Docker or OCI
+image. Prepare the runtime environment separately.
 
-macOS images are one `image.dmg` file. Compressions are `ulfo`
-(the default), `ulmo`, and `udro`. A writable mount stores changes
-in `sessions/<name>/runtime/m<seq>/upper.shadow`. `tiler umount`
-leaves that file in place and leaves the mountpoint empty.
+## How It Works: Shared Base, Independent Changes
 
-`tiler doctor` passes `image_toolchain` when `hdiutil` is on
-`PATH`, and fails with a note that it was not found when it is
-missing. It does not report `fuse_device`, `fuse_overlayfs`,
-`fusermount3`, or `squashfuse_subdir` as failures. A missing `git`
-suggests `xcode-select --install`. The single-file size probe stays,
-because `image.dmg` is one file. Cold-read measurements are info.
-`concatfs` and `slowfs` stay in the report as info and state that
-they are unused on macOS, because the dmg path does not use FUSE
-helpers. The detail does not repeat the Linux build guidance.
+On Linux, both workspaces share the same read-only chain: a full image at the
+bottom, with saved incremental images above it (zero or more layers, with higher
+layers taking precedence). Each session adds its own upper filesystem layer. The
+merged directory is the workspace that applications see.
 
-When `attach -shadow` cannot use an APFS image on this system, every
-new image is created as HFS+ and doctor states that reason. The
-choice is not a configuration key.
+```mermaid
+flowchart TB
+  full["full image<br/>read-only base, shared"]
+  inc["incremental image<br/>read-only, shared, zero or more layers"]
+  full --> inc
+  inc --> upperA["upper A<br/>session A's writable layer"]
+  inc --> upperB["upper B<br/>session B's writable layer"]
+  upperA --> workA["work-a"]
+  upperB --> workB["work-b"]
+```
 
-## Windows via WSL2
+Images are mounted through **FUSE**, which runs filesystem logic in user space
+while applications access files through ordinary directories. tiler invokes
+external tools to mount squashfs or erofs. Routine workspace operations do not
+need root access, but the tools must be installed and the current user must have
+access to `/dev/fuse`. Installing dependencies and configuring device
+permissions may require administrator access. See the
+[FUSE documentation](https://docs.kernel.org/filesystems/fuse/).
 
-WSL2 runs a real Linux kernel. Inside the distro, `runtime.GOOS` is
-`linux`, so tiler uses the same squashfs/erofs and FUSE path as bare
-metal Linux. There is no Windows-native mount stack and no dmg path.
-Build and run the Linux binary in a WSL shell. A `tiler.exe` built
-for Windows cannot mount.
+Once the images are mounted, tiler uses
+[fuse-overlayfs](https://github.com/containers/fuse-overlayfs) to merge the
+read-only image layers with a writable layer (the upper) into one directory.
+Applications see a complete workspace. When multiple versions exist at the same
+path, the higher layer takes precedence.
 
-Keep the repository, `$HOME/.tiler` (images, sessions, cache, logs), and
-mountpoints on the distro's own filesystem (typically under
-`/home/<user>`). Do not put them under `/mnt/c` or `/mnt/d`: those
-are Windows volumes seen through 9p (WSL2) or drvfs (WSL1). Atomic
-renames, xattrs, whiteouts, and FUSE are unreliable there, and
-incremental layers can break. From Windows, open the same trees with
-`\\wsl.localhost\<Distro>\home\<user>\...` (or `\\wsl$\...`).
+File changes use **Copy-on-Write (CoW)**. Unmodified files are read directly
+from the read-only layers. Before modifying a lower-layer file, copy-up copies
+it to the writable layer, where the changes are made. New files go directly into
+the upper. Deleting a lower-layer file records a whiteout that hides it from the
+current view while leaving the base image intact. The
+[OverlayFS documentation](https://docs.kernel.org/filesystems/overlayfs.html)
+explains these concepts; tiler uses the user-space fuse-overlayfs on Linux.
 
-### Setup
+Storage use grows as each task makes changes. CoW does not mean each edit stores
+only the bytes that changed. tiler keeps file changes separate between
+workspaces; process, network, and security isolation require other mechanisms.
 
-1. Install a WSL2 Ubuntu-class distro (`wsl --install`).
-2. Inside the distro, install Go 1.25 or newer and the image tools:
+macOS takes a different path: it mounts DMG images through `hdiutil` and stores
+writable changes in `upper.shadow`. Saving results merges the shadow changes
+with the base image into a new full image, rather than appending Linux-style
+incremental layers.
 
-   ```bash
-   sudo apt update
-   sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
-   # optional erofs stack:
-   sudo apt install erofs-utils
-   ```
+## Install tiler
 
-3. Confirm `/dev/fuse` exists and is usable. `tiler doctor` reports
-   that as `fuse_device`; missing FUSE fails the mount path.
-4. Clone this repository under `$HOME`, then `make build` and
-   `make test`.
+tiler is written in Go, and its end-to-end tests use the Git project's test
+framework, [git-test-lib](https://github.com/jiangxin/git-test-lib). To build
+tiler, install Go 1.25 or newer and make, then get the source from the
+[project repository](https://github.com/tilerworks/tiler).
 
-### Loop
+```bash
+git clone https://github.com/tilerworks/tiler.git
+cd tiler
+make build
+mkdir -p "$HOME/.local/bin"
+install -m 755 bin/tiler "$HOME/.local/bin/tiler"
+export PATH="$HOME/.local/bin:$PATH"
+tiler version
+```
 
-Run every command in the WSL shell (not from a Windows-built binary):
+Add the PATH setting to your shell startup file so future terminals can find
+tiler. The build produces a static binary with `CGO_ENABLED=0`. Check the system
+tools with:
 
 ```bash
 tiler doctor
-tiler build --image alice/app dir
-tiler mount alice/app work
-# edit under work; a Windows IDE may use \\wsl$\...
-tiler status work
-tiler build          # incremental when the cwd is the merged view
-tiler umount work
 ```
 
-From PowerShell you can only invoke the WSL binary, for example:
+`tiler doctor` reports each check separately. Install any missing dependencies
+it identifies. On Linux, check that tools such as `mksquashfs`, `squashfuse_ll`,
+`fuse-overlayfs`, and `fusermount3` are available and that the current user can
+access `/dev/fuse`.
 
-```powershell
-wsl -d Ubuntu -- tiler doctor
-```
-
-Do not add a Windows wrapper script. Privileged e2e tests that need a
-real mount also run inside WSL; when `/dev/fuse` or permission is
-missing they keep calling `t.Skip` and must not be turned into
-failures.
-
-## Usage
-
-Text timestamps in image and session commands, status, and GC previews
-use the runtime local time zone. Image lists, session lists and layered
-status details use compact image-list formatting; other timestamps use
-second precision (`YYYY-MM-DD HH:MM:SS`).
-JSON, activity logs, and stored metadata retain
-their existing timestamp formats and precision.
-
-`tiler images` (alias `tiler image`) and `tiler session` (alias
-`tiler sessions`) run `list` when no subcommand is given. Text output
-starts with a hint to use `ls` to hide the hint and `-h` for more
-subcommands. List flags such as
-`--json`, `-v/--verbose`, and image listing's `-w/--width` work on the group too; JSON
-omits the hint. Explicit `list` output is unchanged.
-
-`images list` and `doctor` accept `-w/--width` for formatted text output
-(default 120 columns, minimum 80). Width does not change JSON output.
-
-The target workflow is: build an image, mount it, develop, finish the
-session, and show status. A quick start covers the workflow:
+Install the squashfs toolchain on Debian, Ubuntu, Linux Mint, and similar
+distributions:
 
 ```bash
-tiler build --image alice/app dir   # pack a prepared directory
-tiler mount alice/app work          # writable view over the image
-# develop inside work; changes land in the upper layer
-tiler status work                   # related sessions and their mount health
-tiler umount work                   # upper and work data survives
+sudo apt update
+sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
-A session groups several mounts into one durable record and is the
-unit of crash recovery:
+Install the squashfs toolchain on Fedora, RHEL, CentOS Stream, Rocky Linux, and
+similar distributions:
 
 ```bash
-tiler session new feature                  # durable record
-tiler mount --session feature alice/app work
-tiler mount --session feature bob/tools tools
-tiler session open feature                 # after a crash: replay and restore
-tiler session close feature                # reverse unmount, record kept
+sudo dnf install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
-Available now:
+macOS uses the system's `hdiutil` to mount DMG images and saves changes in
+`upper.shadow`, so it does not need the Linux tools above. macOS support is
+still experimental: functionality is incomplete, incremental images are
+unsupported, and mounting is slow. Measurements for each image format appear
+under Platforms and Performance below.
 
-- `tiler version` and `tiler --version` print one version line.
-- `tiler doctor [-w <columns>] [--json]` probes `/dev/fuse`, the shared external
-  tools, the image toolchain (one complete squashfs or erofs stack
-  is enough; a missing stack warns), and the squashfuse subdir
-  baseline, then inspects the storage: a
-  sparse ladder detects a single-file size limit on the filesystems
-  behind the image library and the cache directory and advises
-  enabling split storage when one is found; a bounded performance
-  probe compares cold sequential and random reads of both
-  directories and turns the comparison into cache advice — the
-  latency baseline in that advice is a trend reference, not an SLA;
-  and the optional contrib helpers `concatfs` and `slowfs` are
-  looked up, with build guidance when missing — tiler never
-  installs them automatically. Any failed probe exits 1; warn and
-  info results never affect the exit code.
-- `tiler build [--full|-f|--incremental|-i] [--image|-I <name>] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` packs a
-  prepared directory into a full image, or, inside a writable merged
-  view, appends the upper layer as one increment. `--format` wins
-  over `image_format`, which wins over toolchain inference: both
-  stacks select squashfs, erofs alone selects erofs, and squashfs
-  alone selects squashfs. `--compression` wins over
-  `image_compression`, which otherwise uses the format default.
-  Squashfs defaults to zstd. erofs defaults to zstd when `mkfs.erofs`
-  provides it, and otherwise to lz4, then gzip. With neither flag nor
-  config on a dual-stack host the
-  image stays squashfs with zstd. An incremental build inherits the
-  base format and compression; a flag that disagrees is a usage
-  error. erofs does not accept xz. A plain directory
-  defaults to a full build and needs an explicit 1-to-5 segment
-  image name; a writable merged view defaults to an incremental
-  build and infers the name from the mounted image. If the recorded
-  incremental layers plus the live upper already exceed half the base
-  image, that default becomes a full rebuild and a warning names
-  `--incremental` to keep appending.
-  The packed directory must stay outside every reserved tree and must
-  not cover `images_dir`, `sessions_dir`, `cache_dir`, `logs_dir`, or
-  `$HOME/.tiler`; comparison uses real paths, so a symlink into or
-  over those trees is refused the same way. An identical full or
-  incremental payload is a no-op that reprints the same id. A dmg
-  pack is not byte-stable under real hdiutil, so a create records
-  `content_sha256` of the packed directory tree, a bake records the
-  sha256 of the session `upper.shadow` after convert, and either
-  skips hdiutil when that fingerprint already matches the active
-  image.
-  With `--image` naming a different library image, a path under a
-  live view (often a subdirectory) packs as that image's full source.
-  Success prints one line:
-  `full <name> <id>` or `incr <name> <id>`. With
-  `split_size` (or `tiler build --split <size>`) greater than zero,
-  full and incremental builds store verified byte blocks instead of
-  one `image.sqsh` / `_incr/<id>.sqsh` (see Split storage below). The
-  active form must stay consistent: blocks active only appends
-  blocks layers; single active only appends single layers.
-- `tiler images list [-v|--verbose] [-w <columns>] [--json]` prints one
-  row per image: `IMAGE`, `VERSIONS`, `TOTAL SIZE`, and `LAST ACTIVITY`.
-  Total size sums every version's own payload once across all branches.
-  Last activity is the newest event across all versions; if any version
-  activity cannot be read reliably, the aggregate is `unknown`.
-  `-v` restores the detailed version tree with times and descriptions.
-  JSON is identical with and without `-v`. The table defaults to 120 terminal
-  display columns, including CJK text and common emoji sequences.
-  Use `-w/--width` to change the limit, for example `-w 80` or
-  `--width 160`. The minimum width is 80; JSON ignores the width.
-  In verbose mode, `IMAGE` uses 10-hex IDs with tree guides (`├─`, `└─`, `│`) and marks
-  the latest version with `★`. Deep ancestor guides and long repository
-  names are elided when needed, preserving IDs and the latest marker.
-  Right-aligned `SIZE` is the node's own payload size, including all
-  blocks for a split payload, without adding ancestor sizes.
-  `CREATED` and `LAST ACTIVITY` use local `MM-DD HH:MM` for the current
-  year. Other years show complete elapsed calendar months: `6mo`, `1y`,
-  or `1y6mo`; less than one month is `<1mo`. Future values use an `in`
-  prefix. One clock snapshot determines the current year for the table.
-  `DESCRIPTION` wraps the first-line summary into at most two lines;
-  its continuation aligns with the description column, and an ellipsis
-  marks omitted text. Full timestamps and descriptions remain available
-  through `images show <name[:hash]>`, which accepts a scoped 4-to-64-hex
-  prefix.
-  Activity includes creation, failed actions, initialization, and
-  descendant dependency events propagated through every ancestor to the
-  full image. It is not limited to successful use. Missing or empty logs
-  display `-`; unreadable or damaged logs display `unknown` with a
-  warning on stderr, while the listing continues. Listing does not renew
-  activity. `--json` preserves full IDs and the existing metadata fields
-  without reading activity logs.
-- `tiler mount <name[:hash]> <dir>` mounts that immutable tip and its
-  ancestors; a bare name selects the newest node on any branch.
-- Builds accept `-m/--message` and `-F/--file` (`-F -` reads stdin);
-  `images describe|desc <name>:<hash>` also opens `$EDITOR` by default.
-- `tiler image rm <name>:<hash>` removes that node and its descendants;
-  `tiler image rm <name>` removes the repository. Session references
-  block either operation. `images gc` lists expired unreferenced
-  image versions, plus pending-cleanup and orphan objects, and
-  deletes only after `--yes` or an interactive `yes`. It does not
-  remove, close, or unmount sessions. Retention is `--expire`
-  (default 30 days); zero expires every inactive object. A pending
-  cleanup runs alone; rerun `images gc` afterward to inspect
-  expiration. Ancestors required by a retained version stay.
-  `session gc` uses the same confirmation and deletes an expired
-  idle session directory, upper data included. Sample output is
-  under Activity and garbage collection.
-- Session records remain authoritative when the reverse-index cache is stale.
-- `tiler mount <image> <dir>` serves an image as a workspace. The
-  default view is writable: every squashfs member mounts read-only
-  under the session's `runtime/m<seq>/` tree, and `fuse-overlayfs`
-  merges them over an upper layer there, so remounting the same
-  directory is idempotent and reuses the earlier changes. Split
-  payload forms resolve through the same reference and mount
-  through their own routes (see Split storage below). A healthy
-  mount of the same view reports `already mounted`; a different
-  identity is a conflict error, never a silent restack.
-  `--read-only` mounts a single image straight onto `<dir>`, or
-  merges a chain lowerdir-only.
-  `<image>` is the path of one squashfs or erofs file, or a 1-to-5
-  segment library name that resolves through the active metadata
-  into the full image plus its incremental chain, at most eight
-  members in one stack; when the cleaned path exists as a regular
-  file, that file wins over a library name. Import an external
-  image with `tiler build --link` or `tiler build --copy`, then
-  mount the library name (see External images below). Library
-  members pass a quick size and mtime check first; `--verify`
-  re-hashes every recorded sha256 digest instead (a bare file path
-  records none). A version whose digest is 64 zeros is unknown:
-  `--verify` skips that sha256, still checks reachability, format,
-  size, and mtime, and reports the skip. Other versions and known
-  blocks stay on the full hash.
-  `--subdir <path>` exposes one image subdirectory as the mount
-  root: members missing the subdirectory drop out of the stack,
-  and when no member has it the mount fails before anything is
-  created. A subtree without `.git` lets workspace git commands
-  search upward past the mount point, so subdir views suit
-  standalone sub-repositories or non-git content. With
-  `cache_enabled` in the configuration (off by default; `--cache`
-  enables it for one call) every member is copied into `cache_dir`
-  under its content digest and verified as a whole before
-  mounting, so NAS-backed images mount from a local copy while
-  the mount table keeps naming the original library path. The
-  target must be an empty directory owned by the current user,
-  outside the runtime tree and every reserved directory, and must
-  not be an ancestor of those trees (a mount must not cover
-  `sessions_dir`, `images_dir`, `cache_dir`, `logs_dir`, or
-  `$HOME/.tiler`).
-  Every mount is recorded write-ahead in a session before the
-  engine runs: `-s, --session <name>` attaches a session created with
-  `session new`, the `TILER_SESSION_ID` environment variable binds
-  one, and without either a generated `adjective-animal` session
-  (for example `happy-fox`) is created. That mount prints
-  `new session created: <name>` before the `mounted` line so a later
-  `--session <name>` can record more views on it. `--rm` marks the
-  just-created session for removal: once its last view unmounts the
-  record is deleted and its runtime directory purged, upper data
-  included. It cannot combine with `--session` or `TILER_SESSION_ID`
-  — use `session new --rm [name]` for a session created ahead of
-  time. A non-`--rm` session stays active after its last view
-  unmounts until `session close`. A failed mount keeps its
-  recorded action failed, so a later `session open` retries it.
-- `tiler umount <dir>` tears a view down by path: the merged point
-  first, then the runtime transit points in reverse order. Each
-  point falls back from `fusermount3 -u` to the lazy `-uz` when it
-  is busy or stale, and a residue sweep of that view's
-  `runtime/m<seq>/` tree catches lowers the table no longer
-  connects to the target. It is idempotent: an unmounted `<dir>`
-  succeeds silently. Upper and work data is never deleted, so a
-  later mount of the same directory reuses the earlier changes.
-  On macOS the writable file is
-  `sessions/<name>/runtime/m<seq>/upper.shadow`; unmount leaves
-  that file and leaves the mountpoint empty.
-- `tiler session` manages the mount sessions that crash recovery
-  replays. `session new [name]` creates an empty record under
-  `~/.tiler/sessions/` and refuses a duplicate name; omitting the
-  name generates an `adjective-animal` name and prints
-  `created <name>`. `--rm` marks
-  it so `session close` deletes the record and purges the runtime
-  of every view instead of keeping it for audit. `session open
-  <name>` walks the record in mount order: a healthy view is
-  skipped and a dead one is cleaned (`fusermount3 -u`, escalating
-  to `-uz`) and rebuilt, so repeated opens are idempotent and one
-  open restores everything after a crash. A closed session resumes
-  the same way: its views remount and the record becomes active
-  again. `session close <name>`
-  unmounts every recorded view in reverse order, then marks the
-  record closed and keeps it for audit — except a `--rm` session,
-  which is removed instead: its record is deleted and the runtime
-  directory of every view is purged, upper data included, and the
-  command prints `removed` rather than `closed`. `session remove <name>`
-  deletes a closed record and refuses an active one. `session
-  list [-v|--verbose] [--json]` prints one aligned row per record:
-  SESSION, STATE, MOUNTS, CREATED, CLOSED, LAST ACTIVITY, and RM.
-  Recent activity comes from the newest session-log event, including failed
-  operations; missing activity is `-`, and unreadable activity is `unknown`.
-  Listing never renews activity. `-v` prints each session's layered mount tree.
-  `session show <name>` shares the detailed output of `status -v -s <name>`;
-  its `--json` form preserves the record object and action history.
-  List, show, and status JSON add `last_activity_at` (UTC RFC3339 or null)
-  and `last_activity_unknown`. `-v` affects text only: list JSON is identical
-  with and without it. A generated name accepts the same commands as an
-  explicit name; only `--rm` changes close into a delete.
-- `tiler status [directory] [-s session] [-i name[:version]]
-  [--active | --no-active] [-v|--verbose] [--json]`
-  and `tiler session status` are equivalent. A directory selects every
-  session whose mount contains it or is contained by it. File arguments
-  are rejected; an unrelated directory returns an empty list. `-s` selects
-  an exact session name. `-i` matches full or incremental layers; omitting
-  the version matches all versions of that image. Filters intersect on
-  the same mount, and selected sessions retain all their mounts.
-  `--active` selects records still marked active or sessions with actual
-  mounts, including internal layer remnants. `--no-active` selects closed
-  sessions without mounts and hides orphans. Both flags are mutually
-  exclusive, even when explicitly set to false; a single false disables
-  that filter. Default output includes all sessions.
-  Active records with no mounts show `missing-mounts`; internal-only
-  mounts or closed records with mounts show `residual-mounts`. These
-  diagnostics do not change the stored state or infer why mounts vanished.
-  Locked sessions and unavailable mount information can produce
-  `activity-unknown`; unknown sessions remain visible under either filter.
-  Default text shows a session heading and one line per mount with its
-  image version, target path, rw/ro mode and health or unmounted status.
-  Activity diagnostics and current/locked markers remain visible. A
-  `warning` marker indicates additional mount diagnostics; use `-v` for
-  their full text. Orphans show their target and filesystem type.
-  `-v`/`--verbose` adds session times and one 📁
-  mount tree with image versions, paths, rw/ro access and live health.
-  Layers run from full to tip; overlay lowers are shown highest priority
-  first, with the writable upper separately. macOS shows the attached
-  shadow instead. Paths use the shorter relative/absolute spelling, or
-  trailing components within 63 display columns. JSON keeps complete IDs
-  and paths. Unclaimed mounts remain visible as orphans in status.
-  `-v` affects text only; JSON is identical with and without it.
-  Status JSON always uses the `current_session`, `sessions`, `orphan_views`
-  overview envelope. This replaces the former single-path JSON document;
-  consumers must read the `sessions` array, which can contain many results.
-  Each status session adds `active` and `activity_reasons` (an array, empty
-  when no diagnostic applies). Unknown activity encodes `active: false`
-  with `activity-unknown`; check the reasons before treating false as
-  confirmed inactivity.
+## Use Case 1: Prepare Once, Create Development Workspaces on Demand
 
-  ```bash
-  tiler status --active
-  tiler status --active -v  # include times and layered mount details
-  tiler status ./work --active --image alice/app
-  tiler status --no-active --json
-  ```
+This example clones `https://github.com/example/app.git` into `example-app`.
+Substitute your own repository URL and choose unused directories and session
+names. Use a standalone repository created by a normal clone, with a complete
+`.git` directory and a remote and tracking branch configured.
 
-### Activity and garbage collection
-
-Each session and each image version has its own JSONL activity log
-under `logs_dir` (default `$HOME/.tiler/logs`). The session file is
-`logs_dir/sessions/<name>.log`. A version file is
-`logs_dir/images/<name>/<id>.log`, whether that version is full or
-incremental. A multi-segment image name such as `alice/app` is the
-directory `images/alice/app/`. The lock file sits beside the log and
-is the log file name plus `.lock`. The log and the lock are mode
-0600. Activity bytes are not part of the payload, so they do not
-change a version id, sha256, or the manifest schema. A mount of a
-file that is not a library version updates the session log only.
-
-Records are UTF-8 JSON lines. A new line starts with the integer
-format number `"version":1`. The image version id is the
-`image_version` field and is omitted when the event has none.
-`version` is the log format number. The time of the newest complete
-line is the last activity, in UTC. A file that would grow past 100 KiB
-(102400 bytes) is compacted in place to its newest complete lines,
-about 50 KiB, and the new line is appended. No rotated copy is kept.
-Compaction and a tail read do not count as activity.
-
-An image event is stored on the source version and on every
-ancestor through the full root. The source line keeps the real
-event, such as `image.create.full`, `image.create.incremental`,
-or `mount`. Each ancestor line is `image.dependency.activity`,
-with `image_version` set to that ancestor, `source_version` set to
-the source id, and `source_event` set to the original event name.
-The phase is unchanged. One batch shares one timestamp, the later
-of the current UTC time and any tail already in the chain. Lines
-are synced from the root toward the source, holding one log lock
-at a time, so a source line means every ancestor line for that
-phase is already durable. An ancestor line does not start another
-walk. A sibling, another full root, and another repository are
-not updated.
-
-The first GC scan that finds a missing log writes
-`activity.initialize` at the current time and keeps that object
-for this scan, including `--expire 0`. On an image version that
-initialization also appends one dependency line on each ancestor
-and may refresh an ancestor that already has a log. The next scan
-only reads. It does not append, and it does not extend retention.
-
-`tiler session gc` and `tiler images gc` (and the `sessions` and
-`image` aliases) take `--expire N` and `--yes`. `N` is a
-nonnegative whole number of days, default 30. A day is 24 hours.
-Zero expires objects that are already inactive. A negative number,
-a fraction, or a value that overflows the duration range is a
-usage error and exits 2.
-
-Both commands accept `-n` / `--dry-run` to list what would be removed
-without deleting or asking, even with `--yes`. Missing activity logs may
-still be initialized, and those objects are retained during that scan.
-
-`tiler images gc [image ...]` limits cleanup to the union of complete image
-names or quoted glob patterns. For example,
-`tiler images gc -n 'team/*' other/app` previews both selections. `*` and `?` cross `/`; character classes
-and backslash escapes are supported. Matches are sorted and deduplicated.
-Unmatched selectors are reported; no matches remove nothing. Without image
-arguments GC scans the whole library. Pending cleanup runs alone; if it
-belongs to an unselected image, clean that image first and retry.
-
-Both commands print every candidate before deleting anything. An
-interactive terminal must answer `yes` in lower case. `--yes`
-prints the list and then deletes. Without `--yes`, a pipe, a
-file, or any other noninteractive input only prints the list,
-even when that input is `yes`. An empty list does not ask.
-Nothing is removed, unmounted, or closed in that preview, though
-a missing log may be initialized.
-
-A session is listed only when it has no attached mount, no other
-process holds its lock, and its last activity is strictly before
-the cutoff. An active session with no mount can expire. GC does
-not unmount. Removal deletes the whole session directory — the record and
-`runtime/` upper data — and the session log and lock under
-`logs_dir`.
-
-```text
-Expired sessions (last activity before 2026-09-29T03:11:06Z):
-  idle  active  last active 2020-01-01T00:00:00Z
-Removing a session deletes its whole directory: the record, its
-activity log, and runtime/, upper data of every view included.
-```
-
-The question and the noninteractive hint go to stderr:
-
-```text
-Nothing removed: confirmation needs an interactive terminal; rerun with --yes to remove 1 sessions.
-```
-
-`--yes` repeats the list, then prints the outcome:
-
-```text
-removed idle
-removed 1 of 1 approved sessions, kept 0
-```
-
-A log created by that scan is not a candidate:
-
-```text
-kept idle: initialized (activity log created by this scan)
-```
-
-Image GC decides per version. A version is listed when it is
-expired, no session references it, and dropping it would not
-remove an ancestor of a version that stays. That closure is
-calculated from the manifest at GC time. It is separate from the
-activity walk, so an old parent of a retained child stays even
-when the parent's log was never refreshed. Another expired root
-in the same repository can still be removed. Rows are
-child-before-parent. Pending-cleanup and orphan objects are
-labeled in the same preview and wait for the same answer.
-`images gc` never deletes a session or an external source file.
-
-```text
-Image GC candidates (last activity before 2026-10-29T03:11:06Z):
-  expired  alice/app:<id>  last active 2026-10-29T03:11:06Z  age 0d
-Only listed image objects are eligible; sessions and external source files are preserved.
-```
-
-A confirmed run then prints `removed alice/app:<id>` and
-`removed 1 of 1 approved image objects, skipped 0`. A version
-initialized by the scan is reported on stderr:
-
-```text
-kept alice/app:<id>: initialized (activity refreshed by this scan)
-```
-
-### External images
-
-NAS shares and vendor trees often hold a ready-made squashfs, erofs,
-or dmg without tiler's library layout. Import the file, then mount
-the library name. A bare path still mounts without entering the
-library.
-
-| Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
-|------|---------------|---------|-------------------------|--------------------|
-| Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
-| Link, then mount | `tiler build --link /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | position file + meta under `images_dir` | yes | yes on Linux |
-| Copy, then mount | `tiler build --copy /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | local payload + meta | yes | yes on Linux |
-
-`--link` and `--copy` are mutually exclusive, require `--image`, and
-accept no positional directory. They do not pack, mount, or open a
-session. Ordinary `tiler build [dir]` still packs a directory, and
-`-F/--file` still reads a description. Those pack and description
-flags cannot combine with import. Usage mistakes exit 2. A missing
-file, a bad digest, or a version conflict exits 1.
-
-A regular file imports as one full image with no parent. To keep an
-incremental chain or split blocks, point `--link` or `--copy` at a
-directory that contains `meta.yaml`. `created_at` is stored as
-RFC 3339 in the local zone, to the second
-(`2026-10-29T18:07:56+08:00`). Older values, including a UTC
-timestamp with a fractional second, still load, and the fraction
-is discarded.
-
-Directory selection:
-
-- Omit `--hash` to import the latest version (newest `created_at`,
-  then the smallest full id) and every ancestor from the root.
-- `--hash <prefix>` imports the one version whose id matches that
-  4-to-64 hex prefix, plus its ancestors. The prefix is matched in
-  lower case. A missing or ambiguous prefix fails and lists the
-  candidates.
-- `--hash all` imports every version, parents before children.
-  Shared ancestors are planned once. The word is exactly `all`.
-
-`--link` writes a position file whose only content is the absolute
-source path and a newline. It does not copy the payload. For one
-file it reads `<stem>.yaml` first (`app.sqsh` selects `app.yaml`),
-then `<image-file>.sha256`. Either file supplies the digest, and
-the payload is not hashed. When both are missing, the import warns
-and reads the image to compute sha256. An explicit digest of 64
-zero hex digits stays the unknown marker. That marker is not a
-content address. It is not used to deduplicate repositories or to
-share a content cache. One image name has at most one all-zero
-version. The same source with the same format, size, and mtime is
-a no-op. A different source, or a changed size or mtime, is a
-conflict. An unknown digest does not prove the bytes are unchanged.
-
-Each published version also stores `image.yaml` beside its payload
-under `_objects/<id>/`. The file repeats that version's `meta.yaml`
-node, including sha256, so an exported image can keep its digest
-when `meta.yaml` is not copied with it.
-
-`--copy` reads the same two metadata files. The streamed bytes must
-match a digest they supply. When both are missing, the import warns
-and records the SHA-256 of the copied bytes. An explicit digest of
-64 zeros is an error.
-
-`mount` of a library name still does the quick size and mtime check.
-`mount --verify` re-hashes recorded digests. For an unknown version
-it skips that sha256, still checks that the source is reachable, and
-checks format, size, and mtime. It prints that the digest is unknown
-and was skipped. Other versions and every known block are hashed.
-A missing or changed source fails the mount. An unknown version is
-not copied into the shared content cache.
-
-Merging into an existing name does not overwrite version facts. The
-same id is a no-op when the link source and the recorded facts match.
-The same id aimed at a different final path is a source conflict,
-even when the declared digest matches. A different parent, format,
-size, or block list is a conflict. `--copy` of a known link keeps
-that id (`converted`), replaces the position file with a local
-payload, and leaves session references valid. `--link` of an id that
-is already a local copy keeps the local copy. `--copy` of an
-all-zero link publishes a new id with the real digest, keeps the old
-zero version and its position file for existing references, and does
-not rewrite sessions. Success lines are `link`, `copy`, `no-op`, or
-`converted`, followed by the image name and version id.
-
-A refused container format exits 1:
-
-| Host | Allowed source | Position or payload name | Refused |
-|------|----------------|--------------------------|---------|
-| Linux | squashfs, erofs | `image.sqsh` | dmg |
-| macOS | dmg only | `image.dmg` | squashfs, erofs |
-
-Removal and GC delete the local position file, metadata, and derived
-cache. They do not delete the external source. After `--copy`, the
-version no longer depends on that source. With `--cache`, a known
-digest may be copied into `cache_dir`; the mount table and session
-still name the library path.
-
-Example:
+### Step 1: Turn Existing Source Code into an Image
 
 ```bash
-# Linux: link a NAS squashfs, mount by name, append a local layer
-tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app
-tiler mount vendor/app work
-# edit under work
+git clone https://github.com/example/app.git example-app
+tiler build --image demo/app example-app
+```
+
+This saves the source code and `.git` together as a snapshot. In one measurement
+on a local Linux disk, cloning took 52 seconds and the workspace occupied 274
+MiB (including `.git`); `tiler build` took 2.4 seconds and produced a 214.9 MiB
+image. Do not modify the source directory while creating the image. Linux
+chooses squashfs or erofs by default according to the available toolchain; macOS
+defaults to DMG. There is no need to specify a format for this basic workflow.
+
+After packing, list the image's versions with `tiler images ls -v`:
+
+```bash
+tiler images ls -v
+```
+
+```text
+📦 demo/app · 1 versions · latest: 0a2a869d90
+  IMAGE                 SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  └─ 0a2a869d90 ★  214.9 MiB  11-02 11:19  11-02 11:19    -
+```
+
+The default image library is at `~/.tiler/images`, with sessions, cache, and
+logs at `~/.tiler/sessions`, `~/.tiler/cache`, and `~/.tiler/logs`,
+respectively. You usually do not need to touch these directories. To override
+the locations, put a `.tiler.yaml` in the workspace directory or in a parent
+directory. tiler searches upward from the current directory and uses the nearest
+file. Its format matches the default `~/.tiler.yaml`.
+
+### Step 2: Mount, Update, Then Start Development
+
+```bash
+mkdir work
+tiler session new coding
+tiler mount --session coding demo/app work
+cd work
+git pull
+```
+
+An image is a snapshot of the moment it was created. Mounting it does not make
+the code current. Run `git pull` and update the current branch before an AI
+agent or a developer starts editing, building, and testing. The image already
+holds the files and Git objects, so the pull fetches only what is new on the
+remote, instead of retrieving the whole project. The pull needs access to that
+remote. If the session already has uncommitted changes, or the branches have
+diverged, follow the project's Git workflow before updating. Skip this step for
+a directory that is not a Git repository.
+
+In the same measurement, `tiler mount` took 0.09 seconds and `git pull` in
+`work` took 0.70 seconds: 0.79 seconds combined, compared with 52 seconds for a
+fresh clone. Pull time depends on how much data has to be updated. This example
+uses an image on a local filesystem. For performance on network-mounted storage,
+see Platforms and Performance below.
+
+To work on another task in parallel, open another terminal in the parent
+directory of `example-app` and create a workspace from the same image:
+
+```bash
+mkdir work-review
+tiler session new review
+tiler mount --session review demo/app work-review
+cd work-review
+git pull
+```
+
+The two tasks update and modify their own workspaces without changing the base
+image or each other's workspace. Mount directories must be empty, owned by the
+current user, and outside tiler's runtime directories. After finishing the
+second task, leave the directory before running `tiler session close review`.
+
+You can also create another workspace for the same repository by running
+`git worktree add` inside an already mounted directory:
+
+```bash
+git worktree add -b review ../work-wt
+```
+
+In the same measurement, this command took 0.36 seconds and created a 62 MiB
+workspace, reusing Git objects from the mounted repository. For multiple
+workspaces in one project, you can mount the image again or use
+`git worktree add`.
+
+### Step 3: Save a Reusable Workspace
+
+To save changes from the first workspace, run these commands inside it:
+
+```bash
+tiler status -v .
 tiler build -i
-tiler umount work
-
-# Copy the same known link into a local payload and keep its id
-tiler build --copy /mnt/nas/vendor/app.sqsh --image vendor/app
-
-# macOS: link an external dmg, then mount by name
-tiler build --link /Volumes/share/base.dmg --image vendor/base
-tiler mount vendor/base work
 ```
 
-### Split storage
-
-Split storage is an opt-in form for targets whose filesystem caps
-single-file size — quota'd NAS shares, FAT-class volumes with a
-4 GiB limit. Set a block size in configuration or on the build
-command; zero (the default) keeps the single-file layout:
-
-```yaml
-split_size: 2G    # default for tiler build; 0 = off
-```
+This incremental build took 7.7 seconds. View the new image with:
 
 ```bash
-tiler build --split 64k --full --image alice/app /path/to/src
-tiler build --split 0 ...   # this build stays single-file
+tiler images ls -v
 ```
 
-When the effective size is greater than zero, **full and each
-incremental layer** are stored as fixed-size byte blocks under
-`_objects/<layer-id>/blk.NNN`. Digests and sizes in metadata describe
-the whole logical container per layer. On Linux, when `concatfs` is
-on PATH, mounting exposes each layer as a virtual concatenated file
-and mounts directly from its blocks. Only small descriptors are
-written under the session runtime; no complete cache image is created.
-Linked imports resolve each block to its external payload path.
-
-Without `concatfs`, mounting reassembles each layer into
-`<cache_dir>/<layer-sha256>.sqsh`, so the cache needs room for those
-complete layers. Both routes verify each block and the whole digest,
-then stack the containers newest-increment-first through the same
-overlay path. Session reopen uses the available route too. Build
-quality checks can still reassemble split layers in the cache.
-No configuration key or mount flag selects concatfs.
-When the doctor single-file limit probe finds a cap on the image
-library or the cache directory, it advises setting `split_size` (or
-`tiler build --split`); with a positive `split_size` the same probe
-reports the configured block size.
-
-The list and view commands carry a machine-readable form for CI
-gates and agent consumers. The schemas are stable and add-only,
-pinned by golden-file tests:
-
-```bash
-tiler images list --json | jq -e '.images | length > 0'  # a CI gate
-tiler status --json | jq -r '.sessions[].name'           # agent inventory
-tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
-```
-
-Every command shares one exit-code contract: 0 succeeds, 1 is a
-runtime or probe failure, and 2 is a usage error.
-
-`tiler doctor` prints two space-aligned sections. Resolved
-configuration comes first, then the probes. Columns are padded with
-spaces. A detail that does not fit the line wraps, and the
-continuation is indented to the detail column:
+The output shows the incremental image's size, 172.1 MiB, and the dependency
+between the two images.
 
 ```text
-📋 Config
-
-  path          /home/alice/.tiler.yaml
-  images_dir    /home/alice/.tiler/images
-  sessions_dir  /home/alice/.tiler/sessions
-  cache_dir     /home/alice/.tiler/cache
-  logs_dir      /home/alice/.tiler/logs
-  log_level     info
-
-🔧 Checks
-
-  file_limit_images    pass  no single-file size limit below 512 GiB
-  storage_perf_images  info  seq 112.5 MiB/s in 145.6 ms; rand avg ...
-  contrib_concatfs     warn  optional tool; sources ship in the
-                             contrib/ directory ...
+📦 demo/app · 2 versions · latest: eb24b00e8c
+  IMAGE                    SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  └─ 0a2a869d90       214.9 MiB  11-02 11:19  11-02 11:42    -
+     └─ eb24b00e8c ★  172.1 MiB  11-02 11:42  11-02 11:42    -
 ```
 
-## Configuration
+On Linux, `build` inside a mounted view saves an incremental image by default.
+When the accumulated increments plus the current upper exceed half the base
+image's size, it switches to a full rebuild. Use `--incremental` to explicitly
+append an increment, or `--full` to create a full snapshot. On macOS, shadow
+changes are merged with the base image into a new full image.
 
-tiler reads a layered YAML configuration. On first run it creates
-`$HOME/.tiler.yaml` from a commented template that pins the built-in
-defaults, so the file is a starting point to edit, never a
-requirement — a read-only HOME is tolerated and tiler falls back to
-the defaults. A compatible existing file is never rewritten.
+Image snapshots are stored on a local disk or a mounted volume. Commit
+important changes and push them to a Git server; do not rely on the image
+alone. Creating a new image does not switch other mounted workspaces to it. On
+Linux, an unmount and a later replay remove saved upper files according to the
+metadata.
 
-The user file carries a top-level integer `version` (currently `1`).
-When `$HOME/.tiler.yaml` is missing `version`, has `version < 1`, or
-still lists a removed key such as `runtime_dir`, the next command
-backups the original to `.tiler.yaml.bak` and rewrites the file to the
-current schema (comments may be lost on rewrite). Only the user-level
-file is upgraded; a project-level `.tiler.yaml` stays read-only and
-fails loudly when incompatible.
+### Step 4: Close and Restore
 
-```yaml
-version: 1
-images_dir: .tiler/images
-sessions_dir: .tiler/sessions      # merged root: records + per-session runtime
-cache_dir: .tiler/cache
-logs_dir: .tiler/logs
-log_level: info
-# image_format: squashfs        # squashfs or erofs; omit to infer
-# image_compression: zstd       # omit to use the format default
+Leave the mounted directory before closing the session. Reopen it when you want
+to resume work:
+
+```bash
+tiler session close coding
+tiler session open coding
+cd work
+git pull
 ```
 
-`image_format` and `image_compression` are optional. Leave them
-unset to infer the container from the installed tools, with
-squashfs preferred when both the squashfs and erofs stacks are
-complete. `squashfs_options` is consumed only by the squashfs
-implementation. There is no `erofs_options` key.
+Closing a regular session unmounts the workspace and preserves its changes;
+reopening restores the mount. After you update the code, continue with the next
+round of work. When you are done, leave the workspace again and close the
+session.
 
-`sessions_dir` is the only session root. Each session is a self-contained
-directory under it (`session.json`, `session.lock`, and
-`runtime/m<seq>/` combination trees). Activity logs are not stored
-there; they live under `logs_dir`. There is no separate global
-`runtime_dir`.
+For a disposable workspace, use `tiler mount --rm demo/app scratch`. Run
+`git pull` inside before using it, then leave the directory and run
+`tiler umount scratch` to clean up. **Warning: `--rm` deletes the temporary
+session's writable data. Export your results beforehand, for example by
+committing and pushing.**
 
-`session_max_age` and `session_autoclose_stale` still load, including
-an explicit zero, so an older file keeps parsing. Garbage collection
-does not read them. `session_max_age: 0s` does not disable
-`session gc`. Those commands use `--expire` only. `session close --rm`
-still deletes on close and does not ask for a GC confirmation.
+The commands above use image names, which select the latest version by default.
+To use a fixed version, find its ID with `tiler images ls -v` and mount
+`demo/app:<version-ID>`. The
+[standard workflow e2e test](test/e2e/t0100-linux-standard-workflow.sh) covers
+the complete lifecycle.
 
-Values resolve in layers, each overriding the last: the built-in
-defaults, the user file `$HOME/.tiler.yaml`, the project-level
-`.tiler.yaml` files found by walking upward from the working
-directory, and the command-line flags. A relative path in a file
-resolves against that file's directory, and a `~/` prefix expands to
-`$HOME`.
+## Use Case 2: Reuse Shared Images by Linking or Copying
 
-The upward walk stops at `$HOME` when the working directory is inside
-it, otherwise at the filesystem root. `TILER_CEILING_DIR` stops it
-earlier: when the ceiling is an ancestor of the working directory the
-ceiling's own `.tiler.yaml` still applies but nothing above it is
-read, and a ceiling that is not an ancestor is ignored. This bounds
-discovery inside a test sandbox or a checkout that must not inherit a
-parent directory's configuration.
+When your team already provides an image, import it directly instead of
+preparing and packing the source again. Suppose `/mnt/share/app.sqsh` is an
+accessible full image file:
 
-`tiler doctor` reports the resolved configuration in the `📋 Config`
-section before `🔧 Checks`: the nearest `.tiler.yaml` the walk
-actually read (the user file when no project file exists) and the
-core directories, one space-aligned row each.
+```bash
+tiler build --image team/app --link /mnt/share/app.sqsh
+tiler mount team/app work
+cd work
+git pull
+```
 
-The `--json` form carries the same data as a top-level `config`
-object (`path`, `images_dir`, `sessions_dir`, `cache_dir`,
-`logs_dir`, `log_level`) alongside `results`. The config section
-never affects the doctor verdict.
+Run this example in a fresh working directory; omit `git pull` if the content is
+not a Git repository. When finished, leave the workspace and run
+`tiler umount work`. A regular session still preserves its changes.
 
-## User story
+| Import method | Suitable for | When the source file is unavailable |
+| --- | --- | --- |
+| `--link` | Shared storage that remains accessible, reducing duplicate storage | New mounts fail if the source is unavailable |
+| `--copy` | Keeping an independent local copy of an image | The local copy remains usable |
 
-A developer prepares a local environment quickly. On a new machine,
-the mount itself completes in milliseconds and the workspace is usable
-in seconds, while a full clone, dependency install, and build takes
-minutes or hours.
+To keep a local copy, replace `--link` with `--copy`. The two options cannot be
+used together. Importing does not modify the source file.
 
-The first stored image takes one command: a scene script prepares a
-directory, `tiler build --image alice/app dir` packs it into the
-library under `~/.tiler/images/`, and the next full build of the same
-name publishes an immutable version without moving earlier payloads.
+If the shared source is an image library directory containing full and
+incremental versions, use `tiler build --image team/app --link /mnt/share/app`
+to import the latest version and its required ancestor chain. Add
+`--hash <version-ID>` to select a fixed version. Do not import a single
+incremental payload as a substitute for the full image chain: importing a single
+file does not automatically recover the base layers.
 
-The read-only base stays immutable. The upper layer can be discarded
-and mounted again.
+For more validation of imports, repeated mounts, and source availability, see
+the [image import e2e test](test/e2e/t0101-linux-import-workflow.sh).
 
-Sessions isolate projects while they share one read-only base. Across
-eight sessions that share one lower layer, each upper layer is about
-6.5 MB in steady state.
+## Use Case 3: Split Large Images Without Changing the Workflow
 
-A crash is recoverable because every mount action is recorded
-write-ahead: after a `kill -9` of tiler or a FUSE daemon, one
-`tiler session open <name>` replays the record, skips the views
-that are still healthy, cleans and rebuilds the dead ones, and the
-upper-layer data survives.
+When storage has a per-file size limit, Linux can split images into byte blocks
+during a build. Suppose a prepared source directory named `source` already
+exists:
 
-A large image on limited storage keeps working through the same
-library. When the target filesystem caps single-file size — a
-quota'd NAS share or a FAT-class volume — `tiler doctor` reports
-the limit and advises `split_size` / `tiler build --split`. With a
-positive block size, full and incremental layers store as verified
-byte blocks; mounting uses concatfs when available, or reassembles
-each layer in the cache directory, then overlays them. One library, one command surface — the block
-size is a configuration (or per-build flag) choice.
+```bash
+tiler build --image team/large-app --split 2G source
+tiler images show team/large-app
+tiler mount team/large-app work
+cd work
+git pull
+```
 
-Machines read the same command surface. Every list and view
-command — `images list`, `images show`, `session list`,
-`session show`, `status`, and `doctor` — carries a `--json` form
-with a stable, add-only schema pinned by golden files: a CI gate
-fails on a missing image or a stale mount, and an agent picks the
-cache setting from the doctor performance numbers without parsing
-human text.
+Run this example in a fresh working directory as well. `2G` is the maximum block
+size; choose it according to the storage limit. A small image may have only one
+block. The `payload blocks` field in the details indicates block storage.
+Development, saving, and closing work the same way as with ordinary images. When
+finished, leave the directory and run `tiler umount work`.
 
-## License
+To enable splitting by default for a project, set `split_size: 2G` in its
+`.tiler.yaml` instead of passing the argument each time. Both full and
+incremental images can use block storage.
 
-Copyright 2026 Jiang Xin.
+Blocks are slices of the image's byte stream. They are not directory partitions,
+content deduplication, or new version layers. With the optional `concatfs`
+installed, Linux can provide a concatenated block view directly. Otherwise, it
+reconstructs the full image in the cache, so account for the cache disk's free
+space and per-file limits. To check payload integrity, add `--verify` when
+mounting. Valid recorded SHA-256 digests are checked, and corrupt or missing
+blocks cause a failure.
 
-The project is licensed under [MIT](LICENSE). The license text
-is the MIT License.
+For complete block storage validation, see the
+[split storage e2e test](test/e2e/t0102-linux-split-workflow.sh).
+
+## Platforms and Performance
+
+| Platform | Image and writable storage | Requirements |
+| --- | --- | --- |
+| Linux | squashfs / erofs, FUSE, and an independent upper | Matching packing and mounting tools, plus `/dev/fuse` |
+| macOS | DMG, `hdiutil`, and a shadow | DMG by default; does not use the Linux FUSE stack |
+| Windows through WSL2 | Uses the Linux implementation | Build and run inside the distribution |
+
+Linux does not build or mount DMG images, and macOS does not build or mount
+squashfs or erofs. After a macOS shadow is saved as a new full image, a new
+mount is needed to use that version; the original session remains bound to its
+original base. In WSL2, keep the image library, sessions, and workspaces on the
+distribution's Linux filesystem, avoiding Windows volumes such as `/mnt/c`.
+
+### Benchmarks
+
+The following cold-read measurements, in MiB/s, were collected with
+`tiler benchmark` on a macOS development machine and a Linux virtual machine.
+The payload was incompressible random data stored in 4 MiB files, with total
+sizes of 32, 128, 256, and 512 MiB. Image reads are averages of two runs; the
+unpacked directory was traversed once after the same cache-clearing step. Linux
+and macOS ran on different machines, so compare numbers only within each host.
+See the [benchmark documentation](docs/benchmark.md) for packing, warm reads,
+and variance.
+
+The Linux host was an aarch64 virtual machine with 6 vCPUs, 11 GiB of memory,
+Ubuntu 24.04, and ext4 on virtio. squashfs used zstd; the host's erofs tools
+lacked zstd, so erofs used lz4. Read-only mounting took 6–38 milliseconds.
+Packing throughput was 87–120 MiB/s for squashfs, 94–106 MiB/s for erofs, and
+about 46 MiB/s for tar.gz.
+
+| MiB | Unpacked directory | squashfs | erofs | tar.gz |
+| --- | --- | --- | --- | --- |
+| 32 | 2651.9 | 761.9 | 1254.9 | 1561.0 |
+| 128 | 2628.9 | 842.1 | 1015.9 | 1641.0 |
+| 256 | 2209.8 | 1207.5 | 1127.8 | 1575.4 |
+| 512 | 2042.2 | 1037.5 | 986.5 | 1141.6 |
+
+The macOS host was an Apple M3 Pro with 36 GiB of memory and APFS. Cold reads
+of a DMG stayed around 330–380 MiB/s, about 16–22% as fast as reading the
+unpacked directory on the same machine. Attaching took about 2.7–3.0 seconds
+and changed little with size. `hdiutil create` has about 6.8 seconds of fixed
+overhead, so throughput was only 4.7 MiB/s at 32 MiB and rose to 45.4 MiB/s at
+512 MiB. Packing a tar.gz on the same machine ran at about 48–52 MiB/s.
+
+| MiB | Unpacked directory | DMG | tar.gz | attach |
+| --- | --- | --- | --- | --- |
+| 32 | 1600.0 | 326.5 | 941.2 | 2.672 s |
+| 128 | 2285.7 | 359.6 | 1790.2 | 2.956 s |
+| 256 | 1718.1 | 369.9 | 1903.3 | 3.048 s |
+| 512 | 2275.6 | 383.8 | 2102.7 | 2.694 s |
+
+Reusing images reduces the time spent copying and unpacking directories. Initial
+code retrieval and packing still have a cost. Actual performance also depends on
+image transfers, cold-cache reads, the user-space filesystem, and the amount of
+modified data. Each additional task needs space for its writable data.
+
+Cold-read throughput does not directly predict speedups for workspace operations
+or compilation. In this random-data test, reading tar.gz is close to
+sequentially reading a single file. The formats may rank differently with a
+compressible source tree. See `tiler benchmark --help` to run measurements on
+your own disk or NAS.
+
+When evaluating performance, measure initial code retrieval and image creation
+separately from later task startup, file reads, and saving changes. Test with a
+real repository and realistic changes, rather than relying on a single mount
+time.
+
+For more options, see `tiler --help`, `tiler build --help`, and
+`tiler session --help`. Report issues and suggestions in the
+[project repository](https://github.com/tilerworks/tiler).
+
+This project is released under the [MIT](LICENSE) license.

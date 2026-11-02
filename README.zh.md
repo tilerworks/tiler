@@ -1,471 +1,292 @@
-# tiler
+# tiler：像铺瓷砖一样，用镜像快速重建工作区
 
 [English](README.md)
 
-tiler 把目录快照打成只读容器镜像，再用 overlay 提供可写工作区。
-第一版容器是 squashfs 与 erofs。工具不检查内容类型。Git 仓库加速
-是旁边脚本完成的一种使用场景。
+AI Coding 正在改变编程的节奏：编程不必始终发生在自己的电脑上，把任务交给代理，让它在远端机器或临时环境里修改代码、运行测试，再带回结果。同一项目也可以同时交给多个代理探索。
 
-以 [MIT](LICENSE) 许可发布。
+为每个任务重新 clone 大仓库或复制目录很费时间。而直接共用一个可写目录，又容易让不同任务的修改混在一起。
 
-## 安装
+**tiler 使用工作区镜像快照解决这个问题：将工作区目录保存为只读镜像，再从同一份镜像复制多个独立可写的工作区。**
 
-在本仓库执行 `make build` 即可构建。静态二进制写到 `bin/tiler`。
+名字 tiler 意为“瓦工”：像用预制瓷砖铺墙一样，用已有镜像搭建工作区。
 
-`tiler version` and `tiler --version` print the same `tiler <version>`
-line without reading or creating configuration. `make build` embeds
-`git describe --dirty`, falling back to `git describe --always --dirty`
-when no usable tag exists. Source archives without Git metadata use the
-newest version in [CHANGELOG.md](CHANGELOG.md) with a `.change` suffix,
-for example `tiler 0.1.0.change`. An enclosing unrelated repository is
-ignored. The installed binary keeps its build-time version. Direct
-`go build` without the linker override continues to report `tiler dev`.
+## 从复制目录，到共享基础
 
-`go install` 尚在规划中。发布二进制下载尚在规划中。
+假设项目已经准备妥当，包含源码、Git 历史和所需的文件。最短的使用流程是：
 
-`tiler doctor` 检查共用运行时工具和每一套镜像栈：
+```bash
+tiler build --image alice/app source
+tiler mount alice/app work-a
+git -C work-a pull
+tiler mount alice/app work-b
+git -C work-b pull
+```
 
-- squashfs 栈：`mksquashfs`、`squashfuse_ll`
-- erofs 栈：`mkfs.erofs`、`erofsfuse`
-- 共用：`fuse-overlayfs`、`fusermount3`，以及 `/dev/fuse`
+如果镜像来自已配置远端和跟踪分支的 Git 工作区，挂载后先执行 `git pull`，将工作区更新到远端当前状态，再交给任务使用。拉取的变化只写入各自的可写层。
 
-一套栈只有在其中每个二进制都装好时才算完整。至少一套完整栈时，
-`image_toolchain` 探测通过。缺另一套是警告。两套都不完整则该探测
-失败。共用检查仍然单独导致失败。双栈都齐全且没有格式设置时，
-构建仍是 squashfs 加 zstd。
+现在，两个工作区可以分别交给两个任务。它们读取相同的只读基础，修改落入各自的可写层。一个任务修改文件，另一个仍能看到自己的版本。
 
-`git` 可选。doctor 总会列出它，缺少该二进制是一次失败的探测，而不是静默跳过。git 探测失败不会阻断其他检查。
+用完后，先退出工作区，再卸载：
 
-可选辅助工具以源码形式放在 `contrib/` 目录：`concatfs`（字节分块
-拼接视图路线；构建需要 gcc 与 libfuse3-dev）与 `slowfs`（延迟注入，
-用于慢速 NAS 对比；构建需要 Go 工具链）。每个目录都记录上游来源、
-许可与构建命令。场景需要而工具缺失时 tiler 会提示安装；tiler 从不
-自动安装它们。
+```bash
+tiler umount work-a
+tiler umount work-b
+```
 
-## macOS
+会话中的修改会保留，后续可以恢复。每个任务无需重新复制整棵基础目录，适合并行 AI 任务、重复测试和大型代码树复用。例如，一个代理修复问题，另一个代理尝试重构，两者从相同版本出发，独立运行测试。如果基础镜像中的 Git 仓库落后太多，每次同步都很慢，可以更新镜像。tiler 支持构建增量镜像（仅 Linux）和完整镜像。
 
-macOS 上的镜像是单个 `image.dmg`。压缩是 `ulfo`（默认）、`ulmo`
-和 `udro`。可写挂载把改动写进
-`sessions/<name>/runtime/m<seq>/upper.shadow`。`tiler umount`
-留下这个影子文件，同时把挂载点清空。
+tiler 对目录内容没有特殊要求，Git 仓库只是一个常见场景。它保存文件快照，不替代 Git 的提交与协作，也不会替你安装系统依赖。这里的镜像是文件系统镜像，不是 Docker/OCI 镜像；运行环境仍需另外准备。
 
-`tiler doctor` 在 `PATH` 上能找到 `hdiutil` 时让 `image_toolchain`
-通过；找不到时失败，并说明它不在 `PATH` 上。它不再把
-`fuse_device`、`fuse_overlayfs`、`fusermount3`、`squashfuse_subdir`
-当成失败项。缺少 `git` 时建议执行 `xcode-select --install`。
-单文件大小探测仍然保留，因为 `image.dmg` 是一个文件。冷读是
-info。`concatfs` 和 `slowfs` 仍出现在报告里，状态为 info，并写明
-在 macOS 上用不上，因为 dmg 路径不使用这些 FUSE 辅助工具。说明
-文字不再重复 Linux 的构建指引。
+## 原理：基础共享，修改独立
 
-若当前系统上 `attach -shadow` 不能用于 APFS 镜像，新建的每张镜像
-都使用 HFS+，doctor 会写明这个原因。该选择不是配置项。
+在 Linux 上，两个工作区共享同一条只读链：最底下是完整镜像，上面是已保存的增量镜像（可以没有，也可以有多层，较上层优先）。每个会话再叠自己的上层文件系统，合并后的目录才是应用看到的工作区。
 
-## 在 Windows 上通过 WSL2 使用
+```mermaid
+flowchart TB
+  full["full image<br/>只读基础层，共享"]
+  inc["增量镜像<br/>只读，共享，零层或多层"]
+  full --> inc
+  inc --> upperA["upper A<br/>会话 A 的可写层"]
+  inc --> upperB["upper B<br/>会话 B 的可写层"]
+  upperA --> workA["work-a"]
+  upperB --> workB["work-b"]
+```
 
-WSL2 里跑的是真正的 Linux 内核。发行版内部 `runtime.GOOS` 为
-`linux`，tiler 走与裸机 Linux 相同的 squashfs/erofs 与 FUSE 路径。
-没有 Windows 原生挂载栈，也不走 dmg。请在 WSL shell 里构建并运行
-Linux 二进制。为 Windows 交叉编译的 `tiler.exe` 不能挂载。
+镜像通过 **FUSE** 挂载。FUSE 让文件系统逻辑运行在用户态，应用仍通过普通目录访问文件。tiler 调用外部工具挂载 squashfs 或 erofs，日常工作区操作无需 root 权限。系统需要安装相应工具，并允许当前用户访问 `/dev/fuse`；安装依赖和配置设备权限可能需要管理员操作。参见 [FUSE 文档](https://docs.kernel.org/filesystems/fuse/)。
 
-把仓库、`$HOME/.tiler`（images、sessions、cache、logs）以及挂载点放在
-发行版自己的文件系统上（一般在 `/home/<user>` 下）。不要放在
-`/mnt/c`、`/mnt/d`：那是经 9p（WSL2）或 drvfs（WSL1）看到的
-Windows 卷。那里的原子 rename、xattr、whiteout 和 FUSE 不稳定，
-增量层容易坏。在 Windows 上用
-`\\wsl.localhost\<发行版>\home\<user>\...`（或 `\\wsl$\...`）打开
-同一棵目录树。
+挂载后，tiler 使用 [fuse-overlayfs](https://github.com/containers/fuse-overlayfs) 将只读镜像层与可写层（upper）合并成一个目录。应用看到的是完整工作区。同一路径出现多个版本时，上层内容优先。
 
-### 安装
+文件修改采用**写时复制（Copy-on-Write，CoW）**。未修改的文件直接从只读层读取；修改下层文件时，先通过 copy-up 将文件复制到可写层，再写入修改；新增文件直接写入 upper。删除下层文件则记录遮蔽信息，使其在当前视图中不可见，基础镜像保持不变。[OverlayFS 文档](https://docs.kernel.org/filesystems/overlayfs.html)介绍了这些概念；tiler 在 Linux 上使用的是用户态的 fuse-overlayfs。
 
-1. 安装 WSL2 的 Ubuntu 类发行版（`wsl --install`）。
-2. 在发行版内安装 Go 1.25 或更新版本，以及镜像工具：
+各任务的修改越多，占用的存储也越多。CoW 不代表每次修改都只保存变化的几个字节。tiler 隔离各工作区的文件修改；进程、网络和安全隔离需要其他机制。
 
-   ```bash
-   sudo apt update
-   sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
-   # 可选 erofs 栈：
-   sudo apt install erofs-utils
-   ```
+macOS 使用另一条路径：通过 `hdiutil` 挂载 DMG，以 `upper.shadow` 保存可写变化。保存成果时，将 shadow 中的修改与基础镜像合成一份新的完整镜像，而不是追加 Linux 式增量层。
 
-3. 确认 `/dev/fuse` 存在且可用。`tiler doctor` 用 `fuse_device`
-   报告它；缺少 FUSE 时挂载路径会失败。
-4. 在 `$HOME` 下克隆本仓库，然后执行 `make build` 与 `make test`。
+## 安装 tiler
 
-### 闭环
+tiler 使用 Go 语言开发，端到端（e2e）测试使用 Git 项目的测试框架 [git-test-lib](https://github.com/jiangxin/git-test-lib)。构建前先安装 Go 1.25 或更新版本以及 make，再从[项目仓库](https://github.com/tilerworks/tiler)获取源码。
 
-每条命令都在 WSL shell 里执行（不要用 Windows 构建的二进制）：
+```bash
+git clone https://github.com/tilerworks/tiler.git
+cd tiler
+make build
+mkdir -p "$HOME/.local/bin"
+install -m 755 bin/tiler "$HOME/.local/bin/tiler"
+export PATH="$HOME/.local/bin:$PATH"
+tiler version
+```
+
+将 PATH 设置加入 shell 启动文件，后续终端就能找到 tiler。构建产物是 `CGO_ENABLED=0` 的静态二进制。运行以下命令检查系统工具是否齐全：
 
 ```bash
 tiler doctor
-tiler build --image alice/app dir
-tiler mount alice/app work
-# 在 work 下编辑；Windows IDE 可用 \\wsl$\...
-tiler status work
-tiler build          # 当前目录是合并视图时默认增量
-tiler umount work
 ```
 
-从 PowerShell 只能调用 WSL 里的二进制，例如：
+`tiler doctor` 会逐项报告检查结果。根据输出补齐依赖；在 Linux 上，需要确认 `mksquashfs`、`squashfuse_ll`、`fuse-overlayfs`、`fusermount3` 等工具可用，且当前用户能访问 `/dev/fuse`。
 
-```powershell
-wsl -d Ubuntu -- tiler doctor
-```
-
-不要增加 Windows 包装脚本。需要真挂载的特权 e2e 也在 WSL 内跑；
-缺少 `/dev/fuse` 或权限时现有测试继续 `t.Skip`，不要改成失败。
-
-## 使用
-
-目标工作流是：构建镜像、挂载、开发、结束 session、查看状态。快速
-开始覆盖整个工作流：
+Debian、Ubuntu、Linux Mint 等安装 squashfs 工具链：
 
 ```bash
-tiler build --image alice/app dir   # 把准备好的目录打成镜像
-tiler mount alice/app work          # 在镜像上挂出可写视图
-# 在 work 内开发；改动都落在 upper 层
-tiler status work                   # 覆盖该路径的 session 与其健康
-tiler umount work                   # upper 与 work 数据保留
+sudo apt update
+sudo apt install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
-session 把多个挂载归入一份持久记录，是崩溃恢复的单位：
+Fedora、RHEL、CentOS Stream、Rocky Linux 等安装 squashfs 工具链：
 
 ```bash
-tiler session new feature                  # 持久记录
-tiler mount --session feature alice/app work
-tiler mount --session feature bob/tools tools
-tiler session open feature                 # 崩溃之后：重放恢复
-tiler session close feature                # 逆序卸载，记录保留
+sudo dnf install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
-当前可用：
+macOS 使用系统的 `hdiutil` 挂载 DMG，以 `upper.shadow` 保存修改，无需安装上述 Linux 工具。目前 macOS 支持仍处于技术验证阶段，功能尚不完整，不支持增量镜像，挂载也较慢。各类镜像格式的测量结果见下文“平台与性能”。
 
-- `tiler version` and `tiler --version` print one version line.
-- `tiler doctor [--json]` 探测 `/dev/fuse`、共用外部工具、镜像
-  工具链（squashfs 或 erofs 至少一套完整即可，缺另一套为警告）
-  与 squashfuse subdir 基线，并进一步体检存储：稀疏阶梯探测镜像库与缓存目录
-  所在文件系统的单文件大小限制，发现限制且未启用分块时建议开启
-  分块存储；有界性能探测对比两个目录的冷读顺序/随机延迟与吞吐，
-  并据此给出缓存建议——建议中的延迟基线只是趋势参考，不是
-  SLA；可选的 contrib 辅助工具 `concatfs` 与 `slowfs` 一并探测，
-  缺失时输出构建指引，tiler 从不自动安装。存在 fail 探测项即
-  退出码 1；warn 与 info 不影响退出码。
-- `tiler build [--full|-f|--incremental|-i] [--image|-I <name>] [--format squashfs|erofs] [--compression name] [--split|-s size] [dir]` 把准备好
-  的目录打成全量镜像；位于可写合并视图内时，默认把 upper 追加为
-  一个增量层。`--format` 优先于 `image_format`，再优先于工具链
-  推断：双栈齐全选 squashfs，仅 erofs 选 erofs，仅 squashfs 选
-  squashfs。`--compression` 优先于 `image_compression`，否则用该
-  格式的默认压缩。squashfs 默认 zstd。erofs 在 `mkfs.erofs` 提供
-  zstd 时默认 zstd，否则依次用 lz4、gzip。双栈主机上不带这些 flag、也不写配置时，
-  镜像仍是 squashfs 加 zstd。增量构建继承 base 的格式与压缩；与
-  base 冲突的 flag 是用法错误。erofs 不接受 xz。普通目录默认全量构建，必须显式给出
-  1 到 5 段的镜像名；可写合并视图默认增量构建，并从挂载的镜像反查名字。若已记录的
-  增量层加上当前 upper 已超过 base image 的一半，默认改为全量重建，
-  并警告可用 `--incremental`（或 `-i`）继续追加增量。构建
-  成功打印一行：`full <name> <id>` 或
-  `incr <name> <id>`。当 `split_size`（或
-  `tiler build --split <size>`）大于零时，全量与增量构建都按该块
-  大小切成字节块入库，而不再是单个 `image.sqsh` /
-  `_incr/<id>.sqsh`（见下文「分块存储」）。活跃形态必须一致：
-  blocks 活跃位只能追加 blocks 层，single 只能追加 single 层。
-- `tiler images list [--archives] [--json]` 把每个活跃镜像打成
-  对齐的一行：名字、id、创建日期、体积、链长、载荷形态
-  （`single` 或 `blocks`），以及归档和 hold 的个数。给人看的
-  id 列是 payload sha256 的 10 位十六进制前缀；该前缀在库叶子
-  内唯一时即可定位这份镜像。被标记废弃，或记录了 ref / 短
-  commit 时，这些信息跟在行尾。`--archives` 在列表每一行下面
-  补上同样缩短的停放链 id。`--json` 仍保留完整 sha256，并渲染
-  一份机器可读文档，blocks 活跃位新增 `form` 字段
-  （契约只增不改）。
-- `tiler images show <name|id> [--json]` 输出一个活跃镜像的多行记录。
-  `<name|id>` 是 1 到 5 段的库名，或完整 payload sha256 / 唯一十六
-  进制前缀（含 `images list` 打出的 10 位 id）。记录包括身份、一行
-  `format`（例如 `squashfs/zstd`）、每一层增量、blocks 载荷块数
-  及其版本拓扑。`--json` 输出相同的版本信息。
-- `tiler images gc` 只处理镜像：列出过期且未被 session 引用的版本，
-  以及 pending-cleanup 与孤立对象，并保留仍被需要的祖先。删除只在
-  `--yes` 或交互式输入 `yes` 之后发生；非交互且没有 `--yes` 时只
-  预览。保留期是 `--expire`（默认 30 天）；0 表示过期所有未活动
-  对象。它不清理、关闭或卸载 session。中断的清理单独执行，之后
-  再运行 `images gc` 才会检查过期。
-- `tiler image rm <name:hash>` 删除指定版本及其所有后代；
-  `tiler image rm <name>` 删除整个 image 及全部版本。任何待删除版本
-  被 session 引用时操作都会拒绝。
-- `tiler mount <image> <dir>` 把镜像供给为工作区。默认视图可
-  写：每个 squashfs 成员先只读挂到该 session 的
-  `runtime/m<seq>/` 树下转接点，再由 `fuse-overlayfs` 叠加在
-  同树内的 upper 之上；同一目录重复挂载是幂等的，并复用先前
-  的改动。分块载荷形态经同一引用解析，按各自的路线挂载（见
-  下文「分块存储」）。同一视图的健康挂载提示 `already
-  mounted`；身份不一致报冲突错误，绝不静默重挂。
-  `--read-only` 把单镜像直接挂在 `<dir>`，带增量链时仅以
-  lowerdir 合并。`<image>` 是单个 squashfs 文件路径，或 1 到 5
-  段的库名：库名经活跃位 meta 解析为全量镜像加增量链，一个栈至多
-  八个成员；清理后的路径若存在且是普通文件，则文件优先于库名。
-  Import an external image with `tiler build --link` or
-  `tiler build --copy`, then mount the library name (see External
-  images below). Library members pass a quick size and mtime check
-  first; `--verify` re-hashes every recorded sha256. A bare file
-  path records none. A version whose digest is 64 zeros is unknown:
-  `--verify` skips that sha256, still checks reachability, format,
-  size, and mtime, and reports the skip.
-  `--subdir <path>` 把镜像内一个子目录暴露为挂载根：缺少该子目录
-  的成员不进栈，全部缺失时挂载失败且不创建任何东西。子树内没有
-  `.git` 时，工作区 git 命令会向上寻到挂载点之外，因此 subdir
-  形态面向独立子仓库或非 git 内容。配置 `cache_enabled`（默认关；
-  `--cache` 对单次调用开启）后，每个成员先按内容摘要拷入
-  `cache_dir` 并整体校验通过才挂载，NAS 上的镜像因此从本地副本
-  挂载，而挂载表身份仍指向原始库路径。目标必须是当前用户拥有的
-  空目录，位于运行时树与全部保留目录之外，也不能是这些树的祖先
-  （挂载不得覆盖 `sessions_dir`、`images_dir`、`cache_dir`、
-  `logs_dir` 或 `$HOME/.tiler`）。每次挂载都在引擎执行前
-  先写进 session 记录（write-ahead）：`-s, --session <name>` 挂进
-  用 `session new` 创建的 session，环境变量 `TILER_SESSION_ID`
-  绑定一个，两者都没有时自动创建 `形容词-动物` 形式的
-  session（例如 `happy-fox`），并先打印
-  `new session created: <name>`，再用 `--session <name>` 继续往
-  同一 session 记录更多挂载点。`--rm` 把这次新建的 session
-  标记为待删：最后一个视图卸载后，记录被删除、runtime 目录被
-  清理，upper 数据一并抹除。它不能与 `--session` 或
-  `TILER_SESSION_ID` 同用——事先创建请用 `session new --rm
-  [name]`。非 `--rm` 的 session 在最后一个视图卸载后仍保持
-  active，直到 `session close`。挂载失败时动作以 failed 状态留在记录里，之后
-  `session open` 会重试。
-- `tiler umount <dir>` 按路径卸载视图：先卸合并点，再逆序卸
-  运行时转接点。每个点 `fusermount3 -u` 失败即转惰性 `-uz`
-  兜底，随后对该视图的 `runtime/m<seq>/` 树扫表，清理表内已
-  不再关联目标的 lower 残留。命令幂等：未挂载的 `<dir>` 静默
-  成功。upper 与 work 数据从不删除，同一目录之后再次挂载时
-  复用先前的改动。在 macOS 上，可写文件是
-  `sessions/<name>/runtime/m<seq>/upper.shadow`；卸载后该文件
-  仍在，挂载点被清空。
-- `tiler session` 管理崩溃恢复据以重放的挂载 session。`session
-  new [name]` 在 `~/.tiler/sessions/` 下创建空记录，重名报错；
-  省略名字时生成 `形容词-动物` 名字并打印 `created <name>`。
-  `--rm` 标记的记录在 `session close` 时删除记录并清理每个视图
-  的 runtime，而不再保留供审计。
-  `session open <name>` 按挂载顺序遍历记录：健康视图跳过，失活
-  视图先清理（`fusermount3 -u`，失败转惰性 `-uz`）再重建，因此
-  重复 open 幂等，崩溃后一条 open 恢复全部挂载。closed session
-  同样借此恢复：视图重新挂载，记录回到 active。`session close
-  <name>` 逆序卸载每个记录在案的视图，随后置 closed 并保留记录
-  供审计——但 `--rm` session 例外，它被直接删除：记录被删、每个
-  视图的 runtime 目录被清理（upper 数据一并抹除），命令打印
-  `removed` 而非 `closed`。`session remove <name>` 删除 closed
-  记录，active 拒绝。
-  `session list [--json]` 把每条记录打成对齐的一行（名字、状态、
-  挂载数、创建/关闭日期，以及 `--rm` 的 RM 标记）。`session
-  show <name> [--json]` 输出多行记录——身份字段，再跟每条动作
-  一行——show 的 `--json` 形态就是记录对象本身。生成的名字与
-  显式名字接受同一套命令；只有 `--rm` 会把 close 变成删除。
-- `tiler status [<path>] [--json]` 把 session 记录与真实挂载状态
-  对账。不带路径时每条记录输出一块——每个未卸载的挂载动作标注
-  `healthy` 或 `stale`——`TILER_SESSION_ID` 命名的 session 标记
-  `current`；挂载表中存在但无 active 记录认领的 tiler 视图列为
-  `orphan` 行。带路径时报告覆盖该路径的 session：合并视图内的
-  深层路径与运行时树内路径（upper 或 lower 转接点）都能反查到
-  覆盖 session；无 session 覆盖的路径报错。
+## 用例一：准备一次，按需创建开发工作区
 
-### 活动日志
+下面以 `https://github.com/example/app.git` 为例，将仓库克隆到 `example-app`。请换成自己的仓库地址，并选择未占用的目录和会话名。`example-app` 应是普通 clone 得到的独立仓库，包含完整的 `.git` 目录，并已配置远端和跟踪分支。
 
-每个 session 和每个镜像版本在 `logs_dir`（默认 `$HOME/.tiler/logs`）
-下各有一份 JSONL 活动日志。会话文件是
-`logs_dir/sessions/<name>.log`。版本文件是
-`logs_dir/images/<name>/<id>.log`，全量与增量都一样。多段镜像名
-（例如 `alice/app`）对应目录 `images/alice/app/`。锁文件在日志旁边，
-名字是日志文件名加 `.lock`。日志和锁的权限是 `0600`。活动字节不参与
-载荷哈希、版本 id 或 manifest schema。挂载一个不属于库版本的文件时，
-只更新会话日志。
-
-新行是一条 UTF-8 JSON，以整数格式号 `"version":1` 开头。镜像版本 id
-写在 `image_version`，没有镜像版本时省略该字段。`version` 是日志格式
-号。依赖行 `image.dependency.activity` 用 `image_version` 记下祖先
-版本 id，`source_version` 是来源 id，`source_event` 是原来的事件名。
-
-### External images
-
-Import a ready-made squashfs, erofs, or dmg, then mount the library
-name. See the English README for the same contract: directory
-selection, the unknown digest, source conflicts, and conversion.
-
-| Path | Command shape | Library | Session `Name`/`FullID` | `build -i` in view |
-|------|---------------|---------|-------------------------|--------------------|
-| Bare file | `tiler mount /path/to/file.sqsh work` | none | no | cannot infer name |
-| Link, then mount | `tiler build --link /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | position file + meta | yes | yes on Linux |
-| Copy, then mount | `tiler build --copy /path/to/file.sqsh --image alice/app` then `tiler mount alice/app work` | local payload + meta | yes | yes on Linux |
-
-`--link` and `--copy` require `--image`, accept no positional
-directory, and do not pack or mount. Omit `--hash` for the latest
-directory version and its ancestors. `--hash <prefix>` selects one
-4-to-64 hex prefix plus ancestors. `--hash all` imports the whole
-forest. A file import reads `<stem>.yaml` first, then `<file>.sha256`.
-When both are missing it warns and hashes the image. An explicit
-digest of 64 zeros stays unknown.
-`mount --verify` skips sha256 for that unknown version and still
-checks reachability, format, size, and mtime. The same id aimed at
-a different final path is a source conflict. `--copy` of a known
-link keeps that id. `--copy` of an all-zero link publishes the real
-digest and keeps the old zero version. A refused format exits 1.
-Removal deletes the local position file and never the external
-source.
+### 步骤 1：把已有源码制成镜像
 
 ```bash
-tiler build --link /mnt/nas/vendor/app.sqsh --image vendor/app
-tiler mount vendor/app work
-
-tiler build --link /Volumes/share/base.dmg --image vendor/base
-tiler mount vendor/base work
+git clone https://github.com/example/app.git example-app
+tiler build --image demo/app example-app
 ```
 
-### 分块存储
+这一步把源码和 `.git` 一起保存为快照。一次 Linux 本地磁盘上的测量：克隆用了 52 秒，工作区占 274 MiB（含 `.git`）；`tiler build` 用了 2.4 秒，得到 214.9 MiB 的镜像。制作镜像时，不要修改源目录。Linux 默认根据工具链选择 squashfs 或 erofs，macOS 默认使用 DMG，无需为这个基本流程指定格式。
 
-分块存储是面向单文件大小受限存储的可选形态——配额型 NAS 共享、
-有 4 GiB 单文件上限的 FAT 类文件系统。通过配置或构建旗标给出块
-大小；缺省 `0` 表示不分块，保持单文件布局：
-
-```yaml
-split_size: 2G    # tiler build 的默认块大小；0 = 关
-```
+打包完成后，用 `tiler images ls -v` 查看这个镜像的版本：
 
 ```bash
-tiler build --split 64k --full --image alice/app /path/to/src
-tiler build --split 0 ...   # 本次构建不分块
+tiler images ls -v
 ```
-
-With a positive block size, full and incremental layers are stored
-as byte blocks under `_objects/<layer-id>/blk.NNN`. Linux automatically
-uses `concatfs` from PATH to mount virtual images directly from those
-blocks, including linked imports. Session runtime holds small descriptors;
-mounting does not create a complete cache image. Without `concatfs`,
-mounting reassembles each layer into `<cache_dir>/<layer-sha256>.sqsh`.
-Both routes verify block and whole-image digests and support session
-reopen. Build quality checks can still reassemble layers. No configuration
-key or mount flag is required.
-
-doctor 的单文件限制探测在镜像库或缓存目录发现上限时，会建议设置
-`split_size`（或 `tiler build --split`）；`split_size` 为正时，同一
-探测会带上已配置的块大小。
-
-列表/查看类命令都带机器可读形态，面向 CI 门禁与 Agent 消费。
-schema 稳定、字段只增不改，由 golden 文件测试钉住：
-
-```bash
-tiler images list --json | jq -e '.images | length > 0'  # CI 门禁
-tiler status --json | jq -r '.sessions[].name'           # Agent 盘点
-tiler doctor --json | jq -r '.results[] | select(.status == "fail") | .name'
-```
-
-全部命令共享同一退出码契约：0 成功；1 运行或探测失败；2 usage
-错误。
-
-`tiler doctor` 分两段输出，列用空格对齐。先是解析后的配置，再是
-探测项。说明放不下一行时按词折行，续行缩进到说明列：
 
 ```text
-📋 Config
-
-  path          /home/alice/.tiler.yaml
-  images_dir    /home/alice/.tiler/images
-  sessions_dir  /home/alice/.tiler/sessions
-  cache_dir     /home/alice/.tiler/cache
-  logs_dir      /home/alice/.tiler/logs
-  log_level     info
-
-🔧 Checks
-
-  file_limit_images    pass  no single-file size limit below 512 GiB
-  storage_perf_images  info  seq 112.5 MiB/s in 145.6 ms; rand avg ...
-  contrib_concatfs     warn  optional tool; sources ship in the
-                             contrib/ directory ...
+📦 demo/app · 1 versions · latest: 0a2a869d90
+  IMAGE                 SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  └─ 0a2a869d90 ★  214.9 MiB  11-02 11:19  11-02 11:19    -
 ```
 
-## 配置
+默认镜像库位于 `~/.tiler/images`，会话、缓存和日志分别位于 `~/.tiler/sessions`、`~/.tiler/cache` 和 `~/.tiler/logs`。通常不必直接操作这些内部目录。可以在工作区目录或其父目录放置 `.tiler.yaml` 覆盖这些位置；tiler 从当前目录向上查找，较近的文件优先。格式与默认的 `~/.tiler.yaml` 相同。
 
-tiler 读取分层的 YAML 配置。首次运行时，它依据一份带注释、钉住
-内置默认值的模板创建 `$HOME/.tiler.yaml`——这个文件是供你编辑的
-起点，而非必需项：HOME 只读时会被容忍，tiler 回退到内置默认；
-兼容的已有文件绝不改写。
+### 步骤 2：挂载后先更新，再开始开发
 
-用户文件带有顶层整数 `version`（当前为 `1`）。当 `$HOME/.tiler.yaml`
-缺少 `version`、`version < 1`，或仍含已移除键（如 `runtime_dir`）时，
-下次命令会先备份为 `.tiler.yaml.bak`，再原子重写为当前 schema
-（重写时注释可能丢失）。自动升级只作用于用户级文件；项目级
-`.tiler.yaml` 只读不改，不兼容时直接报错。
-
-```yaml
-version: 1
-images_dir: .tiler/images
-sessions_dir: .tiler/sessions      # 合并根：记录 + 每会话 runtime
-cache_dir: .tiler/cache
-logs_dir: .tiler/logs
-log_level: info
-# image_format: squashfs        # squashfs 或 erofs；省略则按工具推断
-# image_compression: zstd       # 省略则用该格式的默认压缩
+```bash
+mkdir work
+tiler session new coding
+tiler mount --session coding demo/app work
+cd work
+git pull
 ```
 
-`image_format` 与 `image_compression` 可选。两者都省略时，按已安装
-工具推断容器；squashfs 与 erofs 两套都完整时优先 squashfs。
-`squashfs_options` 只由 squashfs 实现消费。没有 `erofs_options` 键。
+镜像是制作时的快照，挂载并不意味着代码已是最新。先执行 `git pull`，完成当前分支的更新，再让 AI 或开发者开始修改、构建和测试。相比从头获取项目，这时已有镜像中的文件与 Git 对象可供复用，只需获取远端新增的内容。拉取需要能够访问项目远端。如果会话中已有未提交修改或分支发生分歧，应先按项目的 Git 工作流处理，再继续更新。非 Git 目录不需要这一步。
 
-`sessions_dir` 是唯一的 session 根。其下每个 session 是自包含目录
-（`session.json`、`session.lock`，以及 `runtime/m<seq>/` 组合树）。
-活动日志不在该目录里，而在 `logs_dir`。不再有全局 `runtime_dir`。
+同一次测量中，`tiler mount` 用了 0.09 秒，随后在 `work` 中执行 `git pull` 用了 0.70 秒，合计 0.79 秒；从头克隆则用了 52 秒。拉取耗时取决于需要更新的数据量。本例使用本地文件系统上的镜像；网络挂载存储的性能讨论见下文“平台与性能”。
 
-取值按层解析，后者覆盖前者：内置默认、用户文件
-`$HOME/.tiler.yaml`、从工作目录向上遍历发现的项目级 `.tiler.yaml`，
-以及命令行 flag。文件内的相对路径以该文件所在目录为基准解析，
-`~/` 前缀展开为 `$HOME`。
+需要并行处理另一项任务时，在 `example-app` 的父目录打开另一个终端，从同一镜像创建工作区：
 
-向上遍历在工作目录位于 `$HOME` 内时止于 `$HOME`，否则止于文件
-系统根。`TILER_CEILING_DIR` 可以更早截止：当截止目录是工作目录的
-祖先时，它自身的 `.tiler.yaml` 仍生效，但其上一律不读；不是祖先
-时忽略。它把配置发现约束在测试沙箱内，或某个不应继承父目录配置
-的检出内。
+```bash
+mkdir work-review
+tiler session new review
+tiler mount --session review demo/app work-review
+cd work-review
+git pull
+```
 
-`tiler doctor` 在 `🔧 Checks` 之前用 `📋 Config` 报告解析后的
-配置：向上查找时实际读到的最近一层 `.tiler.yaml`（没有项目文件时
-为用户文件）与核心目录，每项一行，用空格对齐。
+两个任务各自更新和修改，不会改动基础镜像或对方的工作区。挂载目录必须为空、由当前用户拥有，并位于 tiler 的运行时目录之外。完成第二个任务后，先离开目录再执行 `tiler session close review`。
 
-`--json` 形态把同样的数据作为顶层 `config` 对象（`path`、
-`images_dir`、`sessions_dir`、`cache_dir`、`logs_dir`、
-`log_level`）与 `results` 并列输出。config 段落不影响 doctor 的判定结果。
+同一仓库的另一个工作区，也可以在已经挂载的目录里用 `git worktree add` 创建：
 
-## 用户故事
+```bash
+git worktree add -b review ../work-wt
+```
 
-开发者用 tiler 快速制备本地环境。新机器上挂载本身毫秒级完成，工作
-区数秒可用；完整克隆、安装依赖再构建则需要数分钟到数小时。
+同一次测量中，这条命令用了 0.36 秒，新工作区占 62 MiB，复用了已挂载仓库的 Git 对象。同一项目需要多个工作区时，可以再次挂载镜像，也可以使用 `git worktree add`。
 
-第一份入库镜像只需一条命令：场景脚本准备好目录，
-`tiler build --image alice/app dir` 把它打进 `~/.tiler/images/` 下的
-镜像库；同名下一次全量构建会把上一份归档，而不是打断读者。之后
-`tiler images gc` 先列出候选再确认，按 `--expire`（默认 30 天，
-0 表示过期所有未活动对象）删除未引用的过期镜像，不清理 session。
+### 步骤 3：保存可复用的工作区
 
-只读基座保持不可变。上层可以丢弃后重新挂载。
+要保存第一个工作区中的修改，在该工作区中执行：
 
-session 隔离各个项目，同时共享同一只读基座。八个 session 共享一个
-lower 时，每个 upper 的稳态大约 6.5 MB。
+```bash
+tiler status -v .
+tiler build -i
+```
 
-崩溃可以恢复，因为每个挂载动作都先行落盘（write-ahead）：
-`kill -9` 杀掉 tiler 或 FUSE 守护进程后，一条 `tiler session open
-<name>` 按记录重放，仍健康的视图跳过，失活的清理后重建，upper
-层数据不丢。
+这次增量构建用了 7.7 秒。查看新镜像：
 
-大镜像在受限存储上照常工作。目标文件系统有单文件大小上限时
-（配额型 NAS 共享、FAT 类卷），`tiler doctor` 报告限制并建议
-设置 `split_size` / `tiler build --split`。块大小为正时，全量与
-增量层都以逐块校验的字节块入库；挂载时在缓存目录逐层重组再
-overlay。同一个镜像库、同一套命令面，块大小只是配置（或单次
-构建旗标）选择。
+```bash
+tiler images ls -v
+```
 
-机器读同一套命令面。`images list`、`images show`、`session list`、
-`session show`、`status` 与 `doctor` 都带 `--json` 形态，schema
-稳定、字段只增不改并由 golden 文件钉住：CI 门禁可以直接断言
-镜像齐全、没有 stale 挂载，Agent 可以从 doctor 的性能数字决定
-要不要开启缓存，无需解析人类文本。
+从命令输出可以看到增量镜像大小为 172.1 MiB，以及两个镜像之间的依赖关系。
 
-## 许可证
+```text
+📦 demo/app · 2 versions · latest: eb24b00e8c
+  IMAGE                    SIZE  CREATED      LAST ACTIVITY  DESCRIPTION
+  └─ 0a2a869d90       214.9 MiB  11-02 11:19  11-02 11:42    -
+     └─ eb24b00e8c ★  172.1 MiB  11-02 11:42  11-02 11:42    -
+```
 
-Copyright 2026 Jiang Xin.
+Linux 上，挂载视图内的 `build` 默认保存增量；累计增量加当前 upper 超过基础镜像大小的一半时，会转为完整重建。可用 `--incremental` 明确追加增量，或用 `--full` 制作完整快照。macOS 则将 shadow 中的修改与基础镜像合成一份新的完整镜像。
 
-本项目以 [MIT](LICENSE) 许可发布。许可证正文为 MIT License。
+镜像快照保存在本地或挂载磁盘上。重要修改应及时提交并推送到 Git 服务器，不要只依赖镜像保存。生成新镜像后，其他已挂载工作区不会自动切换版本。Linux 上，卸载和后续重放会根据元数据清理已保存的 upper 文件。
+
+### 步骤 4：关闭与恢复
+
+先离开挂载目录，再关闭会话。需要继续工作时，重新打开：
+
+```bash
+tiler session close coding
+tiler session open coding
+cd work
+git pull
+```
+
+关闭普通会话会卸载工作区并保留修改；重新打开会恢复挂载。更新好代码后，可以继续下一轮开发。结束时再次离开工作区并关闭会话。
+
+若只需一次性工作区，可用 `tiler mount --rm demo/app scratch`；在其中先执行 `git pull` 再使用，退出目录后用 `tiler umount scratch` 清理。**警告：`--rm` 会删除该临时会话的可写数据，成果应提前导出（如：提交并推送）。**
+
+以上命令直接使用镜像名，默认选择最新版本。需要固定版本时，用 `tiler images ls -v` 查看版本 ID，再挂载 `demo/app:<版本ID>`。完整生命周期的自动化测试见[标准工作流 e2e](test/e2e/t0100-linux-standard-workflow.sh)。
+
+## 用例二：复用共享镜像，选择链接或复制
+
+团队已经提供镜像时，可以直接导入，无需重新准备源码并打包。下面假设 `/mnt/share/app.sqsh` 是一个可访问的完整镜像文件：
+
+```bash
+tiler build --image team/app --link /mnt/share/app.sqsh
+tiler mount team/app work
+cd work
+git pull
+```
+
+这个例子应在一个新的工作目录下执行；如果内容不是 Git 仓库，省略 `git pull`。完成后离开工作区，执行 `tiler umount work`，普通会话仍会保留修改。
+
+| 导入方式 | 适用场景 | 源文件不可用时 |
+| --- | --- | --- |
+| `--link` | 持续可访问的共享存储，减少重复存储 | 源文件不可用时无法新建挂载 |
+| `--copy` | 希望将镜像保存在本地独立使用 | 本地副本仍可使用 |
+
+要复制到本地，将导入命令中的 `--link` 换为 `--copy`，两者不能同时使用。导入不会修改源文件。
+
+如果共享的是带有完整与增量版本的镜像库目录，可使用 `tiler build --image team/app --link /mnt/share/app` 导入最新版本及所需祖先链；需要固定版本时，再加 `--hash <版本ID>`。不要单独导入一个增量载荷来替代完整镜像链：单文件导入不会自动找回基础层。
+
+更多导入、重复挂载和源可用性验证见[镜像导入 e2e](test/e2e/t0101-linux-import-workflow.sh)。
+
+## 用例三：大镜像拆分存储，使用方式不变
+
+当存储介质有单文件大小限制时，Linux 可以在构建时启用字节块拆分。假设已有一个准备好的源码目录 `source`：
+
+```bash
+tiler build --image team/large-app --split 2G source
+tiler images show team/large-app
+tiler mount team/large-app work
+cd work
+git pull
+```
+
+这个例子同样在新的工作目录下执行。`2G` 是每块的大小上限，应根据存储限制选择；小镜像可能只有一个块。详情中的 `payload blocks` 表明采用了块存储。挂载后的开发、保存与关闭流程和普通镜像相同，结束后离开目录并执行 `tiler umount work`。
+
+若希望项目默认启用拆分，可在项目 `.tiler.yaml` 中设置 `split_size: 2G`，不必每次传参。完整镜像和增量都可采用块存储。
+
+块是镜像字节流的切片，不是按目录划分，也不是内容去重或新的版本层。安装可选的 `concatfs` 后，Linux 可直接提供块拼接视图；否则会在缓存中重组完整镜像，仍需考虑缓存磁盘的空间和单文件限制。需要检查载荷完整性时，为挂载加上 `--verify`；已记录的有效 SHA-256 摘要会参与校验，损坏或缺失的块会导致失败。
+
+完整的块存储验证见[拆分存储 e2e](test/e2e/t0102-linux-split-workflow.sh)。
+
+## 平台与性能
+
+| 平台 | 镜像与可写方式 | 使用条件 |
+| --- | --- | --- |
+| Linux | squashfs / erofs，FUSE 与独立 upper | 对应打包、挂载工具和 `/dev/fuse` |
+| macOS | DMG，`hdiutil` 与 shadow | 默认 DMG，不使用 Linux 的 FUSE 栈 |
+| Windows 经 WSL2 | 使用 Linux 实现 | 在发行版内部构建与运行 |
+
+Linux 不构建或挂载 DMG，macOS 不构建或挂载 squashfs、erofs。macOS 的 shadow 保存为新完整镜像后，需要新挂载来使用该版本；原会话仍绑定原来的基础。WSL2 中应把镜像库、会话和工作区放在发行版的 Linux 文件系统内，避免放到 `/mnt/c` 等 Windows 卷上。
+
+### 基准测量
+
+下面是在一台 macOS 开发机和一台 Linux 虚拟机上用 `tiler benchmark` 测得的冷读取吞吐，单位为 MiB/s。测试使用不可压缩的随机数据，每个文件 4 MiB，总大小分别为 32、128、256、512 MiB。镜像读取结果取两次运行的平均值；展开目录的结果来自同样清理缓存后的一次遍历。Linux 与 macOS 是两台机器，数字只在各自主机内比较。打包、热缓存读取和方差见[基准文档](docs/benchmark.md)。
+
+Linux 测试环境为虚拟机：aarch64，6 vCPU，11 GiB，Ubuntu 24.04，virtio 上的 ext4。squashfs 使用 zstd；这台机器的 erofs 工具没有 zstd，打包选用 lz4。只读挂载耗时 6–38 毫秒。打包吞吐为 squashfs 87–120 MiB/s，erofs 94–106 MiB/s，tar.gz 约 46 MiB/s。
+
+| MiB | 展开目录 | squashfs | erofs | tar.gz |
+| --- | --- | --- | --- | --- |
+| 32 | 2651.9 | 761.9 | 1254.9 | 1561.0 |
+| 128 | 2628.9 | 842.1 | 1015.9 | 1641.0 |
+| 256 | 2209.8 | 1207.5 | 1127.8 | 1575.4 |
+| 512 | 2042.2 | 1037.5 | 986.5 | 1141.6 |
+
+macOS 主机是 Apple M3 Pro，36 GiB，APFS。DMG 冷读取吞吐约为 330–380 MiB/s，是同机展开目录的 0.16–0.22 倍。attach 约 2.7–3.0 秒，随尺寸变化不大。`hdiutil create` 有约 6.8 秒的固定开销，32 MiB 只有 4.7 MiB/s，到 512 MiB 升到 45.4 MiB/s；同机 tar.gz 打包吞吐约为 48–52 MiB/s。
+
+| MiB | 展开目录 | DMG | tar.gz | attach |
+| --- | --- | --- | --- | --- |
+| 32 | 1600.0 | 326.5 | 941.2 | 2.672 s |
+| 128 | 2285.7 | 359.6 | 1790.2 | 2.956 s |
+| 256 | 1718.1 | 369.9 | 1903.3 | 3.048 s |
+| 512 | 2275.6 | 383.8 | 2102.7 | 2.694 s |
+
+复用镜像可以减少重复复制和展开目录的时间。首次获取代码和打包仍有开销，实际性能也受镜像传输、冷缓存读取、用户态文件系统和修改量的影响。每增加一个任务，还需要为它的可写数据留出空间。
+
+冷读取吞吐不能直接换算为工作区操作或编译的加速倍数。在这组随机数据测试中，读取 tar.gz 接近顺序读取单个文件；换成可压缩的源码树，各格式的性能排序可能不同。用 `tiler benchmark --help` 查看测量方法，在自己的磁盘或 NAS 上测试。
+
+评估时，分别记录首次获取代码、制作镜像，以及后续启动任务、读取文件和保存修改的耗时。使用真实仓库和实际修改量测试，不要只看单次挂载时间。
+
+更多参数见 `tiler --help`、`tiler build --help` 和 `tiler session --help`。问题与建议请提交到[项目仓库](https://github.com/tilerworks/tiler)。
+
+本项目以 [MIT](LICENSE) 许可证发布。
