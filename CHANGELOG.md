@@ -3,7 +3,7 @@
 All notable changes to tiler are recorded here. Versions are listed newest
 first. An unreleased entry describes the next planned release.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-02
 
 ### Added
 
