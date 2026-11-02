@@ -224,14 +224,16 @@ func TestVersionEngineSerializesConcurrentCoreMounts(t *testing.T) {
 	start := make(chan struct{})
 	var workers sync.WaitGroup
 	for range 2 {
-		workers.Go(func() {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
 			<-start
 			if _, err := e.RunMount("dev", action, func(a Action) (Result, error) {
 				return Result{Mountpoint: a.Mountpoint}, nil
 			}); err != nil {
 				t.Error(err)
 			}
-		})
+		}()
 	}
 	close(start)
 	workers.Wait()

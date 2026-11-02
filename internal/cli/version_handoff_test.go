@@ -169,7 +169,7 @@ func TestVersionRuntimePinsBranchAcrossCloseAndReopen(t *testing.T) {
 	upper := filepath.Join(sessionsDir(home), "dev", "runtime", "m1", "upper")
 	writeTestFile(t, filepath.Join(upper, "branch.txt"), "branch")
 	f.table = viewTable(imagesDir, "alice/app", view, upper)
-	t.Chdir(view)
+	chdir(t, view)
 	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
 	if err != nil {
 		t.Fatalf("branch build: %v\n%s", err, stderr)

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/jiangxin/tiler/internal/dirroot"
 )
 
 const (
@@ -211,12 +213,12 @@ func probeErofsSubdir(run ToolRunner, imagePath, rel string) (bool, error) {
 }
 
 // statErofsSubdir reports whether rel is a directory inside the mount
-// at point. OpenRoot keeps the lookup under that root, so a symlink
-// cannot resolve to a host path. A missing name, or a path that walks
-// through a non-directory, is absence. The root is closed before
+// at point. The directory root keeps the lookup under that root, so a
+// symlink cannot resolve to a host path. A missing name, or a path that
+// walks through a non-directory, is absence. The root is closed before
 // return so the caller can unmount.
 func statErofsSubdir(point, rel string) (bool, error) {
-	root, err := os.OpenRoot(point)
+	root, err := dirroot.Open(point)
 	if err != nil {
 		return false, err
 	}

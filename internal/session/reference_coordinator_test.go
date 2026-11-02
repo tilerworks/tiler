@@ -210,13 +210,15 @@ func TestReferenceCoordinatorSerializesCompetingSnapshots(t *testing.T) {
 	start, results := make(chan struct{}), make(chan error, 2)
 	var workers sync.WaitGroup
 	for _, builder := range []string{"one", "two"} {
-		workers.Go(func() {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
 			after := before
 			after.Actions = append([]Action(nil), before.Actions...)
 			after.Actions[0].Mountpoint = filepath.Join(t.TempDir(), builder)
 			<-start
 			results <- c.Apply(&before, &after)
-		})
+		}()
 	}
 	close(start)
 	workers.Wait()

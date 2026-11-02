@@ -81,14 +81,16 @@ func testReferenceScopeReusesStoreMutationsUnderBothLocks(t *testing.T, held boo
 	}
 	var workers sync.WaitGroup
 	for range 4 {
-		workers.Go(func() {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
 			if _, err := retained.Load(rec.Name); !errors.Is(err, ErrReferenceScopeClosed) {
 				t.Errorf("retained load = %v", err)
 			}
 			if err := retained.SaveVersion(rec); !errors.Is(err, ErrReferenceScopeClosed) {
 				t.Errorf("retained save = %v", err)
 			}
-		})
+		}()
 	}
 	workers.Wait()
 	if err := retained.deleteRecordFiles(rec.Name); !errors.Is(err, ErrReferenceScopeClosed) {

@@ -8,10 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
 	"time"
+
+	"github.com/jiangxin/tiler/internal/testutil"
 
 	"github.com/jiangxin/tiler/internal/image"
 )
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	testutil.Chdir(t, dir)
+}
 
 type statusVolume struct {
 	image  string

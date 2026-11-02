@@ -170,7 +170,7 @@ func TestWorkingDirectoryInsideReservedTreeExitsWithCode1(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	t.Chdir(inside)
+	chdir(t, inside)
 
 	stdout, stderr, _, err := runCmd(t)
 	if ExitCode(err) != 1 {
@@ -391,7 +391,7 @@ func TestCeilingDirBoundsProjectWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeProjectConfig(t, zone, "cache_dir: marker-cache\n")
-	t.Chdir(deep)
+	chdir(t, deep)
 
 	// Without a ceiling the walk reaches zone and applies the marker.
 	cfg := mustRun(t)
@@ -416,7 +416,7 @@ func withWorkspace(t *testing.T) (home, work string) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	t.Chdir(work)
+	chdir(t, work)
 	return home, work
 }
 

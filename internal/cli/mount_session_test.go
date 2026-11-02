@@ -110,7 +110,7 @@ func TestMountRecordsStackTipAfterIncrementalBuild(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
 	if err != nil {
 		t.Fatalf("incr build: %v\n%s", err, stderr)

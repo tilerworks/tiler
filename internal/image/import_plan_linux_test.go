@@ -72,7 +72,7 @@ func selfRChar(t *testing.T) uint64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for line := range strings.SplitSeq(string(data), "\n") {
+	for _, line := range strings.Split(string(data), "\n") {
 		rest, ok := strings.CutPrefix(line, "rchar: ")
 		if !ok {
 			continue

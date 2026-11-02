@@ -195,9 +195,9 @@ func TestSplitBlocksChainReassembleSeesIncrContent(t *testing.T) {
 	mountOK(t, lib, "mounted "+view1+"\n",
 		"mount", "--session", "dev", "alice/data", view1)
 	writeTestFile(t, filepath.Join(view1, "incr-only.txt"), "from-incr\n")
-	t.Chdir(view1)
+	chdir(t, view1)
 	incrID := buildOutput(t, mustCmd(t, append(lib, "build", "--split", "128k")...))
-	t.Chdir(work)
+	chdir(t, work)
 	if out := umountCmd(t, lib, view1); out != "unmounted "+view1+"\n" {
 		t.Fatalf("umount output = %q", out)
 	}

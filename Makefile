@@ -13,8 +13,13 @@ fmt: ## golangci-lint fmt
 lint: ## golangci-lint run
 	golangci-lint run
 
+# Go 1.22's internal linker omits LC_UUID on newer macOS releases.
 test: ## go test ./... -race -cover -timeout 5m
-	go test ./... -race -cover -timeout 5m
+	@case "$$(go env GOOS):$$(go env GOVERSION)" in \
+		darwin:go1.22.*) \
+			go test ./... -race -cover -timeout 5m -ldflags=-linkmode=external ;; \
+		*) go test ./... -race -cover -timeout 5m ;; \
+	esac
 
 # darwin-check and linux-check compile the other host's tests and do
 # not run them. GOOS and GOARCH are set on these command lines only,

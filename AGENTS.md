@@ -28,7 +28,7 @@ do not change the requirement to keep both versions in sync.
 
 ## Runtime and product surface
 
-Builds use Go 1.25 or newer with `CGO_ENABLED=0` static binaries.
+Builds use Go 1.22 or newer with `CGO_ENABLED=0` static binaries.
 Call git and FUSE tools only through `exec`. Do not add go-git, and do
 not add CGO FUSE bindings. Platform-specific code lives in
 `//go:build` files (`linux`, `darwin`, and `!linux && !darwin`), not
@@ -152,9 +152,13 @@ mount checks stay on Linux.
 ## CI
 
 The unit CI job runs on push and pull request. It checks out the tree,
-installs Go 1.25, runs `go vet ./...`, runs golangci-lint, checks
-formatting without rewriting files, and runs `go test ./... -race
--cover`. The pipeline does not reformat the tree.
+installs Go 1.22, runs `go vet ./...`, and runs `go test ./... -race
+-cover`. It then installs Go 1.25 to run golangci-lint and the format
+check. Compatibility jobs also vet and run the race-enabled tests on
+Linux with Go 1.25 and on macOS with Go 1.22 and Go 1.25. The Linux
+compatibility job compiles Darwin tests for arm64 and amd64. These
+cross-compilation checks do not replace macOS runtime validation.
+The pipeline does not reformat the tree.
 
 The privileged integration-smoke job is added only after mount code
 exists, on a self-hosted runner with the squashfs and FUSE toolchain.

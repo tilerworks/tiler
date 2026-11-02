@@ -497,7 +497,7 @@ func TestBuildIncrIdempotentOnSameUpper(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 	// --incremental keeps the layer even when the upper is large
 	// enough that the default would promote to a full rebuild.
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
@@ -543,7 +543,7 @@ func TestBuildIncrementalForwardsDescriptionAndRejectsDuplicateChange(t *testing
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	_, stderr, _, err := runCmd(t, append(lib,
 		"build", "--incremental", "-m", "Incremental details")...)
@@ -691,7 +691,7 @@ func TestBuildIncrementalInsideView(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
 	if err != nil {
 		t.Fatalf("incr build: %v\n%s", err, stderr)
@@ -751,7 +751,7 @@ func TestBuildDirectoryFormsMatchInsideView(t *testing.T) {
 			if form.parent {
 				dir = home
 			}
-			t.Chdir(dir)
+			chdir(t, dir)
 			args := append(append([]string{}, lib...), "build")
 			switch {
 			case form.dot:
@@ -800,7 +800,7 @@ func TestBuildIdentityFallsBackToSessionRecord(t *testing.T) {
 	writeTestFile(t, filepath.Join(merged, "base.txt"), "base")
 	writeSessionRecord(t, sessionsDir(home), "dev",
 		libraryAction("alice/app", merged, session.ModeRW))
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
 	if err != nil {
@@ -837,7 +837,7 @@ func TestBuildReadOnlyViewNeedsExplicitFull(t *testing.T) {
 	}}
 	withBuildSeams(t, table)
 	writeTestFile(t, filepath.Join(merged, "f.txt"), "x")
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	_, _, _, err := runCmd(t, append(lib, "build")...)
 	if ExitCode(err) != 2 {
@@ -1000,7 +1000,7 @@ func TestBuildIncrementalSelectsIndependentFormat(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	writeProjectConfig(t, work, "image_format: erofs\nimage_compression: lz4\n")
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--incremental")...)
@@ -1146,7 +1146,7 @@ func TestBuildFullInsideViewRebasesSessionRecord(t *testing.T) {
 	// The view content differs from the packed source, so the
 	// rebuild publishes a new id instead of being a no-op.
 	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
 	if err != nil {
@@ -1179,7 +1179,7 @@ func TestBuildFullNoopInsideViewKeepsSessionRecord(t *testing.T) {
 	// The view content matches the packed source, so every rebuild
 	// is a no-op that reports the existing id.
 	writeTestFile(t, filepath.Join(merged, "base.txt"), "base")
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	for i := 1; i <= 2; i++ {
 		stdout, stderr, _, err := runCmd(t, append(lib, "build", "--full")...)
@@ -1214,7 +1214,7 @@ func TestBuildIncrInsideViewRebasesSessionRecord(t *testing.T) {
 	if err := os.MkdirAll(merged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
 	if err != nil {
@@ -1244,7 +1244,7 @@ func TestBuildPromotedFullInsideViewRebasesSessionRecord(t *testing.T) {
 	// default build to a full rebuild of the view.
 	writeTestFile(t, filepath.Join(upper, "big.txt"), strings.Repeat("x", 4096))
 	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	stdout, stderr, _, err := runCmd(t, append(lib, "build")...)
 	if err != nil {
@@ -1294,7 +1294,7 @@ func TestBuildOutsideViewKeepsSessionRecord(t *testing.T) {
 	// and leaves the mounted view's record alone as well.
 	docs := filepath.Join(merged, "docs")
 	writeTestFile(t, filepath.Join(docs, "guide.md"), "guide")
-	t.Chdir(merged)
+	chdir(t, merged)
 	stdout, stderr, _, err = runCmd(t, append(lib, "build", "--image", "bob/docs", docs)...)
 	if err != nil {
 		t.Fatalf("diverted build: %v\n%s", err, stderr)
@@ -1318,7 +1318,7 @@ func TestBuildRebaseFailureWarnsAndStillSucceeds(t *testing.T) {
 	withSessionSeams(t, nil)
 	oldID := viewFixture(t, home, work, lib, merged)
 	writeTestFile(t, filepath.Join(merged, "base.txt"), "changed in view")
-	t.Chdir(merged)
+	chdir(t, merged)
 
 	orig := rebaseMountedStack
 	t.Cleanup(func() { rebaseMountedStack = orig })

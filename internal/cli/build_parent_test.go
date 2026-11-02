@@ -21,7 +21,7 @@ func TestBuildIncrementalUsesMountedVersionInsteadOfLatest(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "base.txt"), "unrelated latest")
 	latest := buildVersionImage(t, lib, "alice/app", src)
 	writeSessionRecord(t, sessionsDir(home), "dev", pinnedAction("alice/app", merged, session.ModeRW, base, base))
-	t.Chdir(work)
+	chdir(t, work)
 	for _, contents := range []string{"first layer", "changed upper"} {
 		writeTestFile(t, filepath.Join(upper, "new.txt"), contents)
 		out, stderr, _, err := runCmd(t, append(lib, "build", "--incremental", merged)...)

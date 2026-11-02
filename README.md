@@ -113,7 +113,7 @@ incremental layers.
 
 tiler is written in Go, and its end-to-end tests use the Git project's test
 framework, [git-test-lib](https://github.com/jiangxin/git-test-lib). To build
-tiler, install Go 1.25 or newer and make, then get the source from the
+tiler, install Go 1.22 or newer and make, then get the source from the
 [project repository](https://github.com/tilerworks/tiler).
 
 ```bash

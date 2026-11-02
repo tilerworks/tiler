@@ -56,6 +56,22 @@ func TestPlanRebaseDeletionsUsesVisibleTrees(t *testing.T) {
 	}
 }
 
+func TestPlanRebaseDeletionsWalksDeepTrees(t *testing.T) {
+	current, desired := t.TempDir(), t.TempDir()
+	deep := strings.Repeat("d/", 300)
+	writeRebaseFile(t, current, deep+"kept")
+	writeRebaseFile(t, desired, deep+"kept")
+	writeRebaseFile(t, desired, deep+"leaf")
+	got, err := planRebaseDeletions(current, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{deep + "leaf"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("deletions = %q, want %q", got, want)
+	}
+}
+
 func TestPlanRebaseDeletionsHandlesEmptyCurrent(t *testing.T) {
 	current, desired := t.TempDir(), t.TempDir()
 	writeRebaseFile(t, desired, "published")

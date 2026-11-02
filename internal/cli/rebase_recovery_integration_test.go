@@ -206,8 +206,8 @@ func TestSessionRebaseReplayPrunesUpperAfterIncrBuild(t *testing.T) {
 // real toolchain and must not warn.
 func buildInView(t *testing.T, lib []string, view, back string, args ...string) (string, string) {
 	t.Helper()
-	t.Chdir(view)
-	defer t.Chdir(back)
+	chdir(t, view)
+	defer chdir(t, back)
 	cmdArgs := append(append([]string{}, lib...), "build")
 	stdout, stderr, _, err := runCmd(t, append(cmdArgs, args...)...)
 	if err != nil {

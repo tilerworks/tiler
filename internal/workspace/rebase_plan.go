@@ -11,6 +11,7 @@ import (
 	"path"
 	"slices"
 
+	"github.com/jiangxin/tiler/internal/dirroot"
 	"github.com/jiangxin/tiler/internal/durable"
 )
 
@@ -45,12 +46,12 @@ type rebasePlan struct {
 // planRebaseDeletions compares visible trees, never absence from the upper alone.
 // Walking both directory trees with Lstat avoids following user symlinks.
 func planRebaseDeletions(current, desired string) ([]string, error) {
-	c, err := os.OpenRoot(current)
+	c, err := dirroot.Open(current)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = c.Close() }()
-	d, err := os.OpenRoot(desired)
+	d, err := dirroot.Open(desired)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +110,7 @@ func validateRebasePlan(plan rebasePlan) error {
 }
 
 func loadRebasePlan(runtime string) (*rebasePlan, error) {
-	root, err := os.OpenRoot(runtime)
+	root, err := dirroot.Open(runtime)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -152,12 +153,16 @@ func saveRebasePlan(runtime string, plan rebasePlan) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(runtime)
+	root, err := dirroot.Open(runtime)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	tmp := ".rebase-" + rand.Text()
+	token, err := rebaseTempToken()
+	if err != nil {
+		return err
+	}
+	tmp := ".rebase-" + token
 	file, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
@@ -176,7 +181,7 @@ func saveRebasePlan(runtime string, plan rebasePlan) error {
 	return syncRebaseDirectory(root)
 }
 
-func syncRebaseDirectory(root *os.Root) error {
+func syncRebaseDirectory(root *dirroot.Root) error {
 	file, err := root.Open(".")
 	if err != nil {
 		return err
@@ -207,7 +212,7 @@ func CompleteRebase(runtime string, identity RebaseIdentity) error {
 	if plan.Identity != identity || !plan.Ready {
 		return errors.New("upper rebase journal does not match the recorded mount")
 	}
-	root, err := os.OpenRoot(runtime)
+	root, err := dirroot.Open(runtime)
 	if err != nil {
 		return err
 	}
@@ -231,5 +236,19 @@ func pendingRebasePlan(runtime string, identity RebaseIdentity) (*rebasePlan, er
 
 // Keep plans deterministic for recovery diagnostics and tests.
 func newRebasePlan(identity RebaseIdentity, deleted []string) rebasePlan {
-	return rebasePlan{Version: 1, Identity: identity, Deleted: slices.Sorted(slices.Values(deleted))}
+	copied := append([]string(nil), deleted...)
+	slices.Sort(copied)
+	return rebasePlan{Version: 1, Identity: identity, Deleted: copied}
+}
+
+func rebaseTempToken() (string, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	var src [26]byte
+	if _, err := rand.Read(src[:]); err != nil {
+		return "", err
+	}
+	for i, b := range src {
+		src[i] = alphabet[b%32]
+	}
+	return string(src[:]), nil
 }

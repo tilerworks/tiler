@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"slices"
 )
 
@@ -48,7 +47,12 @@ func (s Store) referenceSourceBuckets() (map[referenceKey]ReferenceBucket, error
 		return nil, err
 	}
 	buckets := make(map[referenceKey]ReferenceBucket)
-	for _, name := range slices.Sorted(maps.Keys(sources)) {
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
 		rec, err := s.loadReferenceSource(name)
 		if err != nil {
 			return nil, err

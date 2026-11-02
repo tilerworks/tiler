@@ -127,8 +127,8 @@ func buildFullImage(t *testing.T, lib []string, name, src string) string {
 // developer building inside the workspace.
 func buildIncrIn(t *testing.T, lib []string, view, back string) string {
 	t.Helper()
-	t.Chdir(view)
-	defer t.Chdir(back)
+	chdir(t, view)
+	defer chdir(t, back)
 	stdout := mustCmd(t, append(lib, "build")...)
 	return buildOutput(t, stdout)
 }

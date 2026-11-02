@@ -25,7 +25,7 @@ func TestVersionQueriesDoNotInitializeConfiguration(t *testing.T) {
 				if err := os.MkdirAll(inside, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				t.Chdir(inside)
+				chdir(t, inside)
 			}
 			for _, args := range [][]string{{"version"}, {"--version"}} {
 				stdout, stderr, _, err := runCmd(t, args...)

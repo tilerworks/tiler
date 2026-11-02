@@ -99,7 +99,7 @@ func seedReservedCwd(t *testing.T, home string) {
 	if err := os.MkdirAll(inside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(inside)
+	chdir(t, inside)
 }
 
 // defaultImagesDir is the library root of the exit-boundary tests,

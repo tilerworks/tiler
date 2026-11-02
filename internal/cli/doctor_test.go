@@ -118,7 +118,7 @@ func TestDoctorJSONMatchesGolden(t *testing.T) {
 	// there, which is fine because it is best-effort and Load falls back
 	// to the built-in defaults resolved under the same home.
 	t.Setenv("HOME", goldenHome)
-	t.Chdir(t.TempDir())
+	chdir(t, t.TempDir())
 	fixture := goldenDoctorResults()
 	restoreDoctor(t, func(context.Context, config.Config, io.Writer) ([]doctor.Result, error) {
 		return fixture, nil

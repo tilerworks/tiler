@@ -204,7 +204,7 @@ func TestBenchmarkReservedCwdStillRuns(t *testing.T) {
 	if err := os.MkdirAll(inside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(inside)
+	chdir(t, inside)
 	stubBenchmarkRun(t)
 
 	_, _, cfg, err := runCmd(t, "benchmark", inside,

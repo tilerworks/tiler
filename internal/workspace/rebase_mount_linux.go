@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jiangxin/tiler/internal/dirroot"
 	"github.com/jiangxin/tiler/internal/durable"
 )
 
@@ -173,7 +174,7 @@ func (w *Workspace) rebaseView(req Request, name string, lowers []string, writab
 
 // Remove through FUSE so rootless and privileged whiteout encodings both work.
 func applyRebaseDeletions(view string, deleted []string) error {
-	root, err := os.OpenRoot(view)
+	root, err := dirroot.Open(view)
 	if err != nil {
 		return err
 	}
@@ -204,7 +205,7 @@ func applyRebaseDeletions(view string, deleted []string) error {
 // Sync generated markers before their directories, without opening unrelated
 // user files. A device whiteout needs its directory synced, never the device.
 func syncRebaseUpper(upper string, deleted []string) error {
-	root, err := os.OpenRoot(upper)
+	root, err := dirroot.Open(upper)
 	if err != nil {
 		return err
 	}

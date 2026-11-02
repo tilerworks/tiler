@@ -6,8 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
 	"time"
+
+	"github.com/jiangxin/tiler/internal/testutil"
 )
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	testutil.Chdir(t, dir)
+}
 
 func TestVersionSelectorSyntax(t *testing.T) {
 	for _, ref := range []string{"alice/app:", "alice/app:abc", "alice/app:abcd:ef", "alice/app:xyz1", "alice/app:" + strings.Repeat("a", 65)} {
@@ -75,7 +83,7 @@ func TestVersionSelectionReportsSortedCompleteAmbiguousIDs(t *testing.T) {
 }
 
 func TestMountFilePrecedencePreservesColonFilenames(t *testing.T) {
-	t.Chdir(t.TempDir())
+	chdir(t, t.TempDir())
 	if err := os.WriteFile("app:abcd", []byte("payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}

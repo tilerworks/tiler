@@ -3,9 +3,10 @@ package workspace
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jiangxin/tiler/internal/dirroot"
 )
 
 func hasBlockMembers(members []member) bool {
@@ -41,7 +42,7 @@ func (w *Workspace) mountBlockMembers(members []member, seam hooks) ([]member, e
 		if err := w.mkdirNew(data); err != nil {
 			return nil, err
 		}
-		root, err := os.OpenRoot(data)
+		root, err := dirroot.Open(data)
 		if err != nil {
 			return nil, err
 		}

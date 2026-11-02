@@ -94,7 +94,7 @@ func TestImportedVersionLifecycle(t *testing.T) {
 	}
 
 	writeTestFile(t, filepath.Join(upper, "new.txt"), "layer")
-	t.Chdir(merged)
+	chdir(t, merged)
 	stdout, stderr, cfg, err := runCmd(t, append(lib, "build", "--incremental")...)
 	if err != nil {
 		t.Fatalf("incremental: %v\n%s", err, stderr)

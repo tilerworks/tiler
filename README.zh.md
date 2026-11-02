@@ -64,7 +64,7 @@ macOS 使用另一条路径：通过 `hdiutil` 挂载 DMG，以 `upper.shadow` �
 
 ## 安装 tiler
 
-tiler 使用 Go 语言开发，端到端（e2e）测试使用 Git 项目的测试框架 [git-test-lib](https://github.com/jiangxin/git-test-lib)。构建前先安装 Go 1.25 或更新版本以及 make，再从[项目仓库](https://github.com/tilerworks/tiler)获取源码。
+tiler 使用 Go 语言开发，端到端（e2e）测试使用 Git 项目的测试框架 [git-test-lib](https://github.com/jiangxin/git-test-lib)。构建前先安装 Go 1.22 或更新版本以及 make，再从[项目仓库](https://github.com/tilerworks/tiler)获取源码。
 
 ```bash
 git clone https://github.com/tilerworks/tiler.git

@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
 	"time"
+
+	"github.com/jiangxin/tiler/internal/testutil"
 )
 
 func TestLoadMissingLogsDirUsesDefault(t *testing.T) {
@@ -175,7 +178,7 @@ func TestLoadRelativePaths(t *testing.T) {
 		"cache_dir: /var/tiler/foo/../cache",
 		"logs_dir: ~/logs",
 	}, "\n"))
-	t.Chdir(cwd)
+	chdir(t, cwd)
 
 	got, err := Load(near, home, base, "", Patch{})
 	if err != nil {
@@ -582,6 +585,11 @@ func mustMkdir(t *testing.T, dirs ...string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	testutil.Chdir(t, dir)
 }
 
 func writeConfig(t *testing.T, dir, body string) string {

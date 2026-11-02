@@ -54,7 +54,7 @@ func TestDescriptionEditorCommandOutcomes(t *testing.T) {
 			return nil
 		}
 		cmd := newImagesDescribeCmd()
-		cmd.SetContext(t.Context())
+		cmd.SetContext(context.Background())
 		remember(cmd, config.Config{ImagesDir: dir})
 		cmd.SetArgs([]string{"alice/app:" + node.ID[:4]})
 		err := cmd.Execute()
