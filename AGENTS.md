@@ -149,6 +149,63 @@ only on those command lines, so neither target rewrites `bin/tiler`.
 They do not run the tests. Real hdiutil checks stay on macOS, and
 mount checks stay on Linux.
 
+## Version promotion
+
+Promote tiler itself with the following SOP. This is a local release
+operation unless the user explicitly requests a push.
+
+1. Establish the release starting point. Require an explicitly supplied
+   SemVer `X.Y.Z`; ask for it when missing rather than choosing a bump.
+   Require a clean working tree on `master` and an existing local `maint`
+   branch. Verify that `vX.Y.Z` does not already exist. Never overwrite or
+   move an existing tag. Review changes since the previous release tag,
+   or the full history for the first release.
+
+2. Prepare the release notes. Check the actual changes and replace
+   `Unreleased` in the matching `CHANGELOG.md` version heading with the
+   actual release date, `YYYY-MM-DD`. Describe user-visible features,
+   fixes, and compatibility changes. Keep `scripts/version.sh` as the
+   version source; do not add version constants or files. Update both
+   READMEs together when usage instructions change. Do not add the next
+   version heading in advance: source archives read the first version
+   heading to determine their version.
+
+3. Validate and commit. Run `make fmt`, `make lint`, `make test`, and
+   `make build`, plus `make darwin-check` on Linux or `make linux-check`
+   on macOS. Run the native Linux and macOS end-to-end cases required by
+   the changes being released. Record skipped or unexecuted checks;
+   cross-compilation does not replace native runtime validation. Review
+   the final diff, including formatter changes, and commit only intended
+   release changes with `git commit -s`. Use the subject
+   `chore(release): promote vX.Y.Z` and the existing 72-column convention.
+
+4. Create and verify the annotated release tag on the validated release
+   commit with `git tag -a vX.Y.Z -m "Release vX.Y.Z"`. Check that the tag
+   resolves to the release commit at `master` and the working tree is
+   clean. Rebuild with `make build`. Require `sh scripts/version.sh` to
+   print exactly `vX.Y.Z`, and both `bin/tiler version` and
+   `bin/tiler --version` to print exactly `tiler vX.Y.Z`.
+
+5. Fast-forward `maint` after creating and verifying the tag. Run
+   `git switch maint` followed by `git merge --ff-only master`. Verify
+   that `maint`, `master`, and `vX.Y.Z^{commit}` resolve to the same commit,
+   then return to `master`. A history-related fast-forward failure means
+   `maint` contains commits not yet merged back into `master`. Stop the
+   promotion, list them with `git log --oneline master..maint`, and report
+   that these changes must first be merged back into `master`. Do not
+   bypass the failure with reset, forced updates, or an automatic merge.
+   Preserve the created tag and report the promotion as incomplete; do
+   not automatically move or delete the tag. For working-tree,
+   permission, or other command failures, report the actual error rather
+   than claiming that the branches have diverged.
+
+6. Report the version, release commit, tag, `maint` fast-forward result,
+   validation results, and push status. Keep the commit, tag, and branch
+   updates local by default. Only when explicitly requested, push
+   `master`, `maint`, and the specific release tag to the intended remote.
+   Do not use `--tags` or force pushes. Stop and report any failure rather
+   than automatically rewriting release history.
+
 ## CI
 
 The unit CI job runs on push and pull request. It checks out the tree,
