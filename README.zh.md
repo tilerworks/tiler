@@ -97,6 +97,15 @@ Fedora、RHEL、CentOS Stream、Rocky Linux 等安装 squashfs 工具链：
 sudo dnf install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
+Rocky Linux、AlmaLinux 和 CentOS Stream 9/10 需要先准备 EPEL 和 CRB，再安装这些软件包：
+
+```bash
+sudo dnf install dnf-plugins-core epel-release
+sudo dnf config-manager --set-enabled crb
+```
+
+版本 8 使用 `powertools` 替代 `crb`。RHEL 需要 EPEL 和匹配的 CodeReady Builder 仓库，请遵循 [EPEL 配置指南](https://docs.fedoraproject.org/en-US/epel/getting-started/)。Fedora 无需 EPEL。还需注意包版本：EPEL 9 提供的 squashfuse 0.1.104 低于要求的 0.5.0，必要时编译安装当前的[上游版本](https://github.com/vasi/squashfuse)。使用 EROFS 时，从配置好的仓库安装 `erofs-utils erofs-fuse`。
+
 macOS 使用系统的 `hdiutil` 挂载 DMG，以 `upper.shadow` 保存修改，无需安装上述 Linux 工具。目前 macOS 支持仍处于技术验证阶段，功能尚不完整，不支持增量镜像，挂载也较慢。各类镜像格式的测量结果见下文“平台与性能”。
 
 ### 交叉编译 Linux 二进制

@@ -154,6 +154,22 @@ similar distributions:
 sudo dnf install squashfs-tools squashfuse fuse3 fuse-overlayfs
 ```
 
+On Rocky Linux, AlmaLinux, and CentOS Stream 9/10, prepare EPEL and CRB
+before installing these packages:
+
+```bash
+sudo dnf install dnf-plugins-core epel-release
+sudo dnf config-manager --set-enabled crb
+```
+
+On version 8 use `powertools` instead of `crb`. RHEL requires EPEL and its
+matching CodeReady Builder repository; follow the
+[EPEL setup guide](https://docs.fedoraproject.org/en-US/epel/getting-started/).
+Fedora does not need EPEL. Package versions also matter: EPEL 9 ships
+squashfuse 0.1.104, below the required 0.5.0 baseline. Build a current
+[upstream release](https://github.com/vasi/squashfuse) when necessary.
+For EROFS, install `erofs-utils erofs-fuse` from the prepared repositories.
+
 macOS uses the system's `hdiutil` to mount DMG images and saves changes in
 `upper.shadow`, so it does not need the Linux tools above. macOS support is
 still experimental: functionality is incomplete, incremental images are

@@ -12,6 +12,8 @@ first. An unreleased entry describes the next planned release.
 
 ### Fixed
 
+- Include EPEL and CRB repository setup in doctor installation guidance on
+  Rocky Linux and related Enterprise Linux distributions.
 - Improve errors, warnings, and recovery hints with image and session context,
   expected and actual integrity values, actionable FUSE permission and timeout
   guidance, explicit skipped validation and partial-success notices, consistent
