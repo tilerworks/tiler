@@ -1,4 +1,4 @@
-# tiler: Rebuild Workspaces as Easily as Laying Tiles
+# tiler: The Builder for Your Development Workspace
 
 [简体中文](README.zh.md)
 
@@ -475,8 +475,297 @@ separately from later task startup, file reads, and saving changes. Test with a
 real repository and realistic changes, rather than relying on a single mount
 time.
 
-For more options, see `tiler --help`, `tiler build --help`, and
-`tiler session --help`. Report issues and suggestions in the
+## FAQ
+
+### Build Fails Because the Image Toolchain Is Incomplete
+
+If building an image fails with the following error:
+
+```console
+$ tiler build -I my/app
+Error: build: no complete image toolchain; check the environment with tiler doctor
+```
+
+Run `tiler doctor` to diagnose the environment:
+
+```sh
+tiler doctor
+```
+
+Follow its output to install missing dependencies or fix the environment, then
+retry the build.
+
+### Interpret the Doctor Report
+
+The following example comes from an Ubuntu container. Paths, versions,
+and available tools depend on the environment.
+
+```console
+$ tiler doctor
+📋 Config
+
+  path          /root/.tiler.yaml
+  images_dir    /root/.tiler/images
+  sessions_dir  /root/.tiler/sessions
+  cache_dir     /root/.tiler/cache
+  logs_dir      /root/.tiler/logs
+  log_level     info
+
+🔧 Checks
+
+  fuse_device          fail  stat /dev/fuse: no such file or directory; Hint: check that the host supports FUSE and
+                             /dev/fuse exists and is accessible to the current user. In a container, check FUSE device
+                             access and CAP_SYS_ADMIN. For Docker, start the container with: --device /dev/fuse
+                             --cap-add SYS_ADMIN. If permissions are already configured, check seccomp/AppArmor/SELinux
+                             restrictions on FUSE mounts.
+  fuse_overlayfs       fail  fuse-overlayfs: exec: "fuse-overlayfs": executable file not found in $PATH; install: sudo
+                             apt install fuse-overlayfs
+  fusermount3          fail  fusermount3: exec: "fusermount3": executable file not found in $PATH; install: sudo apt
+                             install fuse3
+  git                  pass  2.53.0
+  image_toolchain      fail  no complete image stack: erofs missing mkfs.erofs, erofsfuse; squashfs missing mksquashfs,
+                             squashfuse_ll; install: sudo apt install erofs-utils erofsfuse squashfs-tools squashfuse
+  squashfuse_subdir    warn  squashfuse_ll is not installed; install: sudo apt install squashfuse
+  file_limit_images    info  not present, skipped
+  file_limit_cache     info  not present, skipped
+  storage_perf_images  info  not present, skipped
+  storage_perf_cache   info  not present, skipped
+  cache_advice         info  no storage comparison without measurements from both directories
+  contrib_concatfs     warn  optional tool; sources ship in the contrib/ directory of the tiler source tree with origin,
+                             license, and build notes; an on-site build needs gcc and libfuse3-dev and takes about a
+                             second; tiler never installs it automatically
+  contrib_slowfs       warn  optional tool; sources ship in the contrib/ directory of the tiler source tree with origin,
+                             license, and build notes; an on-site build needs gcc and libfuse3-dev and takes about a
+                             second; tiler never installs it automatically
+Error: doctor: failing probes: fuse_device, fuse_overlayfs, fusermount3, image_toolchain
+```
+
+Read the report as follows:
+
+- **Config** shows the configuration file path, effective storage directories,
+  and log level. Here tiler runs as root, so the paths are under `/root`.
+- **Statuses**: `pass` means the check passed; `fail` means it failed; `warn`
+  calls for attention but does not fail the command; `info` provides context or
+  explains a skipped check. Any `fail` makes `doctor` exit with status 1. The
+  final error lists the failed probes.
+- **FUSE device**: `/dev/fuse` is missing from this container. Check that the
+  host supports FUSE and exposes the device, then recreate the Docker container
+  with `--device /dev/fuse --cap-add SYS_ADMIN` added to its startup options.
+  Installing packages inside the container alone does not expose the device.
+  If access still fails, check user permissions and seccomp/AppArmor/SELinux
+  restrictions.
+- **Required tools**: `fuse-overlayfs` and `fusermount3` are missing from
+  `$PATH`. The suggested Ubuntu packages are `fuse-overlayfs` and `fuse3`.
+  Neither image toolchain is complete. At least one complete stack is needed:
+  squashfs uses `mksquashfs` and `squashfuse_ll`; erofs uses `mkfs.erofs` and
+  `erofsfuse`. The report lists packages for both; installing both stacks is
+  optional. For example, install the FUSE tools and the squashfs stack with:
+
+  ```sh
+  sudo apt install fuse-overlayfs fuse3 squashfs-tools squashfuse
+  ```
+
+  When already running as root, omit `sudo`.
+- **Other results**: Git passed. `squashfuse_subdir` warns because
+  `squashfuse_ll` is absent. The file-limit and storage-performance checks were
+  skipped because the image and cache directories do not exist yet; without
+  both measurements, `cache_advice` cannot compare them. The `contrib_*`
+  warnings describe optional tools, not required dependencies; their source,
+  license, and build notes are in `contrib/`, and tiler never installs them
+  automatically.
+
+After fixing device access and installing the required tools, rerun
+`tiler doctor`, resolve any remaining failures, and retry the build.
+
+### What Is the Difference Between `tiler session` and `tiler mount`?
+
+`tiler session` manages sessions. A session can contain multiple mounts, and
+you can choose its name when creating it with `tiler session new <name>`.
+`tiler mount` creates a mount and records it in a session. Use `-s <session>`
+to associate the mount with an existing session, for example:
+
+```sh
+tiler session new coding
+tiler mount -s coding my/app my-project
+tiler mount -s coding my/tools my-tools
+```
+
+Without `-s <session>` (or `--session`) and with no `TILER_SESSION_ID` environment
+variable set, `tiler mount` automatically creates a session and associates the
+mount with it. Such a session usually contains just one mount:
+
+```sh
+tiler mount my/app my-project
+```
+
+### How Do I Remove Expired Sessions and Images?
+
+Sessions and image versions expire after 30 days without activity by default.
+Use `tiler session ls` and `tiler images ls` to see their last activity times:
+
+```sh
+tiler session ls
+tiler images ls
+```
+
+Run the following commands to clean up expired sessions and image versions:
+
+```sh
+tiler session gc
+tiler images gc
+```
+
+Each command lists cleanup candidates and asks for `yes` before deleting them.
+Without `--yes`, a noninteractive run only previews candidates. Use `--expire`
+to change the default 30-day retention period.
+
+Session GC keeps mounted or busy sessions. Removing a session also deletes its
+writable data, including the upper layers. Image GC keeps versions referenced
+by sessions and ancestors needed by retained versions. Cleaning up sessions
+first can release image references so image GC can remove those versions.
+
+### Recover Unexported Data After Mounts Are Lost
+
+If mounts disappear after a crash or reboot, tiler can restore the mounts and
+automatically recover the data.
+
+First, use `tiler status` to inspect the mounts:
+
+```console
+$ tiler status
+clever-owl · active · missing-mounts
+  my/app:4ab665e99f → my-project  [rw · stale]
+```
+
+The `clever-owl` session created by `tiler mount` is still recorded as `active`,
+but `missing-mounts` reports missing mounts. Here `stale` means the recorded
+mount is no longer usable; it does not mean the saved data has expired.
+
+Restore the session's mounts with:
+
+```sh
+tiler session open clever-owl
+```
+
+`session open` restores dead or missing mounts and skips healthy views. After
+opening the session, inspect the details with `tiler status -v`:
+
+```console
+$ tiler status -v
+clever-owl · active
+  Created: 11-03 14:16 · Last activity: 11-03 14:24
+
+  📁 my/app:4ab665e99f  →  my-project  [rw · mounted · healthy]
+     ├─ full         4ab665e99f  ../.tiler/sessions/clever-owl/runtime/m1/lower-0
+     └─ overlay
+        ├─ upper     ../.tiler/sessions/clever-owl/runtime/m1/upper
+        └─ lower     [highest priority first]
+           └─ ../.tiler/sessions/clever-owl/runtime/m1/lower-0
+```
+
+`mounted · healthy` confirms that the view is mounted and usable again. The
+`upper` layer holds user-created and modified data; do not manually change its
+contents. Enter the mount directory (`my-project` in this example) to check and
+recover your files through the restored view:
+
+```sh
+cd my-project
+ls
+```
+
+### Can I Mount a Subdirectory of an Image?
+
+Yes, on Linux: `tiler mount --subdir <path>` exposes an image subdirectory as
+the mount root. macOS DMG images do not support `--subdir`; tiler rejects it
+with `mount: --subdir is not available for dmg`.
+
+Some users mount Git directories from images as local reference repositories
+to accelerate clones. Git borrows existing objects locally and fetches
+missing objects from the remote. This can reduce network transfer, although
+actual gains depend on how much history the reference and remote share.
+
+This Linux example assumes two full images are already available:
+`demo/superproject` for a superproject containing the submodule
+`deps/subproject`, and `demo/subproject` for a standalone checkout of that
+subproject. Each image contains a real `.git` directory; a submodule's `.git`
+file pointing into another repository cannot serve as that directory.
+
+Mount each image's `.git` subdirectory. The mounts use writable overlays so
+`core.bare` can be set for each reference repository; these configuration
+changes leave the image payloads unchanged.
+
+```sh
+demo_root=$(pwd -P)
+mkdir -p references clones
+tiler session new reference-demo
+tiler mount -s reference-demo --subdir .git \
+  demo/superproject references/superproject.git
+tiler mount -s reference-demo --subdir .git \
+  demo/subproject references/subproject.git
+
+git --git-dir=references/superproject.git config core.bare true
+git --git-dir=references/subproject.git config core.bare true
+```
+
+Clone the superproject from its remote using the mounted local reference,
+then initialize the submodule with its own reference:
+
+```sh
+git clone --reference "$demo_root/references/superproject.git" \
+  https://example.com/superproject.git clones/my-project
+git -C clones/my-project submodule update --init \
+  --reference "$demo_root/references/subproject.git" deps/subproject
+```
+
+Replace `https://example.com/superproject.git` with your superproject's remote
+URL. The submodule is cloned from the URL recorded in `.gitmodules`.
+
+Inspect the mounts, check both repositories, and verify their object sources:
+
+```sh
+tiler status -v
+git -C clones/my-project submodule status
+git -C clones/my-project fsck --full
+git -C clones/my-project/deps/subproject fsck --full
+cat clones/my-project/.git/objects/info/alternates
+cat clones/my-project/.git/modules/deps/subproject/objects/info/alternates
+```
+
+The mounts should be `mounted · healthy`, and the two `alternates` files should
+point to the respective mounted reference's `objects` directory. Plain
+`--reference` keeps this dependency: keep the mounts available while using the
+clones.
+
+You can also build and mount an image of the entire workspace, including its
+initialized submodules, and work directly in that mounted view. Separate
+reference repositories are optional.
+
+### Main tiler Commands
+
+| Command | Purpose |
+| --- | --- |
+| `tiler build -I <image> [dir]` | Build a full or incremental image from a directory or mounted workspace. |
+| `tiler mount [-s <session>] <image> <dir>` | Mount an image as a writable workspace; use `--read-only` for a read-only view or `--subdir <path>` for a subdirectory on Linux. |
+| `tiler umount <dir>` | Unmount a workspace by path. |
+| `tiler status [-v]` | Check session mounts against their actual state; `-v` shows layer details. |
+| `tiler images ls [-v]` | List images and their latest activity; `-v` shows the version tree. |
+| `tiler images show <image>` | Show an image repository or version in detail. |
+| `tiler images describe <name>:<hash>` | Update an image version's description. |
+| `tiler images remove <image>` | Remove an image repository or version subtree. |
+| `tiler images gc` | Clean up expired, unreferenced image versions. |
+| `tiler session new [name]` | Create an empty session with a chosen or generated name. |
+| `tiler session ls [-v]` | List sessions and their latest activity; `-v` shows mount details. |
+| `tiler session show <name>` | Show a session record in detail. |
+| `tiler session open <name>` | Restore or ensure the session's mounts. |
+| `tiler session close <name>` | Unmount the session's views and close the session. |
+| `tiler session remove <name>` | Delete a closed session and its writable data. |
+| `tiler session gc` | Clean up expired idle sessions and their writable data. |
+| `tiler doctor` | Diagnose the local toolchain, FUSE access, and storage environment. |
+| `tiler benchmark <path>` | Measure image packing and read performance. |
+| `tiler version` | Print the tiler version. |
+| `tiler help [command]` | Show command usage and options. |
+
+Report issues and suggestions in the
 [project repository](https://github.com/tilerworks/tiler).
 
 This project is released under the [MIT](LICENSE) license.

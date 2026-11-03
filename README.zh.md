@@ -1,4 +1,4 @@
-# tiler：像铺瓷砖一样，用镜像快速重建工作区
+# tiler：工作区的装修工
 
 [English](README.md)
 
@@ -6,7 +6,7 @@ AI Coding 正在改变编程的节奏：编程不必始终发生在自己的电�
 
 为每个任务重新 clone 大仓库或复制目录很费时间。而直接共用一个可写目录，又容易让不同任务的修改混在一起。
 
-**tiler 使用工作区镜像快照解决这个问题：将工作区目录保存为只读镜像，再从同一份镜像复制多个独立可写的工作区。**
+**tiler 使用工作区镜像快照解决这个问题：将工作区目录保存为只读镜像，再从同一份镜像创建多个独立可写的工作区。**
 
 名字 tiler 意为“瓦工”：像用预制瓷砖铺墙一样，用已有镜像搭建工作区。
 
@@ -217,7 +217,7 @@ git pull
 
 若只需一次性工作区，可用 `tiler mount --rm demo/app scratch`；在其中先执行 `git pull` 再使用，退出目录后用 `tiler umount scratch` 清理。**警告：`--rm` 会删除该临时会话的可写数据，成果应提前导出（如：提交并推送）。**
 
-以上命令直接使用镜像名，默认选择最新版本。需要固定版本时，用 `tiler images ls -v` 查看版本 ID，再挂载 `demo/app:<版本ID>`。完整生命周期的自动化测试见[标准工作流 e2e](test/e2e/t0100-linux-standard-workflow.sh)。
+以上命令直接使用镜像名，默认选择最新版本。需要固定版本时，用 `tiler images ls -v` 查看版本 ID，再挂载 `demo/app:<version-ID>`。完整生命周期的自动化测试见[标准工作流 e2e](test/e2e/t0100-linux-standard-workflow.sh)。
 
 ## 用例二：复用共享镜像，选择链接或复制
 
@@ -239,7 +239,7 @@ git pull
 
 要复制到本地，将导入命令中的 `--link` 换为 `--copy`，两者不能同时使用。导入不会修改源文件。
 
-如果共享的是带有完整与增量版本的镜像库目录，可使用 `tiler build --image team/app --link /mnt/share/app` 导入最新版本及所需祖先链；需要固定版本时，再加 `--hash <版本ID>`。不要单独导入一个增量载荷来替代完整镜像链：单文件导入不会自动找回基础层。
+如果共享的是带有完整与增量版本的镜像库目录，可使用 `tiler build --image team/app --link /mnt/share/app` 导入最新版本及所需祖先链；需要固定版本时，再加 `--hash <version-ID>`。不要单独导入一个增量载荷来替代完整镜像链：单文件导入不会自动找回基础层。
 
 更多导入、重复挂载和源可用性验证见[镜像导入 e2e](test/e2e/t0101-linux-import-workflow.sh)。
 
@@ -301,6 +301,237 @@ macOS 主机是 Apple M3 Pro，36 GiB，APFS。DMG 冷读取吞吐约为 330–3
 
 评估时，分别记录首次获取代码、制作镜像，以及后续启动任务、读取文件和保存修改的耗时。使用真实仓库和实际修改量测试，不要只看单次挂载时间。
 
-更多参数见 `tiler --help`、`tiler build --help` 和 `tiler session --help`。问题与建议请提交到[项目仓库](https://github.com/tilerworks/tiler)。
+## FAQ
+
+### 构建因镜像工具链不完整而失败
+
+如果构建镜像时遇到以下错误：
+
+```console
+$ tiler build -I my/app
+Error: build: no complete image toolchain; check the environment with tiler doctor
+```
+
+执行 `tiler doctor` 诊断环境：
+
+```sh
+tiler doctor
+```
+
+根据输出安装缺失的依赖或修复环境，然后重新构建。
+
+### 解读 Doctor 诊断报告
+
+以下示例来自 Ubuntu 容器。路径、版本和可用工具会随环境而变化。
+
+```console
+$ tiler doctor
+📋 Config
+
+  path          /root/.tiler.yaml
+  images_dir    /root/.tiler/images
+  sessions_dir  /root/.tiler/sessions
+  cache_dir     /root/.tiler/cache
+  logs_dir      /root/.tiler/logs
+  log_level     info
+
+🔧 Checks
+
+  fuse_device          fail  stat /dev/fuse: no such file or directory; Hint: check that the host supports FUSE and
+                             /dev/fuse exists and is accessible to the current user. In a container, check FUSE device
+                             access and CAP_SYS_ADMIN. For Docker, start the container with: --device /dev/fuse
+                             --cap-add SYS_ADMIN. If permissions are already configured, check seccomp/AppArmor/SELinux
+                             restrictions on FUSE mounts.
+  fuse_overlayfs       fail  fuse-overlayfs: exec: "fuse-overlayfs": executable file not found in $PATH; install: sudo
+                             apt install fuse-overlayfs
+  fusermount3          fail  fusermount3: exec: "fusermount3": executable file not found in $PATH; install: sudo apt
+                             install fuse3
+  git                  pass  2.53.0
+  image_toolchain      fail  no complete image stack: erofs missing mkfs.erofs, erofsfuse; squashfs missing mksquashfs,
+                             squashfuse_ll; install: sudo apt install erofs-utils erofsfuse squashfs-tools squashfuse
+  squashfuse_subdir    warn  squashfuse_ll is not installed; install: sudo apt install squashfuse
+  file_limit_images    info  not present, skipped
+  file_limit_cache     info  not present, skipped
+  storage_perf_images  info  not present, skipped
+  storage_perf_cache   info  not present, skipped
+  cache_advice         info  no storage comparison without measurements from both directories
+  contrib_concatfs     warn  optional tool; sources ship in the contrib/ directory of the tiler source tree with origin,
+                             license, and build notes; an on-site build needs gcc and libfuse3-dev and takes about a
+                             second; tiler never installs it automatically
+  contrib_slowfs       warn  optional tool; sources ship in the contrib/ directory of the tiler source tree with origin,
+                             license, and build notes; an on-site build needs gcc and libfuse3-dev and takes about a
+                             second; tiler never installs it automatically
+Error: doctor: failing probes: fuse_device, fuse_overlayfs, fusermount3, image_toolchain
+```
+
+可以按以下方式解读报告：
+
+- **Config** 显示配置文件路径、实际使用的存储目录和日志级别。此处 tiler 以 root 身份运行，所以路径位于 `/root` 下。
+- **状态**：`pass` 表示检查通过；`fail` 表示检查失败；`warn` 表示需要关注，但不会使命令失败；`info` 提供背景信息或说明跳过检查的原因。只要存在 `fail`，`doctor` 就会以状态码 1 退出，末尾的错误会汇总失败项。
+- **FUSE 设备**：容器中缺少 `/dev/fuse`。先确认宿主机支持 FUSE 且设备存在，再在 Docker 启动参数中加入 `--device /dev/fuse --cap-add SYS_ADMIN`，重新创建容器。仅在容器内安装软件包不会让设备自动可见。如果仍无法访问，检查用户权限及 seccomp/AppArmor/SELinux 限制。
+- **必需工具**：`$PATH` 中缺少 `fuse-overlayfs` 和 `fusermount3`，对应的 Ubuntu 软件包为 `fuse-overlayfs` 和 `fuse3`。两套镜像工具链也都不完整，至少需要一套完整工具链：squashfs 使用 `mksquashfs` 和 `squashfuse_ll`，erofs 使用 `mkfs.erofs` 和 `erofsfuse`。报告列出了两套工具链的软件包，但不必全部安装。例如，可以安装 FUSE 工具和 squashfs 工具链：
+
+  ```sh
+  sudo apt install fuse-overlayfs fuse3 squashfs-tools squashfuse
+  ```
+
+  如果已经以 root 身份运行，可以省略 `sudo`。
+- **其他结果**：Git 检查通过。`squashfuse_subdir` 因缺少 `squashfuse_ll` 而告警。镜像和缓存目录尚不存在，因此跳过文件大小限制和存储性能检查；缺少两处测量结果时，`cache_advice` 无法进行比较。`contrib_*` 告警介绍的是可选工具，不是必需依赖；源码、许可证和构建说明位于 `contrib/`，tiler 不会自动安装它们。
+
+修复设备访问并安装必需工具后，再次运行 `tiler doctor`，处理剩余失败项，然后重新构建。
+
+### `tiler session` 和 `tiler mount` 命令有什么区别？
+
+`tiler session` 用于管理会话。一个会话可以包含多个挂载，创建时可以通过 `tiler session new <name>` 自定义会话名称。`tiler mount` 用于创建挂载并将其记录到会话中，通过 `-s <session>` 可以将挂载关联到已有会话，例如：
+
+```sh
+tiler session new coding
+tiler mount -s coding my/app my-project
+tiler mount -s coding my/tools my-tools
+```
+
+如果未指定 `-s <session>`（或 `--session`），也未设置 `TILER_SESSION_ID` 环境变量，`tiler mount` 会自动创建会话，并将挂载关联到该会话。这种会话通常只有一个挂载：
+
+```sh
+tiler mount my/app my-project
+```
+
+### 如何删除过期的会话和镜像？
+
+会话和镜像版本默认在最后活跃时间超过 30 天后过期。可以通过 `tiler session ls` 和 `tiler images ls` 查看最后活跃时间：
+
+```sh
+tiler session ls
+tiler images ls
+```
+
+执行以下命令清理过期会话和镜像版本：
+
+```sh
+tiler session gc
+tiler images gc
+```
+
+每条命令会列出清理候选项，输入 `yes` 确认后才会删除。非交互运行时，如果没有指定 `--yes`，则只预览候选项。可以通过 `--expire` 修改默认的 30 天保留期限。
+
+会话 GC 会保留仍有挂载或正在使用的会话。删除会话也会删除其可写数据，包括 upper 层。镜像 GC 会保留被会话引用的版本，以及保留版本所依赖的祖先版本。先清理会话可以释放镜像引用，让镜像 GC 能够删除相应版本。
+
+### 挂载丢失后找回尚未导出的数据
+
+如果挂载因宕机或重启而丢失，tiler 挂载可以恢复，数据也自动恢复。
+
+首先使用 `tiler status` 查看挂载状态：
+
+```console
+$ tiler status
+clever-owl · active · missing-mounts
+  my/app:4ab665e99f → my-project  [rw · stale]
+```
+
+由 `tiler mount` 创建的 `clever-owl` 会话仍记录为 `active`，但 `missing-mounts` 表示挂载缺失。此处 `stale` 表示记录中的挂载已失效，不表示保存的数据已过期。
+
+执行以下命令恢复会话挂载：
+
+```sh
+tiler session open clever-owl
+```
+
+`session open` 会恢复已失效或缺失的挂载，并跳过健康的挂载视图。重新打开会话后，使用 `tiler status -v` 查看详情：
+
+```console
+$ tiler status -v
+clever-owl · active
+  Created: 11-03 14:16 · Last activity: 11-03 14:24
+
+  📁 my/app:4ab665e99f  →  my-project  [rw · mounted · healthy]
+     ├─ full         4ab665e99f  ../.tiler/sessions/clever-owl/runtime/m1/lower-0
+     └─ overlay
+        ├─ upper     ../.tiler/sessions/clever-owl/runtime/m1/upper
+        └─ lower     [highest priority first]
+           └─ ../.tiler/sessions/clever-owl/runtime/m1/lower-0
+```
+
+`mounted · healthy` 表示视图已成功挂载且可以正常使用。`upper` 层保存用户新增和修改的数据，不要手工改动该目录的内容。进入挂载目录（本例为 `my-project`），通过恢复后的视图检查并找回文件：
+
+```sh
+cd my-project
+ls
+```
+
+### 可以挂载一个 image 的子目录么？
+
+Linux 下可以：`tiler mount --subdir <path>` 将镜像中的子目录作为挂载根目录。macOS 的 DMG 镜像不支持 `--subdir`，tiler 会拒绝该操作并提示 `mount: --subdir is not available for dmg`。
+
+有人通过挂载镜像中的 Git 目录作为本地参考仓库来加速克隆。Git 从本地借用已有对象，仅从远端获取缺少的对象，可以减少网络传输；实际收益取决于参考仓库与远端共享多少历史。
+
+以下 Linux 示例假设已经有两个 full image：`demo/superproject` 是包含 `deps/subproject` 子模块的主项目镜像，`demo/subproject` 是该子项目独立检出目录的镜像。两个镜像中都包含真正的 `.git` 目录；submodule 中指向其他仓库的 `.git` 文件不能作为该目录使用。
+
+挂载两个镜像各自的 `.git` 子目录。这里使用可写 overlay 挂载，以便为两个参考仓库设置 `core.bare`；这些配置修改不会改变镜像内容。
+
+```sh
+demo_root=$(pwd -P)
+mkdir -p references clones
+tiler session new reference-demo
+tiler mount -s reference-demo --subdir .git \
+  demo/superproject references/superproject.git
+tiler mount -s reference-demo --subdir .git \
+  demo/subproject references/subproject.git
+
+git --git-dir=references/superproject.git config core.bare true
+git --git-dir=references/subproject.git config core.bare true
+```
+
+使用挂载的本地参考仓库，从远端克隆主项目，再用子项目的参考仓库初始化 submodule：
+
+```sh
+git clone --reference "$demo_root/references/superproject.git" \
+  https://example.com/superproject.git clones/my-project
+git -C clones/my-project submodule update --init \
+  --reference "$demo_root/references/subproject.git" deps/subproject
+```
+
+将 `https://example.com/superproject.git` 替换为主项目的实际远端地址。submodule 会从 `.gitmodules` 中记录的 URL 克隆。
+
+检查挂载和两个仓库，并确认对象来源：
+
+```sh
+tiler status -v
+git -C clones/my-project submodule status
+git -C clones/my-project fsck --full
+git -C clones/my-project/deps/subproject fsck --full
+cat clones/my-project/.git/objects/info/alternates
+cat clones/my-project/.git/modules/deps/subproject/objects/info/alternates
+```
+
+挂载应显示 `mounted · healthy`，两个 `alternates` 文件应分别指向对应参考挂载中的 `objects` 目录。普通 `--reference` 会保留这种依赖，使用克隆仓库期间应保持参考挂载可用。
+
+也可以直接对包含已初始化 submodule 的整个工作区创建和挂载镜像，在挂载视图中继续工作，不必拆分参考仓库。
+
+### tiler 主要命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `tiler build -I <image> [dir]` | 从目录或挂载工作区创建完整或增量镜像。 |
+| `tiler mount [-s <session>] <image> <dir>` | 将镜像挂载为可写工作区；`--read-only` 用于只读视图，Linux 下可用 `--subdir <path>` 挂载子目录。 |
+| `tiler umount <dir>` | 按路径卸载工作区。 |
+| `tiler status [-v]` | 检查会话挂载的实际状态；`-v` 显示分层详情。 |
+| `tiler images ls [-v]` | 列出镜像及最后活跃时间；`-v` 显示版本树。 |
+| `tiler images show <image>` | 查看镜像仓库或版本的详情。 |
+| `tiler images describe <name>:<hash>` | 更新镜像版本的描述。 |
+| `tiler images remove <image>` | 删除镜像仓库或版本子树。 |
+| `tiler images gc` | 清理过期且未被引用的镜像版本。 |
+| `tiler session new [name]` | 创建空会话，可指定名称或自动生成名称。 |
+| `tiler session ls [-v]` | 列出会话及最后活跃时间；`-v` 显示挂载详情。 |
+| `tiler session show <name>` | 查看会话记录的详情。 |
+| `tiler session open <name>` | 恢复或确保会话挂载可用。 |
+| `tiler session close <name>` | 卸载会话中的视图并关闭会话。 |
+| `tiler session remove <name>` | 删除已关闭的会话及其可写数据。 |
+| `tiler session gc` | 清理过期的空闲会话及其可写数据。 |
+| `tiler doctor` | 诊断本地工具链、FUSE 访问和存储环境。 |
+| `tiler benchmark <path>` | 测量镜像打包和读取性能。 |
+| `tiler version` | 显示 tiler 版本。 |
+| `tiler help [command]` | 查看命令用法和选项。 |
+
+问题与建议请提交到[项目仓库](https://github.com/tilerworks/tiler)。
 
 本项目以 [MIT](LICENSE) 许可证发布。
