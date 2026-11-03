@@ -22,6 +22,9 @@ cross: ## cross-compile static linux binaries for arm64, x86_64, and i386
 			-o "dist/tiler_linux_$$name" ./cmd/tiler || exit 1; \
 	done
 
+clean: ## remove build artifacts under bin/ and dist/, plus coverage.out
+	rm -rf bin dist coverage.out
+
 fmt: ## golangci-lint fmt
 	golangci-lint fmt
 
@@ -68,4 +71,4 @@ e2e: build ## run shell e2e cases under test/e2e/ (skips cleanly without the too
 help: ## show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-8s %s\n", $$1, $$2}'
 
-.PHONY: build cross fmt lint test darwin-check linux-check cover e2e help
+.PHONY: build cross clean fmt lint test darwin-check linux-check cover e2e help
