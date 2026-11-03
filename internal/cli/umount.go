@@ -104,12 +104,10 @@ func umountDisk(cmd *cobra.Command, cfg config.Config, dir string) error {
 func closeRemovableSession(cmd *cobra.Command, cfg config.Config, dir string) {
 	engine := sessionEngine(cfg)
 	if err := engine.ReleaseMount(dir); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-			"umount: warning: release mount: %v\n", err)
+		_, _ = writeWarning(cmd.ErrOrStderr(), "umount", "%q was unmounted, but its session mount record could not be released: %v\n", dir, err)
 	}
 	if _, err := engine.CloseRemovableFor(dir, sessionUmount(cfg)); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-			"umount: warning: removable session close: %v\n", err)
+		_, _ = writeWarning(cmd.ErrOrStderr(), "umount", "%q was unmounted, but automatic session cleanup failed: %v\n", dir, err)
 	}
 }
 

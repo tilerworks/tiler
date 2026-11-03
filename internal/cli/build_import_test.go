@@ -24,7 +24,7 @@ func TestBuildImportFourForms(t *testing.T) {
 	dir := filepath.Join(images, "vendor", "app")
 
 	stdout, stderr, err := runImport(t, lib, "build", "--link", src, "--image", "vendor/app")
-	if err != nil || stdout != "link vendor/app "+sum+"\n" || !strings.Contains(stderr, "warning:") ||
+	if err != nil || stdout != "link vendor/app "+sum+"\n" || !strings.Contains(stderr, "Warning:") ||
 		!strings.Contains(stderr, "no metadata file") {
 		t.Fatalf("link without metadata: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}

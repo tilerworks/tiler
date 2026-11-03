@@ -41,7 +41,7 @@ func verifyFileSHA256(path, want string) error {
 		return err
 	}
 	if got := hexDigest(sum); got != want {
-		return fmt.Errorf("image: %s does not match sha256", path)
+		return fmt.Errorf("image: %q does not match sha256: expected %s, got %s", path, want, got)
 	}
 	return nil
 }
@@ -66,7 +66,7 @@ func quickCheckFile(path string, size, mtime int64) error {
 			path, info.Size(), size)
 	}
 	if info.ModTime().Unix() != mtime {
-		return fmt.Errorf("image: %s mtime does not match meta", path)
+		return fmt.Errorf("image: %q mtime does not match meta: expected %d, got %d", path, mtime, info.ModTime().Unix())
 	}
 	return nil
 }

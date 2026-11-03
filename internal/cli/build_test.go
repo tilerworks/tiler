@@ -1343,7 +1343,7 @@ func TestBuildRebaseFailureWarnsAndStillSucceeds(t *testing.T) {
 	}
 	// The published image is not rolled back: the failure degrades
 	// to a stderr warning and the build exits 0.
-	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "boom") {
+	if !strings.Contains(stderr, "Warning:") || !strings.Contains(stderr, "boom") {
 		t.Fatalf("stderr = %q, want a rebase warning", stderr)
 	}
 	assertStack(t, onlyMountAction(t, sessionsDir(home), "dev"), oldID, oldID, "", "")

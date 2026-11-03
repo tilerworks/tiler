@@ -421,6 +421,9 @@ func TestVersionMountActivityReportsALostOutcomeRecord(t *testing.T) {
 	if !errors.Is(err, session.ErrActivityFailed) {
 		t.Fatalf("mount err = %v, want the lost-record sentinel", err)
 	}
+	if !strings.Contains(err.Error(), `is mounted at "/view", but`) {
+		t.Fatalf("missing completed mount context: %v", err)
+	}
 	if result.Mountpoint != "/view" {
 		t.Fatalf("result = %+v, want the served view", result)
 	}

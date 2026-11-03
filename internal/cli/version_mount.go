@@ -139,8 +139,8 @@ func runVersionMountEngine(
 	// The view is up and only its record is missing. The session layer
 	// keeps a mounted action for ErrActivityFailed instead of writing a
 	// live view down as failed.
-	return result, fmt.Errorf("%w: mount activity of %s: %w",
-		session.ErrActivityFailed, action.Name, logErr)
+	return result, fmt.Errorf("mount: image %q is mounted at %q, but its activity log could not be written: %w: %w",
+		action.Name, dir, session.ErrActivityFailed, logErr)
 }
 
 // runVersionMount gates the toolchain of one assembled request and runs it.

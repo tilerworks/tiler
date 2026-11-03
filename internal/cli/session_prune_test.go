@@ -222,7 +222,7 @@ func TestSessionReplayUnresolvableServedStackWarnsAndKeepsUpper(t *testing.T) {
 	if req.PruneUpper {
 		t.Fatal("PruneUpper = true, want an unresolvable served stack to skip the prune")
 	}
-	if !strings.Contains(stderr, "warning:") ||
+	if !strings.Contains(stderr, "Warning:") ||
 		!strings.Contains(stderr, "the served stack gone-full tip gone-full no longer resolves") {
 		t.Fatalf("stderr = %q, want a prune warning quoting the full served pin", stderr)
 	}

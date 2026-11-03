@@ -3,6 +3,7 @@ package image
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
+	"github.com/jiangxin/tiler/internal/diagnostic"
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
@@ -63,6 +65,8 @@ type IncrRequest struct {
 	// ErrSmokeSkipped, which still succeeds the build. A mount
 	// that fails is a real error.
 	MountSmoke func(image string) error
+	// Diagnostics receives non-fatal validation notices. Nil suppresses notices.
+	Diagnostics io.Writer
 }
 
 // IncrResult reports one successful incremental build. When the
@@ -548,11 +552,11 @@ func defaultSmokeRun(name string, args ...string) error {
 func defaultMountSmoke(format Format, path string) error {
 	f, err := container.Lookup(format.Type)
 	if err != nil {
-		return fmt.Errorf("build: %w", err)
+		return fmt.Errorf("image format: %w", err)
 	}
 	if err := smokeReady(f); err != nil {
 		if errors.Is(err, workspace.ErrUnavailable) {
-			return ErrSmokeSkipped
+			return fmt.Errorf("%w: %w", ErrSmokeSkipped, err)
 		}
 		return err
 	}
@@ -565,7 +569,7 @@ func defaultMountSmoke(format Format, path string) error {
 // to detach the smoke mount; skipping first avoids leaving it up.
 func defaultSmokeReady(f container.Format) error {
 	if runtime.GOOS != "linux" {
-		return workspace.ErrUnavailable
+		return fmt.Errorf("%w: FUSE smoke validation requires Linux", workspace.ErrUnavailable)
 	}
 	if _, err := os.Stat("/dev/fuse"); err != nil {
 		return fmt.Errorf("%w: /dev/fuse: %v", workspace.ErrUnavailable, err)
@@ -584,24 +588,27 @@ func defaultSmokeReady(f container.Format) error {
 func smokeMount(f container.Format, imagePath string) error {
 	point, err := os.MkdirTemp("", "tiler-smoke-")
 	if err != nil {
-		return fmt.Errorf("build: %w", err)
+		return fmt.Errorf("create smoke mountpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(point) }()
 
 	argv := f.MountArgv(imagePath, "", "", imagePath, point)
 	if len(argv) == 0 {
-		return errors.New("build: empty mount command")
+		return errors.New("smoke mount: empty mount command")
 	}
 	if err := smokeRun(argv[0], argv[1:]...); err != nil {
-		return fmt.Errorf("build: smoke mount: %w", err)
+		if denied := deniedSmokeMount(err); denied != nil {
+			return denied
+		}
+		return fmt.Errorf("smoke mount: %w", err)
 	}
 	_, listErr := os.ReadDir(point)
 	unmountErr := smokeRun("fusermount3", "-u", point)
 	if listErr != nil {
-		return fmt.Errorf("build: smoke read: %w", listErr)
+		return fmt.Errorf("smoke read: %w", listErr)
 	}
 	if unmountErr != nil {
-		return fmt.Errorf("build: smoke unmount: %w", unmountErr)
+		return fmt.Errorf("smoke unmount: %w", unmountErr)
 	}
 	return nil
 }
@@ -620,14 +627,33 @@ func runIncrSmoke(req IncrRequest, path string, node ImageMeta, format Format) e
 	if len(node.Blocks) > 0 {
 		assembled, err := assembleIncrBlocks(req.Config.CacheDir, path, node)
 		if err != nil {
-			return fmt.Errorf("build: quality gate: %w", err)
+			return fmt.Errorf("build: image validation failed: assemble blocks: %w", err)
 		}
 		target = assembled
 	}
-	if err := smoke(target); err != nil && !errors.Is(err, ErrSmokeSkipped) {
-		return fmt.Errorf("build: quality gate: %w", err)
+	if err := smoke(target); err != nil {
+		if errors.Is(err, ErrSmokeSkipped) {
+			if req.Diagnostics != nil {
+				_, _ = fmt.Fprintf(req.Diagnostics, "Warning: build: image %q was not mount-validated.\n  Reason: %s\n  Hint: run 'tiler doctor' and validate the image on a host with a working FUSE toolchain.\n", req.Name, diagnostic.Text(smokeSkipReason(err)))
+			}
+			return nil
+		}
+		var denied *smokeMountDeniedError
+		if errors.As(err, &denied) {
+			return err
+		}
+		return fmt.Errorf("build: image validation failed: %w", err)
 	}
 	return nil
+}
+
+func smokeSkipReason(err error) string {
+	reason := strings.TrimPrefix(err.Error(), ErrSmokeSkipped.Error()+": ")
+	reason = strings.TrimPrefix(reason, workspace.ErrUnavailable.Error()+": ")
+	if reason == ErrSmokeSkipped.Error() {
+		return "mount validation is unavailable in this environment"
+	}
+	return reason
 }
 
 // assembleIncrBlocks materializes _blocks/<id>/ into the content-

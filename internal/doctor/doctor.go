@@ -230,7 +230,14 @@ func probeDevice(ctx context.Context, seams Seams) (Result, error) {
 		return Result{}, err
 	}
 	if err := seams.Stat(fuseDevicePath); err != nil {
-		return fail(nameFuseDevice, err.Error()), nil
+		return fail(nameFuseDevice, err.Error()+
+			"; Hint: check that the host supports FUSE and /dev/fuse exists"+
+			" and is accessible to the current user."+
+			" In a container, check FUSE device access and CAP_SYS_ADMIN."+
+			" For Docker, start the container with:"+
+			" --device /dev/fuse --cap-add SYS_ADMIN."+
+			" If permissions are already configured, check seccomp/AppArmor/SELinux"+
+			" restrictions on FUSE mounts."), nil
 	}
 	return pass(nameFuseDevice, fuseDevicePath), nil
 }

@@ -537,7 +537,7 @@ func TestMountCascadingChain(t *testing.T) {
 	}
 	view4 := filepath.Join(work, "view4")
 	err := failCmd(t, append(lib, "mount", "alice/app", view4)...)
-	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "image "+layer1) {
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), `image "alice/app" version `+layer1) {
 		t.Fatalf("broken chain: ExitCode(%v) = %d: %v", err, ExitCode(err), err)
 	}
 }

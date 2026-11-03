@@ -865,6 +865,9 @@ func TestPublishActivityReportsAFailedCreationWrite(t *testing.T) {
 	if !errors.Is(err, activity.ErrDamagedLog) {
 		t.Fatalf("publish err = %v, want ErrDamagedLog", err)
 	}
+	if !strings.Contains(err.Error(), "was published, but") || !strings.Contains(err.Error(), base.ID) {
+		t.Fatalf("missing completed publication context: %v", err)
+	}
 	if got.ID != base.ID {
 		t.Fatalf("published version = %#v, want the committed version", got)
 	}

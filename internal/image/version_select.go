@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// ErrVersionNotFound identifies a valid selector with no stored version.
+var ErrVersionNotFound = errors.New("image version not found")
+
 // ErrInvalidHashPrefix identifies malformed explicitly selected version hashes.
 var ErrInvalidHashPrefix = errors.New("hash prefix must contain 4 to 64 hexadecimal characters")
 
@@ -72,7 +75,7 @@ func selectVersionPrefix(forest Forest, selector, prefix string) ([]ImageMeta, e
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("image selector %q: no matching image", selector)
+		return nil, fmt.Errorf("image selector %q: no matching image: %w; run 'tiler images show %s' to see available versions", selector, ErrVersionNotFound, strings.SplitN(selector, ":", 2)[0])
 	case 1:
 		return forest.Stack(matches[0])
 	default:

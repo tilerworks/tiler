@@ -90,5 +90,5 @@ func packFullStaged(req FullRequest) (string, string, error) {
 }
 
 func runFullVersionSmoke(req FullRequest, payload string, node ImageMeta) error {
-	return runIncrSmoke(IncrRequest{Config: req.Config, MountSmoke: req.MountSmoke}, payload, node, node.Format)
+	return runIncrSmoke(IncrRequest{Config: req.Config, Name: req.Name, MountSmoke: req.MountSmoke, Diagnostics: req.Diagnostics}, payload, node, node.Format)
 }

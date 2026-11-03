@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/jiangxin/tiler/internal/activity"
@@ -28,7 +27,7 @@ func collectVersionActivity(views []versionImageView, cfg config.Config, warning
 				views[i].Activity[node.ID] = imageListActivity{}
 			default:
 				views[i].Activity[node.ID] = imageListActivity{Unknown: true}
-				if _, writeErr := fmt.Fprintf(warnings, "Warning: images list: %s:%s: %v\n", views[i].Name, node.ID, err); writeErr != nil {
+				if _, writeErr := writeWarning(warnings, "images list", "%s:%s: %v\n", views[i].Name, node.ID, err); writeErr != nil {
 					return writeErr
 				}
 			}

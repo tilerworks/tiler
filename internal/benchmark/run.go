@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/jiangxin/tiler/internal/diagnostic"
 )
 
 // Env is the process seam Run uses. Tests inject Command, Host,
@@ -36,7 +38,7 @@ func Run(d Decision, env Env) error {
 	defer state.cleanup(logCommand(env.Command, state.logs, detachLogName))
 	if d.CreatePath {
 		if _, err := fmt.Fprintf(env.Stderr,
-			"benchmark: warning: path %s did not exist; created it\n", d.Path); err != nil {
+			"Warning: benchmark: path %s did not exist; created it\n", diagnostic.Text(d.Path)); err != nil {
 			return fmt.Errorf("benchmark: write warning: %w", err)
 		}
 	}

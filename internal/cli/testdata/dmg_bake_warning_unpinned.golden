@@ -1,2 +1,4 @@
-warning: dmg has no incremental layer; baking a full image
-warning: published new image e84f2195b6c3212ccd3d6cabec7d16197117290b5684b65c74b0fd551cb865f4 for alice/app; the mounted view is not rebased and keeps serving the base it was mounted from; the new image takes effect only at the next fresh mount
+Warning: build: dmg has no incremental layer; baking a full image
+Warning: build: published new image e84f2195b6c3212ccd3d6cabec7d16197117290b5684b65c74b0fd551cb865f4 for alice/app.
+  The mounted view keeps serving its original base.
+  Hint: use a fresh mount to use the new image.

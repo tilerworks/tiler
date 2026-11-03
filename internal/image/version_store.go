@@ -95,7 +95,7 @@ func appendVersion(repo Repo, node ImageMeta, descriptionSet bool, seam hooks) (
 		Event: versionCreationEvent(node),
 		Phase: activity.PhaseSucceeded,
 	}, nil); err != nil {
-		return node, err
+		return node, fmt.Errorf("image %q version %s was published, but its activity log could not be written: %w", repo.Name(), node.ID, err)
 	}
 	return node, nil
 }

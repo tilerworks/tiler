@@ -10,6 +10,14 @@ first. An unreleased entry describes the next planned release.
 - `make cross` builds static Linux binaries for arm64, amd64 (named
   `x86_64`), and 386 (named `i386`) under `dist/`.
 
+### Fixed
+
+- Improve errors, warnings, and recovery hints with image and session context,
+  expected and actual integrity values, actionable FUSE permission and timeout
+  guidance, explicit skipped validation and partial-success notices, consistent
+  warning formatting, and terminal-safe text that preserves trusted multiline
+  hints.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

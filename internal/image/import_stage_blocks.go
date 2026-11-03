@@ -124,7 +124,7 @@ func orderedBlocks(node ImageMeta) error {
 		size += block.Size
 	}
 	if size != node.Size {
-		return errors.New("logical image size mismatch")
+		return fmt.Errorf("logical image %s size mismatch: metadata declares %d bytes, blocks total %d bytes", node.ID, node.Size, size)
 	}
 	return nil
 }
@@ -206,10 +206,10 @@ func writeStagedBlock(ctx context.Context, dir string, want BlockEntry, before o
 	}
 	got := hex.EncodeToString(sum)
 	if n != want.Size {
-		return BlockEntry{}, fmt.Errorf("block %s size mismatch", want.Name)
+		return BlockEntry{}, fmt.Errorf("block %q size mismatch: expected %d bytes, got %d", path, want.Size, n)
 	}
 	if got != want.SHA256 {
-		return BlockEntry{}, fmt.Errorf("block %s digest mismatch", want.Name)
+		return BlockEntry{}, fmt.Errorf("block %q digest mismatch: expected sha256 %s, got %s", path, want.SHA256, got)
 	}
 	if err = acceptCopyDigest(got); err != nil {
 		return BlockEntry{}, fmt.Errorf("block %s: %w", want.Name, err)
@@ -223,13 +223,13 @@ func writeStagedBlock(ctx context.Context, dir string, want BlockEntry, before o
 func finishStagedBlocks(dir string, node ImageMeta, blocks []BlockEntry, size int64, whole []byte, root string) (StagedBlocks, error) {
 	sum := hex.EncodeToString(whole)
 	if sum != node.SHA256 {
-		return StagedBlocks{}, errors.New("logical image digest mismatch")
+		return StagedBlocks{}, fmt.Errorf("logical image digest mismatch at %q: expected sha256 %s, got %s", dir, node.SHA256, sum)
 	}
 	if err := acceptCopyDigest(sum); err != nil {
 		return StagedBlocks{}, err
 	}
 	if size != node.Size {
-		return StagedBlocks{}, errors.New("logical image size mismatch")
+		return StagedBlocks{}, fmt.Errorf("logical image size mismatch at %q: expected %d bytes, got %d", dir, node.Size, size)
 	}
 	if err := writeConcatView(dir, blockNames(blocks)); err != nil {
 		return StagedBlocks{}, err

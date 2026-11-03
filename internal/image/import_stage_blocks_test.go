@@ -83,6 +83,20 @@ type splitFault struct {
 	sync       func(*os.File) error
 }
 
+func TestOrderedBlocksReportsDeclaredAndTotalSizes(t *testing.T) {
+	node := ImageMeta{ID: strings.Repeat("a", 64), SHA256: strings.Repeat("a", 64), Size: 10,
+		Blocks: []BlockEntry{{Name: "blk.000", Size: 7, SHA256: strings.Repeat("b", 64)}}}
+	err := orderedBlocks(node)
+	if err == nil {
+		t.Fatal("mismatched size accepted")
+	}
+	for _, want := range []string{node.ID, "metadata declares 10 bytes", "blocks total 7 bytes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("diagnostic %q missing %q", err, want)
+		}
+	}
+}
+
 func TestStageImportBlocksRejectsBrokenCopies(t *testing.T) {
 	cases := []splitFault{
 		{name: "missing block", want: "blk.001", setup: removeSecondBlock},
@@ -116,6 +130,13 @@ func TestStageImportBlocksRejectsBrokenCopies(t *testing.T) {
 			_, err := stageImportBlocks(ctx, copyReq(images, dir), node.ID, seam)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v", err)
+			}
+			if tc.badWhole || tc.name == "corrupt block" {
+				for _, want := range []string{"expected sha256 ", ", got "} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("integrity diagnostic %q missing %q", err, want)
+					}
+				}
 			}
 			assertNoVisibleVersion(t, images)
 			if _, statErr := os.Stat(filepath.Join(repo.Dir, "keep")); statErr != nil {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jiangxin/tiler/internal/container"
+	"github.com/jiangxin/tiler/internal/diagnostic"
 )
 
 // ErrUnavailable means mounting cannot work here: the host is not
@@ -1073,7 +1074,7 @@ func (w *Workspace) pruneWindow(req Request, lowers []string, seam hooks) {
 		// Every window failure already carries its own context and
 		// the "workspace: " package tag; warnf only adds the
 		// warning prefix, so nothing is prefixed twice.
-		warnf("%v", err)
+		warnf("redundant upper-file cleanup failed; mounting will continue.\n  %v\n  Hint: check the cleanup error before retrying the mount.", err)
 		return
 	}
 	prog.succeed()
@@ -1129,12 +1130,18 @@ func pruneOf(seam hooks, prog *pruneProgress) func(upperDir, lowerView string) (
 	}
 }
 
-// warnf reports one non-fatal problem on stderr with the same bare
-// "warning: " prefix the cli layer uses: the errors callers pass in
-// already carry the "workspace: " package tag and their own context.
-// It is a variable so tests can capture the warnings.
+// warnf reports non-fatal mount problems and escapes dynamic terminal controls.
+// Tests replace it to capture warnings.
 var warnf = func(format string, args ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
+	values := make([]any, len(args))
+	for i, arg := range args {
+		if err, ok := arg.(error); ok {
+			values[i] = diagnostic.ErrorText(err)
+		} else {
+			values[i] = diagnostic.Text(fmt.Sprint(arg))
+		}
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "Warning: mount: "+format+"\n", values...)
 }
 
 // prepareRuntime creates the runtime directory of this mount, plus
@@ -1163,7 +1170,7 @@ func (w *Workspace) mountPoint(m member, req Request, point string, seam hooks) 
 		return w.fail(err)
 	}
 	if err := w.run(argv[0], argv[1:]...); err != nil {
-		return w.fail(fmt.Errorf("workspace: %w", err))
+		return w.fail(fuseMountError(point, "image layer", err))
 	}
 	w.mounts = append(w.mounts, point)
 	if err := waitLive(point, seam); err != nil {
@@ -1185,7 +1192,7 @@ func (w *Workspace) mountMerged(req Request, lowers []string, seam hooks) error 
 	}
 	argv := overlayArgv(lowers, upper, work, req.FuseOptions, req.MergedDir)
 	if err := w.run(argv[0], argv[1:]...); err != nil {
-		return w.fail(fmt.Errorf("workspace: %w", err))
+		return w.fail(fuseMountError(req.MergedDir, "merged view", err))
 	}
 	w.mounts = append(w.mounts, req.MergedDir)
 	if err := waitLive(req.MergedDir, seam); err != nil {
@@ -1207,6 +1214,14 @@ func layerArgv(m member, req Request, point string) ([]string, error) {
 		return nil, fmt.Errorf("workspace: %s has no mount command", m.format)
 	}
 	return argv, nil
+}
+
+func fuseMountError(point, phase string, err error) error {
+	context := fmt.Sprintf("workspace: FUSE %s mount at %q was denied.", phase, point)
+	if denied := diagnostic.DeniedMount(context, err); denied != nil {
+		return denied
+	}
+	return fmt.Errorf("workspace: mount %s at %q: %w", phase, point, err)
 }
 
 // overlayArgv builds the fuse-overlayfs command line. An empty upper
@@ -1234,8 +1249,16 @@ func waitLive(point string, seam hooks) error {
 		}
 		sleep(liveInterval)
 	}
-	return fmt.Errorf("workspace: %s did not become a live mount", point)
+	return &mountTimeoutError{point: point}
 }
+
+type mountTimeoutError struct{ point string }
+
+func (e *mountTimeoutError) Error() string {
+	return fmt.Sprintf("workspace: waiting for FUSE mount readiness at %q timed out after %s; the target did not become a live mount\n  Hint: check the FUSE daemon output and whether its process exited before the mount became ready", e.point, time.Duration(livePolls)*liveInterval)
+}
+
+func (e *mountTimeoutError) TerminalDiagnostic() string { return e.Error() }
 
 // liveOf probes through the seam, defaulting to the real stat probe.
 func liveOf(seam hooks, point string) bool {

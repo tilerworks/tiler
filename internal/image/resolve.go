@@ -66,7 +66,7 @@ func resolveFile(arg string) (Target, error) {
 }
 
 func fileFormError(arg string, err error) error {
-	base := fmt.Errorf("mount: %w: %w", ErrNotImageFile, err)
+	base := fmt.Errorf("mount: image file %q: %w: %w", arg, ErrNotImageFile, err)
 	if !strings.Contains(arg, "/") || filepath.IsAbs(arg) {
 		return base
 	}

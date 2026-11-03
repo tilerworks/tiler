@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 	"time"
 
@@ -33,7 +32,7 @@ func loadSessionActivity(engine *session.Engine, summary *session.Summary, diagn
 	value, err := engine.LastActivity(summary.Name)
 	summary.Activity = value
 	if err != nil {
-		_, _ = fmt.Fprintln(diagnostics, err)
+		_, _ = writeWarning(diagnostics, "session", "%q: last activity is unknown: %s\n", summary.Name, err)
 	}
 }
 

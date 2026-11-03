@@ -32,7 +32,7 @@ func runBuildImport(cmd *cobra.Command, args []string, cfg config.Config, imageN
 	req := image.ImportRequest{
 		Mode: mode, ImagesDir: cfg.ImagesDir, LogsDir: cfg.LogsDir, Name: imageName, Source: source, Hash: hash,
 		Warn: func(msg string) {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", msg)
+			_, _ = writeWarning(cmd.ErrOrStderr(), "build", "%s\n", msg)
 		},
 	}
 	name, items, err := publishImport(req)

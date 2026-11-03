@@ -474,8 +474,7 @@ func promoteBySize(stderr io.Writer, base, layers int64, upperDir string) (bool,
 	if !exceedsHalfBase(base, layers, upper) {
 		return false, nil
 	}
-	_, err = fmt.Fprintf(stderr,
-		"warning: incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
+	_, err = writeWarning(stderr, "build", "incremental layers and upper (%d bytes) exceed 50%% of the base image (%d bytes); building a full image (pass --incremental to append a layer anyway)\n",
 		layers+upper, base)
 	return err == nil, err
 }
@@ -538,6 +537,7 @@ func runFullBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Refs:           session.Refs{Dir: cfg.SessionsDir},
 		Run:            packTool,
 		MountSmoke:     incrSmoke,
+		Diagnostics:    cmd.ErrOrStderr(),
 	})
 	if err != nil {
 		return mapBuildPathError(err)
@@ -574,8 +574,7 @@ func rebaseView(stderr io.Writer, cfg config.Config, decision mountinfo.Decision
 	}
 	err := rebaseMountedStack(cfg, decision.MountPoint, decision.Name.String(), fullID, tipID)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr,
-			"warning: the session record for %s was not moved to the new image %s: %v\n",
+		_, _ = writeWarning(stderr, "build", "the session record for %s was not moved to the new image %s: %v\n",
 			decision.MountPoint, tipID, err)
 	}
 }
@@ -601,6 +600,7 @@ func runIncrBuild(cmd *cobra.Command, cfg config.Config, decision mountinfo.Deci
 		Refs:           session.Refs{Dir: cfg.SessionsDir},
 		Run:            packTool,
 		MountSmoke:     incrSmoke,
+		Diagnostics:    cmd.ErrOrStderr(),
 	})
 	if err != nil {
 		return mapBuildPathError(err)
@@ -728,7 +728,7 @@ func runDMGBake(cmd *cobra.Command, cfg config.Config, decision mountinfo.Decisi
 		return fmt.Errorf("build: %w", err)
 	}
 	if _, err := fmt.Fprintln(cmd.ErrOrStderr(),
-		"warning: dmg has no incremental layer; baking a full image"); err != nil {
+		"Warning: build: dmg has no incremental layer; baking a full image"); err != nil {
 		return err
 	}
 	// The pre-publish active root detects the idle no-op: a shadow
@@ -805,9 +805,8 @@ func warnDMGBakeKeepsOldBase(stderr io.Writer, name, newID, oldID string) {
 		warnDMGKeepsBase(stderr, name, newID)
 		return
 	}
-	_, _ = fmt.Fprintf(stderr,
-		"warning: published new image %s for %s; the mounted view is still served by the old base %s and its shadow, and the shadow is bound to that base, so the session record keeps %s; the new image takes effect only at the next fresh mount, and replaying this session still attaches %s\n",
-		newID, name, oldID, oldID, oldID)
+	_, _ = writeWarning(stderr, "build", "published new image %s for %s.\n  The mounted view and session replay keep the old base %s and its bound shadow.\n  Hint: use a fresh mount to use the new image.\n",
+		newID, name, oldID)
 }
 
 // warnDMGCreateKeepsOldBase is the stderr warning a successful dmg
@@ -824,16 +823,14 @@ func warnDMGCreateKeepsOldBase(stderr io.Writer, name, newID, oldID string) {
 		warnDMGKeepsBase(stderr, name, newID)
 		return
 	}
-	_, _ = fmt.Fprintf(stderr,
-		"warning: published new image %s for %s; the mounted view keeps serving the base %s it was mounted from, so the session record keeps %s; the new image takes effect only at the next fresh mount, and replaying this session still attaches %s\n",
-		newID, name, oldID, oldID, oldID)
+	_, _ = writeWarning(stderr, "build", "published new image %s for %s.\n  The mounted view and session replay keep the old base %s.\n  Hint: use a fresh mount to use the new image.\n",
+		newID, name, oldID)
 }
 
 // warnDMGKeepsBase is the id-less variant both dmg paths share when
 // no session record pins the base the mounted view serves.
 func warnDMGKeepsBase(stderr io.Writer, name, newID string) {
-	_, _ = fmt.Fprintf(stderr,
-		"warning: published new image %s for %s; the mounted view is not rebased and keeps serving the base it was mounted from; the new image takes effect only at the next fresh mount\n",
+	_, _ = writeWarning(stderr, "build", "published new image %s for %s.\n  The mounted view keeps serving its original base.\n  Hint: use a fresh mount to use the new image.\n",
 		newID, name)
 }
 

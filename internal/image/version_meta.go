@@ -25,8 +25,15 @@ type VersionManifest struct {
 // Callers coordinate recovery and subsequent payload I/O with the library lock.
 func LoadVersionManifest(repo Repo) (VersionManifest, error) {
 	manifest, body, err := loadVersionMeta(repo)
-	if err == nil && body == nil {
-		err = os.ErrNotExist
+	if err != nil {
+		return manifest, fmt.Errorf("image %q: read metadata %q: %w", repo.Name(), repo.MetaPath(), err)
+	}
+	if body == nil {
+		_, statErr := os.Stat(repo.Dir)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return manifest, fmt.Errorf("image %q: inspect repository %q: %w", repo.Name(), repo.Dir, statErr)
+		}
+		err = &MissingManifestError{Name: repo.Name(), Library: libraryRoot(repo), Path: repo.MetaPath(), RepositoryExists: statErr == nil}
 	}
 	return manifest, err
 }

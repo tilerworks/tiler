@@ -3,6 +3,7 @@ package image
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +63,8 @@ type FullRequest struct {
 	DescriptionSet bool
 	// MountSmoke overrides the immutable build quality gate in tests.
 	MountSmoke func(string) error
+	// Diagnostics receives non-fatal validation notices. Nil suppresses notices.
+	Diagnostics io.Writer
 }
 
 // FullResult reports one successful full build.

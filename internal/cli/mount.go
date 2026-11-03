@@ -733,7 +733,7 @@ func noteUnknownDigest(id string) {
 	if id == "" {
 		id = "image"
 	}
-	_, _ = fmt.Fprintf(mountNotice, "mount: %s: digest unknown, skipped sha256 verification\n", listID(id))
+	_, _ = writeWarning(mountNotice, "mount", "%s: digest unknown, skipped sha256 verification\n", listID(id))
 }
 
 // mountRequest assembles the engine request. With the cache enabled

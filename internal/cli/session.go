@@ -414,9 +414,8 @@ func replayPruneUpper(
 	}
 	served, err := resolveStackTip(cfg, action.Name, action.ServedID, action.ServedTip)
 	if err != nil {
-		_, _ = fmt.Fprintf(warn,
-			"warning: session: replay %s: the served stack %s no longer"+
-				" resolves; the reused upper stays unpruned: %v\n",
+		_, _ = writeWarning(warn, "session", "replay %s: the served stack %s no longer"+
+			" resolves; the reused upper stays unpruned: %v\n",
 			action.Image, describeServedPin(action), err)
 		return false
 	}

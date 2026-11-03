@@ -105,7 +105,7 @@ func (fx rebaseFixture) assertRecoveredReplay(t *testing.T, wantFull, wantTip st
 	if stdout != "opened dev\n" {
 		t.Fatalf("open output = %q", stdout)
 	}
-	if strings.Contains(stderr, "warning:") {
+	if strings.Contains(stderr, "Warning:") {
 		t.Fatalf("open warned: %q", stderr)
 	}
 	assertBytesFile(t, filepath.Join(fx.view, "top.txt"), "changed\n")

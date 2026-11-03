@@ -138,6 +138,29 @@ func TestProbeShapes(t *testing.T) {
 	}
 }
 
+func TestFuseDeviceFailureIncludesRecoveryAdvice(t *testing.T) {
+	for _, cause := range []error{fs.ErrNotExist, os.ErrPermission} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			result, err := probeDevice(context.Background(), healthyHost("0.5.0").withStat(cause).seams())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != statusFail {
+				t.Fatalf("status = %q, want fail", result.Status)
+			}
+			for _, want := range []string{
+				cause.Error(), "Hint:", "host supports FUSE", "/dev/fuse exists",
+				"accessible to the current user", "--device /dev/fuse --cap-add SYS_ADMIN",
+				"seccomp/AppArmor/SELinux",
+			} {
+				if !strings.Contains(result.Detail, want) {
+					t.Errorf("detail = %q, want %q", result.Detail, want)
+				}
+			}
+		})
+	}
+}
+
 func TestImageToolchainThreeStates(t *testing.T) {
 	tests := []struct {
 		name    string

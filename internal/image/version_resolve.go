@@ -46,7 +46,7 @@ func resolveVersionRepo(repo Repo, selector string) (Target, error) {
 	for _, node := range stack {
 		member, err := resolveVersionMember(repo, node)
 		if err != nil {
-			return Target{}, fmt.Errorf("mount: image %s: %w", node.ID, err)
+			return Target{}, fmt.Errorf("mount: image %q version %s: %w", repo.Name(), node.ID, err)
 		}
 		members = append(members, member)
 	}

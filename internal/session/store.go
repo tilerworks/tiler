@@ -99,7 +99,7 @@ func (s Store) Load(name string) (Record, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Record{}, fmt.Errorf("session: %w: %s", ErrNotFound, name)
+			return Record{}, fmt.Errorf("session: %w: %q (record %q); run 'tiler session list' to see available sessions", ErrNotFound, name, path)
 		}
 		return Record{}, fmt.Errorf("session: %w", err)
 	}
