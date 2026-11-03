@@ -319,7 +319,7 @@ func probeSquashfuseSubdir(ctx context.Context, seams Seams) (Result, error) {
 		return fail(nameSquashfuseSub, detail), nil
 	}
 	if ver.below(0, 5, 0) {
-		return fail(nameSquashfuseSub, ver.raw+" is below "+subdirBaselineText), nil
+		return fail(nameSquashfuseSub, ver.raw+" is below "+subdirBaselineText+"; install squashfuse >= 0.5.0; if distro packages are older (including EPEL 9), build an upstream release: https://github.com/vasi/squashfuse"), nil
 	}
 	return pass(nameSquashfuseSub, ver.raw), nil
 }

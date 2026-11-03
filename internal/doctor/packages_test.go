@@ -71,6 +71,13 @@ func TestInstallGuidanceFollowsDistro(t *testing.T) {
 			absent:  []string{"apt"},
 		},
 		{
+			name:    "rocky prepares EPEL and CRB",
+			release: "ID=rocky\nVERSION_ID=9.8\nID_LIKE=\"rhel centos fedora\"\n",
+			missing: []string{"mkfs.erofs", "erofsfuse"},
+			want:    []string{"sudo dnf install dnf-plugins-core epel-release", "sudo dnf config-manager --set-enabled crb", "sudo dnf install erofs-utils erofs-fuse"},
+			absent:  []string{"sudo apt"},
+		},
+		{
 			name:    "unreadable os-release shows both",
 			readErr: osReleaseUnreadable{},
 			missing: []string{"mksquashfs", "squashfuse_ll", "mkfs.erofs", "erofsfuse"},
@@ -127,6 +134,26 @@ func TestHealthyProbeOmitsInstallHint(t *testing.T) {
 	for _, result := range results {
 		if strings.Contains(result.Detail, "install:") {
 			t.Fatalf("%s detail = %q, want no install hint", result.Name, result.Detail)
+		}
+	}
+}
+
+func TestRepositoryGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		release string
+		binary  string
+		want    string
+	}{
+		{"ID=rocky\nVERSION_ID=8.10", "mkfs.erofs", "--set-enabled powertools"},
+		{"ID=almalinux\nVERSION_ID=10.0", "erofsfuse", "--set-enabled crb"},
+		{"ID=rhel\nVERSION_ID=9.8", "squashfuse_ll", "CodeReady Builder"},
+		{"ID=fedora\nVERSION_ID=43", "squashfuse_ll", ""},
+		{"ID=rocky\nVERSION_ID=9.8", "git", ""},
+		{"ID=ubuntu", "erofsfuse", ""},
+	} {
+		got := repositoryHint(tc.release, []string{tc.binary})
+		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
+			t.Errorf("repositoryHint(%q, %q) = %q, want %q", tc.release, tc.binary, got, tc.want)
 		}
 	}
 }

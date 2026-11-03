@@ -47,10 +47,49 @@ func withInstall(detail string, binaries []string) string {
 	if hint == "" {
 		return detail
 	}
+	if release, err := readOSRelease(); err == nil {
+		hint = repositoryHint(release, binaries) + hint
+	}
 	if detail == "" {
 		return hint
 	}
 	return detail + "; " + hint
+}
+
+// repositoryHint describes repository setup without changing the host.
+func repositoryHint(release string, binaries []string) string {
+	needsEPEL := false
+	for _, binary := range binaries {
+		if binary == "mkfs.erofs" || binary == "erofsfuse" || binary == "squashfuse_ll" {
+			needsEPEL = true
+		}
+	}
+	if !needsEPEL {
+		return ""
+	}
+	id, like := parseOSRelease(release)
+	if id == "fedora" || classifyOS(release) != distroRedHat {
+		return ""
+	}
+	if id == "rocky" || id == "almalinux" || id == "centos" {
+		for _, line := range strings.Split(release, "\n") {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok || key != "VERSION_ID" {
+				continue
+			}
+			major, _, _ := strings.Cut(strings.Trim(value, `"'`), ".")
+			if major == "9" || major == "10" {
+				return "prepare repositories if needed: sudo dnf install dnf-plugins-core epel-release && sudo dnf config-manager --set-enabled crb; "
+			}
+			if major == "8" {
+				return "prepare repositories if needed: sudo dnf install dnf-plugins-core epel-release && sudo dnf config-manager --set-enabled powertools; "
+			}
+		}
+	}
+	if id == "rhel" || distroOf(like) == distroRedHat {
+		return "enable EPEL and the matching CRB/CodeReady Builder repository for this OS release first (https://docs.fedoraproject.org/en-US/epel/getting-started/); "
+	}
+	return "check package availability in repositories for this OS release; "
 }
 
 func currentDistro() distro {
