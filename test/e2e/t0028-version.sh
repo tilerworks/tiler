@@ -161,7 +161,10 @@ test_expect_success VERSION_BUILD 'an archive build embeds the changelog version
 	mv build-archive/bin/tiler "$HOME/archive-tiler" &&
 	mkdir runtime &&
 	printf "invalid: [\n" >runtime/.tiler.yaml &&
-	printf "tiler 0.1.0.change\n" >expect &&
+	# The planned version advances with each changelog slot, so derive
+	# the expected value from the version source instead of pinning it.
+	archive_version=$(sh "$version_script" "$HOME/build-archive") &&
+	printf "tiler %s\n" "$archive_version" >expect &&
 	(
 		cd runtime &&
 		"$HOME/archive-tiler" version >"$HOME/archive-version.out" 2>"$HOME/archive-version.err" &&

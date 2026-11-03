@@ -140,7 +140,9 @@ A change is complete when these commands are green:
 
 Also run `make build` when `cmd/` changes. `make build` produces a
 `CGO_ENABLED=0` static binary under `bin/` for the host OS. It does
-not cross-compile.
+not cross-compile. `make cross` writes static Linux binaries for
+arm64, amd64 as `x86_64`, and 386 as `i386` to `dist/`; it only
+compiles and never runs the binaries.
 
 Linux development also runs `make darwin-check`. macOS development
 also runs `make linux-check`. Each target compiles tests for arm64

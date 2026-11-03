@@ -3,6 +3,13 @@
 All notable changes to tiler are recorded here. Versions are listed newest
 first. An unreleased entry describes the next planned release.
 
+## [0.2.0] - [Unreleased]
+
+### Added
+
+- `make cross` builds static Linux binaries for arm64, amd64 (named
+  `x86_64`), and 386 (named `i386`) under `dist/`.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

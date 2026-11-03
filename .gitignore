@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /coverage.out
 
 # tiler e2e run artifacts, scoped to test/e2e/ only. The vendored

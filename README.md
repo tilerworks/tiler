@@ -160,6 +160,24 @@ still experimental: functionality is incomplete, incremental images are
 unsupported, and mounting is slow. Measurements for each image format appear
 under Platforms and Performance below.
 
+### Cross-compiling Linux binaries
+
+To build static Linux binaries for the supported architectures without a Linux
+machine, run:
+
+```bash
+make cross
+ls dist
+# dist/tiler_linux_arm64
+# dist/tiler_linux_x86_64
+# dist/tiler_linux_i386
+```
+
+`make cross` maps `x86_64` to `GOARCH=amd64` and `i386` to `GOARCH=386`. The
+binaries use `CGO_ENABLED=0` and carry the same source-derived version as
+`make build`. The target only compiles: it does not execute the binaries or
+modify `bin/`, so run each binary on a matching host.
+
 ## Use Case 1: Prepare Once, Create Development Workspaces on Demand
 
 This example clones `https://github.com/example/app.git` into `example-app`.

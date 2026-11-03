@@ -48,7 +48,8 @@ func lstatat(dirfd int, name string) (fs.FileInfo, error) {
 	if err := syscall.Fstat(fd, &st); err != nil {
 		return nil, err
 	}
-	return fileInfo{name: name, mode: modeFrom(uint32(st.Mode)), size: int64(st.Size), mtime: time.Unix(st.Mtim.Sec, st.Mtim.Nsec), stat: &st}, nil
+	// Timespec fields are 32-bit on 386 and 64-bit elsewhere.
+	return fileInfo{name: name, mode: modeFrom(uint32(st.Mode)), size: int64(st.Size), mtime: time.Unix(int64(st.Mtim.Sec), int64(st.Mtim.Nsec)), stat: &st}, nil
 }
 
 func readlinkat(dirfd int, name string) (string, error) {

@@ -7,6 +7,21 @@ build: ## build a versioned static binary under bin/
 		-ldflags "-X github.com/jiangxin/tiler/internal/cli.Version=$$tiler_version" \
 		-o bin/ ./cmd/...
 
+# cross writes static Linux release binaries to dist/ and never touches
+# bin/. amd64 is named x86_64 and 386 is named i386, the spellings Linux
+# users expect. GOOS and GOARCH apply to these commands only.
+cross: ## cross-compile static linux binaries for arm64, x86_64, and i386
+	@tiler_version=$$(sh scripts/version.sh) && \
+	mkdir -p dist && \
+	for pair in arm64:arm64 amd64:x86_64 386:i386; do \
+		arch=$${pair%%:*}; \
+		name=$${pair#*:}; \
+		echo "==> linux/$$arch -> dist/tiler_linux_$$name"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build \
+			-ldflags "-X github.com/jiangxin/tiler/internal/cli.Version=$$tiler_version" \
+			-o "dist/tiler_linux_$$name" ./cmd/tiler || exit 1; \
+	done
+
 fmt: ## golangci-lint fmt
 	golangci-lint fmt
 
@@ -53,4 +68,4 @@ e2e: build ## run shell e2e cases under test/e2e/ (skips cleanly without the too
 help: ## show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-8s %s\n", $$1, $$2}'
 
-.PHONY: build fmt lint test darwin-check linux-check cover e2e help
+.PHONY: build cross fmt lint test darwin-check linux-check cover e2e help

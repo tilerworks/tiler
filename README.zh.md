@@ -99,6 +99,20 @@ sudo dnf install squashfs-tools squashfuse fuse3 fuse-overlayfs
 
 macOS 使用系统的 `hdiutil` 挂载 DMG，以 `upper.shadow` 保存修改，无需安装上述 Linux 工具。目前 macOS 支持仍处于技术验证阶段，功能尚不完整，不支持增量镜像，挂载也较慢。各类镜像格式的测量结果见下文“平台与性能”。
 
+### 交叉编译 Linux 二进制
+
+要在非 Linux 机器上生成受支持架构的静态 Linux 二进制，运行：
+
+```bash
+make cross
+ls dist
+# dist/tiler_linux_arm64
+# dist/tiler_linux_x86_64
+# dist/tiler_linux_i386
+```
+
+`make cross` 将 `x86_64` 映射为 `GOARCH=amd64`，将 `i386` 映射为 `GOARCH=386`。产物使用 `CGO_ENABLED=0` 构建，并带有与 `make build` 相同的源码版本号。该目标只负责编译，不执行产物，也不修改 `bin/`；请在对应架构的主机上运行。
+
 ## 用例一：准备一次，按需创建开发工作区
 
 下面以 `https://github.com/example/app.git` 为例，将仓库克隆到 `example-app`。请换成自己的仓库地址，并选择未占用的目录和会话名。`example-app` 应是普通 clone 得到的独立仓库，包含完整的 `.git` 目录，并已配置远端和跟踪分支。
