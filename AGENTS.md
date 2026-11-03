@@ -168,9 +168,13 @@ operation unless the user explicitly requests a push.
    actual release date, `YYYY-MM-DD`. Describe user-visible features,
    fixes, and compatibility changes. Keep `scripts/version.sh` as the
    version source; do not add version constants or files. Update both
-   READMEs together when usage instructions change. Do not add the next
-   version heading in advance: source archives read the first version
-   heading to determine their version.
+   READMEs together when usage instructions change. When adding a
+   changelog entry, use the current unreleased slot. If there is no
+   slot, create one as `## [X.Y.Z] - [Unreleased]`: raise the minor
+   version of the newest released heading, reset the patch to zero,
+   and keep the major version unchanged. If the explicit release
+   version differs from the slot, rename the slot before replacing
+   `[Unreleased]` with the date.
 
 3. Validate and commit. Run `make fmt`, `make lint`, `make test`, and
    `make build`, plus `make darwin-check` on Linux or `make linux-check`
