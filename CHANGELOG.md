@@ -12,6 +12,8 @@ first. An unreleased entry describes the next planned release.
 
 ### Fixed
 
+- Keep doctor progress in a temporary terminal screen that adapts to small
+  windows and resizing, then restore the original screen before the report.
 - Include EPEL and CRB repository setup in doctor installation guidance on
   Rocky Linux and related Enterprise Linux distributions.
 - Improve errors, warnings, and recovery hints with image and session context,

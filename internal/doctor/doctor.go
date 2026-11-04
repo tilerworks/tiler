@@ -97,10 +97,11 @@ type Options struct {
 	// split storage is off; a positive value shapes probe advice.
 	SplitSize int64
 	// Progress receives a "probing" heading and one indented module
-	// row when a probe starts. On a terminal that row is rewritten
-	// with spaces so done lines up when the probe finishes. Nil
-	// stays silent. The caller prints the finished report after
-	// every module row is marked.
+	// row when a probe starts. A terminal uses a temporary alternate
+	// screen with aligned completion marks and a viewport that fits
+	// its dimensions. The original screen is restored when probing
+	// ends. Other writers receive plain-text progress. Nil stays silent.
+	// The caller prints the finished report after probing returns.
 	Progress io.Writer
 }
 
@@ -190,13 +191,12 @@ func probeFUSE(ctx context.Context, seams Seams, opts Options) ([]Result, error)
 	)
 	tasks = append(tasks, contribTasks(seams, false)...)
 	view := newProbeView(opts.Progress, probeNames(tasks))
+	defer view.close()
 	results, err := runProbeTasks(ctx, view, tasks)
 	if err != nil {
-		view.close()
 		return nil, err
 	}
 	results, err = withAdvice(view, results, cacheAdvice(images, cache), false)
-	view.close()
 	return results, err
 }
 

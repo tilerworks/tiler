@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/doctor"
@@ -72,7 +75,11 @@ func newDoctorCmd() *cobra.Command {
 			if !ok {
 				return errors.New("doctor: configuration is not loaded")
 			}
-			return writeDoctor(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON, width)
+			// Let probes unwind and restore their temporary terminal screen
+			// when the user interrupts doctor.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return writeDoctor(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, asJSON, width)
 		},
 	}
 	bindOutputWidth(cmd, &width)

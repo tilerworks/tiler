@@ -27,13 +27,12 @@ func probeDarwin(ctx context.Context, seams Seams, opts Options) ([]Result, erro
 	}
 	tasks = append(tasks, contribTasks(seams, true)...)
 	view := newProbeView(opts.Progress, probeNames(tasks))
+	defer view.close()
 	results, err := runProbeTasks(ctx, view, tasks)
 	if err != nil {
-		view.close()
 		return nil, err
 	}
 	results, err = withAdvice(view, results, cacheAdvice(images, cache), true)
-	view.close()
 	return results, err
 }
 

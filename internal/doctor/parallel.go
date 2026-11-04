@@ -3,8 +3,6 @@ package doctor
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"sync"
 )
 
@@ -16,12 +14,11 @@ type probeTask struct {
 }
 
 // runProbeTasks starts every task and waits for all of them. The
-// progress block has one "probing" heading, then one indented row
-// per module. On a terminal that row is rewritten with spaces and
-// done when the task finishes, so the report below it starts only
-// after every row is marked. A diagnostic failure uses fail instead
-// of done. A hard error, including a cancelled context, discards
-// the partial set after the other tasks have stopped.
+// progress view has one "probing" heading, then one indented row
+// per module. A terminal repaints the visible rows as tasks finish.
+// A diagnostic failure uses fail instead of done. A hard error,
+// including a cancelled context, discards the partial set after the
+// other tasks have stopped.
 func runProbeTasks(ctx context.Context, view *probeView, tasks []probeTask) ([]Result, error) {
 	if err := contextErr(ctx, nil); err != nil {
 		return nil, err
@@ -99,33 +96,6 @@ const (
 	probeProgressIndent = "  "
 )
 
-// probeView prints the probing heading once, then one row per probe.
-// On a terminal the finished mark replaces that row in place.
-// Anywhere else the finish mark is a second row, so a redirected log
-// stays plain text.
-type probeView struct {
-	mu     sync.Mutex
-	w      io.Writer
-	live   bool
-	lines  int
-	index  map[string]int
-	markAt int
-}
-
-// progressLive reports whether progress should rewrite lines. Tests
-// replace it. The default treats a character device as a terminal.
-var progressLive = func(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
 // probeNames is every progress label in this run, including the
 // cache comparison that is printed after the batch. The shared list
 // fixes the column where done starts.
@@ -135,89 +105,6 @@ func probeNames(tasks []probeTask) []string {
 		names = append(names, task.name)
 	}
 	return append(names, nameCacheAdvice)
-}
-
-func newProbeView(w io.Writer, names []string) *probeView {
-	live := false
-	if w != nil {
-		live = progressLive(w)
-	}
-	markAt := 0
-	for _, name := range names {
-		if n := len(probeProgressPrefix(name)); n > markAt {
-			markAt = n
-		}
-	}
-	if markAt > 0 {
-		markAt++
-	}
-	view := &probeView{w: w, live: live, index: map[string]int{}, markAt: markAt}
-	if w != nil {
-		_, _ = fmt.Fprintf(w, "%s\n\n", probeProgressHeading)
-	}
-	return view
-}
-
-func probeProgressPrefix(name string) string {
-	return probeProgressIndent + name + " ..."
-}
-
-// finishedLine pads the probing prefix with spaces so mark starts in
-// the same column for every name supplied to newProbeView.
-func (v *probeView) finishedLine(name, mark string) string {
-	prefix := probeProgressPrefix(name)
-	width := 0
-	if v != nil {
-		width = v.markAt
-	}
-	if width <= len(prefix) {
-		return prefix + " " + mark
-	}
-	return fmt.Sprintf("%-*s%s", width, prefix, mark)
-}
-
-func (v *probeView) start(name string) {
-	if v == nil || v.w == nil {
-		return
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.live {
-		v.index[name] = v.lines
-		v.lines++
-	}
-	_, _ = fmt.Fprintf(v.w, "%s\n", probeProgressPrefix(name))
-}
-
-func (v *probeView) finish(name, mark string) {
-	if v == nil || v.w == nil {
-		return
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	line := v.finishedLine(name, mark)
-	if !v.live {
-		_, _ = fmt.Fprintf(v.w, "%s\n", line)
-		return
-	}
-	idx, ok := v.index[name]
-	if !ok {
-		_, _ = fmt.Fprintf(v.w, "%s\n", line)
-		return
-	}
-	up := v.lines - idx
-	_, _ = fmt.Fprintf(v.w, "\033[%dA\r\033[2K%s\033[%dB\r", up, line, up)
-}
-
-// close ends the probing section with a blank line so the following
-// config section does not sit on the next row.
-func (v *probeView) close() {
-	if v == nil || v.w == nil {
-		return
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	_, _ = fmt.Fprintln(v.w)
 }
 
 func toolTask(seams Seams, spec toolSpec) probeTask {

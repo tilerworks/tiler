@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"context"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -98,33 +97,5 @@ func TestDarwinProbesOverlapAndReportProgress(t *testing.T) {
 	}
 	if strings.Contains(text, "📋") || strings.Contains(text, "🔧") {
 		t.Fatalf("progress contains the finished report\n%s", text)
-	}
-}
-
-func TestProbeViewRewritesFinishedLines(t *testing.T) {
-	prev := progressLive
-	progressLive = func(io.Writer) bool { return true }
-	t.Cleanup(func() { progressLive = prev })
-
-	var buf strings.Builder
-	view := newProbeView(&buf, []string{"git", "image_toolchain"})
-	view.start("git")
-	view.start("image_toolchain")
-	view.finish("image_toolchain", "done")
-	view.finish("git", "done")
-	view.close()
-
-	git := probeProgressPrefix("git")
-	tool := probeProgressPrefix("image_toolchain")
-	toolDone := tool + " done"
-	gitDone := git + strings.Repeat(" ", len(tool)-len(git)+1) + "done"
-	got := buf.String()
-	want := probeProgressHeading + "\n\n" +
-		git + "\n" +
-		tool + "\n" +
-		"\033[1A\r\033[2K" + toolDone + "\033[1B\r" +
-		"\033[2A\r\033[2K" + gitDone + "\033[2B\r\n"
-	if got != want {
-		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
