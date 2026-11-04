@@ -139,6 +139,19 @@ it identifies. On Linux, check that tools such as `mksquashfs`, `squashfuse_ll`,
 `fuse-overlayfs`, and `fusermount3` are available and that the current user can
 access `/dev/fuse`.
 
+On Linux, image chains allow up to 32 layers by default, counting the full
+image and its increments, excluding the writable session upper. Set
+`max_layers` to a positive integer in the user or project `.tiler.yaml` to
+change the build and mount limit. The generated user configuration includes:
+
+```yaml
+# max_layers: 32
+```
+
+Uncomment the key to override the default. At the limit, build a new full
+image before adding more increments. Lowering the limit keeps existing
+metadata readable for listing and cleanup.
+
 Install the squashfs toolchain on Debian, Ubuntu, Linux Mint, and similar
 distributions:
 

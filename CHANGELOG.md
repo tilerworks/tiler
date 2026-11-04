@@ -7,6 +7,9 @@ first. An unreleased entry describes the next planned release.
 
 ### Added
 
+- Configure image chain depth with `max_layers` in `.tiler.yaml`, defaulting
+  to 32 layers instead of 8 for builds and mounts.
+
 - `make cross` builds static Linux binaries for arm64, amd64 (named
   `x86_64`), and 386 (named `i386`) under `dist/`.
 

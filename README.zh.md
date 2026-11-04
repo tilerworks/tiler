@@ -84,6 +84,14 @@ tiler doctor
 
 `tiler doctor` 会逐项报告检查结果。根据输出补齐依赖；在 Linux 上，需要确认 `mksquashfs`、`squashfuse_ll`、`fuse-overlayfs`、`fusermount3` 等工具可用，且当前用户能访问 `/dev/fuse`。
 
+在 Linux 上，镜像链默认最多 32 层，包含完整镜像和增量镜像，不包含会话可写 upper。在用户或项目的 `.tiler.yaml` 中将 `max_layers` 设置为正整数，可以调整构建和挂载的层数上限。自动生成的用户配置包含：
+
+```yaml
+# max_layers: 32
+```
+
+取消该项注释即可覆盖默认值。达到上限后，先构建新的完整镜像，再继续添加增量。调低上限后，仍可读取已有元数据以列出和清理镜像。
+
 Debian、Ubuntu、Linux Mint 等安装 squashfs 工具链：
 
 ```bash
