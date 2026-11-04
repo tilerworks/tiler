@@ -16,7 +16,7 @@ func addDefaultListHint(cmd *cobra.Command) {
 			return err
 		}
 		if !asJSON {
-			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands."); err != nil {
+			if _, err := fmt.Fprint(cmd.OutOrStdout(), "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n\n"); err != nil {
 				return err
 			}
 		}

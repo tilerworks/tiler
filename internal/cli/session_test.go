@@ -472,7 +472,7 @@ func TestSessionGroupWithoutSubcommandListsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session: %v\n%s", err, stderr)
 	}
-	if stdout != "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n" || stderr != "" {
+	if stdout != "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n\n" || stderr != "" {
 		t.Fatalf("unexpected empty session listing: %q %q", stdout, stderr)
 	}
 }

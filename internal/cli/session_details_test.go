@@ -34,7 +34,7 @@ func TestSessionDetailsShareStatusAndVerboseAliases(t *testing.T) {
 			t.Fatalf("verbose %v: %v %s\n%s", args, err, stderr, out)
 		}
 		if len(args) == 2 {
-			_, out, _ = strings.Cut(out, "\n")
+			_, out, _ = strings.Cut(out, "\n\n")
 		}
 		if expected != "" && out != expected {
 			t.Fatalf("verbose aliases differ: %s", out)

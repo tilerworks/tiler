@@ -34,7 +34,7 @@ func TestCommandGroupsDefaultToListWithTextHint(t *testing.T) {
 			}
 			groupArgs := append(append([]string{}, lib...), tc.group)
 			out, stderr, _, err := runCmd(t, append(groupArgs, tc.flags...)...)
-			want := "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n" + listed
+			want := "💡 Use 'ls' to hide this hint; use '-h' to see more subcommands.\n\n" + listed
 			if err != nil || stderr != "" || out != want {
 				t.Fatalf("group: %v, %q, %q; want %q", err, out, stderr, want)
 			}
