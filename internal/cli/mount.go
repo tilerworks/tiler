@@ -575,6 +575,7 @@ func blocksRequest(
 	// fsname override keeps the table pointing at the logical image.
 	canonical := repo.ImagePath()
 	return workspace.Request{
+		MaxLayers:       cfg.LayerLimit(),
 		Full:            mounted[0],
 		FullFSName:      canonical,
 		Layers:          mounted[1:],
@@ -777,6 +778,7 @@ func mountRequest(
 		return workspace.Request{}, fmt.Errorf("mount: %w", err)
 	}
 	req := workspace.Request{
+		MaxLayers:       cfg.LayerLimit(),
 		Full:            mounted[0],
 		Layers:          mounted[1:],
 		Format:          format,

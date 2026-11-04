@@ -59,7 +59,8 @@ func versionMountRequest(
 		return workspace.Request{}, nil, fmt.Errorf("mount: %w", err)
 	}
 	return workspace.Request{
-		Members: members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper, Rebase: rebase,
+		MaxLayers: cfg.LayerLimit(),
+		Members:   members, ReadOnly: flags.readOnly, PruneUpper: flags.pruneUpper, Rebase: rebase,
 		Subdir: flags.subdir, Table: toEntries(table),
 		SquashfsOptions: cfg.SquashfsOptions, FuseOptions: cfg.FuseOptions,
 		RuntimeDir: runtimeDir, MergedDir: dir, Run: mountRun,

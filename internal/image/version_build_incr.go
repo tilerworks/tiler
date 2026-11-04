@@ -112,6 +112,9 @@ func incrVersionParent(repo Repo, req IncrRequest) (ImageMeta, error) {
 	if err != nil {
 		return ImageMeta{}, err
 	}
+	if err := checkNewLayerDepth(len(stack), req.Config.LayerLimit()); err != nil {
+		return ImageMeta{}, err
+	}
 	for _, member := range stack {
 		if member.Format.Type != FormatSquashfs && member.Format.Type != FormatErofs {
 			return ImageMeta{}, errors.New("version build: incremental bases require squashfs or erofs")

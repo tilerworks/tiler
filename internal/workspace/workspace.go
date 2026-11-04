@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
 	"github.com/jiangxin/tiler/internal/diagnostic"
 )
@@ -27,9 +28,6 @@ import (
 // Callers treat it as a skip. A macOS disk image does not use it
 // when hdiutil is selected.
 var ErrUnavailable = errors.New("workspace: mounting requires linux and a usable /dev/fuse")
-
-// maxStackDepth is one full image plus at most seven increments.
-const maxStackDepth = 8
 
 const (
 	// liveInterval is the pause between mount liveness polls.
@@ -63,6 +61,9 @@ type Entry struct {
 // fields keep the writable merged view the incremental build and its
 // quality gate rely on.
 type Request struct {
+	// MaxLayers includes the full image and increments, excluding the upper.
+	// Zero inherits config.DefaultMaxLayers.
+	MaxLayers int
 	// Members overrides the legacy Full/Layers fields with a root-to-tip
 	// stack. Concat cannot be combined with explicit members.
 	Members []MountMember
@@ -920,10 +921,14 @@ func stack(req Request) ([]member, error) {
 		}
 		req = memberRequest(req)
 	}
-	if depth := 1 + len(req.Layers); depth > maxStackDepth {
+	limit := req.MaxLayers
+	if limit == 0 {
+		limit = config.DefaultMaxLayers
+	}
+	if depth := 1 + len(req.Layers); depth > limit {
 		return nil, fmt.Errorf(
 			"workspace: stack holds %d members; the limit is %d",
-			depth, maxStackDepth)
+			depth, limit)
 	}
 	members := make([]member, 0, len(req.Layers)+1)
 	for i := len(req.Layers) - 1; i >= 0; i-- {

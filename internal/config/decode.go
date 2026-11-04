@@ -14,6 +14,7 @@ import (
 // rawPatch is the YAML shape. Pointers stay nil when the key is absent.
 // A present zero or false is non-nil so it can overlay a lower value.
 type rawPatch struct {
+	MaxLayers             *maxLayersValue    `yaml:"max_layers"`
 	Version               *versionValue      `yaml:"version"`
 	ImagesDir             *string            `yaml:"images_dir"`
 	SessionsDir           *string            `yaml:"sessions_dir"`
@@ -30,6 +31,23 @@ type rawPatch struct {
 	SplitSize             *splitSizeText     `yaml:"split_size"`
 	CacheEnabled          *bool              `yaml:"cache_enabled"`
 	LogLevel              *string            `yaml:"log_level"`
+}
+
+// maxLayersValue rejects fractional and non-scalar layer counts.
+type maxLayersValue struct {
+	n int
+}
+
+func (v *maxLayersValue) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return errors.New("max_layers: invalid integer")
+	}
+	n, err := strconv.ParseInt(value.Value, 10, 0)
+	if err != nil {
+		return fmt.Errorf("max_layers: %w", err)
+	}
+	v.n = int(n)
+	return nil
 }
 
 // versionValue stores a base-10 integer schema version. A float is
@@ -144,6 +162,7 @@ func (raw rawPatch) patch() (Patch, error) {
 	}
 	return Patch{
 		Version:               versionPtr(raw.Version),
+		MaxLayers:             maxLayersPtr(raw.MaxLayers),
 		ImagesDir:             raw.ImagesDir,
 		SessionsDir:           raw.SessionsDir,
 		CacheDir:              raw.CacheDir,
@@ -160,6 +179,14 @@ func (raw rawPatch) patch() (Patch, error) {
 		CacheEnabled:          raw.CacheEnabled,
 		LogLevel:              raw.LogLevel,
 	}, nil
+}
+
+func maxLayersPtr(v *maxLayersValue) *int {
+	if v == nil {
+		return nil
+	}
+	n := v.n
+	return &n
 }
 
 func versionPtr(v *versionValue) *int {

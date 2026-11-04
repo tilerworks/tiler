@@ -335,28 +335,14 @@ func TestManifestValidateReportsEveryBranch(t *testing.T) {
 	}
 }
 
-func TestManifestValidateEnforcesStackDepth(t *testing.T) {
-	atLimit := deepManifest(maxStackDepth - 1)
-	if err := atLimit.Validate(); err != nil {
-		t.Fatalf("depth %d rejected: %v", maxStackDepth, err)
+func TestManifestValidationDoesNotImposeRuntimeLayerLimit(t *testing.T) {
+	manifest := deepManifest(64)
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("structurally valid long chain rejected: %v", err)
 	}
-	stack, err := atLimit.HeadStack()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stack) != maxStackDepth {
-		t.Fatalf("stack = %d, want %d", len(stack), maxStackDepth)
-	}
-	over := deepManifest(maxStackDepth)
-	err = over.Validate()
-	if err == nil {
-		t.Fatal("over-deep manifest accepted")
-	}
-	if !strings.Contains(err.Error(), "exceeds the stack limit of 8") {
-		t.Fatalf("error = %v", err)
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("images[%d]:", maxStackDepth)) {
-		t.Fatalf("deepest node not named: %v", err)
+	stack, err := manifest.HeadStack()
+	if err != nil || len(stack) != 65 {
+		t.Fatalf("long chain: %d members, %v", len(stack), err)
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{ImagesDir: filepath.Join(root, "images"), CacheDir: filepath.Join(root, "cache"),
-		LogsDir: filepath.Join(root, "logs")}
+		LogsDir: filepath.Join(root, "logs"), MaxLayers: 64}
 	base := versionNode("a", image.KindFull, "", time.Now().UTC())
 	child := versionNode("b", image.KindIncremental, base.ID, base.CreatedAt.Add(time.Minute))
 	base.Format.Type, child.Format.Type = image.FormatSquashfs, image.FormatErofs
@@ -57,6 +57,9 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	if req.Progress != mountNotice {
 		t.Fatal("version mount progress writer is not mountNotice")
 	}
+	if req.MaxLayers != 64 {
+		t.Fatalf("configured mount limit = %d, want 64", req.MaxLayers)
+	}
 
 	originalEngine := mountEngine
 	originalTable := loadMountTable
@@ -77,6 +80,9 @@ func TestVersionMountRequestPinsHistoryAndMemberFormats(t *testing.T) {
 	}
 	if replayed.Progress != mountNotice {
 		t.Fatal("replayed progress writer is not mountNotice")
+	}
+	if replayed.MaxLayers != 64 {
+		t.Fatalf("replayed mount limit = %d, want 64", replayed.MaxLayers)
 	}
 }
 

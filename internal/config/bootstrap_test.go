@@ -31,6 +31,7 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 		"# image_format: squashfs",
 		"# image_compression: zstd",
 		"# split_size: 2G",
+		"# max_layers: 32",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("template missing %q\n%s", want, data)
@@ -59,6 +60,9 @@ func TestEnsureUserFileCreatesTemplate(t *testing.T) {
 	}
 	if cfg.ImagesDir != filepath.Join(home, ".tiler", "images") {
 		t.Fatalf("images = %q after loading the created file", cfg.ImagesDir)
+	}
+	if cfg.MaxLayers != 32 {
+		t.Fatalf("max layers = %d, want 32", cfg.MaxLayers)
 	}
 	if cfg.SplitSize != 0 {
 		t.Fatalf("split size = %d, want the commented example to stay off", cfg.SplitSize)

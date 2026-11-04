@@ -12,7 +12,7 @@ import (
 // Validate reports every manifest rule violation in one error. The
 // graph rules require unique well-formed ids, exactly one parentless
 // full root, every other node parented inside the graph, no cycles,
-// a head inside the graph, root-to-node paths within the stack limit,
+// a head inside the graph,
 // and one payload kind across nodes. Every node also carries the
 // payload facts — digest, size, mtime, and created_at — and the full
 // root carries the builder and, when recorded, the content digest.
@@ -148,14 +148,13 @@ func (m Manifest) checkHead(index map[string]int, list *issueList) {
 	}
 }
 
-// checkWalks reports the first parent cycle once and every node
-// whose root-to-node path exceeds the stack limit.
+// checkWalks reports the first parent cycle. Chain depth is runtime policy,
+// so metadata remains readable independently of the configured limit.
 func (m Manifest) checkWalks(index map[string]int, list *issueList) {
 	cycleReported := false
 	for i := range m.Images {
 		prefix := fmt.Sprintf("images[%d]", i)
 		onPath := make(map[string]bool, len(m.Images))
-		depth := 0
 		cycle := false
 		for id := m.Images[i].ID; id != ""; {
 			if onPath[id] {
@@ -163,20 +162,15 @@ func (m Manifest) checkWalks(index map[string]int, list *issueList) {
 				break
 			}
 			onPath[id] = true
-			depth++
 			j, ok := index[id]
 			if !ok {
 				break // a malformed id was already reported
 			}
 			id = m.Images[j].Parent
 		}
-		switch {
-		case cycle && !cycleReported:
+		if cycle && !cycleReported {
 			list.add("%s.parent: the parent edges must stay acyclic", prefix)
 			cycleReported = true
-		case !cycle && depth > maxStackDepth:
-			list.add("%s: root path of %d images exceeds the stack limit of %d",
-				prefix, depth, maxStackDepth)
 		}
 	}
 }

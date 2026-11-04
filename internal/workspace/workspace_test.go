@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxin/tiler/internal/config"
 	"github.com/jiangxin/tiler/internal/container"
 )
 
@@ -217,10 +218,10 @@ func TestMountRequiresFields(t *testing.T) {
 
 func TestMountRefusesDeepStack(t *testing.T) {
 	req, _ := testRequest(t)
-	req.Layers = make([]string, maxStackDepth)
+	req.Layers = make([]string, config.DefaultMaxLayers)
 	rec := &recRunner{}
 	_, err := mountTest(t, req, rec.run, testHooks())
-	if err == nil || !strings.Contains(err.Error(), "the limit is 8") {
+	if err == nil || !strings.Contains(err.Error(), "the limit is 32") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(rec.calls) != 0 {

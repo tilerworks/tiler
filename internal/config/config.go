@@ -22,6 +22,8 @@ const (
 
 	// DefaultLogLevel is used when no document sets log_level.
 	DefaultLogLevel = "info"
+	// DefaultMaxLayers includes the full image and its incremental layers.
+	DefaultMaxLayers = 32
 	// DefaultSessionMaxAge is thirty days. Callers must keep an
 	// explicit zero distinct from this default.
 	DefaultSessionMaxAge = 720 * time.Hour
@@ -29,6 +31,8 @@ const (
 
 // Config is the resolved settings after defaults and overlays.
 type Config struct {
+	// MaxLayers limits a root-to-tip image chain, excluding the writable upper.
+	MaxLayers int
 	// Version is the .tiler.yaml schema version. Defaults to
 	// CurrentConfigVersion when no document sets it.
 	Version int
@@ -91,6 +95,7 @@ type Config struct {
 
 // Patch records fields present in one document. Nil means omitted.
 type Patch struct {
+	MaxLayers             *int
 	Version               *int
 	ImagesDir             *string
 	SessionsDir           *string
@@ -115,6 +120,7 @@ func Defaults(home string) Config {
 	root := filepath.Join(home, ".tiler")
 	return Config{
 		Version:       CurrentConfigVersion,
+		MaxLayers:     DefaultMaxLayers,
 		ImagesDir:     filepath.Join(root, "images"),
 		SessionsDir:   filepath.Join(root, "sessions"),
 		CacheDir:      filepath.Join(root, "cache"),
@@ -125,6 +131,16 @@ func Defaults(home string) Config {
 		userFile:      filepath.Join(home, fileName),
 		configFile:    filepath.Join(home, fileName),
 	}
+}
+
+// LayerLimit returns the configured limit. A zero-valued Config used by
+// library callers inherits the same default as a loaded configuration.
+// Explicit zero in YAML is rejected by Validate after overlays.
+func (c Config) LayerLimit() int {
+	if c.MaxLayers == 0 {
+		return DefaultMaxLayers
+	}
+	return c.MaxLayers
 }
 
 // UserFile returns the $HOME/.tiler.yaml path this config resolved
@@ -148,6 +164,7 @@ func (c Config) ConfigFile() string {
 // as they are on base.
 func (p Patch) Apply(base Config) Config {
 	base.Version = overlay(base.Version, p.Version)
+	base.MaxLayers = overlay(base.MaxLayers, p.MaxLayers)
 	base.ImagesDir = overlay(base.ImagesDir, p.ImagesDir)
 	base.SessionsDir = overlay(base.SessionsDir, p.SessionsDir)
 	base.CacheDir = overlay(base.CacheDir, p.CacheDir)
@@ -175,6 +192,9 @@ func overlay[T any](base T, value *T) T {
 
 // Validate checks a resolved configuration. The error names the field.
 func Validate(cfg Config) error {
+	if cfg.MaxLayers < 1 {
+		return errors.New("max_layers: must be a positive integer")
+	}
 	if cfg.Version < 0 {
 		return errors.New("version: must not be negative")
 	}

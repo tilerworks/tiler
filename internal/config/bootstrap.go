@@ -26,6 +26,7 @@ logs_dir: .tiler/logs
 log_level: info
 # image_format: squashfs        # squashfs or erofs; omit to infer from tools
 # image_compression: zstd       # omit to use the format default
+# max_layers: 32                # full image plus increments; excludes writable upper
 # split_size: 2G                # 0 disables splitting; bare bytes or k/m/g/t
 `
 

@@ -18,13 +18,10 @@ import (
 	"github.com/jiangxin/tiler/internal/workspace"
 )
 
-// maxStackDepth is one full image plus at most seven increments.
-const maxStackDepth = 8
-
 // IncrRequest is one incremental layer build. The upper directory of
 // a merged view is packed as-is and appended to the active chain.
 type IncrRequest struct {
-	// Config supplies the image library location and split policy.
+	// Config supplies the image library location, split policy, and layer limit.
 	Config config.Config
 	// Name is the resolved 1-to-5 segment image name.
 	Name string
@@ -174,7 +171,7 @@ func validateIncr(req IncrRequest) (Repo, Manifest, error) {
 	if !exists {
 		return Repo{}, Manifest{}, errors.New("build: no active full image")
 	}
-	if err := checkIncrBase(active, req.BaseTip); err != nil {
+	if err := checkIncrBase(active, req.BaseTip, req.Config.LayerLimit()); err != nil {
 		return Repo{}, Manifest{}, err
 	}
 	if err := checkIncrForm(active.PayloadKind(), req.Config.SplitSize); err != nil {
@@ -195,17 +192,24 @@ func validateIncr(req IncrRequest) (Repo, Manifest, error) {
 // the head, so the limit is measured along the head stack, which
 // preserves the historical whole-chain check. A base that trails the
 // head is measured along its own branch instead.
-func checkIncrBase(active Manifest, baseTip string) error {
+func checkIncrBase(active Manifest, baseTip string, limit int) error {
 	stack, err := active.Stack(incrParent(active, baseTip))
 	if err != nil {
 		return fmt.Errorf("build: base tip: %w", err)
 	}
-	if len(stack)+1 > maxStackDepth {
+	if err := checkNewLayerDepth(len(stack), limit); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkNewLayerDepth(depth, limit int) error {
+	if depth >= limit {
 		// The count includes the full root, so it is reported as
 		// images to match the documented stack limit.
 		return fmt.Errorf(
-			"build: stack to the base tip already holds %d images; build a new full image instead",
-			len(stack))
+			"build: stack to the base tip already holds %d images; max_layers is %d; build a new full image instead",
+			depth, limit)
 	}
 	return nil
 }

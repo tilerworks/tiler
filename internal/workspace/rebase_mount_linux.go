@@ -121,7 +121,7 @@ func (w *Workspace) closeRebaseViews(seam hooks) error {
 }
 
 func (w *Workspace) rebaseCurrent(req Request, temp *Workspace, seam hooks) (string, error) {
-	oldReq := Request{Members: req.Rebase.Members, Subdir: req.Subdir, ReadOnly: true,
+	oldReq := Request{MaxLayers: req.MaxLayers, Members: req.Rebase.Members, Subdir: req.Subdir, ReadOnly: true,
 		SquashfsOptions: req.SquashfsOptions, FuseOptions: req.FuseOptions}
 	members, err := stack(oldReq)
 	if err != nil {
