@@ -43,6 +43,10 @@ func requireMountTestEnv(t *testing.T) {
 	if _, lookErr := exec.LookPath("unshare"); lookErr != nil {
 		t.Skipf("mount test needs privilege (%v) and unshare is missing", lookErr)
 	}
+	probe := exec.Command("unshare", "-rm", "--propagation", "private", "true")
+	if out, probeErr := probe.CombinedOutput(); probeErr != nil {
+		t.Skipf("mount test needs a user namespace: %v: %s", probeErr, strings.TrimSpace(string(out)))
+	}
 	self, selfErr := os.Executable()
 	if selfErr != nil {
 		t.Fatalf("cannot locate the test binary: %v", selfErr)
