@@ -3,15 +3,17 @@
 All notable changes to tiler are recorded here. Versions are listed newest
 first. An unreleased entry describes the next planned release.
 
-## [0.2.0] - [Unreleased]
+## [0.2.0] - 2026-11-24
 
 ### Added
 
-- Create and restore directory checkpoints with atomic directory exchange on
-  Linux and macOS. Create leaves the task copy at the active path, and
-  restore archives it before optional removal. Interrupted operations can be
-  retried. Older checkpoints are preserved and require manual recovery or an
-  older version.
+- `tiler checkpoint create <dir>...` saves the original directories as
+  checkpoints and leaves writable task copies at their active paths.
+  `tiler checkpoint restore [--rm] <dir>...` restores the originals and
+  archives the task copies. Use `--rm` to delete the archives after restore.
+  Both commands use atomic directory exchange on Linux and macOS. Retry an
+  interrupted operation by running the same command again. Older checkpoints
+  are preserved and require manual recovery or an older version.
 
 - Configure image chain depth with `max_layers` in `.tiler.yaml`, defaulting
   to 32 layers instead of 8 for builds and mounts.
@@ -34,6 +36,7 @@ first. An unreleased entry describes the next planned release.
   windows and resizing, then restore the original screen before the report.
 - Include EPEL and CRB repository setup in doctor installation guidance on
   Rocky Linux and related Enterprise Linux distributions.
+- Send default listing hints to stderr so stdout stays usable in scripts.
 - Improve errors, warnings, and recovery hints with image and session context,
   expected and actual integrity values, actionable FUSE permission and timeout
   guidance, explicit skipped validation and partial-success notices, consistent
