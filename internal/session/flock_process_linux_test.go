@@ -16,7 +16,7 @@ import (
 // lockHelperEnv marks a test binary re-executed as a lock holder.
 // Its value carries the store directory, the session name, the
 // shared log path, and the hold duration in milliseconds, joined
-// with "|".
+// with "|". A negative duration waits for the log's release file.
 const lockHelperEnv = "TILER_SESSION_LOCK_HELPER"
 
 // TestHelperLockProcess is not a test of its own: a re-executed
@@ -43,7 +43,22 @@ func TestHelperLockProcess(t *testing.T) {
 	}
 	defer release()
 	appendLogLine(t, logPath, "enter "+name)
-	time.Sleep(time.Duration(hold) * time.Millisecond)
+	if hold < 0 {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := os.Stat(logPath + ".release"); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for release signal")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	} else {
+		time.Sleep(time.Duration(hold) * time.Millisecond)
+	}
 	appendLogLine(t, logPath, "exit "+name)
 }
 
@@ -75,7 +90,7 @@ func spawnLockHelper(t *testing.T, dir, name, logPath string, hold time.Duration
 
 // waitProc waits for one helper process and fails on its exit
 // status. The helper bounds itself: the lock wait is one minute and
-// the hold is milliseconds.
+// the hold is timed or bounded by a release signal timeout.
 func waitProc(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
 	if err := cmd.Wait(); err != nil {
@@ -156,10 +171,13 @@ func TestLockSerializesAcrossProcesses(t *testing.T) {
 func TestLockRunsDifferentSessionsInParallel(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "log")
-	holder := spawnLockHelper(t, dir, "aaa", logPath, 600*time.Millisecond)
+	holder := spawnLockHelper(t, dir, "aaa", logPath, -time.Millisecond)
 	waitLog(t, logPath, 1)
-	time.Sleep(200 * time.Millisecond)
 	other := spawnLockHelper(t, dir, "bbb", logPath, 200*time.Millisecond)
+	waitLog(t, logPath, 2)
+	if err := os.WriteFile(logPath+".release", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitProc(t, holder)
 	waitProc(t, other)
 	lines := waitLog(t, logPath, 4)
