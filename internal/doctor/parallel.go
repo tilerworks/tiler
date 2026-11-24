@@ -50,6 +50,9 @@ func runProbeTasks(ctx context.Context, view *probeView, tasks []probeTask) ([]R
 	if firstErr != nil {
 		return nil, firstErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 

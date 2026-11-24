@@ -13,6 +13,7 @@ import (
 )
 
 func TestMissingMountImageDiagnostic(t *testing.T) {
+	installFoundTools(t)
 	home, _ := withWorkspace(t)
 	stdout, stderr, _, err := runCmd(t, "mount", "--rm", "my/images", "mnt1")
 	if ExitCode(err) != 1 || stdout != "" {
@@ -37,6 +38,7 @@ func TestWarningPreservesMissingImageHintLayout(t *testing.T) {
 }
 
 func TestMissingMetadataIsNotMissingRepository(t *testing.T) {
+	installFoundTools(t)
 	home, _ := withWorkspace(t)
 	dir := filepath.Join(home, ".tiler", "images", "my", "images")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -60,6 +62,7 @@ func TestWarningEscapesDynamicControls(t *testing.T) {
 }
 
 func TestMissingVersionRemainsRuntimeFailure(t *testing.T) {
+	installFoundTools(t)
 	home, _ := withWorkspace(t)
 	writeVersionForest(t, filepath.Join(home, ".tiler", "images"), "my/images", versionNode("a", image.KindFull, "", time.Now().UTC()))
 	_, stderr, _, err := runCmd(t, "mount", "my/images:dddd", "mnt1")

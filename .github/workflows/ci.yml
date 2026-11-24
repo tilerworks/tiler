@@ -5,55 +5,46 @@ on:
   pull_request:
 
 jobs:
-  unit:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: make test
-
-      - name: Set up Go for lint
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25"
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
 
       - name: Format
         run: golangci-lint fmt --diff
 
-  compatibility:
+  test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         go: ["1.22", "1.25"]
-        exclude:
-          # The unit job already runs this combination.
-          - os: ubuntu-latest
-            go: "1.22"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
+
+      - name: Install Linux image tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools squashfuse fuse3 fuse-overlayfs erofs-utils erofsfuse
 
       - name: Vet
         run: go vet ./...
@@ -62,5 +53,9 @@ jobs:
         run: make test
 
       - name: Compile Darwin tests for both architectures
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.go == '1.25'
         run: make darwin-check
+
+      - name: Run macOS end-to-end tests
+        if: runner.os == 'macOS' && matrix.go == '1.25'
+        run: make e2e

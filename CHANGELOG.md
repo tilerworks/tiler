@@ -7,6 +7,12 @@ first. An unreleased entry describes the next planned release.
 
 ### Added
 
+- Create and restore directory checkpoints with atomic directory exchange on
+  Linux and macOS. Create leaves the task copy at the active path, and
+  restore archives it before optional removal. Interrupted operations can be
+  retried. Older checkpoints are preserved and require manual recovery or an
+  older version.
+
 - Configure image chain depth with `max_layers` in `.tiler.yaml`, defaulting
   to 32 layers instead of 8 for builds and mounts.
 
@@ -14,6 +20,15 @@ first. An unreleased entry describes the next planned release.
   `x86_64`), and 386 (named `i386`) under `dist/`.
 
 ### Fixed
+
+- Name checkpoint archives from restore time, report existing checkpoints, and
+  warn without failing when a requested checkpoint is missing.
+
+- Reject and preserve older checkpoint transaction records and completion receipts;
+  only the current atomic exchange transaction protocol is resumed.
+
+- Accept multiple directory checkpoint targets, warn when correcting a mistaken
+  `.checkpoint` suffix, and reserve the checkpoint path during restore recovery.
 
 - Keep doctor progress in a temporary terminal screen that adapts to small
   windows and resizing, then restore the original screen before the report.
