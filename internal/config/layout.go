@@ -29,6 +29,17 @@ func reservedRoots(cfg Config) []reservedRoot {
 	}
 }
 
+// ReservedPaths returns the configured paths reserved for tiler storage.
+func (cfg Config) ReservedPaths() []string {
+	var paths []string
+	for _, root := range reservedRoots(cfg) {
+		if root.dir != "" {
+			paths = append(paths, root.dir)
+		}
+	}
+	return paths
+}
+
 // OutsideReserved returns an error when path equals a reserved root
 // or lies inside one, and nil when path is outside every reserved
 // tree. The reserved trees are the cleaned $HOME/.tiler root and its

@@ -114,8 +114,9 @@ scripts on Linux.
 
 ## Dependencies
 
-The dependency whitelist is cobra, `gopkg.in/yaml.v3`, and the standard
-library. `moby/sys/mountinfo` waits until mount-table parsing exists.
+The dependency whitelist is cobra, `gopkg.in/yaml.v3`,
+`golang.org/x/sys/unix`, and the standard library. `moby/sys/mountinfo`
+waits until mount-table parsing exists.
 Prefer the standard library for everything else.
 
 ## Commits
