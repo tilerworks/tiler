@@ -769,6 +769,56 @@ You can also build and mount an image of the entire workspace, including its
 initialized submodules, and work directly in that mounted view. Separate
 reference repositories are optional.
 
+### Directory Checkpoints
+
+On Linux and macOS, save a directory before changing an agent context:
+
+```sh
+tiler checkpoint create "$HOME/.agents"
+# Install or change skills and other context under ~/.agents.
+tiler checkpoint restore "$HOME/.agents"
+```
+
+Create copies the directory using clone-on-write when supported and ordinary
+copying otherwise. It atomically exchanges the directories, leaving the
+original at `.agents.checkpoint` with a new marker and the task copy at
+`.agents`. Existing checkpoints are preserved. Create removes an existing
+unversioned regular `.tiler-checkpoint` file before copying, even if a later
+operation fails. The original directory must
+allow marker creation. Files, symbolic links, hard links, owners,
+permissions, modification times, ACLs, and extended attributes are preserved.
+Special files, nested mounts, and filesystems that cannot preserve required
+metadata or atomically exchange directories are refused.
+
+Both commands accept multiple directories and process them in order. They stop
+on the first failure, retaining earlier results and reporting remaining paths.
+Duplicate or overlapping resolved paths are rejected before any changes. If a
+`.checkpoint` argument has a corresponding directory without that suffix, tiler
+warns and uses the unsuffixed directory; otherwise the name is used as given.
+
+Restore uses an empty `<dir>.checkpoint.lock` directory for two atomic
+exchanges, keeping the checkpoint path reserved until cleanup. It consumes the
+checkpoint and archives the changed directory beside it using the local restore
+time. A retry
+keeps the archive name recorded when the restore began. Pass `--rm` to delete
+the archive after it has been created. If the active directory is absent,
+restore moves the checkpoint directly into place. An existing valid checkpoint
+is reported and left unchanged on repeated create; restore warns and continues
+when a checkpoint is missing. Existing archive paths are preserved. Retry interrupted operations
+with the same command and path. Tiler keeps a completion
+receipt so it can report a completed operation again. The next reverse
+operation safely replaces it. If an error reports an unrecognized object or
+changed identity, inspect the paths before intervening. Version 1 markers and
+version 1 or 2 transaction records and completion receipts require the tiler
+version that created them or manual recovery. They are preserved, not resumed.
+
+Stop writers and close directory handles before create. Concurrent writes
+can produce an inconsistent copy, and existing handles still point to the
+original after the exchange. Link and mount checks are best effort against
+external changes between filesystem operations. Protected system paths and
+tiler storage are refused, including ambiguous Unicode spellings of missing
+protected paths on macOS.
+
 ### Main tiler Commands
 
 | Command | Purpose |
@@ -791,6 +841,8 @@ reference repositories are optional.
 | `tiler session gc` | Clean up expired idle sessions and their writable data. |
 | `tiler doctor` | Diagnose the local toolchain, FUSE access, and storage environment. |
 | `tiler benchmark <path>` | Measure image packing and read performance. |
+| `tiler checkpoint create <dir>...` | Save the original as a checkpoint and put a task copy at the active path. |
+| `tiler checkpoint restore [--rm] <dir>...` | Restore a checkpoint and optionally remove the changed directory. |
 | `tiler version` | Print the tiler version. |
 | `tiler help [command]` | Show command usage and options. |
 

@@ -524,6 +524,24 @@ cat clones/my-project/.git/modules/deps/subproject/objects/info/alternates
 
 也可以直接对包含已初始化 submodule 的整个工作区创建和挂载镜像，在挂载视图中继续工作，不必拆分参考仓库。
 
+### 目录检查点
+
+在 Linux 和 macOS 上，可以在修改 agent 上下文之前保存目录：
+
+```sh
+tiler checkpoint create "$HOME/.agents"
+# 在 ~/.agents 下安装或修改 skills 和其他上下文。
+tiler checkpoint restore "$HOME/.agents"
+```
+
+创建命令先复制目录，优先使用写时复制，不支持时使用普通复制。随后原子交换两个目录，原目录移到 `.agents.checkpoint` 并写入新标记，任务副本留在 `.agents`。已有检查点会保留。复制之前会删除已有的不含版本信息的 `.tiler-checkpoint` 普通文件，即使后续操作失败也不会恢复该文件。原目录必须允许创建标记。文件、符号链接、硬链接、所有者、权限、修改时间、ACL 和扩展属性都会保留。特殊文件、嵌套挂载，以及无法保留所需元数据或原子交换目录的文件系统会被拒绝。
+
+两个命令都接受多个目录并按顺序处理。遇到第一个错误时停止，保留已完成的结果并报告尚未处理的路径。解析后重复或重叠的路径会在任何修改前被拒绝。如果带 `.checkpoint` 后缀的参数对应存在去掉后缀的目录，tiler 会警告并使用该目录；否则按原目录名处理。
+
+恢复时使用空的 `<dir>.checkpoint.lock` 目录进行两次原子交换，直至清理前保留 checkpoint 路径。恢复命令消耗检查点，并在同级以恢复时的本地时间为后缀归档修改后的目录；重试沿用恢复开始时记录的归档名。指定 `--rm` 会在归档创建后将其删除。如果活动目录不存在，恢复会将检查点直接移到原路径。重复创建时已有的有效检查点会被报告并保留；恢复时缺失检查点会发出警告并继续处理。已有归档路径会保留。操作中断后可用相同命令和路径重试。tiler 保留完成回执，以便再次报告已完成的操作；下一次反向操作会安全替换它。如果报错指出对象无法识别或身份已变化，请先检查相关路径。第 1 版标记以及第 1、2 版事务记录和完成回执需要用创建它们的 tiler 版本或手动恢复；这些记录会被保留，不会自动续行。
+
+创建前请停止写入并关闭目录句柄。并发写入可能导致副本不一致，既有句柄在交换后仍指向原目录。链接和挂载检查只能尽力检测各文件系统操作之间的外部变更。受保护的系统路径和 tiler 存储目录会被拒绝；在 macOS 上，也会拒绝可能指向尚不存在的受保护路径的歧义 Unicode 拼写。
+
 ### tiler 主要命令
 
 | 命令 | 用途 |
@@ -546,6 +564,8 @@ cat clones/my-project/.git/modules/deps/subproject/objects/info/alternates
 | `tiler session gc` | 清理过期的空闲会话及其可写数据。 |
 | `tiler doctor` | 诊断本地工具链、FUSE 访问和存储环境。 |
 | `tiler benchmark <path>` | 测量镜像打包和读取性能。 |
+| `tiler checkpoint create <dir>...` | 将原目录保存为检查点，并在活动路径放置任务副本。 |
+| `tiler checkpoint restore [--rm] <dir>...` | 恢复检查点，并可选择删除修改后的目录。 |
 | `tiler version` | 显示 tiler 版本。 |
 | `tiler help [command]` | 查看命令用法和选项。 |
 

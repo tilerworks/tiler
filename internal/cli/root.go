@@ -60,6 +60,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newSessionCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newBenchmarkCmd())
+	root.AddCommand(newCheckpointCmd())
 	return root
 }
 
