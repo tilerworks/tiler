@@ -11,3 +11,6 @@ func safeName(name string) error {
 	}
 	return nil
 }
+
+// MarkerName identifies a directory as a checkpoint.
+const MarkerName = ".tiler-checkpoint"
